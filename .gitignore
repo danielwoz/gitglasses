@@ -1,0 +1,11 @@
+build/
+out/
+node_modules/
+dist/
+*.vsix
+extension/bin/
+vcpkg_installed/
+.cache/
+.turbo/
+*.log
+.DS_Store

@@ -1,0 +1,16 @@
+{
+  "name": "gitglasses",
+  "version-string": "0.1.0",
+  "builtin-baseline": "82b6bc886d7b0f8342e34babc2e0b8943f79b0e1",
+  "dependencies": [
+    {
+      "name": "libgit2",
+      "default-features": false,
+      "features": ["pcre2"]
+    },
+    "nlohmann-json",
+    "fmt",
+    "spdlog",
+    "gtest"
+  ]
+}
