@@ -42,6 +42,9 @@ enum class Mode { Serial, Concurrent };
 // read loop and flips the matching request's CancelToken. Responses and
 // notifications are emitted through a caller-supplied send callback, which
 // must be thread-safe (FrameWriter is).
+//
+// Lifetime contract: call TaskPool::shutdown() (draining all handler tasks)
+// before destroying the Dispatcher or anything the send callback captures.
 class Dispatcher {
  public:
   using SendFn = std::function<void(const Json& message)>;

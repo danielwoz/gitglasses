@@ -26,6 +26,22 @@ add_library(gg_repo STATIC
 )
 target_link_libraries(gg_repo PUBLIC gg_core PRIVATE gg_warnings)
 
+add_library(gg_exec STATIC
+  src/exec/git_process.cpp
+  src/exec/parsers/incremental_blame.cpp
+)
+target_link_libraries(gg_exec PUBLIC gg_util PRIVATE gg_warnings)
+
+add_library(gg_cache STATIC
+  src/cache/blame_cache.cpp
+)
+target_link_libraries(gg_cache PUBLIC gg_exec PRIVATE gg_warnings)
+
+add_library(gg_services STATIC
+  src/services/blame/blame_service.cpp
+)
+target_link_libraries(gg_services PUBLIC gg_cache gg_core gg_exec PRIVATE gg_warnings)
+
 add_library(gg_rpc STATIC
   src/rpc/framing.cpp
   src/rpc/dispatcher.cpp
@@ -38,7 +54,7 @@ add_executable(gitglasses-engine
   src/main.cpp
   src/server.cpp
 )
-target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_warnings)
+target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_warnings)
 
 if(GG_BUILD_TESTS)
   add_subdirectory(tests)

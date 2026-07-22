@@ -4,10 +4,13 @@
 
 #include <atomic>
 
+#include "cache/blame_cache.h"
+#include "cache/doc_overlay.h"
 #include "core/git2.h"
 #include "repo/registry.h"
 #include "rpc/dispatcher.h"
 #include "rpc/framing.h"
+#include "services/blame/blame_service.h"
 
 namespace gg {
 
@@ -24,6 +27,9 @@ int runServer(std::istream& in, std::ostream& out) {
   rpc::FrameWriter writer(out);
   TaskPool pool;
   repo::Registry registry;
+  cache::BlameCache blameCache;
+  cache::DocOverlay docOverlay;
+  services::BlameService blameService(blameCache);
   std::atomic<bool> shutdownRequested{false};
 
   rpc::Dispatcher dispatcher(pool, [&writer](const rpc::Json& message) {
@@ -83,6 +89,76 @@ int runServer(std::istream& in, std::ostream& out) {
               {"detached", head.value().detached},
               {"unborn", head.value().unborn}}}};
   });
+
+  dispatcher.notification("doc/didChange", [&docOverlay](const rpc::Json& params) {
+    docOverlay.update(params.value("repoId", ""), params.value("path", ""),
+                      params.value("contents", ""), params.value("version", std::int64_t{0}));
+  });
+
+  dispatcher.notification("doc/didClose", [&docOverlay](const rpc::Json& params) {
+    docOverlay.close(params.value("repoId", ""), params.value("path", ""));
+  });
+
+  dispatcher.method(
+      "blame/file",
+      [&registry, &blameService, &docOverlay](const rpc::Json& params, const CancelToken& token,
+                                              const rpc::NotifyFn& notify) -> rpc::Json {
+        const std::string repoId = params.value("repoId", "");
+        const std::string streamId = params.value("streamId", "");
+        auto repo = registry.open(repoId);
+        if (!repo) throw rpc::HandlerError{{repo.error()}};
+
+        services::BlameRequest request;
+        request.path = params.value("path", "");
+        if (request.path.empty()) {
+          throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
+        }
+        if (params.contains("rev") && params["rev"].is_string()) {
+          request.rev = params["rev"].get<std::string>();
+        }
+        // Working-tree blame respects unsaved editor contents when pushed.
+        if (!request.rev) {
+          if (auto doc = docOverlay.get(repoId, request.path)) {
+            request.contents = std::move(doc->contents);
+          }
+        }
+
+        std::uint32_t totalLines = 0;
+        auto summary = blameService.blame(
+            repo.value(), request, token, [&](const exec::BlameHunk& hunk) {
+              totalLines = std::max(totalLines, hunk.resultLine + hunk.lineCount - 1);
+              rpc::Json hunkJson = {{"streamId", streamId},
+                                    {"sha", hunk.sha},
+                                    {"resultLine", hunk.resultLine},
+                                    {"originalLine", hunk.originalLine},
+                                    {"lineCount", hunk.lineCount},
+                                    {"path", hunk.path}};
+              if (hunk.previousSha) {
+                hunkJson["previous"] = {{"sha", *hunk.previousSha}, {"path", *hunk.previousPath}};
+              }
+              notify("blame/hunk", hunkJson);
+            });
+        if (!summary) throw rpc::HandlerError{{summary.error()}};
+
+        rpc::Json commits = rpc::Json::object();
+        for (const auto& [sha, commit] : summary.value().result->commits) {
+          commits[sha] = {{"author",
+                           {{"name", commit.author.name},
+                            {"email", commit.author.email},
+                            {"time", commit.author.time}}},
+                          {"committer",
+                           {{"name", commit.committer.name},
+                            {"email", commit.committer.email},
+                            {"time", commit.committer.time}}},
+                          {"summary", commit.summary},
+                          {"boundary", commit.boundary}};
+        }
+        return {{"streamId", streamId},
+                {"totalLines", totalLines},
+                {"fromCache", summary.value().fromCache},
+                {"commits", commits}};
+      },
+      rpc::Mode::Concurrent);
 
   while (!shutdownRequested) {
     auto payload = reader.read();

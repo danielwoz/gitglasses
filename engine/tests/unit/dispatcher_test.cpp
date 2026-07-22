@@ -65,6 +65,10 @@ struct DispatcherTest : ::testing::Test {
   MessageSink sink;
   Dispatcher dispatcher{pool, [this](const Json& m) { sink.push(m); }};
 
+  // Per the Dispatcher lifetime contract, drain handler tasks before the
+  // dispatcher and sink members are destroyed.
+  ~DispatcherTest() override { pool.shutdown(); }
+
   void send(const Json& message) { dispatcher.dispatch(message.dump()); }
 };
 

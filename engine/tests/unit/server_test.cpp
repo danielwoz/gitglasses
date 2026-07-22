@@ -7,7 +7,11 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <ext/stdio_filebuf.h>
+#include <unistd.h>
+
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include "test_fixtures.h"
@@ -53,6 +57,100 @@ std::vector<Json> runSession(const std::vector<Json>& requests) {
   EXPECT_EQ(runServer(in, out), 0);
   return parseFrames(out.str());
 }
+
+// A live server session over real pipes: requests can await their responses,
+// mirroring how the extension actually talks to the engine (a dependent
+// request is only sent after its prerequisite completed).
+class InteractiveSession {
+ public:
+  InteractiveSession() {
+    int toServer[2], fromServer[2];
+    EXPECT_EQ(pipe(toServer), 0);
+    EXPECT_EQ(pipe(fromServer), 0);
+    inWrite_ = toServer[1];
+    serverIn_ = std::make_unique<__gnu_cxx::stdio_filebuf<char>>(toServer[0], std::ios::in);
+    serverOut_ = std::make_unique<__gnu_cxx::stdio_filebuf<char>>(fromServer[1], std::ios::out);
+    clientRead_ = std::make_unique<__gnu_cxx::stdio_filebuf<char>>(fromServer[0], std::ios::in);
+    serverThread_ = std::thread([this] {
+      std::istream in(serverIn_.get());
+      std::ostream out(serverOut_.get());
+      runServer(in, out);
+      serverOut_.reset();  // flush + close so pending client reads see EOF
+    });
+  }
+
+  ~InteractiveSession() {
+    closeInput();
+    serverThread_.join();
+  }
+
+  void notify(const Json& message) { writeFrame(message); }
+
+  // Sends the request and blocks until its response arrives; interleaved
+  // notifications are collected into `notifications`.
+  Json request(const Json& message) {
+    writeFrame(message);
+    std::istream in(clientRead_.get());
+    FrameReaderStream reader(in);
+    for (;;) {
+      auto payload = reader.read();
+      if (!payload) {
+        ADD_FAILURE() << "server closed stream before response";
+        return {};
+      }
+      Json m = Json::parse(*payload);
+      if (m.contains("id") && m["id"] == message["id"]) return m;
+      notifications.push_back(std::move(m));
+    }
+  }
+
+  void closeInput() {
+    if (inWrite_ != -1) {
+      close(inWrite_);
+      inWrite_ = -1;
+    }
+  }
+
+  std::vector<Json> notifications;
+
+ private:
+  // Minimal blocking frame reader over the client end of the pipe.
+  struct FrameReaderStream {
+    std::istream& in;
+    explicit FrameReaderStream(std::istream& s) : in(s) {}
+    std::optional<std::string> read() {
+      std::string line;
+      size_t length = 0;
+      while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) {
+          std::string payload(length, '\0');
+          in.read(payload.data(), static_cast<std::streamsize>(length));
+          if (in.gcount() != static_cast<std::streamsize>(length)) return std::nullopt;
+          return payload;
+        }
+        if (line.rfind("Content-Length:", 0) == 0) {
+          length = std::stoul(line.substr(15));
+        }
+      }
+      return std::nullopt;
+    }
+  };
+
+  void writeFrame(const Json& message) {
+    const std::string payload = message.dump();
+    const std::string framed =
+        "Content-Length: " + std::to_string(payload.size()) + "\r\n\r\n" + payload;
+    ASSERT_EQ(write(inWrite_, framed.data(), framed.size()),
+              static_cast<ssize_t>(framed.size()));
+  }
+
+  int inWrite_ = -1;
+  std::unique_ptr<__gnu_cxx::stdio_filebuf<char>> serverIn_;
+  std::unique_ptr<__gnu_cxx::stdio_filebuf<char>> serverOut_;
+  std::unique_ptr<__gnu_cxx::stdio_filebuf<char>> clientRead_;
+  std::thread serverThread_;
+};
 
 Json initRequest(std::int64_t id = 1) {
   return {{"jsonrpc", "2.0"},
@@ -112,6 +210,77 @@ TEST(Server, DiscoverListAndState) {
   EXPECT_EQ(state["result"]["head"]["branch"], "main");
   EXPECT_EQ(state["result"]["head"]["oid"].get<std::string>().size(), 40u);
   EXPECT_EQ(state["result"]["head"]["unborn"], false);
+}
+
+TEST(Server, BlameFileStreamsHunksAndRespectsOverlay) {
+  gg::testing::FixtureRepo fixture;
+  fixture.writeFile("app.txt", "one\ntwo\n");
+  fixture.run("git add app.txt");
+  fixture.commit("add app");
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", fixture.root().string()}}}});
+  const std::string repoId = discover["result"]["repoId"];
+
+  // Clean blame.
+  Json clean = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 3},
+       {"method", "blame/file"},
+       {"params", {{"repoId", repoId}, {"path", "app.txt"}, {"streamId", "s1"}}}});
+  EXPECT_EQ(clean["result"]["totalLines"], 2);
+  EXPECT_EQ(clean["result"]["commits"].size(), 1u);
+  EXPECT_EQ(clean["result"]["fromCache"], false);
+
+  bool sawStreamedHunk = false;
+  for (const auto& m : session.notifications) {
+    if (m.value("method", "") == "blame/hunk" && m["params"]["streamId"] == "s1") {
+      sawStreamedHunk = true;
+      EXPECT_TRUE(m["params"].contains("sha"));
+    }
+  }
+  EXPECT_TRUE(sawStreamedHunk);
+
+  // Identical second request is served from cache.
+  Json cached = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 4},
+       {"method", "blame/file"},
+       {"params", {{"repoId", repoId}, {"path", "app.txt"}, {"streamId", "s2"}}}});
+  EXPECT_EQ(cached["result"]["fromCache"], true);
+
+  // Push unsaved contents: the extra line must attribute as uncommitted.
+  session.notify({{"jsonrpc", "2.0"},
+                  {"method", "doc/didChange"},
+                  {"params",
+                   {{"repoId", repoId},
+                    {"path", "app.txt"},
+                    {"contents", "one\ntwo\nunsaved\n"},
+                    {"version", 7}}}});
+  Json dirty = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 5},
+       {"method", "blame/file"},
+       {"params", {{"repoId", repoId}, {"path", "app.txt"}, {"streamId", "s3"}}}});
+  EXPECT_EQ(dirty["result"]["totalLines"], 3);
+  const std::string uncommitted(40, '0');
+  EXPECT_TRUE(dirty["result"]["commits"].contains(uncommitted));
+
+  // Closing the doc reverts blame to on-disk contents.
+  session.notify({{"jsonrpc", "2.0"},
+                  {"method", "doc/didClose"},
+                  {"params", {{"repoId", repoId}, {"path", "app.txt"}}}});
+  Json closed = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 6},
+       {"method", "blame/file"},
+       {"params", {{"repoId", repoId}, {"path", "app.txt"}, {"streamId", "s4"}}}});
+  EXPECT_EQ(closed["result"]["totalLines"], 2);
+  EXPECT_FALSE(closed["result"]["commits"].contains(uncommitted));
 }
 
 TEST(Server, DiscoverOutsideRepoReturnsError) {
