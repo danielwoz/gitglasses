@@ -9,6 +9,9 @@ export class BlameHoverProvider implements vscode.HoverProvider {
   constructor(
     private readonly blame: BlameModel,
     private readonly repos: RepositoryService,
+    /** Optional enrichment: autolinks issue references in the commit summary
+     *  (pure text substitution — must never hit the network). */
+    private readonly autolink?: (text: string, repoRoot: string) => Promise<string>,
   ) {}
 
   async provideHover(
@@ -42,9 +45,13 @@ export class BlameHoverProvider implements vscode.HoverProvider {
       const commit = fileBlame.commits[hunk.sha];
       if (!commit) return undefined;
       const date = new Date(commit.author.time * 1000);
+      let summary = commit.summary;
+      if (this.autolink) {
+        summary = await this.autolink(summary, located.rootPath).catch(() => commit.summary);
+      }
       markdown.appendMarkdown(
         `$(git-commit) **${commit.author.name}** <${commit.author.email}>\n\n` +
-          `${commit.summary}\n\n` +
+          `${summary}\n\n` +
           `\`${hunk.sha.slice(0, 12)}\` • ${date.toLocaleString()}` +
           (hunk.path !== located.relativePath ? ` • was \`${hunk.path}\`` : ''),
       );

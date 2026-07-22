@@ -106,6 +106,67 @@
       {
         "command": "gitglasses.worktrees.remove",
         "title": "Remove Worktree"
+      },
+      {
+        "command": "gitglasses.connectIntegration",
+        "title": "GitGlasses: Connect Integration…"
+      },
+      {
+        "command": "gitglasses.disconnectIntegration",
+        "title": "GitGlasses: Disconnect Integration…"
+      },
+      {
+        "command": "gitglasses.startWork",
+        "title": "GitGlasses: Start Work on Issue…"
+      },
+      {
+        "command": "gitglasses.launchpad.refresh",
+        "title": "GitGlasses: Refresh Launchpad",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitglasses.launchpad.open",
+        "title": "Open in Browser"
+      },
+      {
+        "command": "gitglasses.launchpad.copyUrl",
+        "title": "Copy URL"
+      },
+      {
+        "command": "gitglasses.launchpad.snooze",
+        "title": "Snooze"
+      },
+      {
+        "command": "gitglasses.launchpad.unsnooze",
+        "title": "Unsnooze"
+      },
+      {
+        "command": "gitglasses.ai.explainCommit",
+        "title": "GitGlasses: AI Explain Commit",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "gitglasses.ai.explainWip",
+        "title": "GitGlasses: AI Explain Working Changes",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "gitglasses.ai.generateCommitMessage",
+        "title": "GitGlasses: AI Generate Commit Message",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "gitglasses.ai.nlSearch",
+        "title": "GitGlasses: AI Search Commits (Natural Language)",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "gitglasses.ai.setApiKey",
+        "title": "GitGlasses: Set AI API Key…"
+      },
+      {
+        "command": "gitglasses.ai.clearApiKey",
+        "title": "GitGlasses: Clear AI API Key…"
       }
     ],
     "viewsContainers": {
@@ -119,6 +180,7 @@
     },
     "views": {
       "gitglasses": [
+        { "id": "gitglasses.views.launchpad", "name": "Launchpad" },
         { "id": "gitglasses.views.commits", "name": "Commits" },
         { "id": "gitglasses.views.branches", "name": "Branches" },
         { "id": "gitglasses.views.remotes", "name": "Remotes" },
@@ -140,7 +202,12 @@
       "view/title": [
         {
           "command": "gitglasses.refreshViews",
-          "when": "view =~ /^gitglasses\\.views\\./",
+          "when": "view =~ /^gitglasses\\.views\\./ && view != gitglasses.views.launchpad",
+          "group": "navigation"
+        },
+        {
+          "command": "gitglasses.launchpad.refresh",
+          "when": "view == gitglasses.views.launchpad",
           "group": "navigation"
         },
         {
@@ -181,6 +248,10 @@
           "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry)$/"
         },
         {
+          "command": "gitglasses.ai.explainCommit",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesCommit"
+        },
+        {
           "command": "gitglasses.worktrees.open",
           "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current)?Worktree$/",
           "group": "inline"
@@ -192,13 +263,33 @@
         {
           "command": "gitglasses.worktrees.remove",
           "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree"
+        },
+        {
+          "command": "gitglasses.launchpad.open",
+          "when": "view == gitglasses.views.launchpad && viewItem =~ /^gitglassesLaunchpad(Snoozed)?Pr$/"
+        },
+        {
+          "command": "gitglasses.launchpad.copyUrl",
+          "when": "view == gitglasses.views.launchpad && viewItem =~ /^gitglassesLaunchpad(Snoozed)?Pr$/"
+        },
+        {
+          "command": "gitglasses.launchpad.snooze",
+          "when": "view == gitglasses.views.launchpad && viewItem == gitglassesLaunchpadPr"
+        },
+        {
+          "command": "gitglasses.launchpad.unsnooze",
+          "when": "view == gitglasses.views.launchpad && viewItem == gitglassesLaunchpadSnoozedPr"
         }
       ],
       "commandPalette": [
         { "command": "gitglasses.copySha", "when": "false" },
         { "command": "gitglasses.openCommitDiff", "when": "false" },
         { "command": "gitglasses.worktrees.open", "when": "false" },
-        { "command": "gitglasses.worktrees.remove", "when": "false" }
+        { "command": "gitglasses.worktrees.remove", "when": "false" },
+        { "command": "gitglasses.launchpad.open", "when": "false" },
+        { "command": "gitglasses.launchpad.copyUrl", "when": "false" },
+        { "command": "gitglasses.launchpad.snooze", "when": "false" },
+        { "command": "gitglasses.launchpad.unsnooze", "when": "false" }
       ]
     },
     "configuration": {
@@ -229,6 +320,91 @@
           "enum": ["trace", "debug", "info", "warn", "error"],
           "default": "warn",
           "description": "Engine log level (logs go to the GitGlasses output channel)"
+        },
+        "gitglasses.integrations.hosts": {
+          "type": "array",
+          "default": [],
+          "description": "Self-hosted git hosting instances, e.g. [{ \"domain\": \"github.example.com\", \"provider\": \"github-enterprise\" }]",
+          "items": {
+            "type": "object",
+            "required": ["domain", "provider"],
+            "properties": {
+              "domain": {
+                "type": "string",
+                "description": "Hostname of the instance, e.g. github.example.com"
+              },
+              "provider": {
+                "type": "string",
+                "description": "Provider id serving this domain, e.g. github-enterprise, gitlab"
+              }
+            }
+          }
+        },
+        "gitglasses.integrations.issues": {
+          "type": "array",
+          "default": [],
+          "description": "Issue tracker integrations, e.g. [{ \"provider\": \"jira\", \"host\": \"mycompany.atlassian.net\" }]",
+          "items": {
+            "type": "object",
+            "required": ["provider"],
+            "properties": {
+              "provider": {
+                "type": "string",
+                "description": "Issue provider id: jira or linear"
+              },
+              "host": {
+                "type": "string",
+                "description": "Provider host, when applicable (e.g. mycompany.atlassian.net)"
+              }
+            }
+          }
+        },
+        "gitglasses.ai.provider": {
+          "type": "string",
+          "enum": ["vscode-lm", "anthropic", "openai", "gemini", "ollama"],
+          "enumDescriptions": [
+            "VS Code Language Model API (GitHub Copilot) — zero configuration when available",
+            "Anthropic Claude API (bring your own key)",
+            "OpenAI API or any compatible endpoint (bring your own key)",
+            "Google Gemini API (bring your own key)",
+            "Local Ollama server — no key, data stays on your machine"
+          ],
+          "default": "vscode-lm",
+          "description": "AI provider used by the GitGlasses AI commands"
+        },
+        "gitglasses.ai.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model id for the selected AI provider (empty = provider default)"
+        },
+        "gitglasses.ai.openai.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL for OpenAI-compatible endpoints (empty = https://api.openai.com/v1)"
+        },
+        "gitglasses.ai.ollama.host": {
+          "type": "string",
+          "default": "",
+          "description": "Ollama server URL (empty = http://localhost:11434)"
+        },
+        "gitglasses.autolinks": {
+          "type": "array",
+          "default": [],
+          "description": "Custom autolink patterns applied to commit messages, e.g. [{ \"regex\": \"TICKET-(\\\\d+)\", \"urlTemplate\": \"https://tracker.example.com/browse/TICKET-$1\" }]",
+          "items": {
+            "type": "object",
+            "required": ["regex", "urlTemplate"],
+            "properties": {
+              "regex": {
+                "type": "string",
+                "description": "Regular expression matching the reference text"
+              },
+              "urlTemplate": {
+                "type": "string",
+                "description": "Target URL; capture groups referenced as $1, $2, …"
+              }
+            }
+          }
         }
       }
     }
@@ -240,6 +416,7 @@
     "package": "vsce package --no-dependencies"
   },
   "dependencies": {
+    "@gitglasses/integrations": "workspace:*",
     "@gitglasses/protocol": "workspace:*"
   },
   "devDependencies": {

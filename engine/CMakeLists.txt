@@ -8,6 +8,7 @@ find_package(libgit2 CONFIG REQUIRED)
 
 add_library(gg_util STATIC
   src/util/log.cpp
+  src/util/sha256.cpp
   src/util/task_pool.cpp
 )
 target_include_directories(gg_util PUBLIC src)
@@ -55,6 +56,7 @@ add_library(gg_services STATIC
   src/services/mutate/mutate_methods.cpp
   src/services/mutate/rebase_methods.cpp
   src/services/mutate/stash_worktree_methods.cpp
+  src/services/patch/patch_methods.cpp
   src/services/refs/refs_methods.cpp
   src/services/status/diff_common.cpp
   src/services/status/diff_methods.cpp

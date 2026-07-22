@@ -16,6 +16,11 @@ export type HostingCapability =
 /** Credentials for a provider call. Tokens come from the host app's secret storage. */
 export interface AuthContext {
   token: string;
+  /**
+   * Account identifier for providers whose API tokens are bound to a login,
+   * e.g. the Jira account email or the Bitbucket username for basic auth.
+   */
+  username?: string;
 }
 
 export interface PullRequestQueryOptions {

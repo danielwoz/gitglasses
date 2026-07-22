@@ -61,6 +61,10 @@ export interface Issue {
   state: string;
   assignee?: Account;
   updatedAt: string;
+  /** Issue type name as reported by the tracker, e.g. "Bug" or "Story". */
+  type?: string;
+  /** Branch name suggested by the tracker itself (e.g. Linear), when available. */
+  branchName?: string;
 }
 
 /** A pattern that turns plain-text references (e.g. "PROJ-42") into links. */

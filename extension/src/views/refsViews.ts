@@ -1,14 +1,36 @@
 import * as vscode from 'vscode';
 import { ActiveRepo, ViewBase, ViewNode, messageNode } from './viewBase';
 import { shortSha } from './viewLogic';
+import type { PrChipProvider } from '../integrations/prChips';
 
 // Branches, remotes, tags, and stashes: stateless views re-fetched per render.
 
+const PR_CHIP_LIMIT = 50;
+
 export class BranchesViewProvider extends ViewBase {
+  // Own emitter (shadowing the base's private one) so PR-chip updates can
+  // refresh a single branch node instead of re-rendering the whole tree.
+  private readonly branchEmitter = new vscode.EventEmitter<ViewNode | undefined>();
+  override readonly onDidChangeTreeData = this.branchEmitter.event;
+  private prChips: PrChipProvider | undefined;
+
+  setPrChipProvider(prChips: PrChipProvider): void {
+    this.prChips = prChips;
+  }
+
+  override refresh(): void {
+    this.branchEmitter.fire(undefined);
+  }
+
+  override dispose(): void {
+    this.branchEmitter.dispose();
+    super.dispose();
+  }
+
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
     const { branches } = await this.engine.request('refs/list', { repoId: repo.repoId });
     if (branches.length === 0) return [messageNode('No branches')];
-    return branches.map((branch) => {
+    const nodes = branches.map((branch) => {
       const item = new vscode.TreeItem(branch.name, vscode.TreeItemCollapsibleState.None);
       item.iconPath = new vscode.ThemeIcon(branch.current ? 'check' : 'git-branch');
       item.description = branch.upstream ?? '';
@@ -17,6 +39,30 @@ export class BranchesViewProvider extends ViewBase {
       const node: ViewNode = { item, sha: branch.sha };
       return node;
     });
+    this.decorateWithPrChips(
+      repo,
+      branches.map((branch, index) => ({ name: branch.name, node: nodes[index] })),
+    );
+    return nodes;
+  }
+
+  // Fire-and-forget: chips arrive after the tree renders and refresh only the
+  // nodes they decorate, so PR lookups never block or fail the render.
+  private decorateWithPrChips(
+    repo: ActiveRepo,
+    branches: Array<{ name: string; node: ViewNode }>,
+  ): void {
+    const prChips = this.prChips;
+    if (!prChips) return;
+    void Promise.allSettled(
+      branches.slice(0, PR_CHIP_LIMIT).map(async ({ name, node }) => {
+        const suffix = await prChips.getChipFor(repo.rootPath, name);
+        if (!suffix) return;
+        const base = typeof node.item.description === 'string' ? node.item.description : '';
+        node.item.description = base ? `${base} · ${suffix}` : suffix;
+        this.branchEmitter.fire(node);
+      }),
+    );
   }
 }
 

@@ -14,6 +14,7 @@
 #include "services/mutate/mutate_methods.h"
 #include "services/mutate/rebase_methods.h"
 #include "services/mutate/stash_worktree_methods.h"
+#include "services/patch/patch_methods.h"
 #include "services/refs/refs_methods.h"
 #include "services/repo_methods.h"
 #include "services/rev_methods.h"
@@ -79,6 +80,7 @@ int runServer(std::istream& in, std::ostream& out) {
   services::registerMutateMethods(dispatcher, context);
   services::registerStashWorktreeMethods(dispatcher, context);
   services::registerRebaseMethods(dispatcher, context);
+  services::registerPatchMethods(dispatcher, context);
 
   while (!shutdownRequested) {
     auto payload = reader.read();

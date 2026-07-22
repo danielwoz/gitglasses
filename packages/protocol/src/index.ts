@@ -354,6 +354,45 @@ export interface Requests {
     params: { repoId: string };
     result: Record<string, never>;
   };
+
+  // --- P4: remotes / open patches ------------------------------------------
+
+  'remote/list': {
+    params: { repoId: string };
+    result: { remotes: { name: string; fetchUrl: string; pushUrl?: string }[] };
+  };
+  /** Creates a shareable patch envelope from WIP, a stash, a commit, or a range. */
+  'patch/create': {
+    params: {
+      repoId: string;
+      source:
+        | { kind: 'wip'; includeUntracked?: boolean }
+        | { kind: 'stash'; index: number }
+        | { kind: 'commit'; sha: string }
+        | { kind: 'range'; base: string; head: string };
+      summary?: string;
+    };
+    result: { envelope: PatchEnvelope };
+  };
+  /** Applies a patch envelope; 3-way when the base is missing. */
+  'patch/apply': {
+    params: { repoId: string; envelope: PatchEnvelope };
+    result: { applied: boolean; conflicts: boolean; baseFound: boolean };
+  };
+}
+
+export interface PatchEnvelope {
+  format: 'gitglasses-patch';
+  version: 1;
+  /** Commit the diff applies onto. */
+  baseSha: string;
+  branch?: string;
+  summary: string;
+  /** Unified diff text (git diff/format-patch output). */
+  patch: string;
+  /** Fingerprint of origin remote URL (sha256 hex, first 16) for repo matching. */
+  remoteFingerprint?: string;
+  createdAtIso: string;
 }
 
 export type RequestMethod = keyof Requests;

@@ -34,6 +34,13 @@ import { registerRebaseWebview } from './webviews/rebaseHost';
 import { registerTimelineWebview } from './webviews/timelineHost';
 import { registerGitPalette } from './commands/gitPalette';
 import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
+import { AuthManager } from './integrations/auth';
+import { IntegrationService } from './integrations/integrationService';
+import { LaunchpadService } from './integrations/launchpadService';
+import { PrChipProvider } from './integrations/prChips';
+import { registerStartWork } from './integrations/startWork';
+import { registerLaunchpad } from './views/launchpadView';
+import { registerAiFeatures } from './ai/features';
 
 function findEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -103,13 +110,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   scm.quickDiffProvider = new GitGlassesQuickDiffProvider(repos);
   context.subscriptions.push(scm);
 
+  // Integrations: auth, hosting/issue providers, launchpad, PR enrichment.
+  const auth = new AuthManager(context.secrets);
+  const integrations = new IntegrationService(auth);
+  const launchpad = new LaunchpadService(integrations, context.globalState);
+  const prChips = new PrChipProvider(integrations);
+  context.subscriptions.push(auth, integrations);
+
   // Sidebar views (activity bar container "gitglasses").
   const searchView = new SearchViewProvider(engine, repos);
   const worktreesView = new WorktreesViewProvider(engine, repos);
+  const branchesView = new BranchesViewProvider(engine, repos);
+  branchesView.setPrChipProvider(prChips);
   const views: Record<string, ViewBase> = {
     'gitglasses.views.worktrees': worktreesView,
     'gitglasses.views.commits': new CommitsViewProvider(engine, repos),
-    'gitglasses.views.branches': new BranchesViewProvider(engine, repos),
+    'gitglasses.views.branches': branchesView,
     'gitglasses.views.remotes': new RemotesViewProvider(engine, repos),
     'gitglasses.views.stashes': new StashesViewProvider(engine, repos),
     'gitglasses.views.tags': new TagsViewProvider(engine, repos),
@@ -183,7 +199,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.languages.registerHoverProvider(
       { scheme: 'file' },
-      new BlameHoverProvider(blame, repos),
+      new BlameHoverProvider(blame, repos, (text, repoRoot) =>
+        integrations.autolinkText(text, repoRoot),
+      ),
     ),
     vscode.languages.registerCodeLensProvider({ scheme: 'file' }, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
@@ -285,6 +303,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.groups.create', () => repoGroups.create()),
     vscode.commands.registerCommand('gitglasses.groups.open', () => repoGroups.open()),
     vscode.commands.registerCommand('gitglasses.groups.delete', () => repoGroups.delete()),
+    vscode.commands.registerCommand('gitglasses.connectIntegration', () =>
+      integrations.connectIntegration(),
+    ),
+    vscode.commands.registerCommand('gitglasses.disconnectIntegration', () =>
+      integrations.disconnectIntegration(),
+    ),
+    registerStartWork(integrations, engine, repos),
+    ...registerLaunchpad(launchpad, integrations),
+    ...registerAiFeatures(context, engine, repos),
   );
 
   const rebase = registerRebaseWebview(context, engine, repos);

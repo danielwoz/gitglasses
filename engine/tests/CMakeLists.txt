@@ -15,7 +15,9 @@ add_executable(engine_tests
   unit/status_service_test.cpp
   unit/sequence_editor_test.cpp
   unit/mutate_service_test.cpp
+  unit/patch_service_test.cpp
   unit/rebase_service_test.cpp
+  unit/sha256_test.cpp
   unit/watch_manager_test.cpp
   ../src/server.cpp
 )

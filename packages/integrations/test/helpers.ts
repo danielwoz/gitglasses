@@ -1,5 +1,39 @@
 import type { Clock } from '../src/cache.js';
+import type { FetchLike, HttpRequestInit, HttpResponseLike } from '../src/http.js';
 import type { PullRequest } from '../src/models.js';
+
+export interface RecordedRequest {
+  url: string;
+  init?: HttpRequestInit;
+}
+
+/** Canned JSON response with case-insensitive header lookup. */
+export function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {}
+): HttpResponseLike {
+  const lowered = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (name) => lowered.get(name.toLowerCase()) ?? null },
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+/** Fetch stub that records every request and delegates to `handler` for the response. */
+export function stubFetch(
+  handler: (url: string, init?: HttpRequestInit) => HttpResponseLike
+): { fetchFn: FetchLike; requests: RecordedRequest[] } {
+  const requests: RecordedRequest[] = [];
+  const fetchFn: FetchLike = async (url, init) => {
+    requests.push({ url, init });
+    return handler(url, init);
+  };
+  return { fetchFn, requests };
+}
 
 /** Manually-advanced clock for deterministic time-based tests. */
 export class FakeClock implements Clock {
