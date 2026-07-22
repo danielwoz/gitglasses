@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+  - extension
+  - mcp-server
+allowBuilds:
+  '@vscode/vsce-sign': false
+  esbuild: true
+  keytar: false

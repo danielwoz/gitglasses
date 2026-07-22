@@ -1,0 +1,68 @@
+import * as vscode from 'vscode';
+import * as path from 'node:path';
+import { EngineClient } from '../engine/engineClient';
+
+export interface LocatedFile {
+  repoId: string;
+  rootPath: string;
+  relativePath: string;
+}
+
+// Maps workspace files to engine repo ids, discovering repos lazily on first
+// touch of a file inside them.
+export class RepositoryService {
+  private rootsById = new Map<string, string>();
+  private discovering = new Map<string, Promise<string | undefined>>();
+
+  constructor(private readonly engine: EngineClient) {}
+
+  /** Synchronous lookup against already-discovered repos. */
+  locate(uri: vscode.Uri): LocatedFile | undefined {
+    if (uri.scheme !== 'file') return undefined;
+    for (const [repoId, rootPath] of this.rootsById) {
+      const relative = path.relative(rootPath, uri.fsPath);
+      if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+        return { repoId, rootPath, relativePath: relative.split(path.sep).join('/') };
+      }
+    }
+    return undefined;
+  }
+
+  /** Discovers the repo containing the file if not yet known. */
+  async locateOrDiscover(uri: vscode.Uri): Promise<LocatedFile | undefined> {
+    const located = this.locate(uri);
+    if (located) return located;
+    if (uri.scheme !== 'file') return undefined;
+
+    const dir = path.dirname(uri.fsPath);
+    let inflight = this.discovering.get(dir);
+    if (!inflight) {
+      inflight = this.engine
+        .request('repo/discover', { path: dir })
+        .then((info) => {
+          // Engine reports the root with a trailing slash; normalize.
+          this.rootsById.set(info.repoId, info.rootPath.replace(/\/$/, ''));
+          return info.repoId;
+        })
+        .catch(() => undefined)
+        .finally(() => this.discovering.delete(dir));
+      this.discovering.set(dir, inflight);
+    }
+    await inflight;
+    return this.locate(uri);
+  }
+
+  /** Re-register all known repos (after an engine respawn: ids are stale). */
+  async rediscoverAll(): Promise<void> {
+    const roots = [...this.rootsById.values()];
+    this.rootsById.clear();
+    for (const root of roots) {
+      try {
+        const info = await this.engine.request('repo/discover', { path: root });
+        this.rootsById.set(info.repoId, info.rootPath.replace(/\/$/, ''));
+      } catch {
+        // Repo may have vanished; drop it.
+      }
+    }
+  }
+}

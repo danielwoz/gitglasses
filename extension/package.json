@@ -1,0 +1,63 @@
+{
+  "name": "gitglasses",
+  "displayName": "GitGlasses",
+  "description": "Open-source git supercharger: inline blame, history, and more — powered by a native engine",
+  "version": "0.1.0",
+  "publisher": "gitglasses",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "extensionKind": ["workspace"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitglasses.toggleLineBlame",
+        "title": "GitGlasses: Toggle Inline Blame"
+      },
+      {
+        "command": "gitglasses.restartEngine",
+        "title": "GitGlasses: Restart Engine"
+      }
+    ],
+    "configuration": {
+      "title": "GitGlasses",
+      "properties": {
+        "gitglasses.currentLine.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show blame annotation for the current line"
+        },
+        "gitglasses.engine.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to gitglasses-engine (defaults to the bundled binary)"
+        },
+        "gitglasses.engine.logLevel": {
+          "type": "string",
+          "enum": ["trace", "debug", "info", "warn", "error"],
+          "default": "warn",
+          "description": "Engine log level (logs go to the GitGlasses output channel)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "test": "vitest run",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@gitglasses/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

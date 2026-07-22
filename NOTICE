@@ -1,0 +1,10 @@
+GitGlasses
+Copyright (c) 2026 GitGlasses contributors
+Licensed under the MIT License.
+
+This product links against libgit2 (https://libgit2.org), which is licensed
+under GPLv2 with a special Linking Exception permitting use in programs under
+other licenses. See the libgit2 COPYING file for the exception text.
+
+Other bundled dependencies (fmt, spdlog, nlohmann-json, GoogleTest) are
+licensed under MIT or BSD-style licenses.
