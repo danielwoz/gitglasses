@@ -415,6 +415,7 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
       "patch/create",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         if (!params.contains("source") || !params["source"].is_object()) {
           throw rpc::HandlerError{{ErrorCode::InvalidParams, "'source' is required"}};
         }
@@ -444,6 +445,7 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
       "patch/apply",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         if (!params.contains("envelope") || !params["envelope"].is_object()) {
           throw rpc::HandlerError{{ErrorCode::InvalidParams, "'envelope' is required"}};
         }

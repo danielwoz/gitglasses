@@ -99,7 +99,8 @@
       },
       {
         "command": "gitglasses.interactiveRebase",
-        "title": "GitGlasses: Interactive Rebase…"
+        "title": "GitGlasses: Interactive Rebase…",
+        "enablement": "gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.worktrees.add",
@@ -178,15 +179,18 @@
       },
       {
         "command": "gitglasses.createPatch",
-        "title": "GitGlasses: Create Patch…"
+        "title": "GitGlasses: Create Patch…",
+        "enablement": "gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.applyPatch",
-        "title": "GitGlasses: Apply Patch…"
+        "title": "GitGlasses: Apply Patch…",
+        "enablement": "gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.suggestChange",
-        "title": "GitGlasses: Suggest Change for Pull Request…"
+        "title": "GitGlasses: Suggest Change for Pull Request…",
+        "enablement": "gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.switchMode",

@@ -28,6 +28,7 @@ add_library(gg_repo STATIC
 target_link_libraries(gg_repo PUBLIC gg_core PRIVATE gg_warnings)
 
 add_library(gg_exec STATIC
+  src/exec/cli_detect.cpp
   src/exec/git_process.cpp
   src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp

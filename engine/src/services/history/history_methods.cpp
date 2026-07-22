@@ -218,6 +218,7 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       "history/file",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::int64_t limit = requireLimit(params);
         const std::string path = requirePath(params);
         std::string startRev;
@@ -269,6 +270,7 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       "history/line",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::string path = requirePath(params);
         const std::int64_t startLine = params.value("startLine", std::int64_t{0});
         const std::int64_t endLine = params.value("endLine", std::int64_t{0});

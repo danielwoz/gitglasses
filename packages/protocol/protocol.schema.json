@@ -33,7 +33,22 @@
           "capabilities": {
             "additionalProperties": true,
             "type": "object",
-            "properties": {}
+            "required": [
+              "gitCli",
+              "watch",
+              "threads"
+            ],
+            "properties": {
+              "gitCli": {
+                "type": "boolean"
+              },
+              "watch": {
+                "type": "boolean"
+              },
+              "threads": {
+                "type": "boolean"
+              }
+            }
           }
         }
       }

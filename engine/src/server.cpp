@@ -49,17 +49,20 @@ int runServer(std::istream& in, std::ostream& out) {
     writer.write(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}.dump());
   };
 
-  dispatcher.method("initialize", [](const rpc::Json& params, const CancelToken&,
-                                     const rpc::NotifyFn&) -> rpc::Json {
+  dispatcher.method("initialize", [&context](const rpc::Json& params, const CancelToken&,
+                                             const rpc::NotifyFn&) -> rpc::Json {
     const std::string clientProtocol = params.value("protocolVersion", "");
     if (clientProtocol != kProtocolVersion) {
       throw rpc::HandlerError{{ErrorCode::InvalidRequest,
                                std::string("protocol version mismatch: engine speaks ") +
                                    kProtocolVersion + ", client sent '" + clientProtocol + "'"}};
     }
+    // watch/threads are static truths of this native build; the wasm build
+    // (no filesystem watcher threads, no worker pool) will report false.
     return {{"engineVersion", kEngineVersion},
             {"protocolVersion", kProtocolVersion},
-            {"capabilities", rpc::Json::object()}};
+            {"capabilities",
+             {{"gitCli", context.cliAvailable}, {"watch", true}, {"threads", true}}}};
   });
 
   dispatcher.method("shutdown", [&shutdownRequested](const rpc::Json&, const CancelToken&,

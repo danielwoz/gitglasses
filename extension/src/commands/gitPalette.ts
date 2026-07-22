@@ -3,6 +3,7 @@
 
 import * as vscode from 'vscode';
 import { EngineClient } from '../engine/engineClient';
+import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, firstWorkspaceRepo } from '../views/viewBase';
 import { back, cancel, next, runFlow } from './quickFlow';
@@ -52,6 +53,21 @@ const ROOT_ITEMS: RootItem[] = [
   { id: 'reset', label: '$(discard) Reset', description: 'Reset the current branch to a ref' },
   { id: 'cherryPick', label: '$(git-commit) Cherry-pick', description: 'Apply commits here' },
 ];
+
+// Representative engine method per flow, for capability gating: every flow
+// here ends in a CLI-dependent mutation, keyed by its first mutating call.
+const FLOW_METHODS: Record<CommandId, string> = {
+  commit: 'mutate/commit',
+  branch: 'mutate/branchCreate',
+  merge: 'mutate/merge',
+  rebase: 'rebase/start',
+  stash: 'stash/push',
+  push: 'mutate/push',
+  pull: 'mutate/pull',
+  fetch: 'mutate/fetch',
+  reset: 'mutate/reset',
+  cherryPick: 'mutate/cherryPick',
+};
 
 type FlowStatus = 'completed' | 'cancelled' | 'backedOut';
 
@@ -443,11 +459,22 @@ export function registerGitPalette(
     const ctx: PaletteContext = { engine, repo, openRebase };
     // Backing out of a flow returns to the root picker.
     for (;;) {
-      const root = await showPick(ROOT_ITEMS, {
+      const caps = engine.capabilities();
+      const items = ROOT_ITEMS.map((item) =>
+        isMethodAvailable(caps, FLOW_METHODS[item.id])
+          ? item
+          : { ...item, description: CLI_UNAVAILABLE_MESSAGE },
+      );
+      const root = await showPick(items, {
         title: 'Git Commands',
         placeholder: 'Pick a git command',
       });
       if (root === 'back' || root === undefined) return;
+      // Unavailable flows explain themselves instead of executing.
+      if (!isMethodAvailable(engine.capabilities(), FLOW_METHODS[root.id])) {
+        void vscode.window.showInformationMessage(`GitGlasses: ${CLI_UNAVAILABLE_MESSAGE}.`);
+        continue;
+      }
       let result: FlowStatus;
       try {
         result = await FLOWS[root.id](ctx);

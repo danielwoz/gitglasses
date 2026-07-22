@@ -56,6 +56,8 @@ export const ErrorCodes = {
   Internal: -32603,
   RepoNotFound: -32000,
   GitError: -32001,
+  /** Method requires a capability this engine build lacks (e.g. gitCli). */
+  MethodNotSupported: -32003,
 } as const;
 
 // --- Models (derived from src/schema/models.ts) -----------------------------
@@ -84,12 +86,19 @@ type R<M extends Method> = Static<(typeof RequestSchemas)[M]['result']>;
 // is `{}`, which would silently accept any object).
 type Empty = Record<string, never>;
 
+/** Typed engine capability flags (open bag: engines may add more). */
+export interface EngineCapabilities {
+  gitCli: boolean;
+  watch: boolean;
+  threads: boolean;
+  [key: string]: unknown;
+}
+
 export interface Requests {
   initialize: {
     params: P<'initialize'>;
-    // Hand-written result: `capabilities` is an open bag typed `object`;
-    // Static of Type.Object({}, { additionalProperties: true }) is `{}`.
-    result: { engineVersion: string; protocolVersion: string; capabilities: object };
+    // Hand-written result: Static<> of an open-bag object widens poorly.
+    result: { engineVersion: string; protocolVersion: string; capabilities: EngineCapabilities };
   };
   shutdown: { params: Empty; result: Empty };
   'repo/discover': { params: P<'repo/discover'>; result: R<'repo/discover'> };

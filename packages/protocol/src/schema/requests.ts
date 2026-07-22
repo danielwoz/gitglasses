@@ -23,6 +23,24 @@ export const EmptyObject = Type.Object({}, strict);
 
 const StageAction = Type.Union([Type.Literal('stage'), Type.Literal('unstage')]);
 
+/** What this engine build can do; the client gates features on these.
+ * additionalProperties stays open so newer engines can add flags without
+ * breaking older clients. */
+export const EngineCapabilities = Type.Object(
+  {
+    /** git CLI available: blame --incremental, --follow/-L history, all
+     * mutations, rebase, network ops, patch create/apply. When false the
+     * engine serves libgit2-backed fallbacks for reads and rejects
+     * CLI-dependent methods with MethodNotSupported. */
+    gitCli: Type.Boolean(),
+    /** Filesystem watching (repo/didChange pushes). */
+    watch: Type.Boolean(),
+    /** Concurrent request execution (false in single-threaded wasm builds). */
+    threads: Type.Boolean(),
+  },
+  { additionalProperties: true },
+);
+
 export const RequestSchemas = {
   initialize: {
     params: Type.Object({ protocolVersion: Type.String() }, strict),
@@ -30,8 +48,7 @@ export const RequestSchemas = {
       {
         engineVersion: Type.String(),
         protocolVersion: Type.String(),
-        // `object` on the TS side: an open bag of engine capabilities.
-        capabilities: Type.Object({}, { additionalProperties: true }),
+        capabilities: EngineCapabilities,
       },
       strict,
     ),

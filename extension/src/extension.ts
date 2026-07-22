@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import * as fs from 'node:fs';
 import { EngineClient } from './engine/engineClient';
+import { createProcessTransportFactory, findEngineBinary } from './engine/processTransport';
+import { HeadChangeTracker } from './engine/capabilityGate';
 import { DocumentSync } from './engine/documentSync';
 import { BlameModel } from './model/blameModel';
 import { RepositoryService } from './model/repositoryService';
@@ -14,7 +15,7 @@ import {
   encodeRevisionUri,
 } from './scm/revisionContentProvider';
 import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
-import { ViewBase, ViewNode } from './views/viewBase';
+import { ViewBase, ViewNode, firstWorkspaceRepo } from './views/viewBase';
 import { CommitsViewProvider } from './views/commitsView';
 import {
   BranchesViewProvider,
@@ -46,32 +47,28 @@ import { ModeController } from './modes/modeController';
 import { registerPatchCommands } from './patches/patchCommands';
 import { registerSuggestChange } from './reviews/suggestCommands';
 
-function findEngineBinary(context: vscode.ExtensionContext): string | undefined {
+function resolveEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
     .getConfiguration('gitglasses')
     .get<string>('engine.path');
-  if (configured) return configured;
-
   const bundled = context.asAbsolutePath(
     path.join('bin', process.platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine'),
   );
-  if (fs.existsSync(bundled)) return bundled;
-
-  // Development fallback: repo-local build outputs.
-  for (const preset of ['release', 'debug']) {
-    const dev = context.asAbsolutePath(
-      path.join('..', 'build', preset, 'engine', 'gitglasses-engine'),
-    );
-    if (fs.existsSync(dev)) return dev;
-  }
-  return undefined;
+  // Development fallbacks after the bundled binary: repo-local build outputs.
+  const dev = ['release', 'debug'].map((preset) =>
+    context.asAbsolutePath(path.join('..', 'build', preset, 'engine', 'gitglasses-engine')),
+  );
+  return findEngineBinary({
+    configuredPath: configured || undefined,
+    candidates: [bundled, ...dev],
+  });
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('GitGlasses');
   context.subscriptions.push(output);
 
-  const enginePath = findEngineBinary(context);
+  const enginePath = resolveEngineBinary(context);
   if (!enginePath) {
     output.appendLine('gitglasses-engine binary not found; GitGlasses is disabled');
     void vscode.window.showWarningMessage(
@@ -83,22 +80,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const logLevel = vscode.workspace
     .getConfiguration('gitglasses')
     .get<string>('engine.logLevel', 'warn');
-  const engine = new EngineClient({
-    enginePath,
-    logLevel,
-    onLog: (line) => output.appendLine(line),
-    onCrash: (error) => output.appendLine(`engine crashed: ${error.message}`),
-    onRestarted: () => {
-      void repos.rediscoverAll().then(() => {
-        blame.invalidate();
-        docSync.resync();
-        lineBlame.refresh();
-        fileAnnotations.refresh();
-        codeLens.fire();
-        for (const view of Object.values(views)) view.refresh();
-      });
+
+  // Same-message throttle: -32003 surfaces once even when a call site also
+  // reports the rejection through its own error path.
+  let lastUnsupported = { message: '', at: 0 };
+  const showMethodNotSupported = (message: string): void => {
+    const now = Date.now();
+    if (message === lastUnsupported.message && now - lastUnsupported.at < 3000) return;
+    lastUnsupported = { message, at: now };
+    void vscode.window.showWarningMessage(`GitGlasses: ${message}`);
+  };
+
+  const engine = new EngineClient(
+    createProcessTransportFactory({
+      enginePath,
+      logLevel,
+      onLog: (line) => output.appendLine(line),
+    }),
+    {
+      onLog: (line) => output.appendLine(line),
+      onCrash: (error) => output.appendLine(`engine crashed: ${error.message}`),
+      onMethodNotSupported: (_method, message) => showMethodNotSupported(message),
+      onRestarted: () => {
+        void repos.rediscoverAll().then(() => {
+          blame.invalidate();
+          docSync.resync();
+          lineBlame.refresh();
+          fileAnnotations.refresh();
+          codeLens.fire();
+          for (const view of Object.values(views)) view.refresh();
+        });
+      },
     },
-  });
+  );
   context.subscriptions.push({ dispose: () => engine.dispose() });
 
   const repos = new RepositoryService(engine);
@@ -152,6 +166,71 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const repoGroups = new RepoGroupsManager(context, engine, repos);
+
+  // The refresh work a HEAD move triggers, shared by the engine's
+  // repo/didChange push and the watch-fallback poller below.
+  const onHeadChanged = (repoId: string): void => {
+    refreshViews([
+      'gitglasses.views.commits',
+      'gitglasses.views.branches',
+      'gitglasses.views.remotes',
+      'gitglasses.views.tags',
+      'gitglasses.views.fileHistory',
+      'gitglasses.views.contributors',
+    ]);
+    blame.invalidate(repoId);
+    lineBlame.refresh();
+    fileAnnotations.refresh();
+    codeLens.fire();
+  };
+
+  // Capability gating: expose gitCli as a when-clause context so mutation
+  // commands grey out on engine builds without the git CLI. Unknown (before
+  // initialize) means "allow"; the engine's -32003 answer is the backstop.
+  const updateCapabilityContext = (): void => {
+    void vscode.commands.executeCommand(
+      'setContext',
+      'gitglasses.engineFullCapabilities',
+      engine.capabilities()?.gitCli !== false,
+    );
+  };
+  updateCapabilityContext();
+
+  // Watch fallback: engines without filesystem watching never push
+  // repo/didChange, so poll the active repo's HEAD while the window is
+  // focused and synthesize the same invalidation on a change.
+  const POLL_INTERVAL_MS = 5000;
+  const headTracker = new HeadChangeTracker();
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+  const pollActiveRepoHead = async (): Promise<void> => {
+    if (!vscode.window.state.focused) return;
+    const editor = vscode.window.activeTextEditor;
+    const located =
+      editor && editor.document.uri.scheme === 'file'
+        ? repos.locate(editor.document.uri)
+        : undefined;
+    const repoId = located?.repoId ?? (await firstWorkspaceRepo(repos))?.repoId;
+    if (!repoId) return;
+    const { head } = await engine.request('repo/state', { repoId });
+    if (headTracker.update(repoId, head.oid)) onHeadChanged(repoId);
+  };
+  const updateWatchFallback = (): void => {
+    const needsPolling = engine.capabilities()?.watch === false;
+    if (needsPolling && pollTimer === undefined) {
+      pollTimer = setInterval(() => void pollActiveRepoHead().catch(() => undefined), POLL_INTERVAL_MS);
+    } else if (!needsPolling && pollTimer !== undefined) {
+      clearInterval(pollTimer);
+      pollTimer = undefined;
+      headTracker.reset();
+    }
+  };
+  context.subscriptions.push(
+    engine.onDidChangeCapabilities(() => {
+      updateCapabilityContext();
+      updateWatchFallback();
+    }),
+    { dispose: () => { if (pollTimer !== undefined) clearInterval(pollTimer); } },
+  );
 
   context.subscriptions.push(
     vscode.window.registerTerminalLinkProvider(new ShaTerminalLinkProvider(engine, repos)),

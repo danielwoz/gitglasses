@@ -17,6 +17,7 @@ enum class ErrorCode {
   RepoNotFound = -32000,
   GitError = -32001,
   NotInitialized = -32002,
+  MethodNotSupported = -32003,
 };
 
 struct Error {

@@ -114,6 +114,7 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       "rebase/preview",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::string upstream = requireString(params, "upstream");
         auto repo = openRepo(context, params);
         auto output = runGitOrThrow(
@@ -133,6 +134,7 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       "rebase/start",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::string upstream = requireString(params, "upstream");
         validatePlan(params);
         auto repo = openRepo(context, params);
@@ -157,6 +159,7 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       "rebase/continue",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         auto repo = openRepo(context, params);
         requireWorktree(repo);
         // GIT_EDITOR=true accepts whatever message git prepared for the
@@ -171,6 +174,7 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       "rebase/abort",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         auto repo = openRepo(context, params);
         runGitOrThrow(repo, {"rebase", "--abort"}, token, "git rebase --abort");
         return rpc::Json::object();

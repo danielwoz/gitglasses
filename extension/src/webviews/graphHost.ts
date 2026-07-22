@@ -5,6 +5,7 @@
 import * as vscode from 'vscode';
 import { GraphRow } from '@gitglasses/protocol';
 import { EngineClient } from '../engine/engineClient';
+import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { firstWorkspaceRepo } from '../views/viewBase';
 import { openCommitDoc } from '../views/nodes';
@@ -44,6 +45,17 @@ const ACTION_LABELS: Record<GraphActionId, string> = {
   reset: 'reset',
   merge: 'merge',
   rebase: 'rebase',
+};
+
+// Engine method each context-menu action leads with, for capability gating.
+const ACTION_METHODS: Record<GraphActionId, string> = {
+  createBranch: 'mutate/branchCreate',
+  switchDetached: 'mutate/switch',
+  cherryPick: 'mutate/cherryPick',
+  revert: 'mutate/revert',
+  reset: 'mutate/reset',
+  merge: 'mutate/merge',
+  rebase: 'rebase/start',
 };
 
 type HostToWebviewMessage =
@@ -168,6 +180,12 @@ export class GraphWebviewHost implements vscode.Disposable {
     const repoId = this.repoId;
     const sha = shas[0];
     if (!repoId || !sha) return;
+    if (!isMethodAvailable(this.engine.capabilities(), ACTION_METHODS[action])) {
+      void vscode.window.showWarningMessage(
+        `GitGlasses: cannot ${ACTION_LABELS[action]}. ${CLI_UNAVAILABLE_MESSAGE}.`,
+      );
+      return;
+    }
     try {
       switch (action) {
         case 'createBranch':

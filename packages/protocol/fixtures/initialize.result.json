@@ -4,6 +4,6 @@
   "payload": {
     "engineVersion": "0.1.0",
     "protocolVersion": "0.1.0",
-    "capabilities": {}
+    "capabilities": { "gitCli": true, "watch": true, "threads": true }
   }
 }

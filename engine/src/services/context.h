@@ -9,7 +9,9 @@
 
 #include "cache/blame_cache.h"
 #include "cache/doc_overlay.h"
+#include "exec/cli_detect.h"
 #include "repo/registry.h"
+#include "rpc/dispatcher.h"
 #include "services/blame/blame_service.h"
 #include "watch/watch_manager.h"
 
@@ -21,7 +23,11 @@ struct ServiceContext {
   repo::Registry registry;
   cache::BlameCache blameCache;
   cache::DocOverlay docOverlay;
-  BlameService blameService{blameCache};
+  // Whether this process has a usable git CLI. Probed once per context (not
+  // statically) so capability reporting, method guards and the blame backend
+  // choice always agree for one server instance.
+  bool cliAvailable = exec::gitCliAvailable();
+  BlameService blameService{blameCache, cliAvailable};
 
   // Sends a server->client notification. Set by the server loop before any
   // request is dispatched; safe to call from watcher threads (the frame
@@ -38,5 +44,13 @@ struct ServiceContext {
                   {{"repoId", repoId}, {"generation", generation}, {"changed", changed}});
       }};
 };
+
+// Rejects a method that shells out to the git CLI when this build/environment
+// has none, as a typed error the client can branch on.
+inline void requireGitCli(const ServiceContext& context) {
+  if (context.cliAvailable) return;
+  throw rpc::HandlerError{{ErrorCode::MethodNotSupported,
+                           "requires the git CLI (not available in this engine build)"}};
+}
 
 }  // namespace gg::services

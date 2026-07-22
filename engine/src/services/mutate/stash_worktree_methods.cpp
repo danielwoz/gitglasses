@@ -76,6 +76,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "stash/push",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"stash", "push"};
         if (params.value("includeUntracked", false)) args.push_back("--include-untracked");
@@ -93,6 +94,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "stash/apply",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::string stashRef = requireStashRef(params);
         const bool pop = params.value("pop", false);
         auto repo = openRepo(context, params);
@@ -107,6 +109,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "stash/drop",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::string stashRef = requireStashRef(params);
         auto repo = openRepo(context, params);
         runGitOrThrow(repo, {"stash", "drop", stashRef}, token, "git stash drop");
@@ -118,6 +121,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "worktree/list",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         auto repo = openRepo(context, params);
         auto output =
             runGitOrThrow(repo, {"worktree", "list", "--porcelain"}, token, "git worktree list");
@@ -129,6 +133,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "worktree/add",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::string path = requireString(params, "path");
         const std::string ref = requireString(params, "ref");
         const std::string createBranch = params.value("createBranch", "");
@@ -149,6 +154,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "worktree/remove",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
         const std::string path = requireString(params, "path");
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"worktree", "remove"};

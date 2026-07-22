@@ -1,7 +1,6 @@
-import { ChildProcess, spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import {
   ClientNotifications,
+  EngineCapabilities,
   EngineNotificationMethod,
   EngineNotificationParams,
   ErrorCodes,
@@ -11,7 +10,7 @@ import {
   RequestResult,
   RpcResponse,
 } from '@gitglasses/protocol';
-import { frame, FrameParser } from './transport';
+import { EngineTransport } from './engineTransport';
 
 export class EngineError extends Error {
   constructor(
@@ -37,72 +36,86 @@ interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   generation: number;
+  method: string;
 }
 
 export interface EngineClientOptions {
-  enginePath: string;
-  logLevel?: string;
   onLog?: (line: string) => void;
   onCrash?: (error: Error) => void;
   /** Called after a respawned engine finished its initialize handshake. */
   onRestarted?: () => void;
+  /** Called when the engine answers a request with MethodNotSupported
+   *  (-32003); receives the engine's message verbatim so the UI can surface
+   *  it even where call sites would otherwise swallow the rejection. */
+  onMethodNotSupported?: (method: string, message: string) => void;
 }
 
 const BACKOFF_START_MS = 250;
 const BACKOFF_MAX_MS = 8000;
 const MAX_RESPAWNS = 5;
 
-// Typed JSON-RPC client over a spawned engine process. Crash-safe: pending
-// requests reject with EngineRestartedError on respawn (a generation counter
-// guarantees no stale result ever resolves), and callers re-query.
+// Typed JSON-RPC client over a pluggable engine transport. Crash-safe:
+// pending requests reject with EngineRestartedError on respawn (a generation
+// counter guarantees no stale result ever resolves), and callers re-query.
+// Each respawn gets a fresh transport from the injected factory.
 export class EngineClient {
-  private process: ChildProcess | undefined;
-  private parser = new FrameParser();
+  private transport: EngineTransport | undefined;
+  private transportAlive = false;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private generation = 0;
   private respawns = 0;
   private backoffMs = BACKOFF_START_MS;
   private disposed = false;
-  private notificationEmitter = new EventEmitter();
+  private notificationHandlers = new Map<string, Set<(params: unknown) => void>>();
+  private capabilityHandlers = new Set<() => void>();
+  private caps: EngineCapabilities | undefined;
   private ready: Promise<void> | undefined;
 
-  constructor(private readonly options: EngineClientOptions) {}
+  constructor(
+    private readonly createTransport: () => EngineTransport,
+    private readonly options: EngineClientOptions = {},
+  ) {}
 
   start(): Promise<void> {
     this.ready ??= this.spawnEngine();
     return this.ready;
   }
 
+  /** Capability flags from the last successful initialize handshake, or
+   *  undefined before the first one. Callers treat undefined as "unknown,
+   *  allow" — the engine's -32003 answer is the backstop. */
+  capabilities(): EngineCapabilities | undefined {
+    return this.caps;
+  }
+
+  /** Fires after every successful initialize handshake (startup, restart,
+   *  and crash respawn) — capabilities may differ across engine builds. */
+  onDidChangeCapabilities(handler: () => void): { dispose(): void } {
+    this.capabilityHandlers.add(handler);
+    return { dispose: () => this.capabilityHandlers.delete(handler) };
+  }
+
   private async spawnEngine(): Promise<void> {
     this.generation += 1;
     const generation = this.generation;
-    const child = spawn(
-      this.options.enginePath,
-      ['--stdio', '--log-level', this.options.logLevel ?? 'warn'],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-    this.process = child;
-    this.parser = new FrameParser();
+    const transport = this.createTransport();
+    this.transport = transport;
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      for (const payload of this.parser.push(chunk)) this.handleMessage(payload);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      this.options.onLog?.(chunk.toString('utf8').trimEnd());
-    });
-    child.on('exit', (code) => {
+    transport.onMessage((payload) => {
       if (this.disposed || generation !== this.generation) return;
+      this.handleMessage(payload);
+    });
+    transport.onExit(({ code }) => {
+      if (this.disposed || generation !== this.generation) return;
+      this.transportAlive = false;
       this.failAllPending(new EngineRestartedError());
       this.options.onCrash?.(new Error(`engine exited with code ${code}`));
       this.scheduleRespawn();
     });
-    child.on('error', (error) => {
-      if (this.disposed || generation !== this.generation) return;
-      this.failAllPending(error);
-      this.options.onCrash?.(error);
-      this.scheduleRespawn();
-    });
+
+    await transport.start();
+    this.transportAlive = true;
 
     const init = await this.request('initialize', { protocolVersion: PROTOCOL_VERSION });
     if (init.protocolVersion !== PROTOCOL_VERSION) {
@@ -111,8 +124,10 @@ export class EngineClient {
         `engine protocol ${init.protocolVersion} != client ${PROTOCOL_VERSION}`,
       );
     }
+    this.caps = init.capabilities;
     this.respawns = 0;
     this.backoffMs = BACKOFF_START_MS;
+    for (const handler of [...this.capabilityHandlers]) handler();
   }
 
   private scheduleRespawn(): void {
@@ -144,7 +159,8 @@ export class EngineClient {
       return;
     }
     if (message.method !== undefined) {
-      this.notificationEmitter.emit(message.method, message.params);
+      const handlers = this.notificationHandlers.get(message.method);
+      if (handlers) for (const handler of [...handlers]) handler(message.params);
       return;
     }
     if (typeof message.id !== 'number') return;
@@ -152,6 +168,9 @@ export class EngineClient {
     if (!pending) return; // cancelled or from a previous generation
     this.pending.delete(message.id);
     if (message.error) {
+      if (message.error.code === ErrorCodes.MethodNotSupported) {
+        this.options.onMethodNotSupported?.(pending.method, message.error.message);
+      }
       pending.reject(new EngineError(message.error.code, message.error.message));
     } else {
       pending.resolve(message.result);
@@ -163,8 +182,8 @@ export class EngineClient {
     params: RequestParams<M>,
     token?: CancellationLike,
   ): Promise<RequestResult<M>> {
-    const stdin = this.process?.stdin;
-    if (!stdin?.writable) {
+    const transport = this.transport;
+    if (!transport || !this.transportAlive) {
       return Promise.reject(new EngineRestartedError());
     }
     const id = this.nextId++;
@@ -175,6 +194,7 @@ export class EngineClient {
         resolve: resolve as (value: unknown) => void,
         reject,
         generation,
+        method,
       });
       const sub = token?.onCancellationRequested(() => {
         // Reject locally right away; tell the engine so it stops working.
@@ -189,7 +209,7 @@ export class EngineClient {
         reject(new EngineError(ErrorCodes.Cancelled, 'cancelled'));
         return;
       }
-      stdin.write(frame(JSON.stringify({ jsonrpc: '2.0', id, method, params })));
+      transport.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
     });
   }
 
@@ -197,23 +217,30 @@ export class EngineClient {
     method: M,
     params: ClientNotifications[M]['params'],
   ): void {
-    if (!this.process?.stdin?.writable) return;
-    this.process.stdin.write(frame(JSON.stringify({ jsonrpc: '2.0', method, params })));
+    if (!this.transport || !this.transportAlive) return;
+    this.transport.send(JSON.stringify({ jsonrpc: '2.0', method, params }));
   }
 
   onNotification<M extends EngineNotificationMethod>(
     method: M,
     handler: (params: EngineNotificationParams<M>) => void,
   ): { dispose(): void } {
-    this.notificationEmitter.on(method, handler);
-    return { dispose: () => this.notificationEmitter.off(method, handler) };
+    let handlers = this.notificationHandlers.get(method);
+    if (!handlers) {
+      handlers = new Set();
+      this.notificationHandlers.set(method, handlers);
+    }
+    const untyped = handler as (params: unknown) => void;
+    handlers.add(untyped);
+    return { dispose: () => this.notificationHandlers.get(method)?.delete(untyped) };
   }
 
   async restart(): Promise<void> {
-    const child = this.process;
-    this.generation += 1; // orphan the old process's exit handler
+    const transport = this.transport;
+    this.generation += 1; // orphan the old transport's exit handler
+    this.transportAlive = false;
     this.failAllPending(new EngineRestartedError());
-    child?.kill('SIGKILL');
+    transport?.kill();
     this.respawns = 0;
     this.ready = this.spawnEngine();
     await this.ready;
@@ -222,8 +249,6 @@ export class EngineClient {
   dispose(): void {
     this.disposed = true;
     this.failAllPending(new EngineRestartedError());
-    this.process?.stdin?.end(); // engine exits when stdin closes
-    const child = this.process;
-    setTimeout(() => child?.kill('SIGKILL'), 2000).unref?.();
+    this.transport?.kill();
   }
 }

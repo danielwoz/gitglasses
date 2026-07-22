@@ -240,6 +240,9 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         const std::string action = requireAction(params);
+        // Unstaging hunks reverse-applies through the git CLI (libgit2 has no
+        // reverse apply); staging stays libgit2-only and needs no CLI.
+        if (action == "unstage") requireGitCli(context);
         const std::string path = params.value("path", "");
         const rpc::Json requested = params.value("hunks", rpc::Json::array());
         if (path.empty()) {

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EngineClient, EngineError } from '../src/engine/engineClient';
+import { createProcessTransportFactory } from '../src/engine/processTransport';
 import { BlameModel } from '../src/model/blameModel';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 
@@ -42,7 +43,7 @@ describe('EngineClient', () => {
 
   beforeEach(async () => {
     fixture = makeFixtureRepo();
-    client = new EngineClient({ enginePath: enginePath! });
+    client = new EngineClient(createProcessTransportFactory({ enginePath: enginePath! }));
     await client.start();
   });
 
