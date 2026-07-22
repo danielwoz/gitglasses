@@ -151,7 +151,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
-  const repoGroups = new RepoGroupsManager(context);
+  const repoGroups = new RepoGroupsManager(context, engine, repos);
 
   context.subscriptions.push(
     vscode.window.registerTerminalLinkProvider(new ShaTerminalLinkProvider(engine, repos)),
@@ -309,6 +309,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.groups.create', () => repoGroups.create()),
     vscode.commands.registerCommand('gitglasses.groups.open', () => repoGroups.open()),
     vscode.commands.registerCommand('gitglasses.groups.delete', () => repoGroups.delete()),
+    vscode.commands.registerCommand('gitglasses.groups.export', () => repoGroups.export()),
+    vscode.commands.registerCommand('gitglasses.groups.import', () => repoGroups.import()),
     vscode.commands.registerCommand('gitglasses.connectIntegration', () =>
       integrations.connectIntegration(),
     ),
@@ -319,7 +321,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     new ModeController(lineBlame, fileAnnotations, codeLens),
     registerStartWork(integrations, engine, repos),
     ...registerLaunchpad(launchpad, integrations),
-    ...registerAiFeatures(context, engine, repos),
+    ...registerAiFeatures(context, engine, repos, searchView),
     ...registerPatchCommands(engine, repos, integrations),
     registerSuggestChange(engine, repos, integrations),
   );

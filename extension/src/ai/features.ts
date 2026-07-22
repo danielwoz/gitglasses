@@ -406,15 +406,16 @@ async function generateCommitMessage(
   }
 }
 
-// The Search & Compare view (SearchViewProvider) exposes no hook to inject
-// externally-built queries/results, and its file belongs to another
-// workstream, so NL search shows matches in a QuickPick that opens the
-// existing commit doc on accept.
+// NL search results land in the Search & Compare view via the provider's
+// runExternalSearch hook, labeled with the user's question. The QuickPick
+// path below survives only as a fallback for the (unexpected) case where no
+// view provider was wired in.
 async function nlSearch(
   engine: EngineClient,
   repos: RepositoryService,
   ai: AiService,
   nextStreamId: () => string,
+  searchView?: ExternalSearchTarget,
 ): Promise<void> {
   const repo = await requireRepo(repos);
   if (!repo) return;
@@ -435,6 +436,11 @@ async function nlSearch(
     void vscode.window.showErrorMessage(
       `GitGlasses AI: could not parse a search query (${parsed.error}). Model reply: ${raw.slice(0, 200)}`,
     );
+    return;
+  }
+
+  if (searchView) {
+    await searchView.runExternalSearch(parsed.query, `NL: "${request}"`);
     return;
   }
 
@@ -486,10 +492,19 @@ async function nlSearch(
 
 // --- Registration -----------------------------------------------------------
 
+/** The slice of SearchViewProvider that NL search feeds results into. */
+export interface ExternalSearchTarget {
+  runExternalSearch(
+    query: { text?: string; author?: string; sha?: string },
+    label: string,
+  ): Promise<void>;
+}
+
 export function registerAiFeatures(
   context: vscode.ExtensionContext,
   engine: EngineClient,
   repos: RepositoryService,
+  searchView?: ExternalSearchTarget,
 ): vscode.Disposable[] {
   const ai = new AiService(context);
   const panel = new AiResultContentProvider();
@@ -506,7 +521,7 @@ export function registerAiFeatures(
       generateCommitMessage(engine, repos, ai),
     ),
     vscode.commands.registerCommand('gitglasses.ai.nlSearch', () =>
-      nlSearch(engine, repos, ai, () => `ai-search-${streamCounter++}`),
+      nlSearch(engine, repos, ai, () => `ai-search-${streamCounter++}`, searchView),
     ),
     ...registerAiAuthCommands(context),
   ];

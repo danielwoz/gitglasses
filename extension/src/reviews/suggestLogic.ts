@@ -66,3 +66,56 @@ export function buildSuggestionBody(options: SuggestionBodyOptions): string {
 export function isAnchorRejection(status: number | undefined): boolean {
   return status === 422 || status === 400;
 }
+
+/** Grow a backtick fence until it exceeds any run inside the content. */
+function fenceFor(content: string): string {
+  let fence = '```';
+  while (content.includes(fence)) fence += '`';
+  return fence;
+}
+
+export interface PatchCommentOptions {
+  /** File path relative to the repository root. */
+  path: string;
+  /** 1-based inclusive line range the suggestion targets. */
+  startLine: number;
+  endLine: number;
+  /** Proposed replacement text for the selected lines. */
+  replacement: string;
+  /** Optional prose explaining the suggestion. */
+  comment?: string;
+  /** Browser URL of the shared patch (gist/snippet), when shared by link. */
+  patchUrl?: string;
+  /** Patch file name, when the envelope was saved to a file instead. */
+  patchFileName?: string;
+}
+
+/**
+ * Build the top-level PR comment posted when a suggestion cannot anchor to
+ * the diff: describes the targeted lines, carries the prose and the proposed
+ * replacement, and links the GitGlasses patch that applies the change.
+ */
+export function buildPatchCommentBody(options: PatchCommentOptions): string {
+  const lines =
+    options.startLine === options.endLine
+      ? `line ${options.startLine}`
+      : `lines ${options.startLine}-${options.endLine}`;
+  const parts: string[] = [
+    `**Suggested change** for \`${options.path}\` (${lines}) — outside the PR diff, so it is shared as a GitGlasses patch instead of an inline suggestion.`,
+  ];
+  const comment = options.comment?.trim();
+  if (comment) parts.push(comment);
+  const fence = fenceFor(options.replacement);
+  parts.push(`Proposed replacement:\n${fence}\n${options.replacement.replace(/\n$/, '')}\n${fence}`);
+  if (options.patchUrl) {
+    parts.push(
+      `Apply it with GitGlasses **Apply Patch** from this URL: ${options.patchUrl}`,
+    );
+  } else {
+    const name = options.patchFileName ?? 'the shared .ggpatch file';
+    parts.push(
+      `Apply it with GitGlasses **Apply Patch** using \`${name}\` (shared separately).`,
+    );
+  }
+  return parts.join('\n\n');
+}

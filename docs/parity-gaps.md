@@ -13,13 +13,19 @@ account). These are the honest gaps, with the reasons and our alternatives.
 ## Cloud Patches → Open Patches
 - Patch envelopes are stored as files or secret Gists/GitLab Snippets.
   **Secret gists are unlisted, not access-controlled** — anyone with the URL
-  can read. Optional client-side `age` encryption closes this when needed.
+  can read. The "Share Encrypted…" destination closes this: client-side
+  passphrase encryption (scrypt + AES-256-GCM), decrypted on apply. The
+  passphrase itself still has to travel out-of-band.
 - No central "my patches across devices" list; a local index only.
 
 ## Code Suggest → PR review suggestions
 - Suggestions must anchor to lines inside the PR diff (GitHub/GitLab API
   limit). GitLens' whole-file/out-of-diff suggestions rely on their cloud;
-  our fallback posts an Open Patch link as a PR comment.
+  when the anchor is rejected (or the provider cannot suggest but can
+  comment), GitGlasses automatically offers to share the working changes as
+  a patch link posted in a top-level PR comment. The reviewer applies it
+  with GitGlasses rather than a one-click provider UI, and the patch carries
+  the whole WIP (the engine has no per-file patch filter yet).
 
 ## Workspaces → Repo Groups
 - Groups sync via Settings Sync (remote URLs, portable), not a team cloud.

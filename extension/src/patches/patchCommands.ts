@@ -20,6 +20,7 @@ import {
   patchFileName,
   snippetProviderHost,
 } from './patchLogic';
+import { decryptEnvelope, encryptEnvelope, isEncryptedEnvelope } from './envelopeCrypto';
 
 type PatchSource = RequestParams<'patch/create'>['source'];
 
@@ -111,18 +112,37 @@ async function pickSource(
   }
 }
 
+/** Passphrase prompt with confirmation for encrypted sharing. */
+async function promptNewPassphrase(): Promise<string | undefined> {
+  const passphrase = await vscode.window.showInputBox({
+    prompt: 'Passphrase to encrypt the patch (share it out-of-band)',
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) => (value.length >= 8 ? undefined : 'At least 8 characters'),
+  });
+  if (passphrase === undefined) return undefined;
+  const confirmation = await vscode.window.showInputBox({
+    prompt: 'Confirm the passphrase',
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) => (value === passphrase ? undefined : 'Passphrases do not match'),
+  });
+  if (confirmation === undefined) return undefined;
+  return passphrase;
+}
+
 async function deliverPatch(
   integrations: IntegrationService,
   repo: ActiveRepo,
   envelope: PatchEnvelope,
 ): Promise<void> {
-  const json = envelopeToJson(envelope);
   const hosting = await integrations.getConnectedHostingFor(repo.rootPath).catch(() => undefined);
   const snippetHost =
     hosting && supportsSnippets(hosting.provider) ? hosting : undefined;
+  const snippetLabel = snippetHost?.providerId === 'gitlab' ? 'Snippet' : 'Gist';
 
   interface DestinationItem extends vscode.QuickPickItem {
-    id: 'file' | 'snippet' | 'clipboard';
+    id: 'file' | 'snippet' | 'encrypted' | 'clipboard';
   }
   const destinations: DestinationItem[] = [
     { id: 'file', label: '$(save) Save to File…' },
@@ -130,10 +150,15 @@ async function deliverPatch(
   if (snippetHost) {
     destinations.push({
       id: 'snippet',
-      label: `$(link) Share via ${snippetHost.providerId === 'gitlab' ? 'Snippet' : 'Gist'}`,
+      label: `$(link) Share via ${snippetLabel}`,
       description: snippetHost.host,
     });
   }
+  destinations.push({
+    id: 'encrypted',
+    label: '$(lock) Share Encrypted…',
+    description: 'passphrase-protected (scrypt + AES-256-GCM)',
+  });
   destinations.push({ id: 'clipboard', label: '$(clippy) Copy to Clipboard' });
 
   const destination = await vscode.window.showQuickPick(destinations, {
@@ -141,18 +166,38 @@ async function deliverPatch(
   });
   if (!destination) return;
 
-  if (destination.id === 'file') {
-    const target = await vscode.window.showSaveDialog({
+  // Encrypted sharing wraps the envelope, then reuses the gist/file paths.
+  let json = envelopeToJson(envelope);
+  let target: 'file' | 'snippet' | 'clipboard' = destination.id === 'encrypted' ? 'file' : destination.id;
+  if (destination.id === 'encrypted') {
+    const passphrase = await promptNewPassphrase();
+    if (passphrase === undefined) return;
+    json = encryptEnvelope(json, passphrase);
+    if (snippetHost) {
+      const how = await vscode.window.showQuickPick(
+        [
+          { id: 'snippet' as const, label: `$(link) Share via ${snippetLabel}`, description: snippetHost.host },
+          { id: 'file' as const, label: '$(save) Save to File…' },
+        ],
+        { placeHolder: 'Share the encrypted patch how?' },
+      );
+      if (!how) return;
+      target = how.id;
+    }
+  }
+
+  if (target === 'file') {
+    const saved = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(repo.rootPath, patchFileName(envelope.summary))),
       filters: { 'GitGlasses Patch': ['ggpatch'] },
     });
-    if (!target) return;
-    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(json));
-    void vscode.window.showInformationMessage(`GitGlasses: patch saved to ${target.fsPath}.`);
+    if (!saved) return;
+    await vscode.workspace.fs.writeFile(saved, new TextEncoder().encode(json));
+    void vscode.window.showInformationMessage(`GitGlasses: patch saved to ${saved.fsPath}.`);
     return;
   }
 
-  if (destination.id === 'snippet' && snippetHost && supportsSnippets(snippetHost.provider)) {
+  if (target === 'snippet' && snippetHost && supportsSnippets(snippetHost.provider)) {
     try {
       const { url } = await snippetHost.provider.createSnippet(snippetHost.auth, {
         filename: 'patch.ggpatch',
@@ -298,6 +343,32 @@ async function applyPatch(
     return;
   }
   if (text === undefined) return;
+
+  // Encrypted envelopes: prompt for the passphrase, three attempts.
+  if (isEncryptedEnvelope(text)) {
+    let decrypted: string | undefined;
+    for (let attempt = 1; attempt <= 3 && decrypted === undefined; attempt++) {
+      const passphrase = await vscode.window.showInputBox({
+        prompt:
+          attempt === 1
+            ? 'This patch is encrypted — enter its passphrase'
+            : `Wrong passphrase — try again (attempt ${attempt} of 3)`,
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (passphrase === undefined) return;
+      try {
+        decrypted = decryptEnvelope(text, passphrase);
+      } catch (error) {
+        if (attempt === 3) {
+          void vscode.window.showErrorMessage(`GitGlasses: ${errorMessage(error)}.`);
+          return;
+        }
+      }
+    }
+    if (decrypted === undefined) return;
+    text = decrypted;
+  }
 
   const parsed = parseEnvelope(text);
   if (!parsed.ok) {

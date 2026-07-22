@@ -10,6 +10,8 @@ const SEARCH_LIMIT = 200;
 // "Search Commits…" button while the tree is empty.
 export class SearchViewProvider extends ViewBase {
   private lastQuery: string | undefined;
+  /** Display label overriding the raw query text (e.g. NL-search phrasing). */
+  private lastLabel: string | undefined;
   private results: CommitSummaryInfo[] = [];
   private truncated = false;
   private streamCounter = 0;
@@ -24,7 +26,7 @@ export class SearchViewProvider extends ViewBase {
     const header = messageNode(
       `${this.results.length}${this.truncated ? '+' : ''} result${
         this.results.length === 1 ? '' : 's'
-      } for "${this.lastQuery}"`,
+      } for ${this.lastLabel ?? `"${this.lastQuery}"`}`,
     );
     header.item.iconPath = new vscode.ThemeIcon('search');
     if (this.results.length === 0) return [header];
@@ -39,7 +41,26 @@ export class SearchViewProvider extends ViewBase {
       value: this.lastQuery,
     });
     if (!text) return;
+    const query = isFullOrAbbreviatedSha(text) ? { sha: text } : { text };
+    await this.runSearch(query, text, undefined);
+  }
 
+  /**
+   * Runs an externally-built query (e.g. AI natural-language search) and shows
+   * the results in this view under a human-readable label.
+   */
+  async runExternalSearch(
+    query: { text?: string; author?: string; sha?: string },
+    label: string,
+  ): Promise<void> {
+    await this.runSearch(query, this.lastQuery, label);
+  }
+
+  private async runSearch(
+    query: { text?: string; author?: string; sha?: string },
+    queryText: string | undefined,
+    label: string | undefined,
+  ): Promise<void> {
     let repo: ActiveRepo | undefined;
     try {
       repo = await firstWorkspaceRepo(this.repos);
@@ -57,7 +78,6 @@ export class SearchViewProvider extends ViewBase {
       if (params.streamId === streamId) matches.push(...params.matches);
     });
     try {
-      const query = isFullOrAbbreviatedSha(text) ? { sha: text } : { text };
       const result = await this.engine.request('search/commits', {
         repoId: repo.repoId,
         streamId,
@@ -72,7 +92,8 @@ export class SearchViewProvider extends ViewBase {
       sub.dispose();
     }
 
-    this.lastQuery = text;
+    this.lastQuery = queryText ?? this.lastQuery ?? '';
+    this.lastLabel = label;
     this.results = matches;
     this.fireChange();
     await vscode.commands.executeCommand('gitglasses.views.searchCompare.focus');

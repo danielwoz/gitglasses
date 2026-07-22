@@ -1,14 +1,137 @@
 // "Suggest Change for Pull Request": turn an editor selection into a
 // diff-anchored review comment with a ```suggestion block on the branch's
-// open PR/MR.
+// open PR/MR. When the suggestion cannot anchor (lines outside the PR diff,
+// or a provider without the suggestions capability), the fallback shares the
+// working changes as a patch link posted in a top-level PR comment.
 
 import * as vscode from 'vscode';
-import { ProviderError, supportsReviewSuggestions } from '@gitglasses/integrations';
+import * as path from 'node:path';
+import {
+  ProviderError,
+  supportsPrComments,
+  supportsReviewSuggestions,
+  supportsSnippets,
+  type PullRequest,
+} from '@gitglasses/integrations';
 import type { EngineClient } from '../engine/engineClient';
 import type { RepositoryService } from '../model/repositoryService';
-import type { IntegrationService } from '../integrations/integrationService';
+import type { ConnectedHosting, IntegrationService } from '../integrations/integrationService';
 import { errorMessage } from '../commands/ui';
-import { buildSuggestionBody, isAnchorRejection, selectionToRange } from './suggestLogic';
+import { envelopeToJson, patchFileName as patchFileNameFor } from '../patches/patchLogic';
+import {
+  buildPatchCommentBody,
+  buildSuggestionBody,
+  isAnchorRejection,
+  selectionToRange,
+  type SuggestionRange,
+} from './suggestLogic';
+
+interface FallbackInput {
+  repoId: string;
+  rootPath: string;
+  relativePath: string;
+  range: SuggestionRange;
+  replacement: string;
+  comment?: string;
+}
+
+/**
+ * Share-as-patch-link fallback: confirm, create a patch envelope from the
+ * working changes (the engine's wip source has no per-file filter, so the
+ * patch carries the whole WIP including the suggested lines), share it via
+ * the provider's snippet host (or a file when snippets are unsupported), and
+ * post a top-level PR comment linking it.
+ */
+async function sharePatchLinkFallback(
+  engine: EngineClient,
+  hosting: ConnectedHosting,
+  pr: PullRequest,
+  input: FallbackInput,
+): Promise<void> {
+  if (!supportsPrComments(hosting.provider)) return;
+
+  const choice = await vscode.window.showWarningMessage(
+    "Can't anchor a suggestion here — share as a patch link instead?",
+    {
+      modal: true,
+      detail:
+        'GitGlasses will create a patch from your working changes, share it, and post a ' +
+        `comment with the link on ${pr.repo.owner}/${pr.repo.name}#${pr.number}.`,
+    },
+    'Share as Patch Link',
+  );
+  if (choice !== 'Share as Patch Link') return;
+
+  const summary = `Suggestion for ${input.relativePath} (PR #${pr.number})`;
+  let envelope;
+  try {
+    ({ envelope } = await engine.request('patch/create', {
+      repoId: input.repoId,
+      source: { kind: 'wip', includeUntracked: true },
+      summary,
+    }));
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      `GitGlasses: creating the patch failed: ${errorMessage(error)}`,
+    );
+    return;
+  }
+  if (envelope.patch.trim() === '') {
+    void vscode.window.showInformationMessage(
+      'GitGlasses: the working tree has no changes to share as a patch.',
+    );
+    return;
+  }
+  const json = envelopeToJson(envelope);
+
+  let patchUrl: string | undefined;
+  let patchFile: string | undefined;
+  if (supportsSnippets(hosting.provider)) {
+    try {
+      ({ url: patchUrl } = await hosting.provider.createSnippet(hosting.auth, {
+        filename: 'patch.ggpatch',
+        content: json,
+        description: summary,
+        secret: true,
+      }));
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `GitGlasses: sharing the patch failed: ${errorMessage(error)}`,
+      );
+      return;
+    }
+  } else {
+    const target = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(path.join(input.rootPath, patchFileNameFor(summary))),
+      filters: { 'GitGlasses Patch': ['ggpatch'] },
+    });
+    if (!target) return;
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(json));
+    patchFile = path.basename(target.fsPath);
+  }
+
+  const body = buildPatchCommentBody({
+    path: input.relativePath,
+    startLine: input.range.startLine,
+    endLine: input.range.endLine,
+    replacement: input.replacement,
+    comment: input.comment,
+    patchUrl,
+    patchFileName: patchFile,
+  });
+  try {
+    const { url } = await hosting.provider.createPullRequestComment(hosting.auth, pr, body);
+    const open = await vscode.window.showInformationMessage(
+      `GitGlasses: patch link posted as a comment on ${pr.repo.owner}/${pr.repo.name}#${pr.number}.`,
+      'Open',
+    );
+    if (open === 'Open') void vscode.env.openExternal(vscode.Uri.parse(url));
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      `GitGlasses: posting the comment failed: ${errorMessage(error)}`,
+    );
+  }
+}
 
 export function registerSuggestChange(
   engine: EngineClient,
@@ -44,7 +167,8 @@ export function registerSuggestChange(
       );
       return;
     }
-    if (!supportsReviewSuggestions(hosting.provider)) {
+    const canSuggest = supportsReviewSuggestions(hosting.provider);
+    if (!canSuggest && !supportsPrComments(hosting.provider)) {
       void vscode.window.showInformationMessage(
         `GitGlasses: ${hosting.providerId} does not support review suggestions.`,
       );
@@ -108,16 +232,33 @@ export function registerSuggestChange(
       ignoreFocusOut: true,
     });
     if (comment === undefined) return;
+    const prose = comment === '' ? undefined : comment;
+
+    const fallbackInput: FallbackInput = {
+      repoId: located.repoId,
+      rootPath: located.rootPath,
+      relativePath: located.relativePath,
+      range,
+      replacement,
+      comment: prose,
+    };
+
+    // Providers that can comment but not suggest go straight to the fallback.
+    const provider = hosting.provider;
+    if (!supportsReviewSuggestions(provider)) {
+      await sharePatchLinkFallback(engine, hosting, pr, fallbackInput);
+      return;
+    }
 
     const body = buildSuggestionBody({
       replacement,
-      comment: comment === '' ? undefined : comment,
+      comment: prose,
       gitlabLinesAbove:
         hosting.providerId === 'gitlab' ? range.endLine - range.startLine : undefined,
     });
 
     try {
-      const { url } = await hosting.provider.createReviewSuggestion(hosting.auth, pr, {
+      const { url } = await provider.createReviewSuggestion(hosting.auth, pr, {
         path: located.relativePath,
         startLine: range.startLine,
         endLine: range.endLine,
@@ -130,6 +271,10 @@ export function registerSuggestChange(
       if (open === 'Open') void vscode.env.openExternal(vscode.Uri.parse(url));
     } catch (error) {
       if (error instanceof ProviderError && isAnchorRejection(error.status)) {
+        if (supportsPrComments(hosting.provider)) {
+          await sharePatchLinkFallback(engine, hosting, pr, fallbackInput);
+          return;
+        }
         void vscode.window.showErrorMessage(
           'GitGlasses: the provider rejected the comment anchor — the selected lines are not ' +
             'part of the pull request diff. Your branch likely has unpushed or uncommitted ' +

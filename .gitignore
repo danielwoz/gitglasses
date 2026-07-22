@@ -2,6 +2,8 @@ build/
 out/
 node_modules/
 dist/
+dist-e2e/
+.vscode-test/
 *.vsix
 extension/bin/
 vcpkg_installed/
