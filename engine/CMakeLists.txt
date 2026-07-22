@@ -39,8 +39,12 @@ target_link_libraries(gg_cache PUBLIC gg_exec PRIVATE gg_warnings)
 
 add_library(gg_services STATIC
   src/services/blame/blame_service.cpp
+  src/services/blame/blame_methods.cpp
+  src/services/repo_methods.cpp
 )
-target_link_libraries(gg_services PUBLIC gg_cache gg_core gg_exec PRIVATE gg_warnings)
+target_link_libraries(gg_services
+  PUBLIC gg_cache gg_core gg_exec gg_repo gg_rpc
+  PRIVATE gg_warnings)
 
 add_library(gg_rpc STATIC
   src/rpc/framing.cpp
