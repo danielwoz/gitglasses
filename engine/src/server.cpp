@@ -29,26 +29,20 @@ namespace {
 constexpr const char* kProtocolVersion = "0.1.0";
 constexpr const char* kEngineVersion = "0.1.0";
 
+// watch/threads are static truths of the build: single-threaded builds
+// (wasm, debug-st) have no watcher threads and no worker pool.
+#ifdef GG_SINGLE_THREADED
+constexpr bool kWatchCapability = false;
+constexpr bool kThreadsCapability = false;
+#else
+constexpr bool kWatchCapability = true;
+constexpr bool kThreadsCapability = true;
+#endif
+
 }  // namespace
 
-int runServer(std::istream& in, std::ostream& out) {
-  core::LibGit2 libgit2;
-  rpc::FrameReader reader(in);
-  rpc::FrameWriter writer(out);
-  TaskPool pool;
-  services::ServiceContext context;
-  std::atomic<bool> shutdownRequested{false};
-
-  rpc::Dispatcher dispatcher(pool, [&writer](const rpc::Json& message) {
-    writer.write(message.dump());
-  });
-
-  // Server-initiated notifications (watcher pushes) go through the same
-  // serialized frame writer as dispatcher responses.
-  context.broadcast = [&writer](const std::string& method, const rpc::Json& params) {
-    writer.write(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}.dump());
-  };
-
+void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& context,
+                         std::atomic<bool>& shutdownRequested) {
   dispatcher.method("initialize", [&context](const rpc::Json& params, const CancelToken&,
                                              const rpc::NotifyFn&) -> rpc::Json {
     const std::string clientProtocol = params.value("protocolVersion", "");
@@ -57,12 +51,12 @@ int runServer(std::istream& in, std::ostream& out) {
                                std::string("protocol version mismatch: engine speaks ") +
                                    kProtocolVersion + ", client sent '" + clientProtocol + "'"}};
     }
-    // watch/threads are static truths of this native build; the wasm build
-    // (no filesystem watcher threads, no worker pool) will report false.
     return {{"engineVersion", kEngineVersion},
             {"protocolVersion", kProtocolVersion},
             {"capabilities",
-             {{"gitCli", context.cliAvailable}, {"watch", true}, {"threads", true}}}};
+             {{"gitCli", context.cliAvailable},
+              {"watch", kWatchCapability},
+              {"threads", kThreadsCapability}}}};
   });
 
   dispatcher.method("shutdown", [&shutdownRequested](const rpc::Json&, const CancelToken&,
@@ -84,6 +78,27 @@ int runServer(std::istream& in, std::ostream& out) {
   services::registerStashWorktreeMethods(dispatcher, context);
   services::registerRebaseMethods(dispatcher, context);
   services::registerPatchMethods(dispatcher, context);
+}
+
+int runServer(std::istream& in, std::ostream& out) {
+  core::LibGit2 libgit2;
+  rpc::FrameReader reader(in);
+  rpc::FrameWriter writer(out);
+  TaskPool pool;
+  services::ServiceContext context;
+  std::atomic<bool> shutdownRequested{false};
+
+  rpc::Dispatcher dispatcher(pool, [&writer](const rpc::Json& message) {
+    writer.write(message.dump());
+  });
+
+  // Server-initiated notifications (watcher pushes) go through the same
+  // serialized frame writer as dispatcher responses.
+  context.broadcast = [&writer](const std::string& method, const rpc::Json& params) {
+    writer.write(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}.dump());
+  };
+
+  configureDispatcher(dispatcher, context, shutdownRequested);
 
   while (!shutdownRequested) {
     auto payload = reader.read();

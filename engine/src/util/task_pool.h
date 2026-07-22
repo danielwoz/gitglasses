@@ -17,6 +17,11 @@ enum class Priority {
 // Fixed-size worker pool with two priority lanes. Interactive tasks always
 // dequeue before background ones; there is no preemption of running tasks —
 // long background work must stay cancellable instead.
+//
+// Under GG_SINGLE_THREADED the pool runs inline: post() executes the task
+// immediately on the calling thread and no workers are spawned. Ordering
+// semantics collapse naturally (everything runs in post order) and Strand
+// works unchanged on top.
 class TaskPool {
  public:
   explicit TaskPool(unsigned threads = defaultThreadCount());

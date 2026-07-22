@@ -49,8 +49,13 @@ TEST_F(NoCliSessionTest, FullSessionWithoutGitCli) {
   ASSERT_TRUE(init.contains("result")) << init.dump();
   const Json caps = init["result"].value("capabilities", Json::object());
   EXPECT_EQ(caps.value("gitCli", true), false);
+#ifdef GG_SINGLE_THREADED
+  EXPECT_EQ(caps.value("watch", true), false);
+  EXPECT_EQ(caps.value("threads", true), false);
+#else
   EXPECT_EQ(caps.value("watch", false), true);
   EXPECT_EQ(caps.value("threads", false), true);
+#endif
 
   Json discovered =
       session.request(req(2, "repo/discover", {{"path", fixture.root().string()}}));

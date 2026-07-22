@@ -1,3 +1,73 @@
+if(EMSCRIPTEN)
+  # Wasm build: one module target from the service/cache/core/rpc sources.
+  # Excluded relative to native: exec/git_process.cpp + exec/cli_detect's
+  # probe path (child processes replaced by src/wasm/git_process_stub.cpp),
+  # watch/ (no watcher threads), util/log.cpp and spdlog/fmt (replaced by the
+  # stderr shim under src/wasm/shim), main.cpp + sequence_editor.cpp (no
+  # stdio loop, no editor shim re-exec).
+  find_package(nlohmann_json CONFIG REQUIRED)
+  find_package(libgit2 CONFIG REQUIRED)
+
+  add_executable(gitglasses-engine-wasm
+    src/wasm/wasm_main.cpp
+    src/wasm/git_process_stub.cpp
+    src/wasm/log_stub.cpp
+    src/server.cpp
+    src/util/sha256.cpp
+    src/util/task_pool.cpp
+    src/core/git2.cpp
+    src/core/repo.cpp
+    src/repo/registry.cpp
+    src/exec/cli_detect.cpp
+    src/exec/parsers/history_log.cpp
+    src/exec/parsers/incremental_blame.cpp
+    src/cache/blame_cache.cpp
+    src/rpc/framing.cpp
+    src/rpc/dispatcher.cpp
+    src/services/blame/blame_service.cpp
+    src/services/blame/blame_methods.cpp
+    src/services/graph/graph_methods.cpp
+    src/services/history/history_methods.cpp
+    src/services/mutate/mutate_common.cpp
+    src/services/mutate/mutate_methods.cpp
+    src/services/mutate/rebase_methods.cpp
+    src/services/mutate/stash_worktree_methods.cpp
+    src/services/patch/patch_methods.cpp
+    src/services/refs/refs_methods.cpp
+    src/services/status/diff_common.cpp
+    src/services/status/diff_methods.cpp
+    src/services/status/stage_methods.cpp
+    src/services/status/status_methods.cpp
+    src/services/repo_methods.cpp
+    src/services/rev_methods.cpp
+  )
+  target_include_directories(gitglasses-engine-wasm PRIVATE src src/wasm/shim)
+  target_compile_definitions(gitglasses-engine-wasm PRIVATE GG_WASM)
+  # Same warning posture as gg_warnings, minus warnings that only emsdk's
+  # newer clang enables under -Wextra (native sources stay untouched).
+  target_compile_options(gitglasses-engine-wasm PRIVATE
+    -fexceptions
+    -Wall -Wextra -Wpedantic
+    $<$<BOOL:${GG_WARNINGS_AS_ERRORS}>:-Werror>
+    -Wno-missing-designated-field-initializers)
+  target_link_libraries(gitglasses-engine-wasm PRIVATE
+    nlohmann_json::nlohmann_json
+    libgit2::libgit2package)
+  target_link_options(gitglasses-engine-wasm PRIVATE
+    -fexceptions
+    -sDISABLE_EXCEPTION_CATCHING=0
+    -sMODULARIZE=1
+    -sEXPORT_ES6=1
+    "-sEXPORTED_FUNCTIONS=_gg_wasm_init,_gg_wasm_handle,_malloc,_free"
+    "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS"
+    -sALLOW_MEMORY_GROWTH=1
+    # libgit2's status/blame paths need far more than the 64 KiB default.
+    -sSTACK_SIZE=2097152
+    -lnodefs.js
+    "-sENVIRONMENT=node,worker")
+  set_target_properties(gitglasses-engine-wasm PROPERTIES SUFFIX ".mjs")
+else()
+
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -86,4 +156,6 @@ target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_wa
 
 if(GG_BUILD_TESTS)
   add_subdirectory(tests)
+endif()
+
 endif()

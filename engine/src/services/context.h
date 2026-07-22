@@ -13,7 +13,10 @@
 #include "repo/registry.h"
 #include "rpc/dispatcher.h"
 #include "services/blame/blame_service.h"
+
+#ifndef GG_SINGLE_THREADED
 #include "watch/watch_manager.h"
+#endif
 
 namespace gg::services {
 
@@ -34,6 +37,15 @@ struct ServiceContext {
   // writer serializes concurrent writes).
   std::function<void(const std::string& method, const nlohmann::json& params)> broadcast;
 
+#ifdef GG_SINGLE_THREADED
+  // Single-threaded builds (wasm, debug-st) have no watcher threads; the
+  // capability is reported as watch:false and watch requests are ignored.
+  struct NullWatchManager {
+    void watch(const std::string&, const std::string&) {}
+    bool isWatching(const std::string&) const { return false; }
+  };
+  NullWatchManager watchManager;
+#else
   // Pushes repo/didChange when a watched repository's git state changes.
   // Declared last so its threads stop before the state they observe goes away.
   watch::WatchManager watchManager{
@@ -43,6 +55,7 @@ struct ServiceContext {
         broadcast("repo/didChange",
                   {{"repoId", repoId}, {"generation", generation}, {"changed", changed}});
       }};
+#endif
 };
 
 // Rejects a method that shells out to the git CLI when this build/environment

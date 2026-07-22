@@ -9,6 +9,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(GG_BUILD_TESTS "Build engine tests" ON)
 option(GG_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
+option(GG_SINGLE_THREADED "Run all tasks inline on the caller (no worker threads)" OFF)
+
+# Wasm has no worker pool, watcher threads, or child processes.
+if(EMSCRIPTEN)
+  set(GG_SINGLE_THREADED ON)
+  set(GG_BUILD_TESTS OFF)
+endif()
+
+if(GG_SINGLE_THREADED)
+  add_compile_definitions(GG_SINGLE_THREADED)
+endif()
 
 add_library(gg_warnings INTERFACE)
 if(MSVC)

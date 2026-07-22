@@ -554,6 +554,9 @@ TEST(MutateService, WorktreeAddListRemove) {
 }
 
 TEST(MutateService, CommitEmitsRepoDidChange) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
   FixtureRepo fixture;
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
@@ -577,6 +580,7 @@ TEST(MutateService, CommitEmitsRepoDidChange) {
     }
   }
   EXPECT_TRUE(sawHeadChange) << "no HEAD/refs repo/didChange after mutate/commit";
+#endif
 }
 
 }  // namespace

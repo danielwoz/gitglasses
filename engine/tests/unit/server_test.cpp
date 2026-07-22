@@ -147,6 +147,9 @@ TEST(Server, BlameFileStreamsHunksAndRespectsOverlay) {
 }
 
 TEST(Server, WatcherPushesRepoDidChange) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
   gg::testing::FixtureRepo fixture;
 
   InteractiveSession session;
@@ -173,6 +176,7 @@ TEST(Server, WatcherPushesRepoDidChange) {
     }
   }
   EXPECT_TRUE(sawRelevantCategory) << note.dump();
+#endif
 }
 
 TEST(Server, FileAtRevReturnsContentsAndErrors) {

@@ -71,6 +71,9 @@ class Collector {
 class WatchManagerTest : public ::testing::TestWithParam<WatchManager::Backend> {};
 
 TEST_P(WatchManagerTest, ReportsIndexAndCommitChangesWithIncreasingGenerations) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
   gg::testing::FixtureRepo fixture;
   Collector collector;
   WatchManager manager(collector.callback(), GetParam());
@@ -101,6 +104,7 @@ TEST_P(WatchManagerTest, ReportsIndexAndCommitChangesWithIncreasingGenerations) 
     EXPECT_GT(event.generation, previous);
     previous = event.generation;
   }
+#endif
 }
 
 INSTANTIATE_TEST_SUITE_P(

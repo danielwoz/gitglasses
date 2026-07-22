@@ -5,9 +5,39 @@
 namespace gg {
 
 unsigned TaskPool::defaultThreadCount() {
+#ifdef GG_SINGLE_THREADED
+  return 1;
+#else
   unsigned hw = std::thread::hardware_concurrency();
   return std::clamp(hw, 2u, 8u);
+#endif
 }
+
+#ifdef GG_SINGLE_THREADED
+
+TaskPool::TaskPool(unsigned threads) { (void)threads; }
+
+TaskPool::~TaskPool() { shutdown(); }
+
+void TaskPool::post(Priority priority, std::function<void()> task) {
+  (void)priority;
+  {
+    std::lock_guard lock(mutex_);
+    if (stopping_) return;
+  }
+  // Inline execution: priority lanes are irrelevant because the caller waits
+  // for the task either way.
+  task();
+}
+
+void TaskPool::shutdown() {
+  std::lock_guard lock(mutex_);
+  stopping_ = true;
+}
+
+void TaskPool::workerLoop() {}
+
+#else
 
 TaskPool::TaskPool(unsigned threads) {
   workers_.reserve(threads);
@@ -39,6 +69,9 @@ void TaskPool::shutdown() {
   }
 }
 
+#endif  // GG_SINGLE_THREADED
+
+#ifndef GG_SINGLE_THREADED
 void TaskPool::workerLoop() {
   for (;;) {
     std::function<void()> task;
@@ -56,5 +89,6 @@ void TaskPool::workerLoop() {
     task();
   }
 }
+#endif  // !GG_SINGLE_THREADED
 
 }  // namespace gg

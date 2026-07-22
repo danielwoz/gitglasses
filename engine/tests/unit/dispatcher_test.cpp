@@ -108,6 +108,9 @@ TEST_F(DispatcherTest, HandlerErrorsMapToJsonRpcErrors) {
 }
 
 TEST_F(DispatcherTest, CancelRequestFlipsTokenAndAnswersCancelled) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: requests complete before $/cancelRequest can land mid-flight";
+#else
   std::mutex startedMutex;
   std::condition_variable startedCv;
   bool started = false;
@@ -135,6 +138,7 @@ TEST_F(DispatcherTest, CancelRequestFlipsTokenAndAnswersCancelled) {
 
   Json response = sink.waitForId(4);
   EXPECT_EQ(response["error"]["code"], -32800);
+#endif
 }
 
 TEST_F(DispatcherTest, StreamingHandlerEmitsNotificationsBeforeResult) {
@@ -171,6 +175,9 @@ TEST_F(DispatcherTest, SerialMethodsRunInSubmissionOrder) {
 }
 
 TEST_F(DispatcherTest, ConcurrentMethodsOverlap) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: concurrent handlers cannot overlap";
+#else
   std::mutex m;
   std::condition_variable cv;
   int running = 0;
@@ -201,6 +208,7 @@ TEST_F(DispatcherTest, ConcurrentMethodsOverlap) {
 
   std::lock_guard lock(m);
   EXPECT_GE(peak, 2);
+#endif
 }
 
 TEST_F(DispatcherTest, InflightDrainsAfterCompletion) {

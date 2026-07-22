@@ -20,6 +20,32 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
     {
+      "name": "debug-st",
+      "inherits": "debug",
+      "cacheVariables": { "GG_SINGLE_THREADED": "ON" }
+    },
+    {
+      "name": "wasm",
+      "vendor": {
+        "gitglasses": {
+          "notes": "Emscripten build of the engine as an ES6 wasm module. Requires emsdk in the environment (source emsdk_env.sh) and prebuilt wasm deps under ~/.cache/gitglasses/vcpkg_wasm. There is no ctest preset; test with `node engine/wasm-test/run.mjs` (plain Node >= 20, no pnpm or package install needed)."
+        }
+      },
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "wasm32-emscripten-gg",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/ci/triplets",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+        "VCPKG_INSTALLED_DIR": "$env{HOME}/.cache/gitglasses/vcpkg_wasm",
+        "VCPKG_MANIFEST_INSTALL": "OFF",
+        "GG_SINGLE_THREADED": "ON",
+        "GG_BUILD_TESTS": "OFF"
+      }
+    },
+    {
       "name": "release",
       "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
@@ -43,12 +69,15 @@
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
+    { "name": "debug-st", "configurePreset": "debug-st" },
+    { "name": "wasm", "configurePreset": "wasm" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
+    { "name": "debug-st", "configurePreset": "debug-st", "output": { "outputOnFailure": true } },
     { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
     { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
     { "name": "tsan", "configurePreset": "tsan", "output": { "outputOnFailure": true } }
