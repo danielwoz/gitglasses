@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+
+jobs:
+  engine:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x64
+            triplet: x64-linux
+          - os: ubuntu-22.04-arm
+            target: linux-arm64
+            triplet: arm64-linux
+          - os: macos-14
+            target: darwin-arm64
+            triplet: arm64-osx
+          - os: macos-13
+            target: darwin-x64
+            triplet: x64-osx
+          - os: windows-2022
+            target: win32-x64
+            triplet: x64-windows-static
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap vcpkg
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics || "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/gitglasses/vcpkg_installed
+            ~/.cache/vcpkg/archives
+          key: vcpkg-release-${{ matrix.target }}-${{ hashFiles('vcpkg.json') }}
+      - name: Install deps + build
+        shell: bash
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet ${{ matrix.triplet }} \
+            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          cmake --preset release \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed"
+          cmake --build --preset release
+      - name: Test
+        shell: bash
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.invalid
+          ctest --preset release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: build/release/engine/gitglasses-engine*
+          if-no-files-found: error
+
+  package:
+    needs: engine
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: engine-bin/
+      - name: Package VSIX
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p dist
+          node scripts/package-vsix.mjs \
+            --engine "$(find engine-bin -name 'gitglasses-engine*' -type f | head -1)" \
+            --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.target }}
+          path: dist/*.vsix
+
+  publish:
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+          path: dist/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.vsix
+          generate_release_notes: true
+      # Marketplace/OpenVSX publish gated on secrets being configured.
+      - name: Publish to marketplaces
+        if: ${{ false }}  # enable once VSCE_PAT / OVSX_PAT secrets exist
+        run: echo "vsce publish + ovsx publish per-target VSIXes"

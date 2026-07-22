@@ -2,6 +2,7 @@ export * from './models.js';
 export * from './errors.js';
 export * from './http.js';
 export * from './hostingProvider.js';
+export * from './snippets.js';
 export * from './remoteMatcher.js';
 export * from './cache.js';
 export * from './rateLimiter.js';

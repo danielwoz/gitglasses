@@ -5,7 +5,15 @@ import type {
   HostingCapability,
   HostingProvider,
   PullRequestQueryOptions,
+  ReviewSuggestionInput,
+  ReviewSuggestions,
 } from '../hostingProvider.js';
+import {
+  parseGistId,
+  type SnippetCreateOptions,
+  type SnippetHost,
+  type SnippetRef,
+} from '../snippets.js';
 import type {
   Account,
   ChecksStatus,
@@ -172,7 +180,7 @@ function mapAccount(account: GraphQlAccount | null): Account {
  * Also serves GitHub Enterprise via createGitHubEnterpriseProvider, which
  * points the same class at an enterprise host's API endpoints.
  */
-export class GitHubProvider implements HostingProvider {
+export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSuggestions {
   readonly id: string;
   readonly host: string;
   readonly capabilities: ReadonlySet<HostingCapability> = new Set<HostingCapability>([
@@ -182,6 +190,8 @@ export class GitHubProvider implements HostingProvider {
     'reviews',
     'mergeability',
     'createPR',
+    'gists',
+    'suggestions',
   ]);
 
   private readonly apiBaseUrl: string;
@@ -262,6 +272,76 @@ export class GitHubProvider implements HostingProvider {
         : this.mapRestPullRequest(pull as Record<string, unknown>, repo);
     }
     return this.mapRestIssue(issueJson, repo);
+  }
+
+  /** Creates a gist (secret by default) holding a single file. */
+  async createSnippet(auth: AuthContext, options: SnippetCreateOptions): Promise<SnippetRef> {
+    const json = (await this.restPost(auth, '/gists', {
+      description: options.description ?? '',
+      public: options.secret === false,
+      files: { [options.filename]: { content: options.content } },
+    })) as { id?: unknown; html_url?: unknown };
+    return { id: String(json.id ?? ''), url: String(json.html_url ?? '') };
+  }
+
+  /** Fetches a gist's file content by id or URL; prefers a .ggpatch file. */
+  async getSnippet(auth: AuthContext, idOrUrl: string): Promise<string> {
+    const id = parseGistId(idOrUrl);
+    if (!id) {
+      throw new ProviderError(`Not a recognizable gist id or URL: ${idOrUrl}`);
+    }
+    const json = await this.rest(auth, `/gists/${id}`);
+    if (json === undefined) {
+      throw new ProviderError(`Gist ${id} not found`, 404);
+    }
+    const files =
+      (json as { files?: Record<string, { content?: string; truncated?: boolean; raw_url?: string }> })
+        .files ?? {};
+    const entries = Object.entries(files);
+    const file = entries.find(([name]) => name.endsWith('.ggpatch'))?.[1] ?? entries[0]?.[1];
+    if (!file) {
+      throw new ProviderError(`Gist ${id} has no files`);
+    }
+    if (file.truncated && file.raw_url) {
+      const response = await this.fetchFn(file.raw_url, {
+        method: 'GET',
+        headers: this.headers(auth),
+      });
+      this.throwForStatus(response);
+      return response.text();
+    }
+    return file.content ?? '';
+  }
+
+  /**
+   * Posts a diff-anchored review comment with a ```suggestion block via
+   * REST POST /repos/{o}/{r}/pulls/{n}/comments (line/start_line, side RIGHT).
+   * REST is chosen over the GraphQL addPullRequestReviewThread flow because a
+   * single call yields an immediately visible comment — no pending review to
+   * create and submit. A 422 means the lines are not part of the PR head diff.
+   */
+  async createReviewSuggestion(
+    auth: AuthContext,
+    pr: PullRequest,
+    input: ReviewSuggestionInput
+  ): Promise<{ url: string }> {
+    const body: Record<string, unknown> = {
+      body: input.body,
+      commit_id: pr.headSha,
+      path: input.path,
+      line: input.endLine,
+      side: 'RIGHT',
+    };
+    if (input.endLine > input.startLine) {
+      body.start_line = input.startLine;
+      body.start_side = 'RIGHT';
+    }
+    const json = (await this.restPost(
+      auth,
+      `/repos/${pr.repo.owner}/${pr.repo.name}/pulls/${pr.number}/comments`,
+      body
+    )) as { html_url?: unknown };
+    return { url: json.html_url ? String(json.html_url) : pr.url };
   }
 
   private mapPullRequest(node: GraphQlPullRequestNode, viewer: string): PullRequest {
@@ -401,6 +481,21 @@ export class GitHubProvider implements HostingProvider {
     if (response.status === 404) {
       return undefined;
     }
+    this.throwForStatus(response);
+    return response.json();
+  }
+
+  /** REST POST with a JSON body; throws typed errors on failure. */
+  private async restPost(
+    auth: AuthContext,
+    path: string,
+    body: Record<string, unknown>
+  ): Promise<unknown> {
+    const response = await this.fetchFn(`${this.apiBaseUrl}${path}`, {
+      method: 'POST',
+      headers: this.headers(auth),
+      body: JSON.stringify(body),
+    });
     this.throwForStatus(response);
     return response.json();
   }

@@ -67,6 +67,39 @@ export interface HostingProvider {
   getAutolinkPatterns?(auth: AuthContext, repo: RepoDescriptor): Promise<AutolinkPattern[]>;
 }
 
+export interface ReviewSuggestionInput {
+  /** File path relative to the repository root, forward slashes. */
+  path: string;
+  /** 1-based first line of the replaced range in the PR head version. */
+  startLine: number;
+  /** 1-based last line of the range, inclusive; equals startLine for one line. */
+  endLine: number;
+  /** Full comment body, including the ```suggestion fenced block. */
+  body: string;
+}
+
+/**
+ * Additive capability interface for providers that can post diff-anchored
+ * review comments carrying a ```suggestion block. The comment anchors to the
+ * PR head sha: when the local file differs from the head on those lines the
+ * provider rejects the anchor (GitHub 422, GitLab 400) and callers should
+ * surface "unpushed/uncommitted changes" guidance.
+ */
+export interface ReviewSuggestions {
+  createReviewSuggestion(
+    auth: AuthContext,
+    pr: PullRequest,
+    input: ReviewSuggestionInput
+  ): Promise<{ url: string }>;
+}
+
+/** True when the provider implements the ReviewSuggestions capability. */
+export function supportsReviewSuggestions<T extends object>(
+  provider: T
+): provider is T & ReviewSuggestions {
+  return typeof (provider as Partial<ReviewSuggestions>).createReviewSuggestion === 'function';
+}
+
 /** An issue tracker (Jira, Linear, GitHub Issues, ...). */
 export interface IssueProvider {
   readonly id: string;

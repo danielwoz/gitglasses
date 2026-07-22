@@ -167,6 +167,18 @@
       {
         "command": "gitglasses.ai.clearApiKey",
         "title": "GitGlasses: Clear AI API Key…"
+      },
+      {
+        "command": "gitglasses.createPatch",
+        "title": "GitGlasses: Create Patch…"
+      },
+      {
+        "command": "gitglasses.applyPatch",
+        "title": "GitGlasses: Apply Patch…"
+      },
+      {
+        "command": "gitglasses.suggestChange",
+        "title": "GitGlasses: Suggest Change for Pull Request…"
       }
     ],
     "viewsContainers": {
@@ -238,6 +250,13 @@
           "group": "navigation"
         }
       ],
+      "editor/context": [
+        {
+          "command": "gitglasses.suggestChange",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "gitglasses@1"
+        }
+      ],
       "view/item/context": [
         {
           "command": "gitglasses.copySha",
@@ -250,6 +269,10 @@
         {
           "command": "gitglasses.ai.explainCommit",
           "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesCommit"
+        },
+        {
+          "command": "gitglasses.createPatch",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|Stash)$/"
         },
         {
           "command": "gitglasses.worktrees.open",
@@ -282,6 +305,7 @@
         }
       ],
       "commandPalette": [
+        { "command": "gitglasses.suggestChange", "when": "editorHasSelection" },
         { "command": "gitglasses.copySha", "when": "false" },
         { "command": "gitglasses.openCommitDiff", "when": "false" },
         { "command": "gitglasses.worktrees.open", "when": "false" },

@@ -1,10 +1,19 @@
+import { ProviderError } from '../errors.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
   PullRequestQueryOptions,
+  ReviewSuggestionInput,
+  ReviewSuggestions,
 } from '../hostingProvider.js';
+import {
+  parseGitLabSnippetId,
+  type SnippetCreateOptions,
+  type SnippetHost,
+  type SnippetRef,
+} from '../snippets.js';
 import type {
   Account,
   AutolinkPattern,
@@ -125,7 +134,7 @@ function mapAccount(user: GitLabUser): Account {
  * GitLab hosting provider backed by the REST v4 API. Serves gitlab.com by
  * default; self-managed instances pass their own baseUrl.
  */
-export class GitLabProvider implements HostingProvider {
+export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSuggestions {
   readonly id: string;
   readonly host: string;
   readonly capabilities: ReadonlySet<HostingCapability> = new Set<HostingCapability>([
@@ -136,6 +145,8 @@ export class GitLabProvider implements HostingProvider {
     'mergeability',
     'autolinks',
     'avatars',
+    'gists',
+    'suggestions',
   ]);
 
   private readonly baseUrl: string;
@@ -257,6 +268,76 @@ export class GitLabProvider implements HostingProvider {
     ];
   }
 
+  /**
+   * Creates a personal snippet via POST /snippets. Visibility defaults to
+   * "private"; note that private GitLab snippets are visible only to their
+   * author (the URL is NOT link-shareable by arbitrary users, unlike a secret
+   * gist) — pass visibility "internal" or "public" to share the link.
+   */
+  async createSnippet(auth: AuthContext, options: SnippetCreateOptions): Promise<SnippetRef> {
+    const json = (await this.post(auth, '/snippets', {
+      title: options.description ?? options.filename,
+      description: options.description,
+      visibility: options.visibility ?? 'private',
+      files: [{ file_path: options.filename, content: options.content }],
+    })) as { id?: unknown; web_url?: unknown };
+    return { id: String(json.id ?? ''), url: String(json.web_url ?? '') };
+  }
+
+  /** Fetches a snippet's raw content by id or URL via GET /snippets/:id/raw. */
+  async getSnippet(auth: AuthContext, idOrUrl: string): Promise<string> {
+    const id = parseGitLabSnippetId(idOrUrl);
+    if (!id) {
+      throw new ProviderError(`Not a recognizable GitLab snippet id or URL: ${idOrUrl}`);
+    }
+    const response = await this.fetchFn(`${this.baseUrl}/api/v4/snippets/${id}/raw`, {
+      method: 'GET',
+      headers: this.headers(auth),
+    });
+    throwForStatus('GitLab', response);
+    return response.text();
+  }
+
+  /**
+   * Posts a diff-anchored discussion on the MR. The position anchors to a
+   * single line (endLine) of the head diff; multi-line replacements are
+   * expressed inside the body with GitLab's ```suggestion:-N+0 offset syntax,
+   * which avoids the line_range/line_code position plumbing. A 400 means the
+   * line is not part of the MR head diff.
+   */
+  async createReviewSuggestion(
+    auth: AuthContext,
+    pr: PullRequest,
+    input: ReviewSuggestionInput
+  ): Promise<{ url: string }> {
+    const project = encodeURIComponent(`${pr.repo.owner}/${pr.repo.name}`);
+    const mr = (await this.get(auth, `/projects/${project}/merge_requests/${pr.number}`)) as
+      | { diff_refs?: { base_sha?: string; start_sha?: string; head_sha?: string } }
+      | undefined;
+    const diffRefs = mr?.diff_refs;
+    if (!diffRefs?.base_sha || !diffRefs.start_sha || !diffRefs.head_sha) {
+      throw new ProviderError(`GitLab merge request !${pr.number} has no diff refs`);
+    }
+    const json = (await this.post(
+      auth,
+      `/projects/${project}/merge_requests/${pr.number}/discussions`,
+      {
+        body: input.body,
+        position: {
+          position_type: 'text',
+          base_sha: diffRefs.base_sha,
+          start_sha: diffRefs.start_sha,
+          head_sha: diffRefs.head_sha,
+          old_path: input.path,
+          new_path: input.path,
+          new_line: input.endLine,
+        },
+      }
+    )) as { notes?: Array<{ id?: unknown }> };
+    const noteId = json.notes?.[0]?.id;
+    return { url: noteId !== undefined ? `${pr.url}#note_${String(noteId)}` : pr.url };
+  }
+
   private async enrichAndMap(
     auth: AuthContext,
     mr: GitLabMergeRequest,
@@ -334,16 +415,35 @@ export class GitLabProvider implements HostingProvider {
   private async get(auth: AuthContext, path: string): Promise<unknown | undefined> {
     const response = await this.fetchFn(`${this.baseUrl}/api/v4${path}`, {
       method: 'GET',
-      headers: {
-        authorization: `Bearer ${auth.token}`,
-        accept: 'application/json',
-        'user-agent': 'gitglasses',
-      },
+      headers: this.headers(auth),
     });
     if (response.status === 404) {
       return undefined;
     }
     throwForStatus('GitLab', response);
     return response.json();
+  }
+
+  /** REST POST against /api/v4 with a JSON body; throws typed errors on failure. */
+  private async post(
+    auth: AuthContext,
+    path: string,
+    body: Record<string, unknown>
+  ): Promise<unknown> {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v4${path}`, {
+      method: 'POST',
+      headers: { ...this.headers(auth), 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    throwForStatus('GitLab', response);
+    return response.json();
+  }
+
+  private headers(auth: AuthContext): Record<string, string> {
+    return {
+      authorization: `Bearer ${auth.token}`,
+      accept: 'application/json',
+      'user-agent': 'gitglasses',
+    };
   }
 }

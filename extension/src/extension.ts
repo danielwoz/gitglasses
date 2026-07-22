@@ -41,6 +41,8 @@ import { PrChipProvider } from './integrations/prChips';
 import { registerStartWork } from './integrations/startWork';
 import { registerLaunchpad } from './views/launchpadView';
 import { registerAiFeatures } from './ai/features';
+import { registerPatchCommands } from './patches/patchCommands';
+import { registerSuggestChange } from './reviews/suggestCommands';
 
 function findEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -312,6 +314,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     registerStartWork(integrations, engine, repos),
     ...registerLaunchpad(launchpad, integrations),
     ...registerAiFeatures(context, engine, repos),
+    ...registerPatchCommands(engine, repos, integrations),
+    registerSuggestChange(engine, repos, integrations),
   );
 
   const rebase = registerRebaseWebview(context, engine, repos);
