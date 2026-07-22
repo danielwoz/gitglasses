@@ -11,6 +11,9 @@
 #include "services/context.h"
 #include "services/graph/graph_methods.h"
 #include "services/history/history_methods.h"
+#include "services/mutate/mutate_methods.h"
+#include "services/mutate/rebase_methods.h"
+#include "services/mutate/stash_worktree_methods.h"
 #include "services/refs/refs_methods.h"
 #include "services/repo_methods.h"
 #include "services/rev_methods.h"
@@ -73,6 +76,9 @@ int runServer(std::istream& in, std::ostream& out) {
   services::registerStatusMethods(dispatcher, context);
   services::registerDiffMethods(dispatcher, context);
   services::registerStageMethods(dispatcher, context);
+  services::registerMutateMethods(dispatcher, context);
+  services::registerStashWorktreeMethods(dispatcher, context);
+  services::registerRebaseMethods(dispatcher, context);
 
   while (!shutdownRequested) {
     auto payload = reader.read();

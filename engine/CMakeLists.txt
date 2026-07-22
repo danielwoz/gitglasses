@@ -30,8 +30,11 @@ add_library(gg_exec STATIC
   src/exec/git_process.cpp
   src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp
+  src/exec/sequence_editor.cpp
 )
-target_link_libraries(gg_exec PUBLIC gg_util PRIVATE gg_warnings)
+target_link_libraries(gg_exec
+  PUBLIC gg_util
+  PRIVATE nlohmann_json::nlohmann_json gg_warnings)
 
 add_library(gg_cache STATIC
   src/cache/blame_cache.cpp
@@ -48,6 +51,10 @@ add_library(gg_services STATIC
   src/services/blame/blame_methods.cpp
   src/services/graph/graph_methods.cpp
   src/services/history/history_methods.cpp
+  src/services/mutate/mutate_common.cpp
+  src/services/mutate/mutate_methods.cpp
+  src/services/mutate/rebase_methods.cpp
+  src/services/mutate/stash_worktree_methods.cpp
   src/services/refs/refs_methods.cpp
   src/services/status/diff_common.cpp
   src/services/status/diff_methods.cpp

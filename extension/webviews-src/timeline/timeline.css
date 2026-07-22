@@ -1,0 +1,90 @@
+/* Visual file history webview chrome. All colors come from VS Code theme
+   variables; the canvas reads its palette from the same variables. */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+#canvas {
+  position: fixed;
+  inset: 0;
+  cursor: grab;
+}
+
+#canvas.dragging {
+  cursor: grabbing;
+}
+
+#canvas.hit {
+  cursor: pointer;
+}
+
+#tooltip {
+  position: fixed;
+  display: none;
+  max-width: 360px;
+  z-index: 10;
+  padding: 6px 10px;
+  pointer-events: none;
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
+
+#tooltip .tooltip-summary {
+  font-weight: 600;
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#tooltip .tooltip-meta {
+  color: var(--vscode-descriptionForeground);
+}
+
+#tooltip .tooltip-adds {
+  color: var(--vscode-charts-green, var(--vscode-gitDecoration-addedResourceForeground));
+}
+
+#tooltip .tooltip-dels {
+  color: var(--vscode-charts-red, var(--vscode-gitDecoration-deletedResourceForeground));
+}
+
+#load-more {
+  position: fixed;
+  display: none;
+  left: 12px;
+  bottom: 40px;
+  z-index: 5;
+  padding: 4px 10px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+  font: inherit;
+  cursor: pointer;
+}
+
+#load-more:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+}
+
+#empty {
+  position: fixed;
+  inset: 0;
+  display: none;
+  padding-top: 30vh;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+}

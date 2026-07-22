@@ -1,7 +1,7 @@
 // Extension-host side of the commit graph webview: a singleton panel that
-// streams graph/rows pages to the canvas renderer and services its requests.
+// streams graph/rows pages to the canvas renderer, services its requests, and
+// executes the context-menu mutation actions.
 
-import * as crypto from 'node:crypto';
 import * as vscode from 'vscode';
 import { GraphRow } from '@gitglasses/protocol';
 import { EngineClient } from '../engine/engineClient';
@@ -9,9 +9,42 @@ import { RepositoryService } from '../model/repositoryService';
 import { firstWorkspaceRepo } from '../views/viewBase';
 import { openCommitDoc } from '../views/nodes';
 import { shortSha } from '../views/viewLogic';
+import { renderWebviewHtml } from './webviewHtml';
+import {
+  confirmCherryPick,
+  confirmMerge,
+  confirmResetHard,
+  confirmRevert,
+  sha7,
+} from '../commands/confirmations';
+import {
+  confirmDestructive,
+  errorMessage,
+  setStatus,
+  showConflictGuidance,
+} from '../commands/ui';
 
 const PAGE_LIMIT = 200;
 const REFRESH_DEBOUNCE_MS = 300;
+
+type GraphActionId =
+  | 'createBranch'
+  | 'switchDetached'
+  | 'cherryPick'
+  | 'revert'
+  | 'reset'
+  | 'merge'
+  | 'rebase';
+
+const ACTION_LABELS: Record<GraphActionId, string> = {
+  createBranch: 'create branch',
+  switchDetached: 'switch',
+  cherryPick: 'cherry-pick',
+  revert: 'revert',
+  reset: 'reset',
+  merge: 'merge',
+  rebase: 'rebase',
+};
 
 type HostToWebviewMessage =
   | { type: 'reset' }
@@ -23,7 +56,8 @@ type WebviewToHostMessage =
   | { type: 'loadMore'; cursor: string }
   | { type: 'select'; shas: string[] }
   | { type: 'openCommit'; sha: string }
-  | { type: 'copySha'; sha: string };
+  | { type: 'copySha'; sha: string }
+  | { type: 'action'; action: GraphActionId; shas: string[] };
 
 export class GraphWebviewHost implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
@@ -36,6 +70,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly engine: EngineClient,
     private readonly repos: RepositoryService,
+    private readonly openRebase: (upstream: string) => void | Promise<void>,
   ) {}
 
   show(): void {
@@ -56,7 +91,11 @@ export class GraphWebviewHost implements vscode.Disposable {
     );
     this.panel = panel;
     panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'gitglasses.svg');
-    panel.webview.html = this.renderHtml(panel.webview, distRoot);
+    panel.webview.html = renderWebviewHtml(panel.webview, distRoot, {
+      script: 'graph.js',
+      style: 'graph.css',
+      title: 'Commit Graph',
+    });
 
     this.panelDisposables.push(
       panel.webview.onDidReceiveMessage((message: WebviewToHostMessage) =>
@@ -119,7 +158,112 @@ export class GraphWebviewHost implements vscode.Disposable {
         break;
       case 'select':
         break; // Selection currently only drives webview-local rendering.
+      case 'action':
+        await this.handleAction(message.action, message.shas);
+        break;
     }
+  }
+
+  private async handleAction(action: GraphActionId, shas: string[]): Promise<void> {
+    const repoId = this.repoId;
+    const sha = shas[0];
+    if (!repoId || !sha) return;
+    try {
+      switch (action) {
+        case 'createBranch':
+          await this.createBranchAt(repoId, sha);
+          break;
+        case 'switchDetached':
+          await this.engine.request('mutate/switch', { repoId, ref: sha });
+          setStatus(`Checked out ${sha7(sha)} (detached HEAD)`);
+          break;
+        case 'cherryPick': {
+          // The webview sends selection newest-first; apply oldest-first.
+          const ordered = [...shas].reverse();
+          if (!(await confirmDestructive(confirmCherryPick(ordered)))) return;
+          const { conflicts } = await this.engine.request('mutate/cherryPick', {
+            repoId,
+            shas: ordered,
+          });
+          if (conflicts) showConflictGuidance('Cherry-pick');
+          else setStatus(`Cherry-picked ${ordered.length} commit${ordered.length === 1 ? '' : 's'}`);
+          break;
+        }
+        case 'revert': {
+          if (!(await confirmDestructive(confirmRevert(shas)))) return;
+          const { conflicts } = await this.engine.request('mutate/revert', { repoId, shas });
+          if (conflicts) showConflictGuidance('Revert');
+          else setStatus(`Reverted ${shas.length} commit${shas.length === 1 ? '' : 's'}`);
+          break;
+        }
+        case 'reset':
+          await this.resetTo(repoId, sha);
+          break;
+        case 'merge': {
+          const branch = await this.currentBranch(repoId);
+          if (!(await confirmDestructive(confirmMerge(sha7(sha), branch)))) return;
+          const { conflicts } = await this.engine.request('mutate/merge', { repoId, ref: sha });
+          if (conflicts) showConflictGuidance('Merge');
+          else setStatus(`Merged ${sha7(sha)} into '${branch}'`);
+          break;
+        }
+        case 'rebase':
+          // Opens the interactive rebase editor with this commit as the
+          // upstream instead of rebasing immediately.
+          await this.openRebase(sha);
+          break;
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `GitGlasses: ${ACTION_LABELS[action]} failed: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  private async currentBranch(repoId: string): Promise<string> {
+    const { head } = await this.engine.request('repo/state', { repoId });
+    return head.detached || !head.branch ? 'HEAD' : head.branch;
+  }
+
+  private async createBranchAt(repoId: string, sha: string): Promise<void> {
+    const name = await vscode.window.showInputBox({
+      prompt: `Branch name (created at ${sha7(sha)})`,
+      validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
+    });
+    if (!name?.trim()) return;
+    const mode = await vscode.window.showQuickPick(['Create', 'Create and Switch'], {
+      placeHolder: `Create '${name.trim()}' at ${sha7(sha)}`,
+    });
+    if (!mode) return;
+    await this.engine.request('mutate/branchCreate', {
+      repoId,
+      name: name.trim(),
+      startPoint: sha,
+      checkout: mode === 'Create and Switch',
+    });
+    setStatus(`Created branch '${name.trim()}' at ${sha7(sha)}`);
+  }
+
+  private async resetTo(repoId: string, sha: string): Promise<void> {
+    const branch = await this.currentBranch(repoId);
+    const mode = await vscode.window.showQuickPick(
+      [
+        { label: 'Soft', description: 'keep index and working tree', mode: 'soft' as const },
+        { label: 'Mixed', description: 'reset index, keep working tree', mode: 'mixed' as const },
+        {
+          label: 'Hard',
+          description: 'discard index and working tree changes',
+          mode: 'hard' as const,
+        },
+      ],
+      { placeHolder: `Reset '${branch}' to ${sha7(sha)}` },
+    );
+    if (!mode) return;
+    if (mode.mode === 'hard' && !(await confirmDestructive(confirmResetHard(branch, sha7(sha))))) {
+      return;
+    }
+    await this.engine.request('mutate/reset', { repoId, ref: sha, mode: mode.mode });
+    setStatus(`Reset '${branch}' to ${sha7(sha)} (${mode.mode})`);
   }
 
   private async fetchAndPost(cursor?: string): Promise<void> {
@@ -152,31 +296,6 @@ export class GraphWebviewHost implements vscode.Disposable {
     }, REFRESH_DEBOUNCE_MS);
   }
 
-  private renderHtml(webview: vscode.Webview, distRoot: vscode.Uri): string {
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, 'graph.js'));
-    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, 'graph.css'));
-    const nonce = crypto.randomBytes(16).toString('base64');
-    const csp = [
-      "default-src 'none'",
-      `style-src ${webview.cspSource}`,
-      `img-src ${webview.cspSource} data:`,
-      `font-src ${webview.cspSource}`,
-      `script-src 'nonce-${nonce}'`,
-    ].join('; ');
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="${csp}">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="${styleUri.toString()}">
-  <title>Commit Graph</title>
-</head>
-<body>
-  <script nonce="${nonce}" src="${scriptUri.toString()}"></script>
-</body>
-</html>`;
-  }
 }
 
 /** Registers the show-graph command; the host lazily creates its panel. */
@@ -184,7 +303,8 @@ export function registerGraphWebview(
   context: vscode.ExtensionContext,
   engine: EngineClient,
   repos: RepositoryService,
+  openRebase: (upstream: string) => void | Promise<void>,
 ): vscode.Disposable[] {
-  const host = new GraphWebviewHost(context, engine, repos);
+  const host = new GraphWebviewHost(context, engine, repos, openRebase);
   return [host, vscode.commands.registerCommand('gitglasses.showGraph', () => host.show())];
 }

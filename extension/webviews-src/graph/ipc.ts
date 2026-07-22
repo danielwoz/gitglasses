@@ -11,9 +11,20 @@ export type HostToWebviewMessage =
   | { type: 'rows'; rows: GraphRow[]; nextCursor?: string }
   | { type: 'theme' };
 
+/** Graph mutation actions the context menu can request from the host. */
+export type GraphActionId =
+  | 'createBranch'
+  | 'switchDetached'
+  | 'cherryPick'
+  | 'revert'
+  | 'reset'
+  | 'merge'
+  | 'rebase';
+
 export type WebviewToHostMessage =
   | { type: 'ready' }
   | { type: 'loadMore'; cursor: string }
   | { type: 'select'; shas: string[] }
   | { type: 'openCommit'; sha: string }
-  | { type: 'copySha'; sha: string };
+  | { type: 'copySha'; sha: string }
+  | { type: 'action'; action: GraphActionId; shas: string[] };

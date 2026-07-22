@@ -2,6 +2,7 @@
 #include <iostream>
 #include <string>
 
+#include "exec/sequence_editor.h"
 #include "server.h"
 #include "util/log.h"
 
@@ -11,13 +12,21 @@ constexpr const char* kVersion = "0.1.0";
 
 int printUsage() {
   std::cerr << "usage: gitglasses-engine --stdio [--log-level <level>]\n"
-               "       gitglasses-engine --version\n";
+               "       gitglasses-engine --version\n"
+               "       gitglasses-engine --edit-sequence <control-file> <todo-file>\n"
+               "       gitglasses-engine --edit-message <control-file> <msg-file>\n";
   return 2;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+  gg::exec::setSelfPathFallback(argc > 0 ? argv[0] : nullptr);
+
+  // Editor-shim modes: git re-invokes this binary as GIT_SEQUENCE_EDITOR /
+  // GIT_EDITOR during an engine-driven interactive rebase.
+  if (const auto shimExit = gg::exec::maybeRunEditorShim(argc, argv)) return *shimExit;
+
   bool stdio = false;
   std::string logLevel = "warn";
 

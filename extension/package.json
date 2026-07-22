@@ -68,6 +68,11 @@
         "icon": "$(git-branch)"
       },
       {
+        "command": "gitglasses.showFileHistory",
+        "title": "GitGlasses: Show Visual File History",
+        "icon": "$(graph-scatter)"
+      },
+      {
         "command": "gitglasses.groups.create",
         "title": "GitGlasses: Create Repo Group from Workspace"
       },
@@ -78,6 +83,29 @@
       {
         "command": "gitglasses.groups.delete",
         "title": "GitGlasses: Delete Repo Group"
+      },
+      {
+        "command": "gitglasses.gitCommands",
+        "title": "GitGlasses: Git Commands…",
+        "icon": "$(source-control)"
+      },
+      {
+        "command": "gitglasses.interactiveRebase",
+        "title": "GitGlasses: Interactive Rebase…"
+      },
+      {
+        "command": "gitglasses.worktrees.add",
+        "title": "GitGlasses: Add Worktree…",
+        "icon": "$(add)"
+      },
+      {
+        "command": "gitglasses.worktrees.open",
+        "title": "Open in New Window",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "gitglasses.worktrees.remove",
+        "title": "Remove Worktree"
       }
     ],
     "viewsContainers": {
@@ -98,7 +126,8 @@
         { "id": "gitglasses.views.tags", "name": "Tags" },
         { "id": "gitglasses.views.fileHistory", "name": "File History" },
         { "id": "gitglasses.views.searchCompare", "name": "Search & Compare" },
-        { "id": "gitglasses.views.contributors", "name": "Contributors" }
+        { "id": "gitglasses.views.contributors", "name": "Contributors" },
+        { "id": "gitglasses.views.worktrees", "name": "Worktrees" }
       ]
     },
     "viewsWelcome": [
@@ -123,6 +152,23 @@
           "command": "gitglasses.showGraph",
           "when": "view == gitglasses.views.commits",
           "group": "navigation"
+        },
+        {
+          "command": "gitglasses.worktrees.add",
+          "when": "view == gitglasses.views.worktrees",
+          "group": "navigation"
+        },
+        {
+          "command": "gitglasses.showFileHistory",
+          "when": "view == gitglasses.views.fileHistory",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "gitglasses.showFileHistory",
+          "when": "resourceScheme == file",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -133,11 +179,26 @@
         {
           "command": "gitglasses.openCommitDiff",
           "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry)$/"
+        },
+        {
+          "command": "gitglasses.worktrees.open",
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current)?Worktree$/",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.worktrees.open",
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current)?Worktree$/"
+        },
+        {
+          "command": "gitglasses.worktrees.remove",
+          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree"
         }
       ],
       "commandPalette": [
         { "command": "gitglasses.copySha", "when": "false" },
-        { "command": "gitglasses.openCommitDiff", "when": "false" }
+        { "command": "gitglasses.openCommitDiff", "when": "false" },
+        { "command": "gitglasses.worktrees.open", "when": "false" },
+        { "command": "gitglasses.worktrees.remove", "when": "false" }
       ]
     },
     "configuration": {

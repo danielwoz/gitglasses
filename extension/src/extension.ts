@@ -30,6 +30,10 @@ import { commitDescription } from './views/viewLogic';
 import { ShaTerminalLinkProvider } from './terminal/linkProvider';
 import { RepoGroupsManager } from './groups/repoGroups';
 import { registerGraphWebview } from './webviews/graphHost';
+import { registerRebaseWebview } from './webviews/rebaseHost';
+import { registerTimelineWebview } from './webviews/timelineHost';
+import { registerGitPalette } from './commands/gitPalette';
+import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
 
 function findEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -101,7 +105,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Sidebar views (activity bar container "gitglasses").
   const searchView = new SearchViewProvider(engine, repos);
+  const worktreesView = new WorktreesViewProvider(engine, repos);
   const views: Record<string, ViewBase> = {
+    'gitglasses.views.worktrees': worktreesView,
     'gitglasses.views.commits': new CommitsViewProvider(engine, repos),
     'gitglasses.views.branches': new BranchesViewProvider(engine, repos),
     'gitglasses.views.remotes': new RemotesViewProvider(engine, repos),
@@ -279,7 +285,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.groups.create', () => repoGroups.create()),
     vscode.commands.registerCommand('gitglasses.groups.open', () => repoGroups.open()),
     vscode.commands.registerCommand('gitglasses.groups.delete', () => repoGroups.delete()),
-    ...registerGraphWebview(context, engine, repos),
+  );
+
+  const rebase = registerRebaseWebview(context, engine, repos);
+  context.subscriptions.push(
+    ...rebase.disposables,
+    ...registerGraphWebview(context, engine, repos, (upstream) => rebase.host.open(upstream)),
+    ...registerTimelineWebview(context, engine, repos),
+    registerGitPalette(engine, repos, (upstream) => rebase.host.open(upstream)),
+    ...registerWorktreeCommands(engine, repos, worktreesView),
   );
 
   try {

@@ -2,7 +2,7 @@
 // keyboard navigation, context menu, and host messaging.
 
 import './graph.css';
-import type { HostToWebviewMessage, WebviewToHostMessage } from './ipc';
+import type { GraphActionId, HostToWebviewMessage, WebviewToHostMessage } from './ipc';
 import { reduceSelection, rowAtY, visibleRange } from './graphLogic';
 import { GraphRenderer, OVERSCAN_ROWS, ROW_HEIGHT, readThemeColors } from './renderer';
 import { GraphStore } from './store';
@@ -16,6 +16,13 @@ document.body.innerHTML = `
   <canvas id="canvas"></canvas>
   <div id="scroller" tabindex="0"><div id="spacer"></div></div>
   <div id="context-menu">
+    <button data-action="createBranch">Create Branch Here…</button>
+    <button data-action="switchDetached">Switch to Commit (Detached)</button>
+    <button data-action="cherryPick">Cherry-pick Commit(s)</button>
+    <button data-action="revert">Revert Commit(s)</button>
+    <button data-action="reset">Reset Current Branch to Here…</button>
+    <button data-action="merge">Merge Commit into Current…</button>
+    <button data-action="rebase">Rebase Current onto Here…</button>
     <button data-action="copySha">Copy SHA</button>
     <button data-action="openCommit">Open Commit</button>
   </div>
@@ -122,13 +129,29 @@ scroller.addEventListener('contextmenu', (event) => {
   contextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - contextMenu.offsetHeight - 4)}px`;
 });
 
+// Cherry-pick/revert act on the whole selection; everything else acts on the
+// right-clicked commit.
+const MULTI_SHA_ACTIONS = new Set<GraphActionId>(['cherryPick', 'revert']);
+
+/** Selected shas in row order (newest first); falls back to the context sha. */
+function selectedShasInRowOrder(contextTarget: string): string[] {
+  const selected = store.selection.selected;
+  const shas = store.rows.filter((row) => selected.has(row.sha)).map((row) => row.sha);
+  return shas.length > 0 ? shas : [contextTarget];
+}
+
 contextMenu.addEventListener('click', (event) => {
   const action = (event.target as HTMLElement).dataset.action;
   const sha = contextSha;
   hideContextMenu();
-  if (sha === undefined) return;
+  if (sha === undefined || action === undefined) return;
   if (action === 'copySha') post({ type: 'copySha', sha });
   else if (action === 'openCommit') post({ type: 'openCommit', sha });
+  else {
+    const actionId = action as GraphActionId;
+    const shas = MULTI_SHA_ACTIONS.has(actionId) ? selectedShasInRowOrder(sha) : [sha];
+    post({ type: 'action', action: actionId, shas });
+  }
 });
 
 scroller.addEventListener('keydown', (event) => {

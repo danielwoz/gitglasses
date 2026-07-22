@@ -2,7 +2,7 @@ import esbuild from 'esbuild';
 
 const watch = process.argv.includes('--watch');
 
-// Extension host bundle (node) and the graph webview bundle (browser).
+// Extension host bundle (node) and the webview bundles (browser).
 const configs = [
   {
     entryPoints: ['src/extension.ts'],
@@ -19,6 +19,26 @@ const configs = [
     entryPoints: ['webviews-src/graph/main.ts'],
     bundle: true,
     outfile: 'dist/webviews/graph.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2022',
+    sourcemap: true,
+    minify: !watch,
+  },
+  {
+    entryPoints: ['webviews-src/rebase/main.ts'],
+    bundle: true,
+    outfile: 'dist/webviews/rebase.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2022',
+    sourcemap: true,
+    minify: !watch,
+  },
+  {
+    entryPoints: ['webviews-src/timeline/main.ts'],
+    bundle: true,
+    outfile: 'dist/webviews/timeline.js',
     format: 'iife',
     platform: 'browser',
     target: 'es2022',
