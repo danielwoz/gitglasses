@@ -9,10 +9,14 @@
 #include "rpc/framing.h"
 #include "services/blame/blame_methods.h"
 #include "services/context.h"
+#include "services/graph/graph_methods.h"
 #include "services/history/history_methods.h"
 #include "services/refs/refs_methods.h"
 #include "services/repo_methods.h"
 #include "services/rev_methods.h"
+#include "services/status/diff_methods.h"
+#include "services/status/stage_methods.h"
+#include "services/status/status_methods.h"
 
 namespace gg {
 
@@ -65,6 +69,10 @@ int runServer(std::istream& in, std::ostream& out) {
   services::registerRevMethods(dispatcher, context);
   services::registerHistoryMethods(dispatcher, context);
   services::registerRefsMethods(dispatcher, context);
+  services::registerGraphMethods(dispatcher, context);
+  services::registerStatusMethods(dispatcher, context);
+  services::registerDiffMethods(dispatcher, context);
+  services::registerStageMethods(dispatcher, context);
 
   while (!shutdownRequested) {
     auto payload = reader.read();

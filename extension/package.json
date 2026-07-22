@@ -63,6 +63,11 @@
         "title": "Open Commit"
       },
       {
+        "command": "gitglasses.showGraph",
+        "title": "GitGlasses: Show Commit Graph",
+        "icon": "$(git-branch)"
+      },
+      {
         "command": "gitglasses.groups.create",
         "title": "GitGlasses: Create Repo Group from Workspace"
       },
@@ -112,6 +117,11 @@
         {
           "command": "gitglasses.searchCommits",
           "when": "view == gitglasses.views.searchCompare",
+          "group": "navigation"
+        },
+        {
+          "command": "gitglasses.showGraph",
+          "when": "view == gitglasses.views.commits",
           "group": "navigation"
         }
       ],

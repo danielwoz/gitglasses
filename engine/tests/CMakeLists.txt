@@ -10,6 +10,8 @@ add_executable(engine_tests
   unit/blame_service_test.cpp
   unit/history_log_parser_test.cpp
   unit/history_service_test.cpp
+  unit/graph_service_test.cpp
+  unit/status_service_test.cpp
   unit/watch_manager_test.cpp
   ../src/server.cpp
 )

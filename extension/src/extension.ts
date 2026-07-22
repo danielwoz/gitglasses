@@ -29,6 +29,7 @@ import { openCommitDiff } from './views/nodes';
 import { commitDescription } from './views/viewLogic';
 import { ShaTerminalLinkProvider } from './terminal/linkProvider';
 import { RepoGroupsManager } from './groups/repoGroups';
+import { registerGraphWebview } from './webviews/graphHost';
 
 function findEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -278,6 +279,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.groups.create', () => repoGroups.create()),
     vscode.commands.registerCommand('gitglasses.groups.open', () => repoGroups.open()),
     vscode.commands.registerCommand('gitglasses.groups.delete', () => repoGroups.delete()),
+    ...registerGraphWebview(context, engine, repos),
   );
 
   try {

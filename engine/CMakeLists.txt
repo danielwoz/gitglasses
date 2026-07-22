@@ -46,8 +46,13 @@ target_link_libraries(gg_watch PUBLIC gg_util PRIVATE gg_warnings)
 add_library(gg_services STATIC
   src/services/blame/blame_service.cpp
   src/services/blame/blame_methods.cpp
+  src/services/graph/graph_methods.cpp
   src/services/history/history_methods.cpp
   src/services/refs/refs_methods.cpp
+  src/services/status/diff_common.cpp
+  src/services/status/diff_methods.cpp
+  src/services/status/stage_methods.cpp
+  src/services/status/status_methods.cpp
   src/services/repo_methods.cpp
   src/services/rev_methods.cpp
 )

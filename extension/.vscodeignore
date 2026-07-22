@@ -1,5 +1,6 @@
 **
 !dist/extension.js
+!dist/webviews/**
 !bin/**
 !media/**
 !package.json
