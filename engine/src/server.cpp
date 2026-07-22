@@ -9,6 +9,8 @@
 #include "rpc/framing.h"
 #include "services/blame/blame_methods.h"
 #include "services/context.h"
+#include "services/history/history_methods.h"
+#include "services/refs/refs_methods.h"
 #include "services/repo_methods.h"
 #include "services/rev_methods.h"
 
@@ -61,6 +63,8 @@ int runServer(std::istream& in, std::ostream& out) {
   services::registerRepoMethods(dispatcher, context);
   services::registerBlameMethods(dispatcher, context);
   services::registerRevMethods(dispatcher, context);
+  services::registerHistoryMethods(dispatcher, context);
+  services::registerRefsMethods(dispatcher, context);
 
   while (!shutdownRequested) {
     auto payload = reader.read();

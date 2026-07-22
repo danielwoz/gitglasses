@@ -28,6 +28,7 @@ target_link_libraries(gg_repo PUBLIC gg_core PRIVATE gg_warnings)
 
 add_library(gg_exec STATIC
   src/exec/git_process.cpp
+  src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp
 )
 target_link_libraries(gg_exec PUBLIC gg_util PRIVATE gg_warnings)
@@ -45,6 +46,8 @@ target_link_libraries(gg_watch PUBLIC gg_util PRIVATE gg_warnings)
 add_library(gg_services STATIC
   src/services/blame/blame_service.cpp
   src/services/blame/blame_methods.cpp
+  src/services/history/history_methods.cpp
+  src/services/refs/refs_methods.cpp
   src/services/repo_methods.cpp
   src/services/rev_methods.cpp
 )

@@ -1,0 +1,81 @@
+import * as vscode from 'vscode';
+import { ActiveRepo, ViewBase, ViewNode, messageNode } from './viewBase';
+import { shortSha } from './viewLogic';
+
+// Branches, remotes, tags, and stashes: stateless views re-fetched per render.
+
+export class BranchesViewProvider extends ViewBase {
+  protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
+    const { branches } = await this.engine.request('refs/list', { repoId: repo.repoId });
+    if (branches.length === 0) return [messageNode('No branches')];
+    return branches.map((branch) => {
+      const item = new vscode.TreeItem(branch.name, vscode.TreeItemCollapsibleState.None);
+      item.iconPath = new vscode.ThemeIcon(branch.current ? 'check' : 'git-branch');
+      item.description = branch.upstream ?? '';
+      item.tooltip = `${branch.name}\n${branch.sha}${branch.current ? '\n(current branch)' : ''}`;
+      item.contextValue = branch.current ? 'gitglassesCurrentBranch' : 'gitglassesBranch';
+      const node: ViewNode = { item, sha: branch.sha };
+      return node;
+    });
+  }
+}
+
+export class RemotesViewProvider extends ViewBase {
+  protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
+    const { remotes } = await this.engine.request('refs/list', { repoId: repo.repoId });
+    if (remotes.length === 0) return [messageNode('No remotes')];
+    return remotes.map((remote) => {
+      const item = new vscode.TreeItem(
+        remote.name,
+        vscode.TreeItemCollapsibleState.Collapsed,
+      );
+      item.iconPath = new vscode.ThemeIcon('cloud');
+      item.contextValue = 'gitglassesRemote';
+      return {
+        item,
+        children: () =>
+          remote.branches.map((branch) => {
+            const child = new vscode.TreeItem(branch.name, vscode.TreeItemCollapsibleState.None);
+            child.iconPath = new vscode.ThemeIcon('git-branch');
+            child.description = shortSha(branch.sha);
+            child.contextValue = 'gitglassesRemoteBranch';
+            const node: ViewNode = { item: child, sha: branch.sha };
+            return node;
+          }),
+      };
+    });
+  }
+}
+
+export class TagsViewProvider extends ViewBase {
+  protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
+    const { tags } = await this.engine.request('refs/list', { repoId: repo.repoId });
+    if (tags.length === 0) return [messageNode('No tags')];
+    return tags.map((tag) => {
+      const item = new vscode.TreeItem(tag.name, vscode.TreeItemCollapsibleState.None);
+      item.iconPath = new vscode.ThemeIcon('tag');
+      item.description = shortSha(tag.sha);
+      item.contextValue = 'gitglassesTag';
+      const node: ViewNode = { item, sha: tag.sha };
+      return node;
+    });
+  }
+}
+
+export class StashesViewProvider extends ViewBase {
+  protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
+    const { entries } = await this.engine.request('stash/list', { repoId: repo.repoId });
+    if (entries.length === 0) return [messageNode('No stashes')];
+    return entries.map((entry) => {
+      const item = new vscode.TreeItem(entry.message, vscode.TreeItemCollapsibleState.None);
+      item.iconPath = new vscode.ThemeIcon('archive');
+      item.description = entry.branch
+        ? `stash@{${entry.index}} on ${entry.branch}`
+        : `stash@{${entry.index}}`;
+      item.tooltip = `${entry.message}\n${entry.sha}`;
+      item.contextValue = 'gitglassesStash';
+      const node: ViewNode = { item, sha: entry.sha };
+      return node;
+    });
+  }
+}

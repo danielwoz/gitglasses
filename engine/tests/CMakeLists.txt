@@ -8,6 +8,8 @@ add_executable(engine_tests
   unit/incremental_blame_test.cpp
   unit/git_process_test.cpp
   unit/blame_service_test.cpp
+  unit/history_log_parser_test.cpp
+  unit/history_service_test.cpp
   unit/watch_manager_test.cpp
   ../src/server.cpp
 )

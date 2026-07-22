@@ -105,6 +105,52 @@ export interface FileHistoryEntry {
   deletions: number;
 }
 
+export interface FileChange {
+  path: string;
+  status: 'M' | 'A' | 'D' | 'R' | 'C' | 'T' | 'U';
+  origPath?: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface GraphRef {
+  name: string;
+  kind: 'head' | 'branch' | 'remote' | 'tag' | 'stash';
+  upstream?: { name: string; ahead: number; behind: number };
+}
+
+export interface GraphRow {
+  sha: string;
+  parents: string[];
+  /** Column assigned by the engine's deterministic lane layout. */
+  lane: number;
+  /** Edges drawn through this row: continuing lanes and merge/branch turns. */
+  laneEdges: { fromLane: number; toLane: number; kind: 'line' | 'mergeIn' | 'branchOut' }[];
+  author: BlameSignature;
+  time: number;
+  summary: string;
+  refs: GraphRef[];
+  kind: 'commit' | 'stash' | 'wip';
+}
+
+export interface DiffHunk {
+  header: string;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  /** Unified diff lines including leading ' ', '+', '-'. */
+  lines: string[];
+}
+
+export interface RebaseEntry {
+  action: 'pick' | 'reword' | 'squash' | 'fixup' | 'drop' | 'edit';
+  sha: string;
+  summary: string;
+  /** Replacement message for reword/squash. */
+  message?: string;
+}
+
 export interface Requests {
   initialize: {
     params: { protocolVersion: string };
@@ -166,6 +212,147 @@ export interface Requests {
   'stash/list': {
     params: { repoId: string };
     result: { entries: { index: number; sha: string; message: string; branch?: string }[] };
+  };
+
+  // --- P2: status / graph / diff / staging / mutations / rebase ------------
+
+  'status/summary': {
+    params: { repoId: string };
+    result: {
+      branch: string;
+      upstream?: string;
+      ahead: number;
+      behind: number;
+      staged: FileChange[];
+      unstaged: FileChange[];
+      untracked: string[];
+      conflicted: string[];
+    };
+  };
+  /** Graph rows with engine-computed lane layout, topo order, paged. */
+  'graph/rows': {
+    params: {
+      repoId: string;
+      cursor?: string;
+      limit: number;
+      include: { stashes: boolean; wip: boolean };
+    };
+    result: { rows: GraphRow[]; nextCursor?: string; generation: number };
+  };
+  'diff/commit': {
+    params: { repoId: string; sha: string };
+    result: { files: FileChange[] };
+  };
+  'diff/refs': {
+    params: { repoId: string; base: string; head: string };
+    result: { files: FileChange[] };
+  };
+  /** Hunks of a file's working-tree (or staged) diff, for hunk staging. */
+  'diff/fileHunks': {
+    params: { repoId: string; path: string; staged: boolean };
+    result: { hunks: DiffHunk[] };
+  };
+  'stage/files': {
+    params: { repoId: string; paths: string[]; action: 'stage' | 'unstage' };
+    result: Record<string, never>;
+  };
+  'stage/hunks': {
+    params: {
+      repoId: string;
+      path: string;
+      action: 'stage' | 'unstage';
+      hunks: { oldStart: number; oldLines: number; newStart: number; newLines: number }[];
+    };
+    result: Record<string, never>;
+  };
+  'mutate/commit': {
+    params: { repoId: string; message: string; amend?: boolean; signoff?: boolean };
+    result: { sha: string };
+  };
+  'mutate/branchCreate': {
+    params: { repoId: string; name: string; startPoint?: string; checkout?: boolean };
+    result: Record<string, never>;
+  };
+  'mutate/branchDelete': {
+    params: { repoId: string; name: string; force?: boolean };
+    result: Record<string, never>;
+  };
+  'mutate/switch': {
+    params: { repoId: string; ref: string };
+    result: Record<string, never>;
+  };
+  'mutate/merge': {
+    params: { repoId: string; ref: string; noFf?: boolean };
+    result: { conflicts: boolean };
+  };
+  'mutate/cherryPick': {
+    params: { repoId: string; shas: string[] };
+    result: { conflicts: boolean };
+  };
+  'mutate/revert': {
+    params: { repoId: string; shas: string[] };
+    result: { conflicts: boolean };
+  };
+  'mutate/reset': {
+    params: { repoId: string; ref: string; mode: 'soft' | 'mixed' | 'hard' };
+    result: Record<string, never>;
+  };
+  'mutate/fetch': {
+    params: { repoId: string; remote?: string; prune?: boolean };
+    result: Record<string, never>;
+  };
+  'mutate/pull': {
+    params: { repoId: string; autoStash?: boolean };
+    result: Record<string, never>;
+  };
+  'mutate/push': {
+    params: { repoId: string; setUpstream?: boolean; force?: 'with-lease' };
+    result: Record<string, never>;
+  };
+  'stash/push': {
+    params: { repoId: string; message?: string; includeUntracked?: boolean };
+    result: Record<string, never>;
+  };
+  'stash/apply': {
+    params: { repoId: string; index: number; pop: boolean };
+    result: { conflicts: boolean };
+  };
+  'stash/drop': {
+    params: { repoId: string; index: number };
+    result: Record<string, never>;
+  };
+  'worktree/list': {
+    params: { repoId: string };
+    result: {
+      worktrees: { path: string; branch?: string; sha: string; bare: boolean; locked: boolean }[];
+    };
+  };
+  'worktree/add': {
+    params: { repoId: string; path: string; ref: string; createBranch?: string };
+    result: Record<string, never>;
+  };
+  'worktree/remove': {
+    params: { repoId: string; path: string; force?: boolean };
+    result: Record<string, never>;
+  };
+  /** Commits upstream..HEAD, oldest first — the editable rebase plan. */
+  'rebase/preview': {
+    params: { repoId: string; upstream: string };
+    result: { entries: { sha: string; summary: string }[] };
+  };
+  /** Executes an interactive rebase with the given plan via sequence-editor
+   * interception. Conflicts pause the rebase (sequencer state watchable). */
+  'rebase/start': {
+    params: { repoId: string; upstream: string; plan: RebaseEntry[] };
+    result: { conflicts: boolean; completed: boolean };
+  };
+  'rebase/continue': {
+    params: { repoId: string };
+    result: { conflicts: boolean; completed: boolean };
+  };
+  'rebase/abort': {
+    params: { repoId: string };
+    result: Record<string, never>;
   };
 }
 

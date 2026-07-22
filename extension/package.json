@@ -39,8 +39,97 @@
       {
         "command": "gitglasses.restartEngine",
         "title": "GitGlasses: Restart Engine"
+      },
+      {
+        "command": "gitglasses.refreshViews",
+        "title": "GitGlasses: Refresh Views",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitglasses.searchCommits",
+        "title": "GitGlasses: Search Commits…",
+        "icon": "$(search)"
+      },
+      {
+        "command": "gitglasses.showLineHistory",
+        "title": "GitGlasses: Show Line History for Selection"
+      },
+      {
+        "command": "gitglasses.copySha",
+        "title": "Copy SHA"
+      },
+      {
+        "command": "gitglasses.openCommitDiff",
+        "title": "Open Commit"
+      },
+      {
+        "command": "gitglasses.groups.create",
+        "title": "GitGlasses: Create Repo Group from Workspace"
+      },
+      {
+        "command": "gitglasses.groups.open",
+        "title": "GitGlasses: Open Repo Group in New Window"
+      },
+      {
+        "command": "gitglasses.groups.delete",
+        "title": "GitGlasses: Delete Repo Group"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitglasses",
+          "title": "GitGlasses",
+          "icon": "media/gitglasses.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitglasses": [
+        { "id": "gitglasses.views.commits", "name": "Commits" },
+        { "id": "gitglasses.views.branches", "name": "Branches" },
+        { "id": "gitglasses.views.remotes", "name": "Remotes" },
+        { "id": "gitglasses.views.stashes", "name": "Stashes" },
+        { "id": "gitglasses.views.tags", "name": "Tags" },
+        { "id": "gitglasses.views.fileHistory", "name": "File History" },
+        { "id": "gitglasses.views.searchCompare", "name": "Search & Compare" },
+        { "id": "gitglasses.views.contributors", "name": "Contributors" }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "gitglasses.views.searchCompare",
+        "contents": "Search commits by message text or SHA.\n[Search Commits…](command:gitglasses.searchCommits)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gitglasses.refreshViews",
+          "when": "view =~ /^gitglasses\\.views\\./",
+          "group": "navigation"
+        },
+        {
+          "command": "gitglasses.searchCommits",
+          "when": "view == gitglasses.views.searchCompare",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gitglasses.copySha",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry|Branch|CurrentBranch|RemoteBranch|Tag|Stash)$/"
+        },
+        {
+          "command": "gitglasses.openCommitDiff",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry)$/"
+        }
+      ],
+      "commandPalette": [
+        { "command": "gitglasses.copySha", "when": "false" },
+        { "command": "gitglasses.openCommitDiff", "when": "false" }
+      ]
+    },
     "configuration": {
       "title": "GitGlasses",
       "properties": {
