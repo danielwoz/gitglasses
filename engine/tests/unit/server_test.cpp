@@ -238,9 +238,10 @@ TEST(Server, BlameFileStreamsHunksAndRespectsOverlay) {
 
   bool sawStreamedHunk = false;
   for (const auto& m : session.notifications) {
-    if (m.value("method", "") == "blame/hunk" && m["params"]["streamId"] == "s1") {
+    if (m.value("method", "") == "blame/hunks" && m["params"]["streamId"] == "s1") {
+      ASSERT_FALSE(m["params"]["hunks"].empty());
       sawStreamedHunk = true;
-      EXPECT_TRUE(m["params"].contains("sha"));
+      EXPECT_TRUE(m["params"]["hunks"][0].contains("sha"));
     }
   }
   EXPECT_TRUE(sawStreamedHunk);

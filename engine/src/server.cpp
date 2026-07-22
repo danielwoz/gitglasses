@@ -123,12 +123,20 @@ int runServer(std::istream& in, std::ostream& out) {
           }
         }
 
+        // Hunks are batched per notification: per-hunk frames are dominated
+        // by serialization overhead on fragmented histories.
+        constexpr size_t kHunkBatch = 500;
         std::uint32_t totalLines = 0;
+        rpc::Json batch = rpc::Json::array();
+        auto flush = [&] {
+          if (batch.empty()) return;
+          notify("blame/hunks", {{"streamId", streamId}, {"hunks", std::move(batch)}});
+          batch = rpc::Json::array();
+        };
         auto summary = blameService.blame(
             repo.value(), request, token, [&](const exec::BlameHunk& hunk) {
               totalLines = std::max(totalLines, hunk.resultLine + hunk.lineCount - 1);
-              rpc::Json hunkJson = {{"streamId", streamId},
-                                    {"sha", hunk.sha},
+              rpc::Json hunkJson = {{"sha", hunk.sha},
                                     {"resultLine", hunk.resultLine},
                                     {"originalLine", hunk.originalLine},
                                     {"lineCount", hunk.lineCount},
@@ -136,9 +144,11 @@ int runServer(std::istream& in, std::ostream& out) {
               if (hunk.previousSha) {
                 hunkJson["previous"] = {{"sha", *hunk.previousSha}, {"path", *hunk.previousPath}};
               }
-              notify("blame/hunk", hunkJson);
+              batch.push_back(std::move(hunkJson));
+              if (batch.size() >= kHunkBatch) flush();
             });
         if (!summary) throw rpc::HandlerError{{summary.error()}};
+        flush();
 
         rpc::Json commits = rpc::Json::object();
         for (const auto& [sha, commit] : summary.value().result->commits) {
