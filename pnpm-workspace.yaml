@@ -3,6 +3,9 @@ packages:
   - extension
   - mcp-server
 allowBuilds:
+  # Browser binaries come from the shared playwright cache instead
+  # (npx playwright install chromium); no install-time download.
+  '@playwright/browser-chromium': false
   '@vscode/vsce-sign': false
   esbuild: true
   keytar: false

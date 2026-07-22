@@ -2,6 +2,8 @@
 // Payloads are complete JSON-RPC message strings; framing (Content-Length,
 // worker postMessage, …) is the transport's concern. EngineClient takes a
 // transport factory so every respawn gets a fresh transport instance.
+// Implementations: ProcessTransport (native child process, stdio framing)
+// and WasmTransport (in-process Emscripten module on the web).
 
 export interface EngineTransport {
   /** Sends one complete JSON-RPC payload to the engine. */

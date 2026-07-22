@@ -5,11 +5,20 @@
   "version": "0.1.0",
   "publisher": "gitglasses",
   "license": "MIT",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Other"],
-  "extensionKind": ["workspace"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
+  "browser": "./dist/web/extension.js",
   "contributes": {
     "commands": [
       {
@@ -228,17 +237,50 @@
     },
     "views": {
       "gitglasses": [
-        { "id": "gitglasses.views.home", "name": "Home" },
-        { "id": "gitglasses.views.launchpad", "name": "Launchpad" },
-        { "id": "gitglasses.views.commits", "name": "Commits" },
-        { "id": "gitglasses.views.branches", "name": "Branches" },
-        { "id": "gitglasses.views.remotes", "name": "Remotes" },
-        { "id": "gitglasses.views.stashes", "name": "Stashes" },
-        { "id": "gitglasses.views.tags", "name": "Tags" },
-        { "id": "gitglasses.views.fileHistory", "name": "File History" },
-        { "id": "gitglasses.views.searchCompare", "name": "Search & Compare" },
-        { "id": "gitglasses.views.contributors", "name": "Contributors" },
-        { "id": "gitglasses.views.worktrees", "name": "Worktrees" }
+        {
+          "id": "gitglasses.views.home",
+          "name": "Home"
+        },
+        {
+          "id": "gitglasses.views.launchpad",
+          "name": "Launchpad"
+        },
+        {
+          "id": "gitglasses.views.commits",
+          "name": "Commits"
+        },
+        {
+          "id": "gitglasses.views.branches",
+          "name": "Branches"
+        },
+        {
+          "id": "gitglasses.views.remotes",
+          "name": "Remotes"
+        },
+        {
+          "id": "gitglasses.views.stashes",
+          "name": "Stashes"
+        },
+        {
+          "id": "gitglasses.views.tags",
+          "name": "Tags"
+        },
+        {
+          "id": "gitglasses.views.fileHistory",
+          "name": "File History"
+        },
+        {
+          "id": "gitglasses.views.searchCompare",
+          "name": "Search & Compare"
+        },
+        {
+          "id": "gitglasses.views.contributors",
+          "name": "Contributors"
+        },
+        {
+          "id": "gitglasses.views.worktrees",
+          "name": "Worktrees"
+        }
       ]
     },
     "viewsWelcome": [
@@ -342,20 +384,62 @@
         }
       ],
       "commandPalette": [
-        { "command": "gitglasses.suggestChange", "when": "editorHasSelection" },
-        { "command": "gitglasses.copySha", "when": "false" },
-        { "command": "gitglasses.openCommitDiff", "when": "false" },
-        { "command": "gitglasses.worktrees.open", "when": "false" },
-        { "command": "gitglasses.worktrees.remove", "when": "false" },
-        { "command": "gitglasses.launchpad.open", "when": "false" },
-        { "command": "gitglasses.launchpad.copyUrl", "when": "false" },
-        { "command": "gitglasses.launchpad.snooze", "when": "false" },
-        { "command": "gitglasses.launchpad.unsnooze", "when": "false" },
-        { "command": "gitglasses.home.push", "when": "false" },
-        { "command": "gitglasses.home.pull", "when": "false" },
-        { "command": "gitglasses.home.switchBranch", "when": "false" },
-        { "command": "gitglasses.home.createBranch", "when": "false" },
-        { "command": "gitglasses.home.dismissGetStarted", "when": "false" }
+        {
+          "command": "gitglasses.suggestChange",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "gitglasses.copySha",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.openCommitDiff",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.open",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.remove",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.launchpad.open",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.launchpad.copyUrl",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.launchpad.snooze",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.launchpad.unsnooze",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.home.push",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.home.pull",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.home.switchBranch",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.home.createBranch",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.home.dismissGetStarted",
+          "when": "false"
+        }
       ]
     },
     "configuration": {
@@ -363,7 +447,11 @@
       "properties": {
         "gitglasses.mode": {
           "type": "string",
-          "enum": ["normal", "zen", "review"],
+          "enum": [
+            "normal",
+            "zen",
+            "review"
+          ],
           "enumDescriptions": [
             "Annotations and CodeLens follow their individual settings",
             "Distraction-free: hide inline blame, status bar blame, file annotations, and blame CodeLens",
@@ -392,9 +480,20 @@
           "default": "",
           "description": "Path to gitglasses-engine (defaults to the bundled binary)"
         },
+        "gitglasses.web.maxRepoBytes": {
+          "type": "number",
+          "default": 209715200,
+          "description": "Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB)"
+        },
         "gitglasses.engine.logLevel": {
           "type": "string",
-          "enum": ["trace", "debug", "info", "warn", "error"],
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
           "default": "warn",
           "description": "Engine log level (logs go to the GitGlasses output channel)"
         },
@@ -404,7 +503,10 @@
           "description": "Self-hosted git hosting instances, e.g. [{ \"domain\": \"github.example.com\", \"provider\": \"github-enterprise\" }]",
           "items": {
             "type": "object",
-            "required": ["domain", "provider"],
+            "required": [
+              "domain",
+              "provider"
+            ],
             "properties": {
               "domain": {
                 "type": "string",
@@ -423,7 +525,9 @@
           "description": "Issue tracker integrations, e.g. [{ \"provider\": \"jira\", \"host\": \"mycompany.atlassian.net\" }]",
           "items": {
             "type": "object",
-            "required": ["provider"],
+            "required": [
+              "provider"
+            ],
             "properties": {
               "provider": {
                 "type": "string",
@@ -438,7 +542,13 @@
         },
         "gitglasses.ai.provider": {
           "type": "string",
-          "enum": ["vscode-lm", "anthropic", "openai", "gemini", "ollama"],
+          "enum": [
+            "vscode-lm",
+            "anthropic",
+            "openai",
+            "gemini",
+            "ollama"
+          ],
           "enumDescriptions": [
             "VS Code Language Model API (GitHub Copilot) — zero configuration when available",
             "Anthropic Claude API (bring your own key)",
@@ -470,7 +580,10 @@
           "description": "Custom autolink patterns applied to commit messages, e.g. [{ \"regex\": \"TICKET-(\\\\d+)\", \"urlTemplate\": \"https://tracker.example.com/browse/TICKET-$1\" }]",
           "items": {
             "type": "object",
-            "required": ["regex", "urlTemplate"],
+            "required": [
+              "regex",
+              "urlTemplate"
+            ],
             "properties": {
               "regex": {
                 "type": "string",
@@ -491,6 +604,7 @@
     "watch": "node esbuild.mjs --watch",
     "test": "vitest run",
     "test:e2e": "node esbuild.mjs && tsc -p test-e2e/tsconfig.json && node test-e2e/headless.cjs",
+    "test:web": "node esbuild.mjs && node test-web/runTests.mjs",
     "package": "vsce package --no-dependencies"
   },
   "dependencies": {
@@ -502,9 +616,10 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/test-web": "^0.0.81",
     "@vscode/vsce": "^3.0.0",
-    "mocha": "^10.8.2",
     "esbuild": "^0.24.0",
+    "mocha": "^10.8.2",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }

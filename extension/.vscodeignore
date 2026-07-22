@@ -1,5 +1,6 @@
 **
 !dist/extension.js
+!dist/web/**
 !dist/webviews/**
 !bin/**
 !media/**

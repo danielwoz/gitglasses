@@ -45,7 +45,17 @@ account). These are the honest gaps, with the reasons and our alternatives.
 - Jira dev-panel branch linking requires a Jira Marketplace app; we create
   issue remote-links instead.
 
+## Web (vscode.dev)
+- **Supported** via the wasm engine build: blame (libgit2 in-process), hovers,
+  history, graph, timeline, search, revision docs, AI — read-only.
+- Requires a workspace with a real `.git` folder (e.g. a local folder opened
+  in the browser). The repo is mirrored into wasm memory, bounded by
+  `gitglasses.web.maxRepoBytes` (default 200 MB).
+- Not on web (v1): mutations/rebase/stage (engine is read-only there),
+  patches (node crypto), provider integrations, external `.git` change
+  watching. github.dev virtual repos (no `.git`) show a clear notice and
+  stay dormant — an API-backed provider for those is future work.
+
 ## Misc
-- vscode.dev (web) unsupported until the engine has a wasm build.
 - Commit graph renderer is our own (GitLens' component is proprietary);
   feature parity tracked in the graph spec, pixel parity is a non-goal.
