@@ -1,0 +1,9 @@
+{
+  "method": "repo/discover",
+  "kind": "result",
+  "payload": {
+    "repoId": "r1",
+    "rootPath": "/home/user/project",
+    "bare": false
+  }
+}

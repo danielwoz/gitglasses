@@ -4,6 +4,7 @@ import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  PrComments,
   PullRequestQueryOptions,
   ReviewSuggestionInput,
   ReviewSuggestions,
@@ -134,7 +135,7 @@ function mapAccount(user: GitLabUser): Account {
  * GitLab hosting provider backed by the REST v4 API. Serves gitlab.com by
  * default; self-managed instances pass their own baseUrl.
  */
-export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSuggestions {
+export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSuggestions, PrComments {
   readonly id: string;
   readonly host: string;
   readonly capabilities: ReadonlySet<HostingCapability> = new Set<HostingCapability>([
@@ -336,6 +337,26 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     )) as { notes?: Array<{ id?: unknown }> };
     const noteId = json.notes?.[0]?.id;
     return { url: noteId !== undefined ? `${pr.url}#note_${String(noteId)}` : pr.url };
+  }
+
+  /**
+   * Posts a plain (non-positioned) note on the merge request via
+   * POST /projects/:id/merge_requests/:iid/notes. Serves as the fallback
+   * channel when a suggestion cannot anchor to the diff.
+   */
+  async createPullRequestComment(
+    auth: AuthContext,
+    pr: { repo: RepoDescriptor; number: number },
+    body: string
+  ): Promise<{ url: string }> {
+    const project = encodeURIComponent(`${pr.repo.owner}/${pr.repo.name}`);
+    const json = (await this.post(
+      auth,
+      `/projects/${project}/merge_requests/${pr.number}/notes`,
+      { body }
+    )) as { id?: unknown };
+    const mrUrl = `${this.baseUrl}/${pr.repo.owner}/${pr.repo.name}/-/merge_requests/${pr.number}`;
+    return { url: json.id !== undefined ? `${mrUrl}#note_${String(json.id)}` : mrUrl };
   }
 
   private async enrichAndMap(

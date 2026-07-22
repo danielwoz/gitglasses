@@ -1,4 +1,4 @@
-import { AuthError } from '../errors.js';
+import { AuthError, NotSupportedError } from '../errors.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
 import type { Account, AutolinkPattern, Issue } from '../models.js';
@@ -106,6 +106,30 @@ export class JiraProvider implements IssueProvider {
     const type = issue.type?.toLowerCase() === 'bug' ? 'fix' : 'feat';
     const slug = slugify(issue.title, 40);
     return slug ? `${type}/${issue.key}-${slug}` : `${type}/${issue.key}`;
+  }
+
+  /**
+   * Attaches the branch to the issue as a remote link (POST
+   * /rest/api/3/issue/{key}/remotelink) titled "branch: <name>", making the
+   * branch visible on the issue even when the Jira dev panel has no
+   * repository integration. Remote links require a valid URL, so when
+   * `branch.url` is absent the call is skipped and a NotSupportedError is
+   * thrown for the caller to handle.
+   */
+  async createBranchLink(
+    auth: AuthContext,
+    issue: Issue,
+    branch: { name: string; url?: string }
+  ): Promise<void> {
+    if (!branch.url) {
+      throw new NotSupportedError('branch URL required');
+    }
+    await this.request(auth, `/rest/api/3/issue/${encodeURIComponent(issue.key)}/remotelink`, {
+      method: 'POST',
+      body: JSON.stringify({
+        object: { url: branch.url, title: `branch: ${branch.name}` },
+      }),
+    });
   }
 
   private mapIssue(payload: JiraIssuePayload): Issue {

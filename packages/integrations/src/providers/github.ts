@@ -4,6 +4,7 @@ import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  PrComments,
   PullRequestQueryOptions,
   ReviewSuggestionInput,
   ReviewSuggestions,
@@ -180,7 +181,7 @@ function mapAccount(account: GraphQlAccount | null): Account {
  * Also serves GitHub Enterprise via createGitHubEnterpriseProvider, which
  * points the same class at an enterprise host's API endpoints.
  */
-export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSuggestions {
+export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSuggestions, PrComments {
   readonly id: string;
   readonly host: string;
   readonly capabilities: ReadonlySet<HostingCapability> = new Set<HostingCapability>([
@@ -342,6 +343,29 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
       body
     )) as { html_url?: unknown };
     return { url: json.html_url ? String(json.html_url) : pr.url };
+  }
+
+  /**
+   * Posts a plain top-level PR comment via the issue-comments endpoint
+   * (POST /repos/{o}/{r}/issues/{n}/comments — PR conversation comments are
+   * issue comments in the REST API). Serves as the fallback channel when a
+   * suggestion cannot anchor to the diff.
+   */
+  async createPullRequestComment(
+    auth: AuthContext,
+    pr: { repo: RepoDescriptor; number: number },
+    body: string
+  ): Promise<{ url: string }> {
+    const json = (await this.restPost(
+      auth,
+      `/repos/${pr.repo.owner}/${pr.repo.name}/issues/${pr.number}/comments`,
+      { body }
+    )) as { html_url?: unknown };
+    return {
+      url: json.html_url
+        ? String(json.html_url)
+        : `https://${this.host}/${pr.repo.owner}/${pr.repo.name}/pull/${pr.number}`,
+    };
   }
 
   private mapPullRequest(node: GraphQlPullRequestNode, viewer: string): PullRequest {

@@ -1,0 +1,33 @@
+{
+  "method": "history/file",
+  "kind": "result",
+  "payload": {
+    "entries": [
+      {
+        "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        "author": {
+          "name": "Fixture Author",
+          "email": "fixture@example.invalid",
+          "time": 1700000000
+        },
+        "summary": "rename module",
+        "path": "src/main.ts",
+        "additions": 5,
+        "deletions": 5
+      },
+      {
+        "sha": "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567",
+        "author": {
+          "name": "Fixture Committer",
+          "email": "committer@example.invalid",
+          "time": 1700000060
+        },
+        "summary": "initial commit",
+        "path": "src/old.ts",
+        "additions": 20,
+        "deletions": 0
+      }
+    ],
+    "nextCursor": "b3BhcXVl"
+  }
+}

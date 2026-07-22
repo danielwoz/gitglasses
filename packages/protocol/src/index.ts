@@ -1,13 +1,25 @@
 // Wire protocol between the VS Code extension and gitglasses-engine.
-// Mirrors the C++ shapes in engine/src (the engine is authoritative until the
-// TypeBox -> JSON Schema -> C++ codegen pipeline lands).
+// Schema-first: the TypeBox schemas in src/schema are the source of truth;
+// the types below derive from them via Static<>, and protocol.schema.json
+// (validated against the real engine by engine/tests) is emitted from them.
 
-export const PROTOCOL_VERSION = '0.1.0';
+import type { Static } from '@sinclair/typebox';
+
+import * as models from './schema/models.js';
+import {
+  ClientNotificationSchemas,
+  EngineNotificationSchemas,
+} from './schema/notifications.js';
+import { RequestSchemas } from './schema/requests.js';
+
+export { PROTOCOL_VERSION } from './version.js';
 
 /** SHA git uses for uncommitted (working tree / dirty buffer) lines. */
 export const UNCOMMITTED_SHA = '0'.repeat(40);
 
 // --- JSON-RPC envelope ------------------------------------------------------
+// Hand-written: the envelope is JSON-RPC boilerplate with open `unknown`
+// payloads, which per-method schemas would only obscure.
 
 export interface RpcRequest {
   jsonrpc: '2.0';
@@ -46,377 +58,132 @@ export const ErrorCodes = {
   GitError: -32001,
 } as const;
 
-// --- Models -----------------------------------------------------------------
+// --- Models (derived from src/schema/models.ts) -----------------------------
 
-export interface RepoInfo {
-  repoId: string;
-  rootPath: string;
-  bare: boolean;
-}
+export type RepoInfo = Static<typeof models.RepoInfo>;
+export type HeadState = Static<typeof models.HeadState>;
+export type BlameSignature = Static<typeof models.BlameSignature>;
+export type BlameCommit = Static<typeof models.BlameCommit>;
+export type BlameHunk = Static<typeof models.BlameHunk>;
+export type CommitSummaryInfo = Static<typeof models.CommitSummaryInfo>;
+export type FileHistoryEntry = Static<typeof models.FileHistoryEntry>;
+export type FileChange = Static<typeof models.FileChange>;
+export type GraphRef = Static<typeof models.GraphRef>;
+export type GraphRow = Static<typeof models.GraphRow>;
+export type DiffHunk = Static<typeof models.DiffHunk>;
+export type RebaseEntry = Static<typeof models.RebaseEntry>;
+export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
 
-export interface HeadState {
-  oid: string;
-  branch: string;
-  detached: boolean;
-  unborn: boolean;
-}
+// --- Method map (derived from src/schema/requests.ts) -----------------------
 
-export interface BlameSignature {
-  name: string;
-  email: string;
-  time: number;
-}
-
-export interface BlameCommit {
-  author: BlameSignature;
-  committer: BlameSignature;
-  summary: string;
-  boundary: boolean;
-}
-
-export interface BlameHunk {
-  sha: string;
-  /** 1-based first line in the blamed file version. */
-  resultLine: number;
-  originalLine: number;
-  lineCount: number;
-  /** Path in the blamed commit (differs across renames). */
-  path: string;
-  previous?: { sha: string; path: string };
-}
-
-// --- Method map -------------------------------------------------------------
-
-export interface CommitSummaryInfo {
-  sha: string;
-  parents: string[];
-  author: BlameSignature;
-  committer: BlameSignature;
-  summary: string;
-}
-
-export interface FileHistoryEntry {
-  sha: string;
-  author: BlameSignature;
-  summary: string;
-  /** Path of the file at this commit (differs across renames). */
-  path: string;
-  additions: number;
-  deletions: number;
-}
-
-export interface FileChange {
-  path: string;
-  status: 'M' | 'A' | 'D' | 'R' | 'C' | 'T' | 'U';
-  origPath?: string;
-  additions: number;
-  deletions: number;
-}
-
-export interface GraphRef {
-  name: string;
-  kind: 'head' | 'branch' | 'remote' | 'tag' | 'stash';
-  upstream?: { name: string; ahead: number; behind: number };
-}
-
-export interface GraphRow {
-  sha: string;
-  parents: string[];
-  /** Column assigned by the engine's deterministic lane layout. */
-  lane: number;
-  /** Edges drawn through this row: continuing lanes and merge/branch turns. */
-  laneEdges: { fromLane: number; toLane: number; kind: 'line' | 'mergeIn' | 'branchOut' }[];
-  author: BlameSignature;
-  time: number;
-  summary: string;
-  refs: GraphRef[];
-  kind: 'commit' | 'stash' | 'wip';
-}
-
-export interface DiffHunk {
-  header: string;
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-  /** Unified diff lines including leading ' ', '+', '-'. */
-  lines: string[];
-}
-
-export interface RebaseEntry {
-  action: 'pick' | 'reword' | 'squash' | 'fixup' | 'drop' | 'edit';
-  sha: string;
-  summary: string;
-  /** Replacement message for reword/squash. */
-  message?: string;
-}
+type Method = keyof typeof RequestSchemas;
+type P<M extends Method> = Static<(typeof RequestSchemas)[M]['params']>;
+type R<M extends Method> = Static<(typeof RequestSchemas)[M]['result']>;
+// Hand-written where TypeBox's Static<> is weaker than the published type:
+// empty payloads stay `Record<string, never>` (Static of an empty Type.Object
+// is `{}`, which would silently accept any object).
+type Empty = Record<string, never>;
 
 export interface Requests {
   initialize: {
-    params: { protocolVersion: string };
+    params: P<'initialize'>;
+    // Hand-written result: `capabilities` is an open bag typed `object`;
+    // Static of Type.Object({}, { additionalProperties: true }) is `{}`.
     result: { engineVersion: string; protocolVersion: string; capabilities: object };
   };
-  shutdown: { params: Record<string, never>; result: Record<string, never> };
-  'repo/discover': { params: { path: string }; result: RepoInfo };
-  'repo/list': { params: Record<string, never>; result: { repos: RepoInfo[] } };
-  'repo/state': { params: { repoId: string }; result: { head: HeadState } };
-  'blame/file': {
-    params: { repoId: string; path: string; rev?: string; streamId: string };
-    result: {
-      streamId: string;
-      totalLines: number;
-      fromCache: boolean;
-      commits: Record<string, BlameCommit>;
-    };
-  };
+  shutdown: { params: Empty; result: Empty };
+  'repo/discover': { params: P<'repo/discover'>; result: R<'repo/discover'> };
+  'repo/list': { params: Empty; result: R<'repo/list'> };
+  'repo/state': { params: P<'repo/state'>; result: R<'repo/state'> };
+  'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
   /** Topo-ordered commit page from a ref (default HEAD). */
-  'log/commits': {
-    params: { repoId: string; ref?: string; cursor?: string; limit: number };
-    result: { commits: CommitSummaryInfo[]; nextCursor?: string };
-  };
+  'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
   /** File history following renames, newest first. */
-  'history/file': {
-    params: { repoId: string; path: string; cursor?: string; limit: number };
-    result: { entries: FileHistoryEntry[]; nextCursor?: string };
-  };
+  'history/file': { params: P<'history/file'>; result: R<'history/file'> };
   /** History of a line range (1-based, inclusive). */
-  'history/line': {
-    params: { repoId: string; path: string; startLine: number; endLine: number };
-    result: { entries: FileHistoryEntry[] };
-  };
+  'history/line': { params: P<'history/line'>; result: R<'history/line'> };
   /** Commit search; matches stream via search/matches notifications. */
-  'search/commits': {
-    params: {
-      repoId: string;
-      streamId: string;
-      limit: number;
-      query: { text?: string; author?: string; sha?: string };
-    };
-    result: { streamId: string; total: number; truncated: boolean };
-  };
+  'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };
   /** Full contents of a file at a revision (virtual docs, quick diff). */
-  'rev/fileAtRev': {
-    params: { repoId: string; path: string; rev: string };
-    result: { contents: string };
-  };
+  'rev/fileAtRev': { params: P<'rev/fileAtRev'>; result: R<'rev/fileAtRev'> };
   /** Refs listing for views: branches, remotes, tags. */
-  'refs/list': {
-    params: { repoId: string };
-    result: {
-      branches: { name: string; sha: string; current: boolean; upstream?: string }[];
-      remotes: { name: string; branches: { name: string; sha: string }[] }[];
-      tags: { name: string; sha: string }[];
-    };
-  };
+  'refs/list': { params: P<'refs/list'>; result: R<'refs/list'> };
   /** Stash entries. */
-  'stash/list': {
-    params: { repoId: string };
-    result: { entries: { index: number; sha: string; message: string; branch?: string }[] };
-  };
+  'stash/list': { params: P<'stash/list'>; result: R<'stash/list'> };
 
   // --- P2: status / graph / diff / staging / mutations / rebase ------------
 
-  'status/summary': {
-    params: { repoId: string };
-    result: {
-      branch: string;
-      upstream?: string;
-      ahead: number;
-      behind: number;
-      staged: FileChange[];
-      unstaged: FileChange[];
-      untracked: string[];
-      conflicted: string[];
-    };
-  };
+  'status/summary': { params: P<'status/summary'>; result: R<'status/summary'> };
   /** Graph rows with engine-computed lane layout, topo order, paged. */
-  'graph/rows': {
-    params: {
-      repoId: string;
-      cursor?: string;
-      limit: number;
-      include: { stashes: boolean; wip: boolean };
-    };
-    result: { rows: GraphRow[]; nextCursor?: string; generation: number };
-  };
-  'diff/commit': {
-    params: { repoId: string; sha: string };
-    result: { files: FileChange[] };
-  };
-  'diff/refs': {
-    params: { repoId: string; base: string; head: string };
-    result: { files: FileChange[] };
-  };
+  'graph/rows': { params: P<'graph/rows'>; result: R<'graph/rows'> };
+  'diff/commit': { params: P<'diff/commit'>; result: R<'diff/commit'> };
+  'diff/refs': { params: P<'diff/refs'>; result: R<'diff/refs'> };
   /** Hunks of a file's working-tree (or staged) diff, for hunk staging. */
-  'diff/fileHunks': {
-    params: { repoId: string; path: string; staged: boolean };
-    result: { hunks: DiffHunk[] };
-  };
-  'stage/files': {
-    params: { repoId: string; paths: string[]; action: 'stage' | 'unstage' };
-    result: Record<string, never>;
-  };
-  'stage/hunks': {
-    params: {
-      repoId: string;
-      path: string;
-      action: 'stage' | 'unstage';
-      hunks: { oldStart: number; oldLines: number; newStart: number; newLines: number }[];
-    };
-    result: Record<string, never>;
-  };
-  'mutate/commit': {
-    params: { repoId: string; message: string; amend?: boolean; signoff?: boolean };
-    result: { sha: string };
-  };
-  'mutate/branchCreate': {
-    params: { repoId: string; name: string; startPoint?: string; checkout?: boolean };
-    result: Record<string, never>;
-  };
-  'mutate/branchDelete': {
-    params: { repoId: string; name: string; force?: boolean };
-    result: Record<string, never>;
-  };
-  'mutate/switch': {
-    params: { repoId: string; ref: string };
-    result: Record<string, never>;
-  };
-  'mutate/merge': {
-    params: { repoId: string; ref: string; noFf?: boolean };
-    result: { conflicts: boolean };
-  };
-  'mutate/cherryPick': {
-    params: { repoId: string; shas: string[] };
-    result: { conflicts: boolean };
-  };
-  'mutate/revert': {
-    params: { repoId: string; shas: string[] };
-    result: { conflicts: boolean };
-  };
-  'mutate/reset': {
-    params: { repoId: string; ref: string; mode: 'soft' | 'mixed' | 'hard' };
-    result: Record<string, never>;
-  };
-  'mutate/fetch': {
-    params: { repoId: string; remote?: string; prune?: boolean };
-    result: Record<string, never>;
-  };
-  'mutate/pull': {
-    params: { repoId: string; autoStash?: boolean };
-    result: Record<string, never>;
-  };
-  'mutate/push': {
-    params: { repoId: string; setUpstream?: boolean; force?: 'with-lease' };
-    result: Record<string, never>;
-  };
-  'stash/push': {
-    params: { repoId: string; message?: string; includeUntracked?: boolean };
-    result: Record<string, never>;
-  };
-  'stash/apply': {
-    params: { repoId: string; index: number; pop: boolean };
-    result: { conflicts: boolean };
-  };
-  'stash/drop': {
-    params: { repoId: string; index: number };
-    result: Record<string, never>;
-  };
-  'worktree/list': {
-    params: { repoId: string };
-    result: {
-      worktrees: { path: string; branch?: string; sha: string; bare: boolean; locked: boolean }[];
-    };
-  };
-  'worktree/add': {
-    params: { repoId: string; path: string; ref: string; createBranch?: string };
-    result: Record<string, never>;
-  };
-  'worktree/remove': {
-    params: { repoId: string; path: string; force?: boolean };
-    result: Record<string, never>;
-  };
+  'diff/fileHunks': { params: P<'diff/fileHunks'>; result: R<'diff/fileHunks'> };
+  'stage/files': { params: P<'stage/files'>; result: Empty };
+  'stage/hunks': { params: P<'stage/hunks'>; result: Empty };
+  'mutate/commit': { params: P<'mutate/commit'>; result: R<'mutate/commit'> };
+  'mutate/branchCreate': { params: P<'mutate/branchCreate'>; result: Empty };
+  'mutate/branchDelete': { params: P<'mutate/branchDelete'>; result: Empty };
+  'mutate/switch': { params: P<'mutate/switch'>; result: Empty };
+  'mutate/merge': { params: P<'mutate/merge'>; result: R<'mutate/merge'> };
+  'mutate/cherryPick': { params: P<'mutate/cherryPick'>; result: R<'mutate/cherryPick'> };
+  'mutate/revert': { params: P<'mutate/revert'>; result: R<'mutate/revert'> };
+  'mutate/reset': { params: P<'mutate/reset'>; result: Empty };
+  'mutate/fetch': { params: P<'mutate/fetch'>; result: Empty };
+  'mutate/pull': { params: P<'mutate/pull'>; result: Empty };
+  'mutate/push': { params: P<'mutate/push'>; result: Empty };
+  'stash/push': { params: P<'stash/push'>; result: Empty };
+  'stash/apply': { params: P<'stash/apply'>; result: R<'stash/apply'> };
+  'stash/drop': { params: P<'stash/drop'>; result: Empty };
+  'worktree/list': { params: P<'worktree/list'>; result: R<'worktree/list'> };
+  'worktree/add': { params: P<'worktree/add'>; result: Empty };
+  'worktree/remove': { params: P<'worktree/remove'>; result: Empty };
   /** Commits upstream..HEAD, oldest first — the editable rebase plan. */
-  'rebase/preview': {
-    params: { repoId: string; upstream: string };
-    result: { entries: { sha: string; summary: string }[] };
-  };
+  'rebase/preview': { params: P<'rebase/preview'>; result: R<'rebase/preview'> };
   /** Executes an interactive rebase with the given plan via sequence-editor
    * interception. Conflicts pause the rebase (sequencer state watchable). */
-  'rebase/start': {
-    params: { repoId: string; upstream: string; plan: RebaseEntry[] };
-    result: { conflicts: boolean; completed: boolean };
-  };
-  'rebase/continue': {
-    params: { repoId: string };
-    result: { conflicts: boolean; completed: boolean };
-  };
-  'rebase/abort': {
-    params: { repoId: string };
-    result: Record<string, never>;
-  };
+  'rebase/start': { params: P<'rebase/start'>; result: R<'rebase/start'> };
+  'rebase/continue': { params: P<'rebase/continue'>; result: R<'rebase/continue'> };
+  'rebase/abort': { params: P<'rebase/abort'>; result: Empty };
 
   // --- P4: remotes / open patches ------------------------------------------
 
-  'remote/list': {
-    params: { repoId: string };
-    result: { remotes: { name: string; fetchUrl: string; pushUrl?: string }[] };
-  };
+  'remote/list': { params: P<'remote/list'>; result: R<'remote/list'> };
   /** Creates a shareable patch envelope from WIP, a stash, a commit, or a range. */
-  'patch/create': {
-    params: {
-      repoId: string;
-      source:
-        | { kind: 'wip'; includeUntracked?: boolean }
-        | { kind: 'stash'; index: number }
-        | { kind: 'commit'; sha: string }
-        | { kind: 'range'; base: string; head: string };
-      summary?: string;
-    };
-    result: { envelope: PatchEnvelope };
-  };
+  'patch/create': { params: P<'patch/create'>; result: R<'patch/create'> };
   /** Applies a patch envelope; 3-way when the base is missing. */
-  'patch/apply': {
-    params: { repoId: string; envelope: PatchEnvelope };
-    result: { applied: boolean; conflicts: boolean; baseFound: boolean };
-  };
-}
-
-export interface PatchEnvelope {
-  format: 'gitglasses-patch';
-  version: 1;
-  /** Commit the diff applies onto. */
-  baseSha: string;
-  branch?: string;
-  summary: string;
-  /** Unified diff text (git diff/format-patch output). */
-  patch: string;
-  /** Fingerprint of origin remote URL (sha256 hex, first 16) for repo matching. */
-  remoteFingerprint?: string;
-  createdAtIso: string;
+  'patch/apply': { params: P<'patch/apply'>; result: R<'patch/apply'> };
 }
 
 export type RequestMethod = keyof Requests;
 export type RequestParams<M extends RequestMethod> = Requests[M]['params'];
 export type RequestResult<M extends RequestMethod> = Requests[M]['result'];
 
+// --- Notifications (derived from src/schema/notifications.ts) ---------------
+
 export interface ClientNotifications {
   'doc/didChange': {
-    params: { repoId: string; path: string; contents: string; version: number };
+    params: Static<(typeof ClientNotificationSchemas)['doc/didChange']['params']>;
   };
-  'doc/didClose': { params: { repoId: string; path: string } };
-  '$/cancelRequest': { params: { id: number } };
+  'doc/didClose': {
+    params: Static<(typeof ClientNotificationSchemas)['doc/didClose']['params']>;
+  };
+  '$/cancelRequest': {
+    params: Static<(typeof ClientNotificationSchemas)['$/cancelRequest']['params']>;
+  };
 }
 
 export interface EngineNotifications {
-  'blame/hunks': { params: { streamId: string; hunks: BlameHunk[] } };
-  'search/matches': { params: { streamId: string; matches: CommitSummaryInfo[] } };
+  'blame/hunks': {
+    params: Static<(typeof EngineNotificationSchemas)['blame/hunks']['params']>;
+  };
+  'search/matches': {
+    params: Static<(typeof EngineNotificationSchemas)['search/matches']['params']>;
+  };
   /** Pushed when the repo's git state changes (refs, HEAD, index, stash). */
   'repo/didChange': {
-    params: {
-      repoId: string;
-      generation: number;
-      changed: ('HEAD' | 'refs' | 'index' | 'stash' | 'worktrees' | 'sequencer')[];
-    };
+    params: Static<(typeof EngineNotificationSchemas)['repo/didChange']['params']>;
   };
 }
 

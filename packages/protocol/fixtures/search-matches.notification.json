@@ -1,0 +1,26 @@
+{
+  "method": "search/matches",
+  "kind": "notification",
+  "payload": {
+    "streamId": "search-1",
+    "matches": [
+      {
+        "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        "parents": [
+          "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567"
+        ],
+        "author": {
+          "name": "Fixture Author",
+          "email": "fixture@example.invalid",
+          "time": 1700000000
+        },
+        "committer": {
+          "name": "Fixture Committer",
+          "email": "committer@example.invalid",
+          "time": 1700000060
+        },
+        "summary": "add lane layout to graph rows"
+      }
+    ]
+  }
+}

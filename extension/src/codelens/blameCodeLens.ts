@@ -53,12 +53,27 @@ export class BlameCodeLensProvider implements vscode.CodeLensProvider, vscode.Di
     });
   }
 
+  /** Controller-level suppression (mode switching); orthogonal to the setting. */
+  private suppressed = false;
+
   /** Re-requests lenses everywhere (after blame invalidation). */
   fire(): void {
     this.emitter.fire();
   }
 
+  isEnabled(): boolean {
+    return !this.suppressed;
+  }
+
+  /** Deterministic enablement (mode switching); disabled lenses return []. */
+  setEnabled(enabled: boolean): void {
+    if (this.suppressed === !enabled) return;
+    this.suppressed = !enabled;
+    this.emitter.fire();
+  }
+
   private enabled(): boolean {
+    if (this.suppressed) return false;
     return vscode.workspace.getConfiguration('gitglasses').get<boolean>('codeLens.enabled', true);
   }
 

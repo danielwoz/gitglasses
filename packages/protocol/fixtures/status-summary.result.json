@@ -1,0 +1,39 @@
+{
+  "method": "status/summary",
+  "kind": "result",
+  "payload": {
+    "branch": "main",
+    "upstream": "origin/main",
+    "ahead": 2,
+    "behind": 1,
+    "staged": [
+      {
+        "path": "src/new.ts",
+        "status": "A",
+        "additions": 12,
+        "deletions": 0
+      },
+      {
+        "path": "src/renamed.ts",
+        "status": "R",
+        "origPath": "src/old.ts",
+        "additions": 1,
+        "deletions": 1
+      }
+    ],
+    "unstaged": [
+      {
+        "path": "README.md",
+        "status": "M",
+        "additions": 3,
+        "deletions": 2
+      }
+    ],
+    "untracked": [
+      "notes.txt"
+    ],
+    "conflicted": [
+      "src/conflict.ts"
+    ]
+  }
+}

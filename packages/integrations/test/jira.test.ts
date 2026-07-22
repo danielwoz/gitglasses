@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AuthError, RateLimitError } from '../src/errors.js';
+import { AuthError, NotSupportedError, RateLimitError } from '../src/errors.js';
 import type { Issue } from '../src/models.js';
 import { JiraProvider } from '../src/providers/jira.js';
 import { jsonResponse, stubFetch } from './helpers.js';
@@ -173,5 +173,35 @@ describe('JiraProvider errors and autolinks', () => {
     expect(regex.test('PROJ-42')).toBe(true);
     expect(regex.test('A2X-9')).toBe(true);
     expect(regex.test('lowercase-42')).toBe(false);
+  });
+});
+
+describe('JiraProvider.createBranchLink', () => {
+  it('POSTs a remote link titled after the branch to the issue', async () => {
+    const { fetchFn, requests } = stubFetch(() => jsonResponse({ id: 10000 }, 201));
+    const provider = new JiraProvider({ site: 'acme', fetchFn });
+    await provider.createBranchLink(auth, makeIssue(), {
+      name: 'fix/PROJ-42-crash-on-login',
+      url: 'https://github.com/acme/widgets/tree/fix/PROJ-42-crash-on-login',
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe('https://acme.atlassian.net/rest/api/3/issue/PROJ-42/remotelink');
+    expect(requests[0].init?.method).toBe('POST');
+    expect(JSON.parse(requests[0].init?.body ?? '{}')).toEqual({
+      object: {
+        url: 'https://github.com/acme/widgets/tree/fix/PROJ-42-crash-on-login',
+        title: 'branch: fix/PROJ-42-crash-on-login',
+      },
+    });
+  });
+
+  it('throws NotSupportedError without calling the API when the branch has no URL', async () => {
+    const { fetchFn, requests } = stubFetch(() => jsonResponse({}));
+    const provider = new JiraProvider({ site: 'acme', fetchFn });
+    const attempt = provider.createBranchLink(auth, makeIssue(), { name: 'fix/PROJ-42' });
+    await expect(attempt).rejects.toBeInstanceOf(NotSupportedError);
+    await expect(attempt).rejects.toMatchObject({ message: 'branch URL required' });
+    expect(requests).toHaveLength(0);
   });
 });

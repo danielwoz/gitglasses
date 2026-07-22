@@ -133,6 +133,20 @@ export class LinearProvider implements IssueProvider {
     return username ? `${username}/${stem}` : stem;
   }
 
+  /**
+   * No-op: Linear attaches branches (and their PRs) to issues automatically
+   * when the branch name follows its branchName convention, which
+   * suggestBranchName produces. Implemented so callers can invoke
+   * createBranchLink uniformly across issue providers.
+   */
+  async createBranchLink(
+    _auth: AuthContext,
+    _issue: Issue,
+    _branch: { name: string; url?: string }
+  ): Promise<void> {
+    // Intentionally empty.
+  }
+
   private async graphql(
     auth: AuthContext,
     query: string,

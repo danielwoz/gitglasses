@@ -43,7 +43,17 @@ export class LineBlameController implements vscode.Disposable {
   }
 
   toggle(): void {
-    this.enabled = !this.enabled;
+    this.setEnabled(!this.enabled);
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /** Deterministic enablement (mode switching); disabling hides the status bar too. */
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
     if (!this.enabled) this.clear();
     else if (vscode.window.activeTextEditor) this.schedule(vscode.window.activeTextEditor);
   }

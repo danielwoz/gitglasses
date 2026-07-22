@@ -179,6 +179,30 @@
       {
         "command": "gitglasses.suggestChange",
         "title": "GitGlasses: Suggest Change for Pull Request…"
+      },
+      {
+        "command": "gitglasses.switchMode",
+        "title": "GitGlasses: Switch Mode…"
+      },
+      {
+        "command": "gitglasses.home.push",
+        "title": "GitGlasses: Push"
+      },
+      {
+        "command": "gitglasses.home.pull",
+        "title": "GitGlasses: Pull"
+      },
+      {
+        "command": "gitglasses.home.switchBranch",
+        "title": "GitGlasses: Switch Branch…"
+      },
+      {
+        "command": "gitglasses.home.createBranch",
+        "title": "GitGlasses: Create Branch…"
+      },
+      {
+        "command": "gitglasses.home.dismissGetStarted",
+        "title": "Dismiss Get Started"
       }
     ],
     "viewsContainers": {
@@ -192,6 +216,7 @@
     },
     "views": {
       "gitglasses": [
+        { "id": "gitglasses.views.home", "name": "Home" },
         { "id": "gitglasses.views.launchpad", "name": "Launchpad" },
         { "id": "gitglasses.views.commits", "name": "Commits" },
         { "id": "gitglasses.views.branches", "name": "Branches" },
@@ -313,12 +338,28 @@
         { "command": "gitglasses.launchpad.open", "when": "false" },
         { "command": "gitglasses.launchpad.copyUrl", "when": "false" },
         { "command": "gitglasses.launchpad.snooze", "when": "false" },
-        { "command": "gitglasses.launchpad.unsnooze", "when": "false" }
+        { "command": "gitglasses.launchpad.unsnooze", "when": "false" },
+        { "command": "gitglasses.home.push", "when": "false" },
+        { "command": "gitglasses.home.pull", "when": "false" },
+        { "command": "gitglasses.home.switchBranch", "when": "false" },
+        { "command": "gitglasses.home.createBranch", "when": "false" },
+        { "command": "gitglasses.home.dismissGetStarted", "when": "false" }
       ]
     },
     "configuration": {
       "title": "GitGlasses",
       "properties": {
+        "gitglasses.mode": {
+          "type": "string",
+          "enum": ["normal", "zen", "review"],
+          "enumDescriptions": [
+            "Annotations and CodeLens follow their individual settings",
+            "Distraction-free: hide inline blame, status bar blame, file annotations, and blame CodeLens",
+            "Review: gutter blame annotations forced on in the editors you open"
+          ],
+          "default": "normal",
+          "description": "GitGlasses mode; switch via the status bar item or the Switch Mode command"
+        },
         "gitglasses.currentLine.enabled": {
           "type": "boolean",
           "default": true,

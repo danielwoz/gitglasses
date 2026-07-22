@@ -1,0 +1,13 @@
+{
+  "method": "repo/didChange",
+  "kind": "notification",
+  "payload": {
+    "repoId": "r1",
+    "generation": 8,
+    "changed": [
+      "HEAD",
+      "refs",
+      "index"
+    ]
+  }
+}

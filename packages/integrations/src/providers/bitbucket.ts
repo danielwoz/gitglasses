@@ -7,6 +7,7 @@ import type {
 } from '../hostingProvider.js';
 import type {
   Account,
+  ChecksStatus,
   Issue,
   PullRequest,
   PullRequestState,
@@ -62,6 +63,28 @@ function mapState(state: BitbucketPullRequest['state']): PullRequestState {
   }
 }
 
+interface BitbucketCommitStatus {
+  state?: 'SUCCESSFUL' | 'FAILED' | 'INPROGRESS' | 'STOPPED' | string;
+}
+
+/**
+ * Aggregate commit statuses into a single ChecksStatus: any FAILED wins as
+ * "failing", then any INPROGRESS as "pending", "passing" only when every
+ * status is SUCCESSFUL, and "none" otherwise (no statuses, or e.g. STOPPED).
+ */
+function deriveChecksStatus(statuses: BitbucketCommitStatus[]): ChecksStatus {
+  if (statuses.length === 0) {
+    return 'none';
+  }
+  if (statuses.some((s) => s.state === 'FAILED')) {
+    return 'failing';
+  }
+  if (statuses.some((s) => s.state === 'INPROGRESS')) {
+    return 'pending';
+  }
+  return statuses.every((s) => s.state === 'SUCCESSFUL') ? 'passing' : 'none';
+}
+
 function mapAccount(account: BitbucketAccount | undefined): Account {
   if (!account) {
     return { id: 'unknown', username: 'unknown' };
@@ -75,19 +98,25 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
   };
 }
 
+/** getMyPullRequests fetches per-PR statuses for at most this many results. */
+const CHECKS_STATUS_PR_CAP = 10;
+
 /**
  * Bitbucket Cloud hosting provider (api.bitbucket.org/2.0).
  *
  * getMyPullRequests returns authored PRs from the documented
  * `/2.0/pullrequests/{selected_user}` endpoint. The Cloud API has no
- * account-wide "PRs where I am a reviewer" endpoint (the reviewer query is
- * repo-scoped only), so review requests are not aggregated here; all results
- * carry viewerRole "author".
+ * account-wide "PRs where I am a reviewer" endpoint — the reviewer query is
+ * repo-scoped only — so review requests are aggregated only when the caller
+ * passes a repo in PullRequestQueryOptions: the repo's open PRs listing
+ * reviewers.uuid = <own uuid> is then merged in with viewerRole "reviewer".
+ * Without a repo context all results carry viewerRole "author".
  *
- * checksStatus is reported as "none": commit statuses live on a separate
- * `/statuses` endpoint that would cost one extra request per PR, and the
- * Cloud API exposes no mergeability signal at all (hence no "mergeability"
- * or "checks" capability flags).
+ * checksStatus comes from the per-PR `/statuses` endpoint at one extra
+ * request per PR; to bound the fan-out only the first CHECKS_STATUS_PR_CAP
+ * (10) results are enriched (first page of statuses only) and the rest stay
+ * "none". The Cloud API exposes no mergeability signal at all (hence no
+ * "mergeability" capability flag).
  */
 export class BitbucketProvider implements HostingProvider {
   readonly id: string;
@@ -99,8 +128,8 @@ export class BitbucketProvider implements HostingProvider {
 
   private readonly apiBaseUrl: string;
   private readonly fetchFn: FetchLike;
-  private cachedUsername?: string;
-  private cachedUsernameToken?: string;
+  private cachedUser?: BitbucketAccount;
+  private cachedUserToken?: string;
 
   constructor(options: BitbucketProviderOptions = {}) {
     this.id = options.id ?? 'bitbucket';
@@ -126,9 +155,21 @@ export class BitbucketProvider implements HostingProvider {
       auth,
       `/pullrequests/${encodeURIComponent(me)}?state=OPEN&pagelen=${limit}`
     )) as { values?: BitbucketPullRequest[] } | undefined;
-    return (json?.values ?? [])
-      .slice(0, limit)
-      .map((pr) => this.mapPullRequest(pr, 'author'));
+    const merged = new Map<number, PullRequest>();
+    for (const pr of json?.values ?? []) {
+      merged.set(pr.id, this.mapPullRequest(pr, 'author'));
+    }
+    // The reviewer query is repo-scoped, so review requests are only visible
+    // when the caller supplies a repo context.
+    if (opts?.repo) {
+      for (const pr of await this.reviewRequestedPullRequests(auth, opts.repo)) {
+        if (!merged.has(pr.id)) {
+          merged.set(pr.id, this.mapPullRequest(pr, 'reviewer'));
+        }
+      }
+    }
+    const prs = [...merged.values()].slice(0, limit);
+    return this.withChecksStatus(auth, prs);
   }
 
   async getPullRequestForBranch(
@@ -145,7 +186,8 @@ export class BitbucketProvider implements HostingProvider {
     if (!pr) {
       return undefined;
     }
-    const viewer = auth.username ?? this.cachedUsername;
+    const viewer =
+      auth.username ?? this.cachedUser?.username ?? this.cachedUser?.nickname;
     const role: ViewerRole =
       viewer !== undefined && mapAccount(pr.author).username === viewer ? 'author' : 'none';
     return this.mapPullRequest(pr, role);
@@ -184,6 +226,43 @@ export class BitbucketProvider implements HostingProvider {
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
 
+  /** Open PRs in `repo` where the authenticated user is a requested reviewer. */
+  private async reviewRequestedPullRequests(
+    auth: AuthContext,
+    repo: RepoDescriptor
+  ): Promise<BitbucketPullRequest[]> {
+    const uuid = (await this.user(auth)).uuid;
+    if (!uuid) {
+      return [];
+    }
+    const q = encodeURIComponent(`state="OPEN" AND reviewers.uuid="${uuid}"`);
+    const json = (await this.get(
+      auth,
+      `/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
+    )) as { values?: BitbucketPullRequest[] } | undefined;
+    return json?.values ?? [];
+  }
+
+  /**
+   * Fills checksStatus from the per-PR statuses endpoint (first page only)
+   * for at most the first CHECKS_STATUS_PR_CAP PRs; later PRs keep "none" to
+   * bound the request fan-out.
+   */
+  private async withChecksStatus(auth: AuthContext, prs: PullRequest[]): Promise<PullRequest[]> {
+    return Promise.all(
+      prs.map(async (pr, index) => {
+        if (index >= CHECKS_STATUS_PR_CAP) {
+          return pr;
+        }
+        const json = (await this.get(
+          auth,
+          `/repositories/${pr.repo.owner}/${pr.repo.name}/pullrequests/${pr.number}/statuses`
+        )) as { values?: BitbucketCommitStatus[] } | undefined;
+        return { ...pr, checksStatus: deriveChecksStatus(json?.values ?? []) };
+      })
+    );
+  }
+
   private mapPullRequest(pr: BitbucketPullRequest, viewerRole: ViewerRole): PullRequest {
     const fullName = pr.destination?.repository?.full_name ?? '/';
     const slash = fullName.indexOf('/');
@@ -209,7 +288,7 @@ export class BitbucketProvider implements HostingProvider {
       checksStatus: 'none',
       mergeable: 'unknown',
       viewerRole,
-      reviewRequestedFromViewer: false,
+      reviewRequestedFromViewer: viewerRole === 'reviewer',
     };
   }
 
@@ -217,17 +296,26 @@ export class BitbucketProvider implements HostingProvider {
     if (auth.username) {
       return auth.username;
     }
-    if (this.cachedUsername !== undefined && this.cachedUsernameToken === auth.token) {
-      return this.cachedUsername;
-    }
-    const user = (await this.get(auth, '/user')) as BitbucketAccount | undefined;
-    const username = user?.username ?? user?.nickname;
+    const user = await this.user(auth);
+    const username = user.username ?? user.nickname;
     if (!username) {
       throw new Error('Bitbucket /user returned no username');
     }
-    this.cachedUsername = username;
-    this.cachedUsernameToken = auth.token;
     return username;
+  }
+
+  /** Own account profile from /2.0/user, cached per token. */
+  private async user(auth: AuthContext): Promise<BitbucketAccount> {
+    if (this.cachedUser !== undefined && this.cachedUserToken === auth.token) {
+      return this.cachedUser;
+    }
+    const user = (await this.get(auth, '/user')) as BitbucketAccount | undefined;
+    if (!user) {
+      throw new Error('Bitbucket /user returned no profile');
+    }
+    this.cachedUser = user;
+    this.cachedUserToken = auth.token;
+    return user;
   }
 
   /** REST GET; returns undefined on 404. */

@@ -1,0 +1,16 @@
+{
+  "method": "patch/create",
+  "kind": "result",
+  "payload": {
+    "envelope": {
+      "format": "gitglasses-patch",
+      "version": 1,
+      "baseSha": "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567",
+      "branch": "feature/lanes",
+      "summary": "graph lane layout tweaks",
+      "patch": "diff --git a/src/main.ts b/src/main.ts\n--- a/src/main.ts\n+++ b/src/main.ts\n@@ -1,2 +1,3 @@\n line\n+added\n line2\n",
+      "remoteFingerprint": "9f86d081884c7d65",
+      "createdAtIso": "2026-07-22T12:00:00.000Z"
+    }
+  }
+}

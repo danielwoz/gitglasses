@@ -1,0 +1,2773 @@
+{
+  "$comment": "Generated from packages/protocol/src/schema by scripts/emit-schema.ts. Do not edit by hand; run `pnpm --filter @gitglasses/protocol build`.",
+  "protocolVersion": "0.1.0",
+  "methods": {
+    "initialize": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "protocolVersion"
+        ],
+        "properties": {
+          "protocolVersion": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "engineVersion",
+          "protocolVersion",
+          "capabilities"
+        ],
+        "properties": {
+          "engineVersion": {
+            "type": "string"
+          },
+          "protocolVersion": {
+            "type": "string"
+          },
+          "capabilities": {
+            "additionalProperties": true,
+            "type": "object",
+            "properties": {}
+          }
+        }
+      }
+    },
+    "shutdown": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "repo/discover": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "rootPath",
+          "bare"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "rootPath": {
+            "type": "string"
+          },
+          "bare": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "repo/list": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repos"
+        ],
+        "properties": {
+          "repos": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "repoId",
+                "rootPath",
+                "bare"
+              ],
+              "properties": {
+                "repoId": {
+                  "type": "string"
+                },
+                "rootPath": {
+                  "type": "string"
+                },
+                "bare": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "repo/state": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "head"
+        ],
+        "properties": {
+          "head": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "oid",
+              "branch",
+              "detached",
+              "unborn"
+            ],
+            "properties": {
+              "oid": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "detached": {
+                "type": "boolean"
+              },
+              "unborn": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "blame/file": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "streamId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "string"
+          },
+          "streamId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "streamId",
+          "totalLines",
+          "fromCache",
+          "commits"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "totalLines": {
+            "type": "number"
+          },
+          "fromCache": {
+            "type": "boolean"
+          },
+          "commits": {
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "author",
+                  "committer",
+                  "summary",
+                  "boundary"
+                ],
+                "properties": {
+                  "author": {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "email",
+                      "time"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "time": {
+                        "type": "number"
+                      }
+                    }
+                  },
+                  "committer": {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "email",
+                      "time"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "time": {
+                        "type": "number"
+                      }
+                    }
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "boundary": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "log/commits": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "limit"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commits"
+        ],
+        "properties": {
+          "commits": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "parents",
+                "author",
+                "committer",
+                "summary"
+              ],
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "parents": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "committer": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "history/file": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "limit"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "author",
+                "summary",
+                "path",
+                "additions",
+                "deletions"
+              ],
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "additions": {
+                  "type": "number"
+                },
+                "deletions": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "history/line": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "startLine",
+          "endLine"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "startLine": {
+            "type": "number"
+          },
+          "endLine": {
+            "type": "number"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "author",
+                "summary",
+                "path",
+                "additions",
+                "deletions"
+              ],
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "additions": {
+                  "type": "number"
+                },
+                "deletions": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "search/commits": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "streamId",
+          "limit",
+          "query"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "streamId": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "query": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "streamId",
+          "total",
+          "truncated"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "rev/fileAtRev": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "rev"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "contents"
+        ],
+        "properties": {
+          "contents": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "refs/list": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "branches",
+          "remotes",
+          "tags"
+        ],
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "sha",
+                "current"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "sha": {
+                  "type": "string"
+                },
+                "current": {
+                  "type": "boolean"
+                },
+                "upstream": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "remotes": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "branches"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "branches": {
+                  "type": "array",
+                  "items": {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "sha"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "sha": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "sha"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "sha": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stash/list": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "index",
+                "sha",
+                "message"
+              ],
+              "properties": {
+                "index": {
+                  "type": "number"
+                },
+                "sha": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "branch": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "status/summary": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "branch",
+          "ahead",
+          "behind",
+          "staged",
+          "unstaged",
+          "untracked",
+          "conflicted"
+        ],
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "upstream": {
+            "type": "string"
+          },
+          "ahead": {
+            "type": "number"
+          },
+          "behind": {
+            "type": "number"
+          },
+          "staged": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    },
+                    {
+                      "const": "T",
+                      "type": "string"
+                    },
+                    {
+                      "const": "U",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "type": "string"
+                },
+                "additions": {
+                  "type": "number"
+                },
+                "deletions": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "unstaged": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    },
+                    {
+                      "const": "T",
+                      "type": "string"
+                    },
+                    {
+                      "const": "U",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "type": "string"
+                },
+                "additions": {
+                  "type": "number"
+                },
+                "deletions": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "untracked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "graph/rows": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "limit",
+          "include"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "include": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "stashes",
+              "wip"
+            ],
+            "properties": {
+              "stashes": {
+                "type": "boolean"
+              },
+              "wip": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "rows",
+          "generation"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "parents",
+                "lane",
+                "laneEdges",
+                "author",
+                "time",
+                "summary",
+                "refs",
+                "kind"
+              ],
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "parents": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "lane": {
+                  "type": "number"
+                },
+                "laneEdges": {
+                  "type": "array",
+                  "items": {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "fromLane",
+                      "toLane",
+                      "kind"
+                    ],
+                    "properties": {
+                      "fromLane": {
+                        "type": "number"
+                      },
+                      "toLane": {
+                        "type": "number"
+                      },
+                      "kind": {
+                        "anyOf": [
+                          {
+                            "const": "line",
+                            "type": "string"
+                          },
+                          {
+                            "const": "mergeIn",
+                            "type": "string"
+                          },
+                          {
+                            "const": "branchOut",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "time": {
+                  "type": "number"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "refs": {
+                  "type": "array",
+                  "items": {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "kind"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "anyOf": [
+                          {
+                            "const": "head",
+                            "type": "string"
+                          },
+                          {
+                            "const": "branch",
+                            "type": "string"
+                          },
+                          {
+                            "const": "remote",
+                            "type": "string"
+                          },
+                          {
+                            "const": "tag",
+                            "type": "string"
+                          },
+                          {
+                            "const": "stash",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "upstream": {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "ahead",
+                          "behind"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "ahead": {
+                            "type": "number"
+                          },
+                          "behind": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "const": "commit",
+                      "type": "string"
+                    },
+                    {
+                      "const": "stash",
+                      "type": "string"
+                    },
+                    {
+                      "const": "wip",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "nextCursor": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "diff/commit": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "sha"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    },
+                    {
+                      "const": "T",
+                      "type": "string"
+                    },
+                    {
+                      "const": "U",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "type": "string"
+                },
+                "additions": {
+                  "type": "number"
+                },
+                "deletions": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "diff/refs": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "base",
+          "head"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    },
+                    {
+                      "const": "T",
+                      "type": "string"
+                    },
+                    {
+                      "const": "U",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "type": "string"
+                },
+                "additions": {
+                  "type": "number"
+                },
+                "deletions": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "diff/fileHunks": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "staged"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "staged": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "hunks"
+        ],
+        "properties": {
+          "hunks": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "header",
+                "oldStart",
+                "oldLines",
+                "newStart",
+                "newLines",
+                "lines"
+              ],
+              "properties": {
+                "header": {
+                  "type": "string"
+                },
+                "oldStart": {
+                  "type": "number"
+                },
+                "oldLines": {
+                  "type": "number"
+                },
+                "newStart": {
+                  "type": "number"
+                },
+                "newLines": {
+                  "type": "number"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stage/files": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "paths",
+          "action"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "action": {
+            "anyOf": [
+              {
+                "const": "stage",
+                "type": "string"
+              },
+              {
+                "const": "unstage",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "stage/hunks": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "action",
+          "hunks"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "const": "stage",
+                "type": "string"
+              },
+              {
+                "const": "unstage",
+                "type": "string"
+              }
+            ]
+          },
+          "hunks": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "oldStart",
+                "oldLines",
+                "newStart",
+                "newLines"
+              ],
+              "properties": {
+                "oldStart": {
+                  "type": "number"
+                },
+                "oldLines": {
+                  "type": "number"
+                },
+                "newStart": {
+                  "type": "number"
+                },
+                "newLines": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "mutate/commit": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "message"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "amend": {
+            "type": "boolean"
+          },
+          "signoff": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sha"
+        ],
+        "properties": {
+          "sha": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mutate/branchCreate": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startPoint": {
+            "type": "string"
+          },
+          "checkout": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "mutate/branchDelete": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "mutate/switch": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "ref"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "mutate/merge": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "ref"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "noFf": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "mutate/cherryPick": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "shas"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "shas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "mutate/revert": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "shas"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "shas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "mutate/reset": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "ref",
+          "mode"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "const": "soft",
+                "type": "string"
+              },
+              {
+                "const": "mixed",
+                "type": "string"
+              },
+              {
+                "const": "hard",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "mutate/fetch": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "remote": {
+            "type": "string"
+          },
+          "prune": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "mutate/pull": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "autoStash": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "mutate/push": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "setUpstream": {
+            "type": "boolean"
+          },
+          "force": {
+            "const": "with-lease",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "stash/push": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "includeUntracked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "stash/apply": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "index",
+          "pop"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "index": {
+            "type": "number"
+          },
+          "pop": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "stash/drop": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "index"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "index": {
+            "type": "number"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "worktree/list": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "worktrees"
+        ],
+        "properties": {
+          "worktrees": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "sha",
+                "bare",
+                "locked"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "branch": {
+                  "type": "string"
+                },
+                "sha": {
+                  "type": "string"
+                },
+                "bare": {
+                  "type": "boolean"
+                },
+                "locked": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "worktree/add": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "ref"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "createBranch": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "worktree/remove": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "rebase/preview": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "upstream"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "upstream": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "summary"
+              ],
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "rebase/start": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "upstream",
+          "plan"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "upstream": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "action",
+                "sha",
+                "summary"
+              ],
+              "properties": {
+                "action": {
+                  "anyOf": [
+                    {
+                      "const": "pick",
+                      "type": "string"
+                    },
+                    {
+                      "const": "reword",
+                      "type": "string"
+                    },
+                    {
+                      "const": "squash",
+                      "type": "string"
+                    },
+                    {
+                      "const": "fixup",
+                      "type": "string"
+                    },
+                    {
+                      "const": "drop",
+                      "type": "string"
+                    },
+                    {
+                      "const": "edit",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "sha": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts",
+          "completed"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          },
+          "completed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "rebase/continue": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts",
+          "completed"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          },
+          "completed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "rebase/abort": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "remote/list": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "remotes"
+        ],
+        "properties": {
+          "remotes": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "fetchUrl"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "fetchUrl": {
+                  "type": "string"
+                },
+                "pushUrl": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "patch/create": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "source"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "wip",
+                    "type": "string"
+                  },
+                  "includeUntracked": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "kind",
+                  "index"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "stash",
+                    "type": "string"
+                  },
+                  "index": {
+                    "type": "number"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "kind",
+                  "sha"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "commit",
+                    "type": "string"
+                  },
+                  "sha": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "kind",
+                  "base",
+                  "head"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "range",
+                    "type": "string"
+                  },
+                  "base": {
+                    "type": "string"
+                  },
+                  "head": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "envelope"
+        ],
+        "properties": {
+          "envelope": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "format",
+              "version",
+              "baseSha",
+              "summary",
+              "patch",
+              "createdAtIso"
+            ],
+            "properties": {
+              "format": {
+                "const": "gitglasses-patch",
+                "type": "string"
+              },
+              "version": {
+                "const": 1,
+                "type": "number"
+              },
+              "baseSha": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "patch": {
+                "type": "string"
+              },
+              "remoteFingerprint": {
+                "type": "string"
+              },
+              "createdAtIso": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "patch/apply": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "envelope"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "envelope": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "format",
+              "version",
+              "baseSha",
+              "summary",
+              "patch",
+              "createdAtIso"
+            ],
+            "properties": {
+              "format": {
+                "const": "gitglasses-patch",
+                "type": "string"
+              },
+              "version": {
+                "const": 1,
+                "type": "number"
+              },
+              "baseSha": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "patch": {
+                "type": "string"
+              },
+              "remoteFingerprint": {
+                "type": "string"
+              },
+              "createdAtIso": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "applied",
+          "conflicts",
+          "baseFound"
+        ],
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "type": "boolean"
+          },
+          "baseFound": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "notifications": {
+    "doc/didChange": {
+      "direction": "client",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path",
+          "contents",
+          "version"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "contents": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "doc/didClose": {
+      "direction": "client",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "$/cancelRequest": {
+      "direction": "client",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "blame/hunks": {
+      "direction": "engine",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "streamId",
+          "hunks"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "hunks": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "resultLine",
+                "originalLine",
+                "lineCount",
+                "path"
+              ],
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "resultLine": {
+                  "type": "number"
+                },
+                "originalLine": {
+                  "type": "number"
+                },
+                "lineCount": {
+                  "type": "number"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "previous": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "sha",
+                    "path"
+                  ],
+                  "properties": {
+                    "sha": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "search/matches": {
+      "direction": "engine",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "streamId",
+          "matches"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "parents",
+                "author",
+                "committer",
+                "summary"
+              ],
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "parents": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "committer": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "repo/didChange": {
+      "direction": "engine",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "generation",
+          "changed"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "const": "HEAD",
+                  "type": "string"
+                },
+                {
+                  "const": "refs",
+                  "type": "string"
+                },
+                {
+                  "const": "index",
+                  "type": "string"
+                },
+                {
+                  "const": "stash",
+                  "type": "string"
+                },
+                {
+                  "const": "worktrees",
+                  "type": "string"
+                },
+                {
+                  "const": "sequencer",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

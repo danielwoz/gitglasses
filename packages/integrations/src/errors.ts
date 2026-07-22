@@ -18,6 +18,18 @@ export class AuthError extends ProviderError {
   }
 }
 
+/**
+ * The operation cannot be performed in the current context, e.g. the caller
+ * lacks an input the provider API requires. Not a transport failure; callers
+ * can catch it to fall back or skip gracefully.
+ */
+export class NotSupportedError extends ProviderError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotSupportedError';
+  }
+}
+
 /** The provider rate limit was hit; retry after `resetAt` when known. */
 export class RateLimitError extends ProviderError {
   /** When the limit resets, if the provider reported it. */

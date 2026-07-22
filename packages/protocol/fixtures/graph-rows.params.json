@@ -1,0 +1,12 @@
+{
+  "method": "graph/rows",
+  "kind": "params",
+  "payload": {
+    "repoId": "r1",
+    "limit": 200,
+    "include": {
+      "stashes": true,
+      "wip": true
+    }
+  }
+}

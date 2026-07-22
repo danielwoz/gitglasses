@@ -109,7 +109,28 @@ jobs:
         with:
           files: dist/*.vsix
           generate_release_notes: true
-      # Marketplace/OpenVSX publish gated on secrets being configured.
-      - name: Publish to marketplaces
-        if: ${{ false }}  # enable once VSCE_PAT / OVSX_PAT secrets exist
-        run: echo "vsce publish + ovsx publish per-target VSIXes"
+
+      # Marketplace publishes run automatically once the tokens are configured
+      # as repository secrets; without them the steps no-op with a notice.
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::notice::VSCE_PAT not configured — skipping Marketplace publish"
+            exit 0
+          fi
+          for vsix in dist/*.vsix; do
+            npx --yes @vscode/vsce publish --packagePath "$vsix"
+          done
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::notice::OVSX_PAT not configured — skipping Open VSX publish"
+            exit 0
+          fi
+          for vsix in dist/*.vsix; do
+            npx --yes ovsx publish "$vsix" -p "$OVSX_PAT"
+          done

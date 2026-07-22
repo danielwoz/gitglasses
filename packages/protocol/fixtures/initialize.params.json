@@ -1,0 +1,7 @@
+{
+  "method": "initialize",
+  "kind": "params",
+  "payload": {
+    "protocolVersion": "0.1.0"
+  }
+}

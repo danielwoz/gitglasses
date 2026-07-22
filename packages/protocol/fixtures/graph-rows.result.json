@@ -1,0 +1,102 @@
+{
+  "method": "graph/rows",
+  "kind": "result",
+  "payload": {
+    "rows": [
+      {
+        "sha": "0000000000000000000000000000000000000000",
+        "parents": [
+          "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+        ],
+        "lane": 0,
+        "laneEdges": [
+          {
+            "fromLane": 0,
+            "toLane": 0,
+            "kind": "line"
+          }
+        ],
+        "author": {
+          "name": "",
+          "email": "",
+          "time": 0
+        },
+        "time": 0,
+        "summary": "Uncommitted changes",
+        "refs": [],
+        "kind": "wip"
+      },
+      {
+        "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        "parents": [
+          "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567",
+          "9876543210fedcba9876543210fedcba98765432"
+        ],
+        "lane": 0,
+        "laneEdges": [
+          {
+            "fromLane": 0,
+            "toLane": 0,
+            "kind": "line"
+          },
+          {
+            "fromLane": 1,
+            "toLane": 0,
+            "kind": "mergeIn"
+          }
+        ],
+        "author": {
+          "name": "Fixture Author",
+          "email": "fixture@example.invalid",
+          "time": 1700000000
+        },
+        "time": 1700000000,
+        "summary": "merge feature into main",
+        "refs": [
+          {
+            "name": "HEAD",
+            "kind": "head"
+          },
+          {
+            "name": "main",
+            "kind": "branch",
+            "upstream": {
+              "name": "origin/main",
+              "ahead": 1,
+              "behind": 0
+            }
+          }
+        ],
+        "kind": "commit"
+      },
+      {
+        "sha": "9876543210fedcba9876543210fedcba98765432",
+        "parents": [],
+        "lane": 1,
+        "laneEdges": [
+          {
+            "fromLane": 1,
+            "toLane": 1,
+            "kind": "branchOut"
+          }
+        ],
+        "author": {
+          "name": "Fixture Author",
+          "email": "fixture@example.invalid",
+          "time": 1700000000
+        },
+        "time": 1699999900,
+        "summary": "WIP on main: stashed work",
+        "refs": [
+          {
+            "name": "stash@{0}",
+            "kind": "stash"
+          }
+        ],
+        "kind": "stash"
+      }
+    ],
+    "nextCursor": "eyJwb3MiOjN9",
+    "generation": 7
+  }
+}

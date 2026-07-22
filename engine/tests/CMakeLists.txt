@@ -19,9 +19,14 @@ add_executable(engine_tests
   unit/rebase_service_test.cpp
   unit/sha256_test.cpp
   unit/watch_manager_test.cpp
+  unit/protocol_contract_test.cpp
   ../src/server.cpp
 )
 target_include_directories(engine_tests PRIVATE ../src)
+# The protocol contract test validates live responses against the JSON Schema
+# artifact committed in the TypeScript protocol package.
+target_compile_definitions(engine_tests PRIVATE
+  GG_PROTOCOL_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/protocol/protocol.schema.json")
 target_link_libraries(engine_tests PRIVATE
   gg_rpc gg_repo gg_services gg_watch
   GTest::gtest GTest::gmock

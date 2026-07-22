@@ -49,6 +49,8 @@ export class FileAnnotationsController implements vscode.Disposable {
 
   /** Active mode keyed by document uri (survives tab switches). */
   private modes = new Map<string, AnnotationMode>();
+  /** Controller-level switch (mode switching); per-document modes are kept. */
+  private enabled = true;
   private debounceTimers = new Map<string, NodeJS.Timeout>();
   private renderCounter = 0;
   private latestRender = new Map<string, number>();
@@ -103,6 +105,27 @@ export class FileAnnotationsController implements vscode.Disposable {
     this.clearDecorations(editor);
   }
 
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /** Deterministic enablement (mode switching); disabling clears every editor. */
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+    if (this.enabled) this.refresh();
+    else for (const editor of vscode.window.visibleTextEditors) this.clearDecorations(editor);
+  }
+
+  /** Sets the annotation mode for an editor's document and renders (mode switching). */
+  setDocumentMode(editor: vscode.TextEditor, mode: AnnotationMode): void {
+    if (editor.document.uri.scheme !== 'file') return;
+    const key = editor.document.uri.toString();
+    if (mode === 'off') this.modes.delete(key);
+    else this.modes.set(key, mode);
+    void this.render(editor);
+  }
+
   /** Re-renders every visible editor (after blame invalidation). */
   refresh(): void {
     for (const editor of vscode.window.visibleTextEditors) void this.render(editor);
@@ -119,7 +142,7 @@ export class FileAnnotationsController implements vscode.Disposable {
     if (document.uri.scheme !== 'file') return;
     const key = document.uri.toString();
     const mode = this.getMode(key);
-    if (mode === 'off') {
+    if (!this.enabled || mode === 'off') {
       this.clearDecorations(editor);
       return;
     }

@@ -26,6 +26,12 @@ export interface AuthContext {
 export interface PullRequestQueryOptions {
   /** Maximum number of results to return. */
   limit?: number;
+  /**
+   * Repository context for providers whose review-request queries are
+   * repo-scoped (e.g. Bitbucket Cloud). Providers with account-wide queries
+   * ignore it.
+   */
+  repo?: RepoDescriptor;
 }
 
 export interface IssueQueryOptions {
@@ -100,6 +106,25 @@ export function supportsReviewSuggestions<T extends object>(
   return typeof (provider as Partial<ReviewSuggestions>).createReviewSuggestion === 'function';
 }
 
+/**
+ * Additive capability interface for providers that can post a plain top-level
+ * comment on a pull request. Used as the fallback channel when a suggestion
+ * cannot anchor to the diff: the caller posts an Open-Patch link as a PR
+ * comment instead.
+ */
+export interface PrComments {
+  createPullRequestComment(
+    auth: AuthContext,
+    pr: { repo: RepoDescriptor; number: number },
+    body: string
+  ): Promise<{ url: string }>;
+}
+
+/** True when the provider implements the PrComments capability. */
+export function supportsPrComments<T extends object>(provider: T): provider is T & PrComments {
+  return typeof (provider as Partial<PrComments>).createPullRequestComment === 'function';
+}
+
 /** An issue tracker (Jira, Linear, GitHub Issues, ...). */
 export interface IssueProvider {
   readonly id: string;
@@ -112,4 +137,16 @@ export interface IssueProvider {
 
   /** A git-branch-safe name derived from the issue, e.g. "proj-42-fix-login". */
   suggestBranchName(issue: Issue): string;
+
+  /**
+   * Record a link from the issue to a git branch, so the branch shows up on
+   * the issue in the tracker's UI. Providers that auto-link by branch name
+   * implement this as a no-op; providers that need a URL may throw
+   * NotSupportedError when `branch.url` is absent.
+   */
+  createBranchLink?(
+    auth: AuthContext,
+    issue: Issue,
+    branch: { name: string; url?: string }
+  ): Promise<void>;
 }

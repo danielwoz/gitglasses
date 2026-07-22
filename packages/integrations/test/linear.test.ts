@@ -152,3 +152,14 @@ describe('LinearProvider errors', () => {
     expect((error as RateLimitError).resetAt?.getTime()).toBe(1_784_000_000_000);
   });
 });
+
+describe('LinearProvider.createBranchLink', () => {
+  it('resolves without any API call (Linear auto-links by branch name)', async () => {
+    const { fetchFn, requests } = stubFetch(() => jsonResponse({}));
+    const provider = new LinearProvider({ fetchFn });
+    await expect(
+      provider.createBranchLink(auth, makeIssue(), { name: 'alice/eng-42-fix-login' })
+    ).resolves.toBeUndefined();
+    expect(requests).toHaveLength(0);
+  });
+});

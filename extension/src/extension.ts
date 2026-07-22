@@ -41,6 +41,8 @@ import { PrChipProvider } from './integrations/prChips';
 import { registerStartWork } from './integrations/startWork';
 import { registerLaunchpad } from './views/launchpadView';
 import { registerAiFeatures } from './ai/features';
+import { HomeViewProvider, registerHomeCommands } from './home/homeView';
+import { ModeController } from './modes/modeController';
 import { registerPatchCommands } from './patches/patchCommands';
 import { registerSuggestChange } from './reviews/suggestCommands';
 
@@ -124,7 +126,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const worktreesView = new WorktreesViewProvider(engine, repos);
   const branchesView = new BranchesViewProvider(engine, repos);
   branchesView.setPrChipProvider(prChips);
+  const homeView = new HomeViewProvider(engine, repos, launchpad, context.globalState);
   const views: Record<string, ViewBase> = {
+    'gitglasses.views.home': homeView,
     'gitglasses.views.worktrees': worktreesView,
     'gitglasses.views.commits': new CommitsViewProvider(engine, repos),
     'gitglasses.views.branches': branchesView,
@@ -311,6 +315,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.disconnectIntegration', () =>
       integrations.disconnectIntegration(),
     ),
+    ...registerHomeCommands(engine, repos, homeView, context.globalState),
+    new ModeController(lineBlame, fileAnnotations, codeLens),
     registerStartWork(integrations, engine, repos),
     ...registerLaunchpad(launchpad, integrations),
     ...registerAiFeatures(context, engine, repos),

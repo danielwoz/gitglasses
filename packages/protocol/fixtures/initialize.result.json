@@ -1,0 +1,9 @@
+{
+  "method": "initialize",
+  "kind": "result",
+  "payload": {
+    "engineVersion": "0.1.0",
+    "protocolVersion": "0.1.0",
+    "capabilities": {}
+  }
+}
