@@ -8,8 +8,10 @@
 #include <nlohmann/json.hpp>
 
 #include <ext/stdio_filebuf.h>
+#include <poll.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -68,6 +70,7 @@ class InteractiveSession {
     EXPECT_EQ(pipe(toServer), 0);
     EXPECT_EQ(pipe(fromServer), 0);
     inWrite_ = toServer[1];
+    outRead_ = fromServer[0];
     serverIn_ = std::make_unique<__gnu_cxx::stdio_filebuf<char>>(toServer[0], std::ios::in);
     serverOut_ = std::make_unique<__gnu_cxx::stdio_filebuf<char>>(fromServer[1], std::ios::out);
     clientRead_ = std::make_unique<__gnu_cxx::stdio_filebuf<char>>(fromServer[0], std::ios::in);
@@ -100,6 +103,38 @@ class InteractiveSession {
       }
       Json m = Json::parse(*payload);
       if (m.contains("id") && m["id"] == message["id"]) return m;
+      notifications.push_back(std::move(m));
+    }
+  }
+
+  // Reads frames until a notification named `method` arrives and returns it;
+  // other frames read along the way are collected into `notifications`. Fails
+  // the test and returns an empty message on timeout.
+  Json readNotificationUntil(const std::string& method, int timeoutMs) {
+    std::istream in(clientRead_.get());
+    FrameReaderStream reader(in);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+      // Only block in read() when bytes are known to be pending, so a missing
+      // notification fails the test instead of hanging it.
+      if (in.rdbuf()->in_avail() <= 0) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   deadline - std::chrono::steady_clock::now())
+                                   .count();
+        if (remaining <= 0) {
+          ADD_FAILURE() << "timed out waiting for notification: " << method;
+          return {};
+        }
+        pollfd pfd{outRead_, POLLIN, 0};
+        if (poll(&pfd, 1, static_cast<int>(remaining)) <= 0) continue;
+      }
+      auto payload = reader.read();
+      if (!payload) {
+        ADD_FAILURE() << "server closed stream before notification: " << method;
+        return {};
+      }
+      Json m = Json::parse(*payload);
+      if (!m.contains("id") && m.value("method", "") == method) return m;
       notifications.push_back(std::move(m));
     }
   }
@@ -146,6 +181,7 @@ class InteractiveSession {
   }
 
   int inWrite_ = -1;
+  int outRead_ = -1;
   std::unique_ptr<__gnu_cxx::stdio_filebuf<char>> serverIn_;
   std::unique_ptr<__gnu_cxx::stdio_filebuf<char>> serverOut_;
   std::unique_ptr<__gnu_cxx::stdio_filebuf<char>> clientRead_;
@@ -282,6 +318,78 @@ TEST(Server, BlameFileStreamsHunksAndRespectsOverlay) {
        {"params", {{"repoId", repoId}, {"path", "app.txt"}, {"streamId", "s4"}}}});
   EXPECT_EQ(closed["result"]["totalLines"], 2);
   EXPECT_FALSE(closed["result"]["commits"].contains(uncommitted));
+}
+
+TEST(Server, WatcherPushesRepoDidChange) {
+  gg::testing::FixtureRepo fixture;
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", fixture.root().string()}}}});
+  const std::string repoId = discover["result"]["repoId"];
+
+  // An external commit (as if made from a terminal) must be pushed to us.
+  fixture.writeFile("pushed.txt", "contents\n");
+  fixture.run("git add pushed.txt");
+  fixture.commit("external commit");
+
+  Json note = session.readNotificationUntil("repo/didChange", 5000);
+  ASSERT_EQ(note.value("method", ""), "repo/didChange");
+  EXPECT_EQ(note["params"]["repoId"], repoId);
+  EXPECT_GE(note["params"]["generation"].get<std::uint64_t>(), 1u);
+  bool sawRelevantCategory = false;
+  for (const auto& category : note["params"]["changed"]) {
+    if (category == "HEAD" || category == "refs" || category == "index") {
+      sawRelevantCategory = true;
+    }
+  }
+  EXPECT_TRUE(sawRelevantCategory) << note.dump();
+}
+
+TEST(Server, FileAtRevReturnsContentsAndErrors) {
+  gg::testing::FixtureRepo fixture;
+
+  // rev/fileAtRev runs concurrently, so discovery must complete before it is
+  // sent; an interactive session awaits each response.
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", fixture.root().string()}}}});
+  const std::string repoId = discover["result"]["repoId"];
+
+  Json contents = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 3},
+       {"method", "rev/fileAtRev"},
+       {"params", {{"repoId", repoId}, {"path", "README.md"}, {"rev", "HEAD"}}}});
+  EXPECT_EQ(contents["result"]["contents"], "fixture\n");
+
+  Json badRev = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 4},
+       {"method", "rev/fileAtRev"},
+       {"params", {{"repoId", repoId}, {"path", "README.md"}, {"rev", "no-such-rev"}}}});
+  EXPECT_EQ(badRev["error"]["code"], -32001);
+  EXPECT_FALSE(badRev["error"]["message"].get<std::string>().empty());
+
+  Json badPath = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 5},
+       {"method", "rev/fileAtRev"},
+       {"params", {{"repoId", repoId}, {"path", "no/such/file.txt"}, {"rev", "HEAD"}}}});
+  EXPECT_EQ(badPath["error"]["code"], -32001);
+
+  Json badRepo = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 6},
+       {"method", "rev/fileAtRev"},
+       {"params", {{"repoId", "r99"}, {"path", "README.md"}, {"rev", "HEAD"}}}});
+  EXPECT_EQ(badRepo["error"]["code"], -32000);
 }
 
 TEST(Server, DiscoverOutsideRepoReturnsError) {

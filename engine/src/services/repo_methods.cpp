@@ -5,14 +5,18 @@ namespace gg::services {
 void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
   auto& registry = context.registry;
 
-  dispatcher.method("repo/discover", [&registry](const rpc::Json& params, const CancelToken&,
-                                                 const rpc::NotifyFn&) -> rpc::Json {
+  dispatcher.method("repo/discover", [&context](const rpc::Json& params, const CancelToken&,
+                                                const rpc::NotifyFn&) -> rpc::Json {
     const std::string path = params.value("path", "");
     if (path.empty()) {
       throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
     }
-    auto info = registry.add(path);
+    auto info = context.registry.add(path);
     if (!info) throw rpc::HandlerError{{info.error()}};
+    // Watch the gitdir so external ref/index changes push repo/didChange.
+    if (auto repo = context.registry.open(info.value().id)) {
+      context.watchManager.watch(info.value().id, repo.value().gitdir());
+    }
     return {{"repoId", info.value().id},
             {"rootPath", info.value().rootPath},
             {"bare", info.value().bare}};

@@ -10,6 +10,7 @@
 #include "services/blame/blame_methods.h"
 #include "services/context.h"
 #include "services/repo_methods.h"
+#include "services/rev_methods.h"
 
 namespace gg {
 
@@ -32,6 +33,12 @@ int runServer(std::istream& in, std::ostream& out) {
     writer.write(message.dump());
   });
 
+  // Server-initiated notifications (watcher pushes) go through the same
+  // serialized frame writer as dispatcher responses.
+  context.broadcast = [&writer](const std::string& method, const rpc::Json& params) {
+    writer.write(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}.dump());
+  };
+
   dispatcher.method("initialize", [](const rpc::Json& params, const CancelToken&,
                                      const rpc::NotifyFn&) -> rpc::Json {
     const std::string clientProtocol = params.value("protocolVersion", "");
@@ -53,6 +60,7 @@ int runServer(std::istream& in, std::ostream& out) {
 
   services::registerRepoMethods(dispatcher, context);
   services::registerBlameMethods(dispatcher, context);
+  services::registerRevMethods(dispatcher, context);
 
   while (!shutdownRequested) {
     auto payload = reader.read();

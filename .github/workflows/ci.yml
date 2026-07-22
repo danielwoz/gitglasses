@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+  VCPKG_INSTALLED_DIR: ~/.cache/gitglasses/vcpkg_installed
+
+jobs:
+  engine:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            preset: debug
+          - os: ubuntu-22.04
+            preset: asan
+          - os: ubuntu-22.04
+            preset: tsan
+          - os: ubuntu-22.04
+            preset: release
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/gitglasses/vcpkg_installed
+            ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Install dependencies
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
+            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.invalid
+          ctest --preset ${{ matrix.preset }}
+
+  extension:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # The TS integration tests exercise the real engine binary.
+      - name: Bootstrap vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/gitglasses/vcpkg_installed
+            ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+      - name: Build engine
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
+            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          cmake --preset release && cmake --build --preset release
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Typecheck extension
+        working-directory: extension
+        run: npx tsc -p tsconfig.json
+
+      - name: Test
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.invalid
+          pnpm test

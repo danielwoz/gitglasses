@@ -2,25 +2,9 @@ import * as vscode from 'vscode';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 import { BlameModel, FileBlame } from '../model/blameModel';
 import { RepositoryService } from '../model/repositoryService';
+import { relativeTime } from '../system/dates';
 
 const CURSOR_DEBOUNCE_MS = 75;
-
-function relativeTime(unixSeconds: number): string {
-  const deltaSec = Date.now() / 1000 - unixSeconds;
-  const units: [number, string][] = [
-    [60 * 60 * 24 * 365, 'year'],
-    [60 * 60 * 24 * 30, 'month'],
-    [60 * 60 * 24 * 7, 'week'],
-    [60 * 60 * 24, 'day'],
-    [60 * 60, 'hour'],
-    [60, 'minute'],
-  ];
-  for (const [seconds, name] of units) {
-    const value = Math.floor(deltaSec / seconds);
-    if (value >= 1) return `${value} ${name}${value > 1 ? 's' : ''} ago`;
-  }
-  return 'just now';
-}
 
 // Inline current-line blame + status bar item. One in-flight cancellation
 // token per editor: a new cursor position or edit cancels the stale request.

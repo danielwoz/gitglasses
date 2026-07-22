@@ -87,6 +87,24 @@ export interface BlameHunk {
 
 // --- Method map -------------------------------------------------------------
 
+export interface CommitSummaryInfo {
+  sha: string;
+  parents: string[];
+  author: BlameSignature;
+  committer: BlameSignature;
+  summary: string;
+}
+
+export interface FileHistoryEntry {
+  sha: string;
+  author: BlameSignature;
+  summary: string;
+  /** Path of the file at this commit (differs across renames). */
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
 export interface Requests {
   initialize: {
     params: { protocolVersion: string };
@@ -105,6 +123,50 @@ export interface Requests {
       commits: Record<string, BlameCommit>;
     };
   };
+  /** Topo-ordered commit page from a ref (default HEAD). */
+  'log/commits': {
+    params: { repoId: string; ref?: string; cursor?: string; limit: number };
+    result: { commits: CommitSummaryInfo[]; nextCursor?: string };
+  };
+  /** File history following renames, newest first. */
+  'history/file': {
+    params: { repoId: string; path: string; cursor?: string; limit: number };
+    result: { entries: FileHistoryEntry[]; nextCursor?: string };
+  };
+  /** History of a line range (1-based, inclusive). */
+  'history/line': {
+    params: { repoId: string; path: string; startLine: number; endLine: number };
+    result: { entries: FileHistoryEntry[] };
+  };
+  /** Commit search; matches stream via search/matches notifications. */
+  'search/commits': {
+    params: {
+      repoId: string;
+      streamId: string;
+      limit: number;
+      query: { text?: string; author?: string; sha?: string };
+    };
+    result: { streamId: string; total: number; truncated: boolean };
+  };
+  /** Full contents of a file at a revision (virtual docs, quick diff). */
+  'rev/fileAtRev': {
+    params: { repoId: string; path: string; rev: string };
+    result: { contents: string };
+  };
+  /** Refs listing for views: branches, remotes, tags. */
+  'refs/list': {
+    params: { repoId: string };
+    result: {
+      branches: { name: string; sha: string; current: boolean; upstream?: string }[];
+      remotes: { name: string; branches: { name: string; sha: string }[] }[];
+      tags: { name: string; sha: string }[];
+    };
+  };
+  /** Stash entries. */
+  'stash/list': {
+    params: { repoId: string };
+    result: { entries: { index: number; sha: string; message: string; branch?: string }[] };
+  };
 }
 
 export type RequestMethod = keyof Requests;
@@ -121,6 +183,15 @@ export interface ClientNotifications {
 
 export interface EngineNotifications {
   'blame/hunks': { params: { streamId: string; hunks: BlameHunk[] } };
+  'search/matches': { params: { streamId: string; matches: CommitSummaryInfo[] } };
+  /** Pushed when the repo's git state changes (refs, HEAD, index, stash). */
+  'repo/didChange': {
+    params: {
+      repoId: string;
+      generation: number;
+      changed: ('HEAD' | 'refs' | 'index' | 'stash' | 'worktrees' | 'sequencer')[];
+    };
+  };
 }
 
 export type EngineNotificationMethod = keyof EngineNotifications;

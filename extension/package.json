@@ -17,6 +17,26 @@
         "title": "GitGlasses: Toggle Inline Blame"
       },
       {
+        "command": "gitglasses.toggleFileBlame",
+        "title": "GitGlasses: Toggle File Blame Annotations"
+      },
+      {
+        "command": "gitglasses.toggleHeatmap",
+        "title": "GitGlasses: Toggle File Heatmap Annotations"
+      },
+      {
+        "command": "gitglasses.clearAnnotations",
+        "title": "GitGlasses: Clear File Annotations"
+      },
+      {
+        "command": "gitglasses.diffWithHead",
+        "title": "GitGlasses: Open Changes with HEAD"
+      },
+      {
+        "command": "gitglasses.openFileAtRevision",
+        "title": "GitGlasses: Open File at Revision"
+      },
+      {
         "command": "gitglasses.restartEngine",
         "title": "GitGlasses: Restart Engine"
       }
@@ -28,6 +48,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show blame annotation for the current line"
+        },
+        "gitglasses.fileAnnotations.dateFormat": {
+          "type": "string",
+          "default": "relative",
+          "description": "Date format for file annotations (only 'relative' is supported for now)"
+        },
+        "gitglasses.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show git blame CodeLens above files and top-level symbols"
         },
         "gitglasses.engine.path": {
           "type": "string",

@@ -6,7 +6,14 @@ import { DocumentSync } from './engine/documentSync';
 import { BlameModel } from './model/blameModel';
 import { RepositoryService } from './model/repositoryService';
 import { LineBlameController } from './annotations/lineBlame';
+import { FileAnnotationsController } from './annotations/fileAnnotations';
 import { BlameHoverProvider } from './annotations/hoverProvider';
+import { BlameCodeLensProvider } from './codelens/blameCodeLens';
+import {
+  RevisionContentProvider,
+  encodeRevisionUri,
+} from './scm/revisionContentProvider';
+import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
 
 function findEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -55,6 +62,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         blame.invalidate();
         docSync.resync();
         lineBlame.refresh();
+        fileAnnotations.refresh();
+        codeLens.fire();
       });
     },
   });
@@ -64,16 +73,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const blame = new BlameModel(engine);
   const docSync = new DocumentSync(engine, repos);
   const lineBlame = new LineBlameController(blame, repos);
-  context.subscriptions.push(docSync, lineBlame);
+  const fileAnnotations = new FileAnnotationsController(blame, repos);
+  const codeLens = new BlameCodeLensProvider(blame, repos);
+  const revisionContent = new RevisionContentProvider(engine);
+  context.subscriptions.push(docSync, lineBlame, fileAnnotations, codeLens);
+
+  const scm = vscode.scm.createSourceControl('gitglasses', 'GitGlasses');
+  scm.quickDiffProvider = new GitGlassesQuickDiffProvider(repos);
+  context.subscriptions.push(scm);
 
   // Blame caches keyed on version -1 (disk state) go stale on save/commit;
-  // saving is the cheap conservative invalidation point until the engine
-  // pushes repo/didChange events.
+  // saving is a cheap conservative invalidation point that complements the
+  // engine's repo/didChange pushes (harmless if both fire).
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
       const located = repos.locate(doc.uri);
       if (located) blame.invalidate(located.repoId);
       lineBlame.refresh();
+      fileAnnotations.refresh();
+      codeLens.fire();
+    }),
+  );
+
+  // Engine-pushed repo state changes: HEAD moves and index changes rewrite
+  // blame attribution, so drop that repo's cache and re-render everything.
+  // The engine may not emit this notification yet; nothing here depends on it.
+  context.subscriptions.push(
+    engine.onNotification('repo/didChange', (params) => {
+      if (!Array.isArray(params?.changed)) return;
+      if (!params.changed.includes('HEAD') && !params.changed.includes('index')) return;
+      blame.invalidate(params.repoId);
+      lineBlame.refresh();
+      fileAnnotations.refresh();
+      codeLens.fire();
     }),
   );
 
@@ -82,13 +114,50 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       { scheme: 'file' },
       new BlameHoverProvider(blame, repos),
     ),
+    vscode.languages.registerCodeLensProvider({ scheme: 'file' }, codeLens),
+    vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
+    vscode.commands.registerCommand('gitglasses.diffWithHead', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.document.uri.scheme !== 'file') return;
+      const located = await repos.locateOrDiscover(editor.document.uri);
+      if (!located) return;
+      const original = encodeRevisionUri(located.repoId, located.relativePath, 'HEAD');
+      await vscode.commands.executeCommand(
+        'vscode.diff',
+        original,
+        editor.document.uri,
+        `${located.relativePath} (HEAD ↔ Working Tree)`,
+      );
+    }),
+    vscode.commands.registerCommand('gitglasses.openFileAtRevision', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.document.uri.scheme !== 'file') return;
+      const located = await repos.locateOrDiscover(editor.document.uri);
+      if (!located) return;
+      const rev = await vscode.window.showInputBox({
+        prompt: 'Revision (sha, branch, tag, HEAD~n…)',
+        value: 'HEAD',
+      });
+      if (!rev) return;
+      const uri = encodeRevisionUri(located.repoId, located.relativePath, rev);
+      await vscode.window.showTextDocument(uri, { preview: true });
+    }),
     vscode.commands.registerCommand('gitglasses.toggleLineBlame', () => lineBlame.toggle()),
+    vscode.commands.registerCommand('gitglasses.toggleFileBlame', () =>
+      fileAnnotations.toggle('blame'),
+    ),
+    vscode.commands.registerCommand('gitglasses.toggleHeatmap', () =>
+      fileAnnotations.toggle('heatmap'),
+    ),
+    vscode.commands.registerCommand('gitglasses.clearAnnotations', () => fileAnnotations.clear()),
     vscode.commands.registerCommand('gitglasses.restartEngine', async () => {
       await engine.restart();
       await repos.rediscoverAll();
       blame.invalidate();
       docSync.resync();
       lineBlame.refresh();
+      fileAnnotations.refresh();
+      codeLens.fire();
     }),
   );
 

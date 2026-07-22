@@ -37,13 +37,19 @@ add_library(gg_cache STATIC
 )
 target_link_libraries(gg_cache PUBLIC gg_exec PRIVATE gg_warnings)
 
+add_library(gg_watch STATIC
+  src/watch/watch_manager.cpp
+)
+target_link_libraries(gg_watch PUBLIC gg_util PRIVATE gg_warnings)
+
 add_library(gg_services STATIC
   src/services/blame/blame_service.cpp
   src/services/blame/blame_methods.cpp
   src/services/repo_methods.cpp
+  src/services/rev_methods.cpp
 )
 target_link_libraries(gg_services
-  PUBLIC gg_cache gg_core gg_exec gg_repo gg_rpc
+  PUBLIC gg_cache gg_core gg_exec gg_repo gg_rpc gg_watch
   PRIVATE gg_warnings)
 
 add_library(gg_rpc STATIC
