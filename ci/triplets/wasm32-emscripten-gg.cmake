@@ -2,7 +2,7 @@
 # diagnostic downgrade. libgit2 1.9's overflow-builtin selection passes
 # size_t* (unsigned long* on Emscripten) where 32-bit platforms are assumed
 # to use unsigned int*; identical width on wasm32, but clang >= 16 hard-errors
-# on the pointer mismatch. Tracked upstream; revisit when libgit2 fixes it.
+# on the pointer mismatch.
 
 set(VCPKG_ENV_PASSTHROUGH_UNTRACKED EMSCRIPTEN_ROOT EMSDK PATH)
 

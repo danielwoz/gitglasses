@@ -1,7 +1,6 @@
 // Pure .git/config parsing (no vscode/fs imports). The engine's refs/list
-// reports remote names without URLs, so — as an interim until an engine method
-// exposes them — the integration service reads the repo's .git/config and this
-// module extracts the remote URLs from it.
+// reports remote names without URLs; the integration service reads the repo's
+// .git/config and this module extracts the remote URLs from it.
 
 export interface RemoteConfig {
   name: string;

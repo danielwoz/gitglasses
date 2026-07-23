@@ -12,9 +12,9 @@
 
 namespace gg::services {
 
-// Which engine computes a blame. Cli is the compatibility oracle (rename
-// heuristics, ignore-revs files, mailmap); LibGit2 is the in-process fallback
-// for builds/environments without a git CLI (wasm groundwork).
+// Which engine computes a blame. Cli honors full git semantics (rename
+// heuristics, ignore-revs files, mailmap); LibGit2 computes in-process and
+// serves builds and environments where no git CLI is available.
 enum class BlameBackend { Cli, LibGit2 };
 
 struct BlameRequest {

@@ -215,10 +215,8 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithCli(
 // from `git blame` (all acceptable; results never share cache entries with
 // the CLI backend):
 //   - Weaker cross-file rename attribution: clean whole-file renames are
-//     followed (verified against the CLI in the parity tests), but libgit2's
-//     similarity-based pairing can attribute rename+edit or copy cases to
-//     the renaming commit instead of the true origin. The parity tests
-//     tolerate exactly this on rename-boundary hunks.
+//     followed, but similarity-based pairing can attribute rename+edit or
+//     copy cases to the renaming commit instead of the true origin.
 //   - No `previous` (blame-parent) hunk fields: libgit2 does not report the
 //     parent commit a hunk was passed from.
 //   - ignore-revs files and mailmap are not consulted.
