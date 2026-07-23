@@ -118,6 +118,51 @@ jobs:
           git config --global user.email ci@example.invalid
           ctest --preset release
 
+  engine-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap vcpkg
+        run: |
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/gitglasses/vcpkg_installed
+            ~/.cache/vcpkg/archives
+          key: vcpkg-macos-${{ hashFiles('vcpkg.json', 'ci/triplets/arm64-osx-gg.cmake') }}
+
+      - name: Install dependencies
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet arm64-osx-gg \
+            --overlay-triplets=ci/triplets \
+            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+
+      - name: Configure
+        run: |
+          cmake --preset release \
+            -DVCPKG_TARGET_TRIPLET=arm64-osx-gg \
+            -DVCPKG_OVERLAY_TRIPLETS=ci/triplets \
+            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Test
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.invalid
+          ctest --preset release
+
   engine-wasm:
     runs-on: ubuntu-22.04
     steps:

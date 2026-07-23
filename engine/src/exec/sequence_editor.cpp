@@ -6,6 +6,11 @@
 #include "exec/win_unicode.h"
 #else
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+
+#include <cstring>
+#endif
 #endif
 
 #include <cstdint>
@@ -86,6 +91,18 @@ std::string selfExePath() {
       return wideToUtf8(buffer);
     }
     buffer.resize(buffer.size() * 2);  // path was truncated; retry larger
+  }
+#elif defined(__APPLE__)
+  // _NSGetExecutablePath yields the launch path (possibly relative or with
+  // symlinks); canonicalize so git can invoke the shim from any directory.
+  uint32_t size = 0;
+  ::_NSGetExecutablePath(nullptr, &size);
+  std::string buffer(size, '\0');
+  if (::_NSGetExecutablePath(buffer.data(), &size) == 0) {
+    buffer.resize(std::strlen(buffer.c_str()));
+    std::error_code canonEc;
+    const std::filesystem::path canonical = std::filesystem::canonical(buffer, canonEc);
+    return canonEc ? buffer : canonical.string();
   }
 #else
   char buffer[4096];
