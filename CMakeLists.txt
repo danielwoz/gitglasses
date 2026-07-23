@@ -28,6 +28,8 @@ endif()
 add_library(gg_warnings INTERFACE)
 if(MSVC)
   target_compile_options(gg_warnings INTERFACE /W4 $<$<BOOL:${GG_WARNINGS_AS_ERRORS}>:/WX>)
+  # Standard C functions (getenv, fopen) are used deliberately and portably.
+  target_compile_definitions(gg_warnings INTERFACE _CRT_SECURE_NO_WARNINGS)
 else()
   target_compile_options(gg_warnings INTERFACE
     -Wall -Wextra -Wpedantic
