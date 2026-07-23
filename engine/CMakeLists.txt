@@ -15,6 +15,7 @@ if(EMSCRIPTEN)
     src/server.cpp
     src/util/sha256.cpp
     src/util/task_pool.cpp
+    src/util/temp_file.cpp
     src/core/git2.cpp
     src/core/repo.cpp
     src/repo/registry.cpp
@@ -73,6 +74,19 @@ find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(libgit2 CONFIG REQUIRED)
 
+if(WIN32)
+  # Lean Win32 headers everywhere; keep min/max as functions, not macros.
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+  if(MSVC)
+    add_compile_options(/utf-8)
+    # Static triplets ship static-CRT libraries; the consuming targets must
+    # match or the link fails with runtime-library mismatches.
+    if(VCPKG_TARGET_TRIPLET MATCHES "-static$")
+      set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+  endif()
+endif()
+
 # Layering (dependencies flow downward only):
 #   rpc -> services -> {cache, repo, watch} -> {core, exec} -> util
 
@@ -80,6 +94,7 @@ add_library(gg_util STATIC
   src/util/log.cpp
   src/util/sha256.cpp
   src/util/task_pool.cpp
+  src/util/temp_file.cpp
 )
 target_include_directories(gg_util PUBLIC src)
 target_link_libraries(gg_util PUBLIC fmt::fmt spdlog::spdlog PRIVATE gg_warnings)
@@ -97,9 +112,17 @@ add_library(gg_repo STATIC
 )
 target_link_libraries(gg_repo PUBLIC gg_core PRIVATE gg_warnings)
 
+# Process spawning is the one per-platform source: posix_spawn process
+# groups on POSIX, CreateProcessW + job objects on Windows.
+if(WIN32)
+  set(GG_GIT_PROCESS_SOURCE src/exec/git_process_win.cpp)
+else()
+  set(GG_GIT_PROCESS_SOURCE src/exec/git_process_posix.cpp)
+endif()
+
 add_library(gg_exec STATIC
   src/exec/cli_detect.cpp
-  src/exec/git_process.cpp
+  ${GG_GIT_PROCESS_SOURCE}
   src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp
   src/exec/sequence_editor.cpp

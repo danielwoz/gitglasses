@@ -26,18 +26,11 @@ Json req(std::int64_t id, const std::string& method, Json params) {
 }
 
 std::string gitOut(const std::filesystem::path& root, const std::string& args) {
-  FILE* pipe = popen(("cd '" + root.string() + "' && git " + args).c_str(), "r");
-  EXPECT_NE(pipe, nullptr);
-  if (!pipe) return "";
-  std::string output;
-  char buf[512];
-  while (fgets(buf, sizeof(buf), pipe)) output += buf;
-  pclose(pipe);
-  return output;
+  return gg::testing::gitCapture(root, args);
 }
 
 std::string rev(const std::filesystem::path& root, const std::string& spec) {
-  std::string sha = gitOut(root, "rev-parse " + spec + " 2>/dev/null");
+  std::string sha = gg::testing::gitCapture(root, "rev-parse " + spec, /*quiet=*/true);
   while (!sha.empty() && sha.back() == '\n') sha.pop_back();
   return sha;
 }
@@ -57,8 +50,7 @@ std::string slurp(const std::filesystem::path& file) {
 
 void commitTick(FixtureRepo& fixture, const std::string& message, int tick) {
   const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
-  fixture.run("GIT_AUTHOR_DATE='" + date + "' GIT_COMMITTER_DATE='" + date +
-              "' git commit -q --allow-empty -m '" + message + "'");
+  fixture.commitAt(date, message);
 }
 
 std::string discoverRepo(InteractiveSession& session, const std::filesystem::path& root) {
@@ -387,8 +379,11 @@ TEST(MutateService, FetchPullPushAgainstBareRemote) {
 
   // Remote-side commit via a second clone.
   fixture.run("git clone -q upstream.git second");
-  fixture.run("cd second && git -c user.name=Remote -c user.email=remote@example.invalid "
-              "commit -q --allow-empty -m 'remote work' && git push -q origin main");
+  const std::filesystem::path second = fixture.root() / "second";
+  gg::testing::runGit(second,
+                      "git -c user.name=Remote -c user.email=remote@example.invalid "
+                      "commit -q --allow-empty -m \"remote work\"");
+  gg::testing::runGit(second, "git push -q origin main");
 
   Json fetch = session.request(req(12, "mutate/fetch", {{"repoId", repoId}}));
   ASSERT_TRUE(fetch.contains("result")) << fetch.dump();
@@ -561,6 +556,11 @@ TEST(MutateService, CommitEmitsRepoDidChange) {
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
 
+  // The polling watcher backend records its baseline on its first sweep;
+  // a change made before that sweep lands is folded into the baseline and
+  // never reported. Give the watcher a full sweep interval to settle.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
   fixture.writeFile("w.txt", "watched\n");
   fixture.run("git add w.txt");
   Json commit = session.request(
@@ -570,9 +570,11 @@ TEST(MutateService, CommitEmitsRepoDidChange) {
   // A commit moves the branch ref HEAD resolves to; depending on debounce
   // batching the watcher reports it as 'HEAD' or 'refs' (the same acceptance
   // the watch-manager tests use).
+  // Generous timeout: the polling watcher backend sweeps at 500ms and slow
+  // environments (emulation, loaded CI) stack delays on top of it.
   bool sawHeadChange = false;
   for (int i = 0; i < 5 && !sawHeadChange; ++i) {
-    Json notification = session.readNotificationUntil("repo/didChange", 5000);
+    Json notification = session.readNotificationUntil("repo/didChange", 20000);
     if (!notification.contains("params")) break;
     EXPECT_EQ(notification["params"]["repoId"], repoId);
     for (const auto& category : notification["params"]["changed"]) {

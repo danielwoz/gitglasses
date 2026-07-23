@@ -51,6 +51,7 @@ std::string classify(const std::string& rel) {
   return "";
 }
 
+#ifdef __linux__
 // Directory trees inside the gitdir that are watched recursively; everything
 // else is covered by the watch on the gitdir itself.
 bool isRecursiveRoot(const std::string& rel) {
@@ -64,6 +65,7 @@ std::string joinRel(const std::string& dir, const std::string& name) {
   if (name.empty()) return dir;
   return dir + "/" + name;
 }
+#endif
 
 }  // namespace
 

@@ -5,18 +5,7 @@
 
 #include "exec/git_process.h"
 
-#include <errno.h>
-#include <spawn.h>
-
 #include "exec/sequence_editor.h"
-
-// Emscripten's libc declares posix_spawnp but does not define it. All call
-// sites (runGitWithEnv in mutate/patch) sit behind requireGitCli, which
-// always rejects in this build, so a failing definition is never reached.
-extern "C" int posix_spawnp(pid_t*, const char*, const posix_spawn_file_actions_t*,
-                            const posix_spawnattr_t*, char* const[], char* const[]) {
-  return ENOSYS;
-}
 
 namespace gg::exec {
 
@@ -25,7 +14,8 @@ namespace gg::exec {
 // CLI-gated.
 std::string selfExePath() { return "/gitglasses-engine-wasm"; }
 
-Result<GitProcess> GitProcess::spawn(const std::string&, std::vector<std::string>) {
+Result<GitProcess> GitProcess::spawn(const std::string&, std::vector<std::string>,
+                                     const SpawnOpts&) {
   return Error{ErrorCode::Internal, "git CLI processes are not available in this engine build"};
 }
 
@@ -34,6 +24,8 @@ GitProcess::GitProcess(GitProcess&&) noexcept = default;
 GitProcess::~GitProcess() = default;
 
 bool GitProcess::readLine(std::string&, const CancelToken&) { return false; }
+
+std::string GitProcess::readAll(const CancelToken&) { return {}; }
 
 int GitProcess::wait(const CancelToken&) { return -1; }
 

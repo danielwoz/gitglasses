@@ -51,6 +51,25 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
     },
     {
+      "name": "mingw",
+      "vendor": {
+        "gitglasses": {
+          "notes": "Windows cross-build with mingw-w64 for local verification under wine. Requires x86_64-w64-mingw32-g++ on the host and prebuilt deps under ~/.cache/gitglasses/vcpkg_mingw (vcpkg triplet x64-mingw-static). Run tests with wine, e.g. WINEPATH=<mingit>/cmd wine build/mingw/engine/tests/engine_tests.exe."
+        }
+      },
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/ci/mingw-toolchain.cmake",
+        "VCPKG_INSTALLED_DIR": "$env{HOME}/.cache/gitglasses/vcpkg_mingw",
+        "VCPKG_MANIFEST_INSTALL": "OFF",
+        "GG_BUILD_TESTS": "ON"
+      }
+    },
+    {
       "name": "asan",
       "inherits": "debug",
       "cacheVariables": {
@@ -71,6 +90,7 @@
     { "name": "debug", "configurePreset": "debug" },
     { "name": "debug-st", "configurePreset": "debug-st" },
     { "name": "wasm", "configurePreset": "wasm" },
+    { "name": "mingw", "configurePreset": "mingw" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" }

@@ -28,29 +28,25 @@ Json req(std::int64_t id, const std::string& method, Json params) {
   return {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", std::move(params)}};
 }
 
-std::vector<std::string> gitLines(const std::filesystem::path& root, const std::string& args) {
-  std::vector<std::string> lines;
-  FILE* pipe = popen(("cd '" + root.string() + "' && git " + args).c_str(), "r");
-  EXPECT_NE(pipe, nullptr);
-  if (!pipe) return lines;
-  std::string output;
-  char buf[512];
-  while (fgets(buf, sizeof(buf), pipe)) output += buf;
-  pclose(pipe);
-  size_t pos = 0;
-  while (pos < output.size()) {
-    const size_t nl = output.find('\n', pos);
-    if (nl == std::string::npos) {
-      lines.push_back(output.substr(pos));
-      break;
-    }
-    lines.push_back(output.substr(pos, nl - pos));
-    pos = nl + 1;
-  }
-  return lines;
-}
+using gg::testing::gitLines;
 
 std::string rev(const FixtureRepo& fixture, const std::string& spec) {
+  // `^` never reaches a shell: cmd.exe treats carets as escape characters,
+  // so parent specs resolve via rev-list --parents instead.
+  const size_t caret = spec.find('^');
+  if (caret != std::string::npos) {
+    const std::string base = spec.substr(0, caret);
+    const std::string indexText = spec.substr(caret + 1);
+    const size_t parentIndex = indexText.empty() ? 1 : std::stoul(indexText);
+    const auto lines = gitLines(fixture.root(), "rev-list --parents -n 1 " + base);
+    EXPECT_FALSE(lines.empty()) << spec;
+    if (lines.empty()) return "";
+    std::istringstream fields(lines[0]);
+    std::string sha;
+    for (size_t i = 0; i <= parentIndex; ++i) fields >> sha;
+    EXPECT_FALSE(sha.empty()) << spec;
+    return sha;
+  }
   const auto lines = gitLines(fixture.root(), "rev-parse " + spec);
   EXPECT_FALSE(lines.empty()) << spec;
   return lines.empty() ? "" : lines[0];
@@ -58,14 +54,35 @@ std::string rev(const FixtureRepo& fixture, const std::string& spec) {
 
 void commitTick(FixtureRepo& fixture, const std::string& message, int tick) {
   const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
-  fixture.run("GIT_AUTHOR_DATE='" + date + "' GIT_COMMITTER_DATE='" + date +
-              "' git commit -q --allow-empty -m '" + message + "'");
+  fixture.commitAt(date, message);
 }
 
 void mergeTick(FixtureRepo& fixture, const std::string& mergeArgs, int tick) {
+  // Refresh cached stat info first: on filesystems with coarse timestamps,
+  // racy-stat protection can leave just-switched files marked dirty, and
+  // merge then refuses to run.
+  fixture.tryRun("git update-index -q --refresh");
   const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
-  fixture.run("GIT_AUTHOR_DATE='" + date + "' GIT_COMMITTER_DATE='" + date + "' git merge -q " +
-              mergeArgs);
+  fixture.runAt(date, "git merge -q " + mergeArgs);
+}
+
+// Builds an N-parent merge commit with plumbing (commit-tree + update-ref).
+// Builtins only: the octopus merge strategy runs through git's shell-script
+// machinery, which some minimal git environments cannot execute.
+void octopusMergeTick(FixtureRepo& fixture, const std::vector<std::string>& extraHeads,
+                      int tick) {
+  const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
+  const auto tree = gitLines(fixture.root(), "log -1 --format=%T HEAD");
+  ASSERT_FALSE(tree.empty());
+  std::string parents = "-p HEAD";
+  for (const auto& head : extraHeads) parents += " -p " + head;
+  gg::testing::ScopedEnv author("GIT_AUTHOR_DATE", date);
+  gg::testing::ScopedEnv committer("GIT_COMMITTER_DATE", date);
+  const auto merged = gitLines(
+      fixture.root(), "commit-tree " + tree[0] + " " + parents + " -m octopus-merge");
+  ASSERT_FALSE(merged.empty());
+  fixture.run("git update-ref refs/heads/main " + merged[0]);
+  fixture.run("git reset -q --hard");
 }
 
 std::string discoverRepo(InteractiveSession& session, const std::filesystem::path& root) {
@@ -185,7 +202,8 @@ TEST(GraphService, CrissCrossLayoutGolden) {
   commitTick(fixture, "base", 1);
   fixture.run("git checkout -q -b sideA");
   commitTick(fixture, "A", 2);
-  fixture.run("git checkout -q main && git checkout -q -b sideB");
+  fixture.run("git checkout -q main");
+  fixture.run("git checkout -q -b sideB");
   commitTick(fixture, "B", 3);
   fixture.run("git checkout -q -b crossA sideA");
   mergeTick(fixture, "--no-ff --no-edit sideB", 4);
@@ -224,11 +242,12 @@ TEST(GraphService, OctopusLayoutGolden) {
   commitTick(fixture, "base", 1);
   fixture.run("git checkout -q -b b1");
   commitTick(fixture, "c1", 2);
-  fixture.run("git checkout -q main && git checkout -q -b b2");
+  fixture.run("git checkout -q main");
+  fixture.run("git checkout -q -b b2");
   commitTick(fixture, "c2", 3);
   fixture.run("git checkout -q main");
   commitTick(fixture, "m1", 4);
-  mergeTick(fixture, "--no-edit b1 b2", 5);
+  octopusMergeTick(fixture, {"b1", "b2"}, 5);
 
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
@@ -388,7 +407,8 @@ TEST(GraphService, UpstreamAheadBehindAndRemoteDecorations) {
   commitTick(fixture, "c1", 1);
   commitTick(fixture, "c2", 2);
   fixture.run("git clone --bare -q . upstream.git");
-  fixture.run("git remote add origin upstream.git && git fetch -q origin");
+  fixture.run("git remote add origin upstream.git");
+  fixture.run("git fetch -q origin");
   fixture.run("git branch -q --set-upstream-to=origin/main main");
   fixture.run("git reset -q --hard HEAD~1");
   commitTick(fixture, "c3", 3);
@@ -428,7 +448,7 @@ TEST(GraphService, UnbornHeadAndBadParams) {
              ("gg-graph-unborn-" +
               std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
       std::filesystem::create_directories(root);
-      EXPECT_EQ(std::system(("cd '" + root.string() + "' && git init -q -b main").c_str()), 0);
+      gg::testing::runGit(root, "git init -q -b main");
     }
     ~UnbornRepo() {
       std::error_code ec;

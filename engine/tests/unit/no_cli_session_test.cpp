@@ -30,8 +30,8 @@ Json req(std::int64_t id, const std::string& method, Json params) {
 // InteractiveSession spawns the server thread is sufficient — and it must be
 // cleared again for any other test sharing this process.
 struct NoCliSessionTest : ::testing::Test {
-  void SetUp() override { ASSERT_EQ(::setenv("GG_NO_GIT_CLI", "1", 1), 0); }
-  void TearDown() override { ::unsetenv("GG_NO_GIT_CLI"); }
+  void SetUp() override { gg::testing::setEnvVar("GG_NO_GIT_CLI", "1"); }
+  void TearDown() override { gg::testing::unsetEnvVar("GG_NO_GIT_CLI"); }
 };
 
 TEST_F(NoCliSessionTest, FullSessionWithoutGitCli) {

@@ -156,19 +156,20 @@ TEST_F(BlameServiceTest, ParityWithGitLinePorcelain) {
     }
   }
 
-  // Ask git directly and compare per line.
-  FILE* pipe = popen(("cd '" + fixture.root().string() +
-                      "' && git blame --line-porcelain code.txt | grep -E '^[0-9a-f]{40} '")
-                         .c_str(),
-                     "r");
-  ASSERT_NE(pipe, nullptr);
-  char buf[256];
+  // Ask git directly and compare per line. Porcelain header lines start with
+  // "<sha> <origLine> <finalLine>"; content lines start with a tab, so a
+  // 40-hex-then-space prefix uniquely selects the headers.
+  const auto isHex40 = [](const std::string& s) {
+    return s.size() > 40 && s[40] == ' ' &&
+           s.find_first_not_of("0123456789abcdef") == 40;
+  };
   std::uint32_t line = 0;
-  while (fgets(buf, sizeof(buf), pipe)) {
+  for (const auto& porcelain :
+       gg::testing::gitLines(fixture.root(), "blame --line-porcelain code.txt")) {
+    if (!isHex40(porcelain)) continue;
     ++line;
-    ASSERT_EQ(ourShaByLine.at(line), std::string(buf, 40)) << "mismatch at line " << line;
+    ASSERT_EQ(ourShaByLine.at(line), porcelain.substr(0, 40)) << "mismatch at line " << line;
   }
-  pclose(pipe);
   EXPECT_EQ(line, ourShaByLine.size());
 }
 

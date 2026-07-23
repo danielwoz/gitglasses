@@ -1,8 +1,5 @@
 #include "services/mutate/rebase_methods.h"
 
-#include <unistd.h>
-
-#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -11,6 +8,7 @@
 
 #include "exec/sequence_editor.h"
 #include "services/mutate/mutate_common.h"
+#include "util/temp_file.h"
 
 namespace gg::services {
 
@@ -42,10 +40,7 @@ std::string shellQuote(const std::string& value) {
 class ControlFile {
  public:
   explicit ControlFile(const rpc::Json& plan) {
-    static std::atomic<int> counter{0};
-    path_ = std::filesystem::temp_directory_path() /
-            ("gg-rebase-" + std::to_string(::getpid()) + "-" + std::to_string(counter++) +
-             ".json");
+    path_ = util::randomTempPath("gg-rebase-", ".json");
     std::ofstream out(path_, std::ios::binary | std::ios::trunc);
     out << rpc::Json{{"plan", plan}, {"consumed", 0}}.dump();
     out.flush();
@@ -144,8 +139,12 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         if (!control.ok()) {
           throw rpc::HandlerError{{ErrorCode::Internal, "cannot write rebase control file"}};
         }
-        const std::string self = shellQuote(exec::selfExePath());
-        const std::string controlArg = shellQuote(control.path());
+        // The editor values run through git's `sh -c`, which wants
+        // forward-slash paths on every platform (Git for Windows included).
+        const std::string self =
+            shellQuote(std::filesystem::path(exec::selfExePath()).generic_string());
+        const std::string controlArg =
+            shellQuote(std::filesystem::path(control.path()).generic_string());
         auto output = runGitWithEnv(
             repo.workdir(), {"rebase", "-i", upstream},
             {{"GIT_SEQUENCE_EDITOR", self + " --edit-sequence " + controlArg},

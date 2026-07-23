@@ -28,18 +28,23 @@ Json req(std::int64_t id, const std::string& method, Json params) {
 }
 
 std::string gitOut(const std::filesystem::path& root, const std::string& args) {
-  FILE* pipe = popen(("cd '" + root.string() + "' && git " + args).c_str(), "r");
-  EXPECT_NE(pipe, nullptr);
-  if (!pipe) return "";
-  std::string output;
-  char buf[512];
-  while (fgets(buf, sizeof(buf), pipe)) output += buf;
-  pclose(pipe);
-  return output;
+  return gg::testing::gitCapture(root, args);
 }
 
 std::string rev(const std::filesystem::path& root, const std::string& spec) {
-  std::string sha = gitOut(root, "rev-parse " + spec + " 2>/dev/null");
+  // `^` never reaches a shell: cmd.exe treats carets as escape characters,
+  // so first-parent specs resolve via rev-list --parents instead.
+  const size_t caret = spec.find('^');
+  if (caret != std::string::npos) {
+    const std::string base = spec.substr(0, caret);
+    std::string line =
+        gg::testing::gitCapture(root, "rev-list --parents -n 1 " + base, /*quiet=*/true);
+    std::istringstream fields(line);
+    std::string sha, parent;
+    fields >> sha >> parent;
+    return parent;
+  }
+  std::string sha = gg::testing::gitCapture(root, "rev-parse " + spec, /*quiet=*/true);
   while (!sha.empty() && sha.back() == '\n') sha.pop_back();
   return sha;
 }
@@ -51,15 +56,13 @@ std::string slurp(const std::filesystem::path& file) {
   return buffer.str();
 }
 
-void runIn(const std::filesystem::path& dir, const std::string& command) {
-  const std::string full = "cd '" + dir.string() + "' && " + command;
-  ASSERT_EQ(std::system(full.c_str()), 0) << "command failed: " << command;
-}
+using gg::testing::runGit;
 
 void commitTick(const std::filesystem::path& dir, const std::string& message, int tick) {
   const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
-  runIn(dir, "GIT_AUTHOR_DATE='" + date + "' GIT_COMMITTER_DATE='" + date +
-               "' git commit -aq --allow-empty -m '" + message + "'");
+  gg::testing::ScopedEnv author("GIT_AUTHOR_DATE", date);
+  gg::testing::ScopedEnv committer("GIT_COMMITTER_DATE", date);
+  runGit(dir, "git commit -aq --allow-empty -m \"" + message + "\"");
 }
 
 std::string discoverRepo(InteractiveSession& session, std::int64_t id,
@@ -74,10 +77,10 @@ class CloneRepo {
  public:
   explicit CloneRepo(const FixtureRepo& fixture)
       : root_(fixture.root().string() + "-clone") {
-    runIn(fixture.root(), "git clone -q . '" + root_.string() + "'");
-    runIn(root_, "git config user.name Fixture");
-    runIn(root_, "git config user.email fixture@example.invalid");
-    runIn(root_, "git config commit.gpgsign false");
+    runGit(fixture.root(), "git clone -q . \"" + root_.string() + "\"");
+    runGit(root_, "git config user.name Fixture");
+    runGit(root_, "git config user.email fixture@example.invalid");
+    runGit(root_, "git config commit.gpgsign false");
   }
 
   ~CloneRepo() {
@@ -202,7 +205,8 @@ TEST(PatchService, ApplyThreeWayWithDivergedBase) {
   CloneRepo clone(fixture);
 
   // The clone advances with a commit touching a nearby (but different) line.
-  std::ofstream(clone.root() / "f.txt") << "l1\nl2\nl3\nl4\nl5 clone\nl6\nl7\nl8\nl9\n";
+  std::ofstream(clone.root() / "f.txt", std::ios::binary)
+      << "l1\nl2\nl3\nl4\nl5 clone\nl6\nl7\nl8\nl9\n";
   commitTick(clone.root(), "clone work", 2);
 
   fixture.writeFile("f.txt", "l1\nl2 patched\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n");
@@ -228,7 +232,7 @@ TEST(PatchService, ApplyConflictReportsUnmerged) {
   CloneRepo clone(fixture);
 
   // The clone rewrites the same line the patch touches.
-  std::ofstream(clone.root() / "f.txt") << "l1\nl2 clone\nl3\n";
+  std::ofstream(clone.root() / "f.txt", std::ios::binary) << "l1\nl2 clone\nl3\n";
   commitTick(clone.root(), "clone conflicting work", 2);
 
   fixture.writeFile("f.txt", "l1\nl2 patched\nl3\n");
@@ -279,8 +283,10 @@ TEST(PatchService, StashSourceEnvelope) {
   commitTick(fixture.root(), "seed", 1);
   fixture.writeFile("s.txt", "working\n");
   fixture.writeFile("loose.txt", "loose\n");
-  fixture.run("git stash push -q -u -m 'stash work'");
-  const std::string stashBase = rev(fixture.root(), "'stash@{0}^1'");
+  fixture.run("git stash push -q -u -m \"stash work\"");
+  // Bare spec: rev() resolves the ^1 via rev-list, and stash@{0} needs no
+  // quoting in either sh or cmd.
+  const std::string stashBase = rev(fixture.root(), "stash@{0}^1");
 
   InteractiveSession session;
   session.request(initRequest(1));

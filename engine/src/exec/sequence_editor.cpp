@@ -1,7 +1,12 @@
 #include "exec/sequence_editor.h"
 
 #include <nlohmann/json.hpp>
+
+#ifdef _WIN32
+#include "exec/win_unicode.h"
+#else
 #include <unistd.h>
+#endif
 
 #include <cstdint>
 #include <filesystem>
@@ -70,9 +75,23 @@ void setSelfPathFallback(const char* argv0) {
 }
 
 std::string selfExePath() {
+#ifdef _WIN32
+  std::wstring buffer(MAX_PATH, L'\0');
+  for (;;) {
+    const DWORD n = GetModuleFileNameW(nullptr, buffer.data(),
+                                       static_cast<DWORD>(buffer.size()));
+    if (n == 0) break;
+    if (n < buffer.size()) {
+      buffer.resize(n);
+      return wideToUtf8(buffer);
+    }
+    buffer.resize(buffer.size() * 2);  // path was truncated; retry larger
+  }
+#else
   char buffer[4096];
   const ssize_t n = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
   if (n > 0) return std::string(buffer, static_cast<size_t>(n));
+#endif
   std::error_code ec;
   const std::filesystem::path absolute = std::filesystem::absolute(argv0Fallback(), ec);
   return ec ? argv0Fallback() : absolute.string();

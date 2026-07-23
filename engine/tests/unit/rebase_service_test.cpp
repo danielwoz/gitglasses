@@ -27,18 +27,11 @@ Json req(std::int64_t id, const std::string& method, Json params) {
 }
 
 std::string gitOut(const std::filesystem::path& root, const std::string& args) {
-  FILE* pipe = popen(("cd '" + root.string() + "' && git " + args).c_str(), "r");
-  EXPECT_NE(pipe, nullptr);
-  if (!pipe) return "";
-  std::string output;
-  char buf[512];
-  while (fgets(buf, sizeof(buf), pipe)) output += buf;
-  pclose(pipe);
-  return output;
+  return gg::testing::gitCapture(root, args);
 }
 
 std::string rev(const std::filesystem::path& root, const std::string& spec) {
-  std::string sha = gitOut(root, "rev-parse " + spec + " 2>/dev/null");
+  std::string sha = gg::testing::gitCapture(root, "rev-parse " + spec, /*quiet=*/true);
   while (!sha.empty() && sha.back() == '\n') sha.pop_back();
   return sha;
 }
@@ -52,8 +45,7 @@ std::string slurp(const std::filesystem::path& file) {
 
 void commitTick(FixtureRepo& fixture, const std::string& message, int tick) {
   const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
-  fixture.run("GIT_AUTHOR_DATE='" + date + "' GIT_COMMITTER_DATE='" + date +
-              "' git commit -q --allow-empty -m '" + message + "'");
+  fixture.commitAt(date, message);
 }
 
 std::string discoverRepo(InteractiveSession& session, const std::filesystem::path& root) {

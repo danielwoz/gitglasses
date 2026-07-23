@@ -1,9 +1,7 @@
 #include "services/status/stage_methods.h"
 
 #include <git2.h>
-#include <unistd.h>
 
-#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +13,7 @@
 
 #include "exec/git_process.h"
 #include "services/status/diff_common.h"
+#include "util/temp_file.h"
 
 namespace gg::services {
 
@@ -148,10 +147,7 @@ std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBl
 
 // Writes `contents` to a throwaway file for `git apply`; removed by caller.
 Result<std::filesystem::path> writeTempPatch(const std::string& contents) {
-  static std::atomic<int> counter{0};
-  const std::filesystem::path file =
-      std::filesystem::temp_directory_path() /
-      ("gg-hunk-" + std::to_string(::getpid()) + "-" + std::to_string(counter++) + ".patch");
+  const std::filesystem::path file = util::randomTempPath("gg-hunk-", ".patch");
   std::FILE* f = std::fopen(file.string().c_str(), "wb");
   if (!f) return Error{ErrorCode::Internal, "cannot create temp patch file"};
   const size_t written = std::fwrite(contents.data(), 1, contents.size(), f);

@@ -32,7 +32,8 @@ struct SpawnAttr {
 
 }  // namespace
 
-Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args) {
+Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args,
+                                     const SpawnOpts& opts) {
   int outPipe[2], errPipe[2];
   if (pipe(outPipe) != 0) return Error{ErrorCode::Internal, "pipe() failed"};
   if (pipe(errPipe) != 0) {
@@ -67,12 +68,44 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
 
   // Scrubbed additions applied on top of the inherited environment: stable
   // parse output, no lock contention with the user's own git commands, and
-  // never a hung child waiting for a credential prompt.
-  std::vector<std::string> extraEnv = {"GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
-                                       "LC_ALL=C"};
+  // never a hung child waiting for a credential prompt. Caller-provided
+  // entries come last so they can override the scrub as well. Each override
+  // replaces any inherited variable of the same name: with duplicates in
+  // envp, which copy wins is unspecified.
+  std::vector<std::string> overrides = {"GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
+                                        "LC_ALL=C"};
+  overrides.insert(overrides.end(), opts.extraEnv.begin(), opts.extraEnv.end());
+  const auto nameLen = [](const std::string& entry) { return entry.find('='); };
+  const auto sameName = [&nameLen](const std::string& a, const char* b) {
+    const size_t n = nameLen(a);
+    return n != std::string::npos && std::strncmp(a.c_str(), b, n) == 0 && b[n] == '=';
+  };
+  std::vector<std::string> envStrings;
+  for (char** e = environ; *e; ++e) {
+    bool overridden = false;
+    for (const auto& entry : overrides) {
+      if (sameName(entry, *e)) {
+        overridden = true;
+        break;
+      }
+    }
+    if (!overridden) envStrings.emplace_back(*e);
+  }
+  // Later overrides win over earlier ones of the same name (extraEnv over
+  // the scrub defaults).
+  for (size_t i = 0; i < overrides.size(); ++i) {
+    bool shadowed = false;
+    for (size_t j = i + 1; j < overrides.size(); ++j) {
+      if (sameName(overrides[j], overrides[i].c_str())) {
+        shadowed = true;
+        break;
+      }
+    }
+    if (!shadowed) envStrings.push_back(overrides[i]);
+  }
   std::vector<char*> envp;
-  for (char** e = environ; *e; ++e) envp.push_back(*e);
-  for (auto& e : extraEnv) envp.push_back(e.data());
+  envp.reserve(envStrings.size() + 1);
+  for (auto& e : envStrings) envp.push_back(e.data());
   envp.push_back(nullptr);
 
   pid_t pid = -1;
@@ -188,6 +221,14 @@ bool GitProcess::readLine(std::string& out, const CancelToken& token) {
       return false;
     }
   }
+}
+
+std::string GitProcess::readAll(const CancelToken& token) {
+  while (fillBuffer(token)) {
+  }
+  std::string out = buffer_.substr(bufferPos_);
+  bufferPos_ = buffer_.size();
+  return out;
 }
 
 int GitProcess::wait(const CancelToken& token) {

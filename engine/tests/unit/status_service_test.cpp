@@ -26,14 +26,7 @@ Json req(std::int64_t id, const std::string& method, Json params) {
 }
 
 std::string gitOut(const std::filesystem::path& root, const std::string& args) {
-  FILE* pipe = popen(("cd '" + root.string() + "' && git " + args).c_str(), "r");
-  EXPECT_NE(pipe, nullptr);
-  if (!pipe) return "";
-  std::string output;
-  char buf[512];
-  while (fgets(buf, sizeof(buf), pipe)) output += buf;
-  pclose(pipe);
-  return output;
+  return gg::testing::gitCapture(root, args);
 }
 
 std::string rev(const FixtureRepo& fixture, const std::string& spec) {
@@ -44,8 +37,7 @@ std::string rev(const FixtureRepo& fixture, const std::string& spec) {
 
 void commitTick(FixtureRepo& fixture, const std::string& message, int tick) {
   const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
-  fixture.run("GIT_AUTHOR_DATE='" + date + "' GIT_COMMITTER_DATE='" + date +
-              "' git commit -q --allow-empty -m '" + message + "'");
+  fixture.commitAt(date, message);
 }
 
 std::string discoverRepo(InteractiveSession& session, const std::filesystem::path& root) {
@@ -132,7 +124,7 @@ TEST(StatusService, SummaryReportsConflicts) {
   fixture.writeFile("c.txt", "right\n");
   fixture.run("git add c.txt");
   commitTick(fixture, "right", 3);
-  fixture.run("git merge left >/dev/null 2>&1 || true");  // conflicts, exit != 0
+  fixture.tryRun("git merge left");  // conflicts, exit != 0
 
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
@@ -149,7 +141,8 @@ TEST(StatusService, SummaryAheadBehindAgainstClonedUpstream) {
   commitTick(fixture, "c1", 1);
   commitTick(fixture, "c2", 2);
   fixture.run("git clone --bare -q . upstream.git");
-  fixture.run("git remote add origin upstream.git && git fetch -q origin");
+  fixture.run("git remote add origin upstream.git");
+  fixture.run("git fetch -q origin");
   fixture.run("git branch -q --set-upstream-to=origin/main main");
   fixture.run("git reset -q --hard HEAD~1");  // behind 1
   commitTick(fixture, "c3", 3);               // ahead 1
@@ -172,10 +165,8 @@ TEST(StatusService, SummaryUnbornHead) {
              ("gg-status-unborn-" +
               std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
       std::filesystem::create_directories(root);
-      EXPECT_EQ(std::system(("cd '" + root.string() + "' && git init -q -b main && "
-                             "echo hi > loose.txt")
-                                .c_str()),
-                0);
+      gg::testing::runGit(root, "git init -q -b main");
+      std::ofstream(root / "loose.txt", std::ios::binary) << "hi\n";
     }
     ~UnbornRepo() {
       std::error_code ec;
@@ -346,7 +337,7 @@ TEST(StatusService, StageFilesStageAndUnstage) {
   commitTick(fixture, "seed", 1);
   fixture.writeFile("a.txt", "one\ntwo\n");
   fixture.writeFile("n.txt", "brand new\n");
-  fixture.run("rm d.txt");
+  std::filesystem::remove(fixture.root() / "d.txt");
 
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());

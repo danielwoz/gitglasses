@@ -1,7 +1,5 @@
 #include "services/blame/blame_service.h"
 
-#include <unistd.h>
-
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -11,6 +9,7 @@
 
 #include "exec/git_process.h"
 #include "exec/parsers/incremental_blame.h"
+#include "util/temp_file.h"
 
 namespace gg::services {
 
@@ -18,39 +17,7 @@ namespace {
 
 // RAII temp file used to hand dirty buffer contents to `git blame
 // --contents` without stdin-pipe deadlock concerns.
-class TempFile {
- public:
-  static Result<TempFile> create(const std::string& contents) {
-    TempFile file;
-    file.path_ =
-        (std::filesystem::temp_directory_path() / "gg-contents-XXXXXX").string();
-    int fd = mkstemp(file.path_.data());
-    if (fd < 0) return Error{ErrorCode::Internal, "mkstemp failed"};
-    size_t written = 0;
-    while (written < contents.size()) {
-      ssize_t n = write(fd, contents.data() + written, contents.size() - written);
-      if (n < 0) {
-        close(fd);
-        return Error{ErrorCode::Internal, "failed writing contents temp file"};
-      }
-      written += static_cast<size_t>(n);
-    }
-    close(fd);
-    return file;
-  }
-
-  TempFile(TempFile&& other) noexcept : path_(std::move(other.path_)) { other.path_.clear(); }
-  TempFile(const TempFile&) = delete;
-  ~TempFile() {
-    if (!path_.empty()) std::remove(path_.c_str());
-  }
-
-  const std::string& path() const { return path_; }
-
- private:
-  TempFile() = default;
-  std::string path_;
-};
+using util::TempFile;
 
 // Resolves (commit OID, blob OID) for a cacheable request. Returns nullopt
 // when the working tree file differs from the blamed blob in a way we can't
@@ -175,7 +142,7 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithCli(
   std::vector<std::string> args = {"blame", "--incremental"};
   std::optional<TempFile> contentsFile;
   if (request.contents) {
-    auto file = TempFile::create(*request.contents);
+    auto file = TempFile::create(*request.contents, "gg-contents-");
     if (!file) return file.error();
     contentsFile.emplace(std::move(file.value()));
     args.push_back("--contents");

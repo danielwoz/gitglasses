@@ -21,35 +21,14 @@ namespace {
 
 using Json = nlohmann::json;
 using gg::testing::FixtureRepo;
+// Runs `git <args>` in the repo and returns stdout split into lines: the
+// parity oracle for history answers.
+using gg::testing::gitLines;
 using gg::testing::initRequest;
 using gg::testing::InteractiveSession;
 
 Json req(std::int64_t id, const std::string& method, Json params) {
   return {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", std::move(params)}};
-}
-
-// Runs `git <args>` in the repo and returns stdout split into lines: the
-// parity oracle for history answers.
-std::vector<std::string> gitLines(const std::filesystem::path& root, const std::string& args) {
-  std::vector<std::string> lines;
-  FILE* pipe = popen(("cd '" + root.string() + "' && git " + args).c_str(), "r");
-  EXPECT_NE(pipe, nullptr);
-  if (!pipe) return lines;
-  std::string output;
-  char buf[512];
-  while (fgets(buf, sizeof(buf), pipe)) output += buf;
-  pclose(pipe);
-  size_t pos = 0;
-  while (pos < output.size()) {
-    const size_t nl = output.find('\n', pos);
-    if (nl == std::string::npos) {
-      lines.push_back(output.substr(pos));
-      break;
-    }
-    lines.push_back(output.substr(pos, nl - pos));
-    pos = nl + 1;
-  }
-  return lines;
 }
 
 // Filters command output to full-sha lines: `git log -L`/patch-bearing
@@ -68,8 +47,7 @@ std::vector<std::string> shaLinesOnly(std::vector<std::string> lines) {
 // ordering (and its parity with git's) is well defined.
 void commitTick(FixtureRepo& fixture, const std::string& message, int tick) {
   const std::string date = "@" + std::to_string(1700000000 + 60 * tick) + " +0000";
-  fixture.run("GIT_AUTHOR_DATE='" + date + "' GIT_COMMITTER_DATE='" + date +
-              "' git commit -q --allow-empty -m '" + message + "'");
+  fixture.commitAt(date, message);
 }
 
 std::string discoverRepo(InteractiveSession& session, const std::filesystem::path& root) {
@@ -88,7 +66,8 @@ void buildRenameChain(FixtureRepo& fixture) {
   fixture.writeFile("renamed-once.txt", "one\ntwo\ntwo-and-a-half\nthree\nfour\nfive\n");
   fixture.run("git add renamed-once.txt");
   commitTick(fixture, "edit after rename", 3);
-  fixture.run("mkdir -p nested && git mv renamed-once.txt nested/renamed-twice.txt");
+  std::filesystem::create_directories(fixture.root() / "nested");
+  fixture.run("git mv renamed-once.txt nested/renamed-twice.txt");
   commitTick(fixture, "second rename into dir", 4);
 }
 
@@ -152,8 +131,7 @@ TEST(HistoryService, LogCommitsMergeTopologyMatchesRevList) {
   commitTick(fixture, "feature work", 2);
   fixture.run("git checkout -q main");
   commitTick(fixture, "main work", 3);
-  fixture.run("GIT_AUTHOR_DATE='@1700000240 +0000' GIT_COMMITTER_DATE='@1700000240 +0000' "
-              "git merge -q --no-ff --no-edit feature");
+  fixture.runAt("@1700000240 +0000", "git merge -q --no-ff --no-edit feature");
 
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
@@ -281,10 +259,10 @@ TEST(HistoryService, FileHistoryPagesAcrossRenameBoundaries) {
 TEST(HistoryService, FileHistoryHandlesPathsWithSpaces) {
   FixtureRepo fixture;
   fixture.writeFile("dir with spaces/my file.txt", "hello\n");
-  fixture.run("git add 'dir with spaces/my file.txt'");
+  fixture.run("git add \"dir with spaces/my file.txt\"");
   commitTick(fixture, "add spaced file", 1);
   fixture.writeFile("dir with spaces/my file.txt", "hello\nworld\n");
-  fixture.run("git add 'dir with spaces/my file.txt'");
+  fixture.run("git add \"dir with spaces/my file.txt\"");
   commitTick(fixture, "edit spaced file", 2);
 
   InteractiveSession session;
@@ -382,9 +360,11 @@ TEST(HistoryService, SearchStreamsMatchesBeforeResultWithGrepParity) {
 TEST(HistoryService, SearchFiltersByAuthorShaAndCombination) {
   FixtureRepo fixture;
   commitTick(fixture, "needle by fixture", 1);
-  fixture.run("GIT_AUTHOR_NAME='Zed Zeta' GIT_AUTHOR_EMAIL='zed@other.dev' "
-              "GIT_AUTHOR_DATE='@1700000120 +0000' GIT_COMMITTER_DATE='@1700000120 +0000' "
-              "git commit -q --allow-empty -m 'needle by zed'");
+  {
+    gg::testing::ScopedEnv name("GIT_AUTHOR_NAME", "Zed Zeta");
+    gg::testing::ScopedEnv email("GIT_AUTHOR_EMAIL", "zed@other.dev");
+    fixture.commitAt("@1700000120 +0000", "needle by zed");
+  }
 
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
@@ -439,9 +419,7 @@ TEST(HistoryService, SearchFiltersByAuthorShaAndCombination) {
 
 TEST(HistoryService, SearchBatchesMatchesInHundreds) {
   FixtureRepo fixture;
-  fixture.run("export GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' "
-              "GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' && for i in $(seq 1 105); do "
-              "git commit -q --allow-empty -m \"needle $i\"; done");
+  for (int i = 1; i <= 105; ++i) fixture.commit("needle " + std::to_string(i));
 
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
@@ -470,10 +448,10 @@ TEST(HistoryService, RefsListBranchesRemotesAndTags) {
   commitTick(fixture, "tagged work", 1);
   fixture.run("git branch feature");
   fixture.run("git tag v1");
-  fixture.run("GIT_AUTHOR_DATE='@1700000120 +0000' GIT_COMMITTER_DATE='@1700000120 +0000' "
-              "git tag -a v2 -m 'annotated tag'");
-  fixture.run("git remote add origin . && git fetch -q origin");
-  fixture.run("git branch --set-upstream-to=origin/main main 2>/dev/null");
+  fixture.runAt("@1700000120 +0000", "git tag -a v2 -m \"annotated tag\"");
+  fixture.run("git remote add origin .");
+  fixture.run("git fetch -q origin");
+  fixture.run("git branch -q --set-upstream-to=origin/main main");
 
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
@@ -527,7 +505,7 @@ TEST(HistoryService, StashListParsesBranchFromMessage) {
   fixture.run("git add work.txt");
   commitTick(fixture, "initial work", 1);
   fixture.writeFile("work.txt", "stable\nwip one\n");
-  fixture.run("git stash push -q -m 'first stash'");
+  fixture.run("git stash push -q -m \"first stash\"");
   fixture.writeFile("work.txt", "stable\nwip two\n");
   fixture.run("git stash push -q");
 
@@ -559,7 +537,7 @@ TEST(HistoryService, UnbornHeadRepoAnswersEmptyEverywhere) {
              ("gg-unborn-" +
               std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
       std::filesystem::create_directories(root);
-      EXPECT_EQ(std::system(("cd '" + root.string() + "' && git init -q -b main").c_str()), 0);
+      gg::testing::runGit(root, "git init -q -b main");
     }
     ~UnbornRepo() {
       std::error_code ec;

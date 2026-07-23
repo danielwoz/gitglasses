@@ -29,6 +29,10 @@ target_include_directories(engine_tests PRIVATE ../src)
 # artifact committed in the TypeScript protocol package.
 target_compile_definitions(engine_tests PRIVATE
   GG_PROTOCOL_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/protocol/protocol.schema.json")
+# The fixtures use std::fopen/std::getenv, which MSVC flags as "insecure".
+if(MSVC)
+  target_compile_definitions(engine_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 target_link_libraries(engine_tests PRIVATE
   gg_rpc gg_repo gg_services gg_watch
   GTest::gtest GTest::gmock

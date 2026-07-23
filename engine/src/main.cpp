@@ -2,6 +2,11 @@
 #include <iostream>
 #include <string>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 #include "exec/sequence_editor.h"
 #include "server.h"
 #include "util/log.h"
@@ -21,6 +26,12 @@ int printUsage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  // The protocol is Content-Length framed: CRLF translation on stdio would
+  // corrupt byte counts, so both streams must be binary.
+  _setmode(_fileno(stdin), _O_BINARY);
+  _setmode(_fileno(stdout), _O_BINARY);
+#endif
   gg::exec::setSelfPathFallback(argc > 0 ? argv[0] : nullptr);
 
   // Editor-shim modes: git re-invokes this binary as GIT_SEQUENCE_EDITOR /

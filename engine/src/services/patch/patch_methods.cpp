@@ -1,28 +1,19 @@
 #include "services/patch/patch_methods.h"
 
-#include <fcntl.h>
 #include <git2.h>
-#include <poll.h>
-#include <signal.h>
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
-#include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <ctime>
-#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "exec/git_process.h"
 #include "services/mutate/mutate_common.h"
 #include "util/sha256.h"
-
-extern char** environ;
+#include "util/temp_file.h"
 
 namespace gg::services {
 
@@ -52,121 +43,14 @@ struct RawGitOutput {
 
 Result<RawGitOutput> runGitRaw(const core::Repo& repo, std::vector<std::string> args,
                                const CancelToken& token) {
-  int outPipe[2], errPipe[2];
-  if (pipe(outPipe) != 0) return Error{ErrorCode::Internal, "pipe() failed"};
-  if (pipe(errPipe) != 0) {
-    close(outPipe[0]);
-    close(outPipe[1]);
-    return Error{ErrorCode::Internal, "pipe() failed"};
-  }
-
-  posix_spawn_file_actions_t actions;
-  posix_spawn_file_actions_init(&actions);
-  posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-  posix_spawn_file_actions_adddup2(&actions, outPipe[1], STDOUT_FILENO);
-  posix_spawn_file_actions_adddup2(&actions, errPipe[1], STDERR_FILENO);
-  posix_spawn_file_actions_addclose(&actions, outPipe[0]);
-  posix_spawn_file_actions_addclose(&actions, errPipe[0]);
-  const std::string cwd = repoCwd(repo);
-  // Own process group so cancellation kills git and anything it forks.
-  posix_spawnattr_t attr;
-  posix_spawnattr_init(&attr);
-  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
-  posix_spawnattr_setpgroup(&attr, 0);
-
-  std::vector<std::string> fullArgs;
-  fullArgs.reserve(args.size() + 1);
-  fullArgs.push_back("git");
-  fullArgs.push_back("-C");
-  fullArgs.push_back(cwd);
-  for (auto& arg : args) fullArgs.push_back(std::move(arg));
-  std::vector<char*> argv;
-  argv.reserve(fullArgs.size() + 1);
-  for (auto& arg : fullArgs) argv.push_back(arg.data());
-  argv.push_back(nullptr);
-
-  // Same non-interactive environment scrub as the other git runners; the
-  // overrides replace inherited entries of the same name.
-  const std::vector<std::pair<std::string, std::string>> overrides = {
-      {"GIT_OPTIONAL_LOCKS", "0"}, {"GIT_TERMINAL_PROMPT", "0"}, {"LC_ALL", "C"}};
-  const auto overridden = [&overrides](const char* entry) {
-    for (const auto& [name, value] : overrides) {
-      (void)value;
-      if (std::strncmp(entry, name.c_str(), name.size()) == 0 && entry[name.size()] == '=') {
-        return true;
-      }
-    }
-    return false;
-  };
-  std::vector<std::string> envStrings;
-  for (char** e = environ; *e; ++e) {
-    if (!overridden(*e)) envStrings.emplace_back(*e);
-  }
-  for (const auto& [name, value] : overrides) envStrings.push_back(name + "=" + value);
-  std::vector<char*> envp;
-  envp.reserve(envStrings.size() + 1);
-  for (auto& entry : envStrings) envp.push_back(entry.data());
-  envp.push_back(nullptr);
-
-  pid_t pid = -1;
-  const int rc = posix_spawnp(&pid, "git", &actions, &attr, argv.data(), envp.data());
-  posix_spawn_file_actions_destroy(&actions);
-  posix_spawnattr_destroy(&attr);
-  close(outPipe[1]);
-  close(errPipe[1]);
-  if (rc != 0) {
-    close(outPipe[0]);
-    close(errPipe[0]);
-    return Error{ErrorCode::Internal, std::string("failed to spawn git: ") + std::strerror(rc)};
-  }
-  fcntl(outPipe[0], F_SETFL, O_NONBLOCK);
-  fcntl(errPipe[0], F_SETFL, O_NONBLOCK);
-
+  exec::SpawnOpts opts;
+  opts.rawOutput = true;
+  auto process = exec::GitProcess::spawn(repoCwd(repo), std::move(args), opts);
+  if (!process) return process.error();
   RawGitOutput output;
-  bool outOpen = true, errOpen = true;
-  const auto drain = [](int fd, std::string& sink, bool& open) {
-    char chunk[65536];
-    for (;;) {
-      const ssize_t n = read(fd, chunk, sizeof(chunk));
-      if (n > 0) {
-        sink.append(chunk, static_cast<size_t>(n));
-        continue;
-      }
-      if (n == 0) open = false;
-      return;
-    }
-  };
-  while (outOpen || errOpen) {
-    if (token.cancelled()) {
-      kill(-pid, SIGKILL);
-      waitpid(pid, nullptr, 0);
-      close(outPipe[0]);
-      close(errPipe[0]);
-      throw CancelledError();
-    }
-    pollfd fds[2] = {{outPipe[0], POLLIN, 0}, {errPipe[0], POLLIN, 0}};
-    poll(fds, 2, 50);
-    if (outOpen) drain(outPipe[0], output.stdoutText, outOpen);
-    if (errOpen) drain(errPipe[0], output.stderrText, errOpen);
-  }
-  close(outPipe[0]);
-  close(errPipe[0]);
-
-  int status = 0;
-  for (;;) {
-    if (token.cancelled()) {
-      kill(-pid, SIGKILL);
-      waitpid(pid, nullptr, 0);
-      throw CancelledError();
-    }
-    const pid_t done = waitpid(pid, &status, WNOHANG);
-    if (done == pid) break;
-    if (done < 0 && errno != EINTR) {
-      return Error{ErrorCode::Internal, "waitpid() failed for git child"};
-    }
-    poll(nullptr, 0, 20);
-  }
-  output.exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status);
+  output.stdoutText = process.value().readAll(token);
+  output.exitCode = process.value().wait(token);
+  output.stderrText = process.value().stderrOutput();
   return output;
 }
 
@@ -206,7 +90,11 @@ std::string isoUtcNow() {
   const std::time_t now =
       std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   std::tm utc{};
+#ifdef _WIN32
+  gmtime_s(&utc, &now);
+#else
   gmtime_r(&now, &utc);
+#endif
   char buffer[32];
   std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
   return buffer;
@@ -345,41 +233,13 @@ EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
 
 // Patch text written to a throwaway file, removed on scope exit (`git apply`
 // takes file arguments, not stdin, through the process runner).
-class TempPatchFile {
- public:
-  explicit TempPatchFile(const std::string& contents) {
-    std::string name =
-        (std::filesystem::temp_directory_path() / "gitglasses-patch-XXXXXX").string();
-    const int fd = mkstemp(name.data());
-    if (fd < 0) {
-      throw rpc::HandlerError{{ErrorCode::Internal, "failed to create temporary patch file"}};
-    }
-    size_t written = 0;
-    while (written < contents.size()) {
-      const ssize_t n = write(fd, contents.data() + written, contents.size() - written);
-      if (n < 0) {
-        close(fd);
-        unlink(name.c_str());
-        throw rpc::HandlerError{{ErrorCode::Internal, "failed to write temporary patch file"}};
-      }
-      written += static_cast<size_t>(n);
-    }
-    close(fd);
-    path_ = std::move(name);
+util::TempFile makeTempPatchFile(const std::string& contents) {
+  auto file = util::TempFile::create(contents, "gitglasses-patch-");
+  if (!file) {
+    throw rpc::HandlerError{{ErrorCode::Internal, "failed to write temporary patch file"}};
   }
-
-  ~TempPatchFile() {
-    if (!path_.empty()) unlink(path_.c_str());
-  }
-
-  TempPatchFile(const TempPatchFile&) = delete;
-  TempPatchFile& operator=(const TempPatchFile&) = delete;
-
-  const std::string& path() const { return path_; }
-
- private:
-  std::string path_;
-};
+  return std::move(file).value();
+}
 
 }  // namespace
 
@@ -474,7 +334,7 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           }
         }
 
-        TempPatchFile file(patch);
+        const util::TempFile file = makeTempPatchFile(patch);
         auto output = runGit(repo, {"apply", "--3way", file.path()}, token);
         if (!output) throw rpc::HandlerError{{output.error()}};
         if (output.value().exitCode == 0) {
