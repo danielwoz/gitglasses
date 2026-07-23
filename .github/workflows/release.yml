@@ -27,15 +27,23 @@ jobs:
             triplet: arm64-linux
             container: quay.io/pypa/manylinux_2_28_aarch64
             static_runtime: ON
+          # macOS floors are pinned to 11.0 (VS Code's own minimum) via the
+          # -gg overlay triplets + CMAKE_OSX_DEPLOYMENT_TARGET, and verified.
           - os: macos-14
             target: darwin-arm64
-            triplet: arm64-osx
+            triplet: arm64-osx-gg
+            osx_target: '11.0'
           - os: macos-13
             target: darwin-x64
-            triplet: x64-osx
+            triplet: x64-osx-gg
+            osx_target: '11.0'
           - os: windows-2022
             target: win32-x64
             triplet: x64-windows-static
+          # Native ARM runner so tests actually execute on arm64.
+          - os: windows-11-arm
+            target: win32-arm64
+            triplet: arm64-windows-static
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || null }}
     steps:
@@ -68,12 +76,26 @@ jobs:
         shell: bash
         run: |
           "$VCPKG_ROOT/vcpkg" install --triplet ${{ matrix.triplet }} \
+            --overlay-triplets=ci/triplets \
             --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
           cmake --preset release \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            -DVCPKG_OVERLAY_TRIPLETS=ci/triplets \
             -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed" \
-            -DGG_STATIC_RUNTIME=${{ matrix.static_runtime || 'OFF' }}
+            -DGG_STATIC_RUNTIME=${{ matrix.static_runtime || 'OFF' }} \
+            ${{ matrix.osx_target && format('-DCMAKE_OSX_DEPLOYMENT_TARGET={0}', matrix.osx_target) || '' }}
           cmake --build --preset release
+      - name: Verify macOS floor
+        if: ${{ matrix.osx_target != '' && matrix.osx_target != null }}
+        shell: bash
+        run: |
+          # The binary's minimum OS must equal the intended floor, not
+          # whatever the runner's SDK defaulted to.
+          minos=$(otool -l build/release/engine/gitglasses-engine \
+            | grep -A3 'LC_BUILD_VERSION\|LC_VERSION_MIN_MACOSX' \
+            | grep -oE '(minos|version) [0-9.]+' | awk '{print $2}' | head -1)
+          echo "minos: $minos (want ${{ matrix.osx_target }})"
+          [ "$minos" = "${{ matrix.osx_target }}" ]
       - name: Verify glibc floor (linux)
         if: ${{ matrix.static_runtime == 'ON' }}
         shell: bash
@@ -92,6 +114,34 @@ jobs:
           git config --global user.name CI
           git config --global user.email ci@example.invalid
           ctest --preset release
+      # Signs + notarizes automatically once Apple credentials exist as
+      # secrets; skips with a notice otherwise (unsigned binaries still work —
+      # VSIX contents are not subject to Gatekeeper's quarantine flow).
+      - name: Codesign + notarize (macOS)
+        if: ${{ matrix.osx_target != '' && matrix.osx_target != null }}
+        shell: bash
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERT_P12" ]; then
+            echo "::notice::Apple signing secrets not configured — shipping unsigned binary"
+            exit 0
+          fi
+          echo "$APPLE_CERT_P12" | base64 -d > cert.p12
+          security create-keychain -p ci ci.keychain
+          security default-keychain -s ci.keychain
+          security unlock-keychain -p ci ci.keychain
+          security import cert.p12 -k ci.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci ci.keychain
+          codesign --force --options runtime --timestamp \
+            --sign "Developer ID Application" build/release/engine/gitglasses-engine
+          ditto -c -k build/release/engine/gitglasses-engine engine.zip
+          xcrun notarytool submit engine.zip --wait \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
       - uses: actions/upload-artifact@v4
         with:
           name: engine-${{ matrix.target }}
@@ -103,7 +153,7 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64]
+        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64, win32-arm64]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
