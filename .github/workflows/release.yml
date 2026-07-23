@@ -163,8 +163,52 @@ jobs:
           path: build/release/engine/gitglasses-engine*
           if-no-files-found: error
 
+  engine-wasm:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.3
+      - name: Bootstrap vcpkg
+        run: |
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+      - name: Cache vcpkg wasm packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/gitglasses/vcpkg_wasm
+            ~/.cache/vcpkg/archives
+          key: vcpkg-wasm-release-${{ hashFiles('vcpkg.json', 'ci/triplets/wasm32-emscripten-gg.cmake') }}
+      - name: Install wasm dependencies
+        run: |
+          cd "$RUNNER_TEMP"
+          "$VCPKG_ROOT/vcpkg" install 'libgit2[core,pcre2]' nlohmann-json \
+            --triplet wasm32-emscripten-gg \
+            --overlay-triplets="$GITHUB_WORKSPACE/ci/triplets" \
+            --x-install-root="$HOME/.cache/gitglasses/vcpkg_wasm"
+      - name: Build
+        run: |
+          cmake --preset wasm
+          cmake --build --preset wasm
+      - name: Harness
+        run: node engine/wasm-test/run.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-wasm-artifacts
+          path: build/wasm/engine/gitglasses-engine-wasm.*
+          if-no-files-found: error
+
   package:
-    needs: engine
+    needs: [engine, engine-wasm]
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -178,6 +222,10 @@ jobs:
         with:
           name: engine-${{ matrix.target }}
           path: engine-bin/
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-wasm-artifacts
+          path: build/wasm/engine/
       - name: Package VSIX
         run: |
           pnpm install --frozen-lockfile
