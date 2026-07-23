@@ -71,6 +71,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
+      # VsDevCmd exports its own VCPKG_ROOT (VS-bundled vcpkg); re-point ours.
+      - name: Restore VCPKG_ROOT
+        shell: bash
+        run: echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
 
       - name: Bootstrap vcpkg
         shell: bash

@@ -40,10 +40,12 @@ jobs:
           - os: windows-2022
             target: win32-x64
             triplet: x64-windows-static
+            msvc_arch: x64
           # Native ARM runner so tests actually execute on arm64.
           - os: windows-11-arm
             target: win32-arm64
             triplet: arm64-windows-static
+            msvc_arch: arm64
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || null }}
     steps:
@@ -56,6 +58,15 @@ jobs:
           ln -sf /opt/python/cp312-cp312/bin/ninja /usr/local/bin/ninja
           git config --global --add safe.directory '*'
       - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: ${{ matrix.msvc_arch != '' && matrix.msvc_arch != null }}
+        with:
+          arch: ${{ matrix.msvc_arch }}
+      # VsDevCmd exports its own VCPKG_ROOT (VS-bundled vcpkg); re-point ours.
+      - name: Restore VCPKG_ROOT
+        if: ${{ matrix.msvc_arch != '' && matrix.msvc_arch != null }}
+        shell: bash
+        run: echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
       - name: Bootstrap vcpkg
         shell: bash
         run: |

@@ -94,7 +94,8 @@ inline std::string gitCapture(const std::filesystem::path& dir, const std::strin
   std::string command =
       "git -C \"" + dir.string() + "\" " + args + " > \"" + outFile.string() + "\"";
   if (quiet) command += std::string(" 2>") + nullDevice();
-  std::system(command.c_str());
+  // Exit status deliberately ignored: probes may fail and return "".
+  [[maybe_unused]] const int rc = std::system(command.c_str());
   std::ifstream in(outFile, std::ios::binary);
   std::ostringstream buffer;
   buffer << in.rdbuf();
@@ -188,7 +189,8 @@ class FixtureRepo {
     assertPortableGitCommand(command);
     const std::string full = "git -C \"" + root_.string() + "\" " + command.substr(4) + " > " +
                              nullDevice() + " 2>&1";
-    std::system(full.c_str());
+    // Failure is the tolerated case; the exit status is irrelevant.
+    [[maybe_unused]] const int rc = std::system(full.c_str());
   }
 
  private:
