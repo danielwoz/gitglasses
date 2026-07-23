@@ -2,7 +2,7 @@
   "name": "gitglasses",
   "displayName": "GitGlasses",
   "description": "Open-source git supercharger: inline blame, history, and more — powered by a native engine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "gitglasses",
   "license": "MIT",
   "repository": {

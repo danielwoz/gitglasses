@@ -13,7 +13,7 @@
 
 namespace {
 
-constexpr const char* kVersion = "0.1.0";
+constexpr const char* kVersion = "0.1.1";
 
 int printUsage() {
   std::cerr << "usage: gitglasses-engine --stdio [--log-level <level>]\n"
