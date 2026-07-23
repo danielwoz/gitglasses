@@ -21,6 +21,8 @@ jobs:
             preset: asan
           - os: ubuntu-22.04
             preset: tsan
+            cc: clang
+            cxx: clang++
           - os: ubuntu-22.04
             preset: release
     runs-on: ${{ matrix.os }}
@@ -50,6 +52,9 @@ jobs:
             --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
 
       - name: Configure
+        env:
+          CC: ${{ matrix.cc || 'cc' }}
+          CXX: ${{ matrix.cxx || 'c++' }}
         run: cmake --preset ${{ matrix.preset }}
 
       - name: Build
@@ -141,8 +146,10 @@ jobs:
       # needs only libgit2 and nlohmann-json; pcre2/zlib arrive transitively.
       - name: Install wasm dependencies
         run: |
-          cd "$VCPKG_ROOT"
-          ./vcpkg install 'libgit2[core,pcre2]' nlohmann-json \
+          # Neutral cwd: classic-mode install; vcpkg finds the repo manifest
+          # from any cwd inside the checkout and then rejects package args.
+          cd "$RUNNER_TEMP"
+          "$VCPKG_ROOT/vcpkg" install 'libgit2[core,pcre2]' nlohmann-json \
             --triplet wasm32-emscripten-gg \
             --overlay-triplets="$GITHUB_WORKSPACE/ci/triplets" \
             --x-install-root="$HOME/.cache/gitglasses/vcpkg_wasm"
@@ -161,8 +168,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -211,8 +216,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
