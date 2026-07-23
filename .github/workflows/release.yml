@@ -33,10 +33,13 @@ jobs:
             target: darwin-arm64
             triplet: arm64-osx-gg
             osx_target: '11.0'
-          - os: macos-13
+          # Cross-compiled on the Apple Silicon runner (Intel macos-13
+          # runners no longer get allocated); tests execute under Rosetta 2.
+          - os: macos-14
             target: darwin-x64
             triplet: x64-osx-gg
             osx_target: '11.0'
+            osx_arch: x86_64
           - os: windows-2022
             target: win32-x64
             triplet: x64-windows-static
@@ -94,7 +97,8 @@ jobs:
             -DVCPKG_OVERLAY_TRIPLETS=ci/triplets \
             -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed" \
             -DGG_STATIC_RUNTIME=${{ matrix.static_runtime || 'OFF' }} \
-            ${{ matrix.osx_target && format('-DCMAKE_OSX_DEPLOYMENT_TARGET={0}', matrix.osx_target) || '' }}
+            ${{ matrix.osx_target && format('-DCMAKE_OSX_DEPLOYMENT_TARGET={0}', matrix.osx_target) || '' }} \
+            ${{ matrix.osx_arch && format('-DCMAKE_OSX_ARCHITECTURES={0}', matrix.osx_arch) || '' }}
           cmake --build --preset release
       - name: Verify macOS floor
         if: ${{ matrix.osx_target != '' && matrix.osx_target != null }}
