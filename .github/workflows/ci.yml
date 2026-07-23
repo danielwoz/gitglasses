@@ -29,7 +29,11 @@ jobs:
 
       - name: Bootstrap vcpkg
         run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Cache vcpkg packages
@@ -70,7 +74,11 @@ jobs:
 
       - name: Bootstrap vcpkg
         run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Cache vcpkg wasm packages
@@ -115,7 +123,11 @@ jobs:
       # The TS integration tests exercise the real engine binary.
       - name: Bootstrap vcpkg
         run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - name: Cache vcpkg packages
         uses: actions/cache@v4
@@ -161,7 +173,11 @@ jobs:
       # The e2e suite launches real VS Code against the real engine binary.
       - name: Bootstrap vcpkg
         run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - name: Cache vcpkg packages
         uses: actions/cache@v4

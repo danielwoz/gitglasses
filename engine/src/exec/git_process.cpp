@@ -47,8 +47,6 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   posix_spawn_file_actions_adddup2(&fileActions.actions, errPipe[1], STDERR_FILENO);
   posix_spawn_file_actions_addclose(&fileActions.actions, outPipe[0]);
   posix_spawn_file_actions_addclose(&fileActions.actions, errPipe[0]);
-  posix_spawn_file_actions_addchdir_np(&fileActions.actions, cwd.c_str());
-
   // Own process group so cancellation can kill git and any children it forks.
   SpawnAttr attr;
   posix_spawnattr_setflags(&attr.attr, POSIX_SPAWN_SETPGROUP);
@@ -56,7 +54,10 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
 
   std::vector<std::string> fullArgs;
   fullArgs.reserve(args.size() + 1);
+  // -C replaces posix_spawn_file_actions_addchdir_np (glibc >= 2.29 only).
   fullArgs.push_back("git");
+  fullArgs.push_back("-C");
+  fullArgs.push_back(cwd);
   for (auto& a : args) fullArgs.push_back(std::move(a));
 
   std::vector<char*> argv;

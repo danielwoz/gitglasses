@@ -73,8 +73,6 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
   posix_spawn_file_actions_adddup2(&actions, errPipe[1], STDERR_FILENO);
   posix_spawn_file_actions_addclose(&actions, outPipe[0]);
   posix_spawn_file_actions_addclose(&actions, errPipe[0]);
-  posix_spawn_file_actions_addchdir_np(&actions, cwd.c_str());
-
   // Own process group so cancellation kills git and any editors it forks.
   posix_spawnattr_t attr;
   posix_spawnattr_init(&attr);
@@ -84,6 +82,8 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
   std::vector<std::string> fullArgs;
   fullArgs.reserve(args.size() + 1);
   fullArgs.push_back("git");
+  fullArgs.push_back("-C");
+  fullArgs.push_back(cwd);
   for (auto& arg : args) fullArgs.push_back(std::move(arg));
   std::vector<char*> argv;
   argv.reserve(fullArgs.size() + 1);

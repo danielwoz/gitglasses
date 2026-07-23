@@ -112,7 +112,7 @@ std::string oidHex(const git_oid& oid) {
 std::string formatTimezone(int offsetMinutes) {
   const char sign = offsetMinutes < 0 ? '-' : '+';
   const int magnitude = offsetMinutes < 0 ? -offsetMinutes : offsetMinutes;
-  char buffer[8];
+  char buffer[16];
   std::snprintf(buffer, sizeof(buffer), "%c%02d%02d", sign, magnitude / 60, magnitude % 60);
   return buffer;
 }

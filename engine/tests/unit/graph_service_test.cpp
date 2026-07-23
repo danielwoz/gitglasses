@@ -172,7 +172,7 @@ TEST(GraphService, CrissCrossLayoutGolden) {
   // initial -- base -- A -- CA (crossA)      CA = merge(A, B)
   //              \       \ /
   //               \       X
-  //                \     / \
+  //                \     / \ .
   //                 -- B -- CB (crossB, HEAD) CB = merge(B, A)
   //
   //   CB    lane 0   branchOut 0->1
@@ -247,7 +247,7 @@ TEST(GraphService, OctopusLayoutGolden) {
 
 TEST(GraphService, ConcurrentBranchesLayoutGolden) {
   // initial -- m1 -- m2 (HEAD, main)
-  //        \
+  //        \ .
   //         f1 (feature)
   //
   //   m2    lane 0            (t4)

@@ -10,6 +10,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(GG_BUILD_TESTS "Build engine tests" ON)
 option(GG_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 option(GG_SINGLE_THREADED "Run all tasks inline on the caller (no worker threads)" OFF)
+# Release builds ship with libstdc++/libgcc linked statically so the binary's
+# only dynamic dependency is glibc (whose floor is set by building in a
+# glibc-2.28 container, matching VS Code's own minimum).
+option(GG_STATIC_RUNTIME "Statically link libstdc++ and libgcc (Linux)" OFF)
 
 # Wasm has no worker pool, watcher threads, or child processes.
 if(EMSCRIPTEN)
@@ -27,6 +31,11 @@ if(MSVC)
 else()
   target_compile_options(gg_warnings INTERFACE
     -Wall -Wextra -Wpedantic
+    # -Wextra's missing-field-initializers fires on C++20 designated
+    # initializers with omitted (value-initialized) members on GCC <= 14,
+    # which is idiomatic usage throughout this codebase; GCC 15 agrees and
+    # no longer warns.
+    -Wno-missing-field-initializers
     $<$<BOOL:${GG_WARNINGS_AS_ERRORS}>:-Werror>)
 endif()
 

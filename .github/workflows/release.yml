@@ -13,12 +13,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux builds run in manylinux_2_28 containers: the binary's glibc
+          # symbol floor becomes 2.28 (VS Code's own minimum), and
+          # GG_STATIC_RUNTIME links libstdc++/libgcc statically so glibc is
+          # the ONLY runtime dependency.
           - os: ubuntu-22.04
             target: linux-x64
             triplet: x64-linux
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            static_runtime: ON
           - os: ubuntu-22.04-arm
             target: linux-arm64
             triplet: arm64-linux
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            static_runtime: ON
           - os: macos-14
             target: darwin-arm64
             triplet: arm64-osx
@@ -29,12 +37,25 @@ jobs:
             target: win32-x64
             triplet: x64-windows-static
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container || null }}
     steps:
+      - name: Container build tools (manylinux)
+        if: ${{ matrix.container != '' && matrix.container != null }}
+        run: |
+          dnf install -y -q zip unzip
+          /opt/python/cp312-cp312/bin/pip install --quiet cmake ninja
+          ln -sf /opt/python/cp312-cp312/bin/cmake /usr/local/bin/cmake
+          ln -sf /opt/python/cp312-cp312/bin/ninja /usr/local/bin/ninja
+          git config --global --add safe.directory '*'
       - uses: actions/checkout@v4
       - name: Bootstrap vcpkg
         shell: bash
         run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics || "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
       - name: Cache vcpkg
         uses: actions/cache@v4
@@ -50,8 +71,21 @@ jobs:
             --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
           cmake --preset release \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
-            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed"
+            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed" \
+            -DGG_STATIC_RUNTIME=${{ matrix.static_runtime || 'OFF' }}
           cmake --build --preset release
+      - name: Verify glibc floor (linux)
+        if: ${{ matrix.static_runtime == 'ON' }}
+        shell: bash
+        run: |
+          # The binary must not need glibc newer than 2.28 (VS Code's floor)
+          # and must not depend on libstdc++/libgcc at all.
+          max=$(objdump -T build/release/engine/gitglasses-engine \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1)
+          echo "max glibc symbol: $max"
+          [ "$(printf '%s\n2.28\n' "${max#GLIBC_}" | sort -V | tail -1)" = "2.28" ]
+          ! objdump -p build/release/engine/gitglasses-engine \
+            | grep -E 'NEEDED.*(libstdc\+\+|libgcc)'
       - name: Test
         shell: bash
         run: |

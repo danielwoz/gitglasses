@@ -56,7 +56,9 @@ void IncrementalBlameParser::feedLine(const std::string& line) {
     // Carry forward the path from the commit's prior mention; a `filename`
     // line will override it before the hunk is emitted.
     if (auto it = commits_.find(hunk.sha); it == commits_.end()) {
-      commits_.emplace(hunk.sha, BlameCommit{.sha = hunk.sha});
+      BlameCommit commit;
+      commit.sha = hunk.sha;
+      commits_.emplace(hunk.sha, std::move(commit));
     }
     pending_ = std::move(hunk);
     return;
