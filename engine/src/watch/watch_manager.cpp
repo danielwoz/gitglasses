@@ -22,7 +22,9 @@ namespace {
 namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
+#ifdef __linux__
 constexpr auto kDebounce = std::chrono::milliseconds(50);
+#endif
 constexpr auto kPollInterval = std::chrono::milliseconds(500);
 
 bool startsWith(const std::string& value, const std::string& prefix) {
@@ -277,10 +279,12 @@ class RepoWatch {
 
   // Touched only by the watch thread.
   std::uint64_t generation_ = 0;
+#ifdef __linux__
   std::map<int, std::string> watchDirs_;  // inotify wd -> dir path relative to gitdir
 
   int inotifyFd_ = -1;
   int wakePipe_[2] = {-1, -1};
+#endif
   std::mutex stopMutex_;
   std::condition_variable stopCv_;
   bool stop_ = false;
