@@ -27,7 +27,7 @@ namespace gg {
 namespace {
 
 constexpr const char* kProtocolVersion = "0.1.0";
-constexpr const char* kEngineVersion = "0.1.1";
+constexpr const char* kEngineVersion = "0.1.2";
 
 // watch/threads are static truths of the build: single-threaded builds
 // (wasm, debug-st) have no watcher threads and no worker pool.
