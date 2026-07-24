@@ -2,7 +2,7 @@
 // vscode/node-process dependency so it is unit-testable with plain buffers.
 
 export class FrameParser {
-  private buffer = Buffer.alloc(0);
+  private buffer: Buffer = Buffer.alloc(0);
   private expected = -1;
 
   /** Feed raw bytes; returns any complete message payloads. */
