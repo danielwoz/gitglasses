@@ -19,7 +19,7 @@ export class DocumentSync implements vscode.Disposable {
     this.disposables.push(
       vscode.workspace.onDidChangeTextDocument((e) => this.onChanged(e.document)),
       vscode.workspace.onDidCloseTextDocument((d) => this.onClosed(d)),
-      vscode.workspace.onDidSaveTextDocument((d) => this.onClosed(d)),
+      vscode.workspace.onDidSaveTextDocument((d) => this.onSaved(d)),
     );
   }
 
@@ -63,6 +63,13 @@ export class DocumentSync implements vscode.Disposable {
       repoId: located.repoId,
       path: located.relativePath,
     });
+  }
+
+  private onSaved(document: vscode.TextDocument): void {
+    const key = document.uri.toString();
+    clearTimeout(this.timers.get(key));
+    this.timers.delete(key);
+    this.dirtyDocs.delete(key);
   }
 
   dispose(): void {

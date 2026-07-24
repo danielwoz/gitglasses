@@ -20,6 +20,7 @@ export interface BlameKey {
 export class BlameModel {
   private cache = new Map<string, Promise<FileBlame>>();
   private streamCounter = 0;
+  private maxCacheSize = 1000;
 
   constructor(private readonly engine: EngineClient) {}
 
@@ -27,6 +28,12 @@ export class BlameModel {
     const cacheKey = `${key.repoId}\0${key.path}\0${key.version}`;
     const existing = this.cache.get(cacheKey);
     if (existing) return existing;
+
+    // Evict oldest entries when cache is full
+    if (this.cache.size >= this.maxCacheSize) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) this.cache.delete(firstKey);
+    }
 
     const streamId = `b${this.streamCounter++}`;
     const hunks: BlameHunk[] = [];

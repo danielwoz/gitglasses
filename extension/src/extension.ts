@@ -109,6 +109,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           fileAnnotations.refresh();
           codeLens.fire();
           for (const view of Object.values(views)) view.refresh();
+        }).catch((error) => {
+          output.appendLine(`rediscoverAll failed: ${error}`);
         });
       },
     },

@@ -19,9 +19,16 @@ export class RepositoryService {
   /** Synchronous lookup against already-discovered repos. */
   locate(uri: vscode.Uri): LocatedFile | undefined {
     if (uri.scheme !== 'file') return undefined;
-    for (const [repoId, rootPath] of this.rootsById) {
-      const relative = path.relative(rootPath, uri.fsPath);
-      if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+    const fsPath = uri.fsPath;
+    // Sort by path length (longest first) so nested repos match before parents.
+    const sorted = [...this.rootsById.entries()].sort(
+      (a, b) => b[1].length - a[1].length,
+    );
+    for (const [repoId, rootPath] of sorted) {
+      if (!fsPath.startsWith(rootPath)) continue;
+      const rest = fsPath.slice(rootPath.length);
+      if (rest === '' || rest.startsWith(path.sep)) {
+        const relative = rest.startsWith(path.sep) ? rest.slice(1) : '';
         return { repoId, rootPath, relativePath: relative.split(path.sep).join('/') };
       }
     }

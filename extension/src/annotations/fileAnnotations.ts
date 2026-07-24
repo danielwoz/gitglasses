@@ -233,5 +233,6 @@ export class FileAnnotationsController implements vscode.Disposable {
     this.gutterTail.dispose();
     for (const type of this.heatTypes) type.dispose();
     for (const d of this.disposables) d.dispose();
+    this.latestRender.clear();
   }
 }

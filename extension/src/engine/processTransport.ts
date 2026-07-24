@@ -83,7 +83,11 @@ export class ProcessTransport implements EngineTransport {
   send(payload: string): void {
     const stdin = this.process?.stdin;
     if (!stdin?.writable) return;
-    stdin.write(frame(payload));
+    try {
+      stdin.write(frame(payload));
+    } catch {
+      // Process may have exited between the writable check and the write.
+    }
   }
 
   kill(): void {

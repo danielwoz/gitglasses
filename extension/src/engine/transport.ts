@@ -7,7 +7,11 @@ export class FrameParser {
 
   /** Feed raw bytes; returns any complete message payloads. */
   push(chunk: Buffer): string[] {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
+    if (this.buffer.length === 0) {
+      this.buffer = chunk;
+    } else {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+    }
     const messages: string[] = [];
     for (;;) {
       if (this.expected < 0) {

@@ -68,6 +68,7 @@ class AiResultContentProvider implements vscode.TextDocumentContentProvider {
   private readonly contents = new Map<string, string>();
   private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidChange = this.emitter.event;
+  private maxEntries = 50;
 
   provideTextDocumentContent(uri: vscode.Uri): string {
     return this.contents.get(uri.path) ?? '';
@@ -75,6 +76,11 @@ class AiResultContentProvider implements vscode.TextDocumentContentProvider {
 
   async show(title: string, markdown: string): Promise<void> {
     const uri = vscode.Uri.from({ scheme: AI_SCHEME, path: `/${title}.md` });
+    // Evict oldest entries when the map grows too large.
+    if (this.contents.size >= this.maxEntries) {
+      const firstKey = this.contents.keys().next().value;
+      if (firstKey) this.contents.delete(firstKey);
+    }
     this.contents.set(uri.path, markdown);
     this.emitter.fire(uri);
     try {
@@ -82,6 +88,11 @@ class AiResultContentProvider implements vscode.TextDocumentContentProvider {
     } catch {
       await vscode.window.showTextDocument(uri, { preview: true });
     }
+  }
+
+  dispose(): void {
+    this.contents.clear();
+    this.emitter.dispose();
   }
 }
 

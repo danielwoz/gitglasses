@@ -144,7 +144,7 @@ export class LineBlameController implements vscode.Disposable {
 
   dispose(): void {
     clearTimeout(this.timer);
-    this.cts?.cancel();
+    this.cts?.dispose();
     this.decoration.dispose();
     this.statusBar.dispose();
     for (const d of this.disposables) d.dispose();

@@ -68,6 +68,7 @@ export class WebRepositoryService extends RepositoryService {
    *  repo ids reset; discover again against the same mount. */
   override async rediscoverAll(): Promise<void> {
     this.repoId = undefined;
+    this.inflight = undefined;
     await this.discover();
   }
 }
