@@ -337,6 +337,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshViews();
     }),
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
+    vscode.commands.registerCommand('gitglasses.openWalkthrough', () =>
+      vscode.commands.executeCommand(
+        'workbench.action.openWalkthrough',
+        'gitglasses.gitglasses#gitglasses.getStarted',
+        false,
+      ),
+    ),
     vscode.commands.registerCommand('gitglasses.loadMore', (loadMore: unknown) => {
       if (typeof loadMore === 'function') (loadMore as () => void)();
     }),
