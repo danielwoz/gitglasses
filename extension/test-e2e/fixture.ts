@@ -19,6 +19,12 @@ export const FIXTURE = {
   dirtyFileCommittedContents: 'tracked base\n',
   dirtyFileWorkingContents: 'tracked base\nlocal uncommitted edit\n',
 
+  // A remote so the open-on-remote path resolves a real forge URL.
+  remoteName: 'origin',
+  remoteUrl: 'https://github.com/example/gitglasses-fixture.git',
+  remoteOwner: 'example',
+  remoteRepo: 'gitglasses-fixture',
+
   renameSource: 'beta.txt',
   renameTarget: 'gamma.txt',
   renameContents: 'beta body kept stable across the rename\n',

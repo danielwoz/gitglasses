@@ -80,6 +80,8 @@ function createFixtureWorkspace(enginePath: string): string {
   git(root, 'mv', FIXTURE.renameSource, FIXTURE.renameTarget);
   git(root, 'commit', '-m', 'rename beta to gamma');
 
+  git(root, 'remote', 'add', FIXTURE.remoteName, FIXTURE.remoteUrl);
+
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileWorkingContents);
 
   fs.mkdirSync(path.join(root, '.vscode'));
