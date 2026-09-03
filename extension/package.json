@@ -270,6 +270,14 @@
         "command": "gitglasses.unstageSelectedHunks",
         "title": "GitGlasses: Unstage Selected Hunk(s)",
         "enablement": "gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.addIntegration",
+        "title": "GitGlasses: Add Integration…"
+      },
+      {
+        "command": "gitglasses.removeIntegration",
+        "title": "GitGlasses: Remove Integration…"
       }
     ],
     "viewsContainers": {
@@ -348,7 +356,7 @@
       },
       {
         "view": "gitglasses.views.launchpad",
-        "contents": "Launchpad collects your pull requests and issues in one place.\n[Connect an Integration…](command:gitglasses.connectIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required."
+        "contents": "Launchpad collects your pull requests and issues in one place.\n[Add Integration…](command:gitglasses.addIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required."
       },
       {
         "view": "gitglasses.views.fileHistory",
@@ -395,6 +403,17 @@
             ]
           },
           {
+            "id": "remote",
+            "title": "Jump to the file on your forge",
+            "description": "Open the current file, at the current line, on GitHub, GitLab or Bitbucket.\n[Open File on Remote](command:gitglasses.openOnRemote)",
+            "media": {
+              "markdown": "media/walkthrough/remote.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.openOnRemote"
+            ]
+          },
+          {
             "id": "worktrees",
             "title": "Work on two branches at once",
             "description": "Worktrees check out another branch in a separate folder, so you can review a pull request without stashing.\n[Add Worktree…](command:gitglasses.worktrees.add)",
@@ -420,11 +439,12 @@
           {
             "id": "integrations",
             "title": "Connect issues and pull requests",
-            "description": "Launchpad gathers your pull requests and issues. Self-hosted servers are supported and cost nothing.\n[Connect an Integration…](command:gitglasses.connectIntegration)",
+            "description": "Launchpad gathers your pull requests and issues. Add a self-hosted forge or issue tracker without editing settings by hand.\n[Add Integration…](command:gitglasses.addIntegration)",
             "media": {
               "markdown": "media/walkthrough/integrations.md"
             },
             "completionEvents": [
+              "onCommand:gitglasses.addIntegration",
               "onCommand:gitglasses.connectIntegration"
             ]
           }

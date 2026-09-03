@@ -489,6 +489,12 @@ export async function activate(
     vscode.commands.registerCommand('gitglasses.groups.delete', () => repoGroups.delete()),
     vscode.commands.registerCommand('gitglasses.groups.export', () => repoGroups.export()),
     vscode.commands.registerCommand('gitglasses.groups.import', () => repoGroups.import()),
+    vscode.commands.registerCommand('gitglasses.addIntegration', () =>
+      integrations.addIntegration(),
+    ),
+    vscode.commands.registerCommand('gitglasses.removeIntegration', () =>
+      integrations.removeIntegration(),
+    ),
     vscode.commands.registerCommand('gitglasses.connectIntegration', () =>
       integrations.connectIntegration(),
     ),
