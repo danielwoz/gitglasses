@@ -243,6 +243,19 @@
       {
         "command": "gitglasses.openWalkthrough",
         "title": "GitGlasses: Get Started"
+      },
+      {
+        "command": "gitglasses.openOnRemote",
+        "title": "GitGlasses: Open File on Remote",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "gitglasses.copyRemoteUrl",
+        "title": "GitGlasses: Copy Remote File URL"
+      },
+      {
+        "command": "gitglasses.openCommitOnRemote",
+        "title": "Open Commit on Remote"
       }
     ],
     "viewsContainers": {
@@ -489,6 +502,16 @@
           "command": "gitglasses.suggestChange",
           "when": "editorHasSelection && resourceScheme == file",
           "group": "gitglasses@1"
+        },
+        {
+          "command": "gitglasses.openOnRemote",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@2"
+        },
+        {
+          "command": "gitglasses.copyRemoteUrl",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@3"
         }
       ],
       "view/item/context": [
@@ -498,6 +521,10 @@
         },
         {
           "command": "gitglasses.openCommitDiff",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry)$/"
+        },
+        {
+          "command": "gitglasses.openCommitOnRemote",
           "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry)$/"
         },
         {

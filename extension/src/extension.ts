@@ -37,6 +37,7 @@ import { registerGitPalette } from './commands/gitPalette';
 import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
 import { AuthManager } from './integrations/auth';
 import { IntegrationService } from './integrations/integrationService';
+import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
 import { LaunchpadService } from './integrations/launchpadService';
 import { PrChipProvider } from './integrations/prChips';
 import { registerStartWork } from './integrations/startWork';
@@ -168,6 +169,86 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const repoGroups = new RepoGroupsManager(context, engine, repos);
+
+  // "Open on remote": resolve the active file's repo, ask the integration layer
+  // which forge hosts it, then hand the target to the pure URL builder.
+  const revealOnRemote = async (
+    target: RemoteTarget,
+    action: 'open' | 'copy',
+    repoRoot?: string,
+  ): Promise<void> => {
+    let root = repoRoot;
+    if (root === undefined) {
+      const editor = vscode.window.activeTextEditor;
+      const located = editor && (await repos.locateOrDiscover(editor.document.uri));
+      if (!located) {
+        void vscode.window.showInformationMessage(
+          'GitGlasses: open a file inside a repository first.',
+        );
+        return;
+      }
+      root = located.rootPath;
+    }
+    const hosting = await integrations.getHostingFor(root);
+    if (!hosting) {
+      void vscode.window.showInformationMessage(
+        'GitGlasses: no recognised remote for this repository.',
+      );
+      return;
+    }
+    const url = buildRemoteUrl(hosting.providerId, hosting.repo, target);
+    if (!url) {
+      void vscode.window.showInformationMessage(
+        `GitGlasses: opening on ${hosting.host} is not supported yet.`,
+      );
+      return;
+    }
+    if (action === 'copy') {
+      await vscode.env.clipboard.writeText(url);
+      void vscode.window.showInformationMessage('GitGlasses: remote URL copied.');
+      return;
+    }
+    await vscode.env.openExternal(vscode.Uri.parse(url));
+  };
+
+  // Links the active file at the checked-out branch, carrying the selection as
+  // a line range. A detached or unborn HEAD has no branch the forge can serve,
+  // so the commit sha is used instead.
+  const openOnRemote = async (action: 'open' | 'copy'): Promise<void> => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.scheme !== 'file') {
+      void vscode.window.showInformationMessage('GitGlasses: open a file first.');
+      return;
+    }
+    const located = await repos.locateOrDiscover(editor.document.uri);
+    if (!located) {
+      void vscode.window.showInformationMessage(
+        'GitGlasses: this file is not inside a repository.',
+      );
+      return;
+    }
+    let ref = 'HEAD';
+    try {
+      const { head } = await engine.request('repo/state', { repoId: located.repoId });
+      if (head.unborn) ref = 'HEAD';
+      else if (head.detached || head.branch === '') ref = head.oid;
+      else ref = head.branch;
+    } catch {
+      // Fall back to HEAD, which the supported forges resolve.
+    }
+    const selection = editor.selection;
+    await revealOnRemote(
+      {
+        kind: 'file',
+        path: located.relativePath,
+        ref,
+        startLine: selection.start.line + 1,
+        endLine: selection.end.line + 1,
+      },
+      action,
+      located.rootPath,
+    );
+  };
 
   // The refresh work a HEAD move triggers, shared by the engine's
   // repo/didChange push and the watch-fallback poller below.
@@ -317,6 +398,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!rev) return;
       const uri = encodeRevisionUri(located.repoId, located.relativePath, rev);
       await vscode.window.showTextDocument(uri, { preview: true });
+    }),
+    vscode.commands.registerCommand('gitglasses.openOnRemote', () => openOnRemote('open')),
+    vscode.commands.registerCommand('gitglasses.copyRemoteUrl', () => openOnRemote('copy')),
+    vscode.commands.registerCommand('gitglasses.openCommitOnRemote', async (node?: ViewNode) => {
+      if (typeof node?.sha !== 'string') return;
+      await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open');
     }),
     vscode.commands.registerCommand('gitglasses.toggleLineBlame', () => lineBlame.toggle()),
     vscode.commands.registerCommand('gitglasses.toggleFileBlame', () =>
