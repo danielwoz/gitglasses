@@ -49,6 +49,10 @@
         "title": "GitGlasses: Toggle File Heatmap Annotations"
       },
       {
+        "command": "gitglasses.toggleChanges",
+        "title": "GitGlasses: Toggle File Changes Annotations"
+      },
+      {
         "command": "gitglasses.clearAnnotations",
         "title": "GitGlasses: Clear File Annotations"
       },

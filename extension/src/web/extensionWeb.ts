@@ -405,6 +405,9 @@ export async function activate(
     vscode.commands.registerCommand('gitglasses.toggleFileBlame', () =>
       fileAnnotations.toggle('blame'),
     ),
+    vscode.commands.registerCommand('gitglasses.toggleChanges', () =>
+      fileAnnotations.toggle('changes'),
+    ),
     vscode.commands.registerCommand('gitglasses.toggleHeatmap', () =>
       fileAnnotations.toggle('heatmap'),
     ),
