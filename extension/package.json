@@ -260,6 +260,16 @@
       {
         "command": "gitglasses.openCommitOnRemote",
         "title": "Open Commit on Remote"
+      },
+      {
+        "command": "gitglasses.stageSelectedHunks",
+        "title": "GitGlasses: Stage Selected Hunk(s)",
+        "enablement": "gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.unstageSelectedHunks",
+        "title": "GitGlasses: Unstage Selected Hunk(s)",
+        "enablement": "gitglasses.engineFullCapabilities"
       }
     ],
     "viewsContainers": {
@@ -516,6 +526,16 @@
           "command": "gitglasses.copyRemoteUrl",
           "when": "resourceScheme == file",
           "group": "gitglasses@3"
+        },
+        {
+          "command": "gitglasses.stageSelectedHunks",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@4"
+        },
+        {
+          "command": "gitglasses.unstageSelectedHunks",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@5"
         }
       ],
       "view/item/context": [

@@ -38,6 +38,11 @@ import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktre
 import { AuthManager } from './integrations/auth';
 import { IntegrationService } from './integrations/integrationService';
 import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
+import {
+  describeHunkCount,
+  hunksIntersectingSelection,
+  toHunkRange,
+} from './scm/hunkStaging';
 import { LaunchpadService } from './integrations/launchpadService';
 import { PrChipProvider } from './integrations/prChips';
 import { registerStartWork } from './integrations/startWork';
@@ -169,6 +174,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const repoGroups = new RepoGroupsManager(context, engine, repos);
+
+  // Stage or unstage just the hunks the editor selection covers. Staging reads
+  // the unstaged diff and unstaging reads the staged one, so each direction
+  // offers the hunks that can actually move that way.
+  const stageSelectedHunks = async (action: 'stage' | 'unstage'): Promise<void> => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.scheme !== 'file') {
+      void vscode.window.showInformationMessage('GitGlasses: open a file first.');
+      return;
+    }
+    const located = await repos.locateOrDiscover(editor.document.uri);
+    if (!located) {
+      void vscode.window.showInformationMessage(
+        'GitGlasses: this file is not inside a repository.',
+      );
+      return;
+    }
+    try {
+      const { hunks } = await engine.request('diff/fileHunks', {
+        repoId: located.repoId,
+        path: located.relativePath,
+        staged: action === 'unstage',
+      });
+      const selection = editor.selection;
+      const picked = hunksIntersectingSelection(
+        hunks,
+        selection.start.line + 1,
+        selection.end.line + 1,
+      );
+      if (picked.length === 0) {
+        void vscode.window.showInformationMessage(
+          `GitGlasses: no ${action === 'stage' ? 'unstaged' : 'staged'} changes in the selection.`,
+        );
+        return;
+      }
+      await engine.request('stage/hunks', {
+        repoId: located.repoId,
+        path: located.relativePath,
+        action,
+        hunks: picked.map(toHunkRange),
+      });
+      void vscode.window.showInformationMessage(
+        `GitGlasses: ${describeHunkCount(picked.length, action)}`,
+      );
+      blame.invalidate();
+      fileAnnotations.refresh();
+      refreshViews();
+    } catch (error) {
+      void vscode.window.showWarningMessage(
+        `GitGlasses: could not ${action} hunks — ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
 
   // "Open on remote": resolve the active file's repo, ask the integration layer
   // which forge hosts it, then hand the target to the pure URL builder.
@@ -399,6 +457,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const uri = encodeRevisionUri(located.repoId, located.relativePath, rev);
       await vscode.window.showTextDocument(uri, { preview: true });
     }),
+    vscode.commands.registerCommand('gitglasses.stageSelectedHunks', () =>
+      stageSelectedHunks('stage'),
+    ),
+    vscode.commands.registerCommand('gitglasses.unstageSelectedHunks', () =>
+      stageSelectedHunks('unstage'),
+    ),
     vscode.commands.registerCommand('gitglasses.openOnRemote', () => openOnRemote('open')),
     vscode.commands.registerCommand('gitglasses.copyRemoteUrl', () => openOnRemote('copy')),
     vscode.commands.registerCommand('gitglasses.openCommitOnRemote', async (node?: ViewNode) => {
