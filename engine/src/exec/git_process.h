@@ -1,12 +1,25 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "util/cancel.h"
 #include "util/result.h"
 
 namespace gg::exec {
+
+// True when git's option parser would read this value as a flag.
+//
+// Refnames, remotes and paths reach argv as positionals; git parses a leading
+// '-' as an option wherever it appears, so such a value can become an
+// arbitrary-command primitive (--upload-pack=, --exec=) or a file write
+// (--output=). Values are not always client-supplied — refnames come from the
+// repository — so a hostile repo is enough. Callers reject these, and add a
+// "--" separator wherever the subcommand accepts one.
+inline bool looksLikeGitOption(std::string_view value) {
+  return !value.empty() && value.front() == '-';
+}
 
 // Options for GitProcess::spawn beyond the defaults every caller wants.
 struct SpawnOpts {

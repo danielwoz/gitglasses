@@ -20,6 +20,7 @@ add_executable(engine_tests
   unit/patch_service_test.cpp
   unit/rebase_service_test.cpp
   unit/sha256_test.cpp
+  unit/hardening_test.cpp
   unit/watch_manager_test.cpp
   unit/protocol_contract_test.cpp
   ../src/server.cpp
