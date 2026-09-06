@@ -12,17 +12,31 @@ const gl: RepoDescriptor = { ...gh, provider: 'gitlab', host: 'gitlab.com' };
 const bb: RepoDescriptor = { ...gh, provider: 'bitbucket', host: 'bitbucket.org' };
 
 describe('supportsRemoteUrls', () => {
-  it('knows the shipped forges and rejects others', () => {
-    expect(supportsRemoteUrls('github')).toBe(true);
-    expect(supportsRemoteUrls('gitlab')).toBe(true);
-    expect(supportsRemoteUrls('bitbucket')).toBe(true);
-    expect(supportsRemoteUrls('azuredevops')).toBe(false);
+  // Every id that can actually reach buildRemoteUrl: DEFAULT_HOSTS, the ids
+  // Add Integration writes, and the service's github-enterprise special case.
+  it('covers every provider id that can reach it', () => {
+    for (const id of [
+      'github',
+      'github-enterprise',
+      'gitlab',
+      'bitbucket',
+      'bitbucketDC',
+      'azuredevops',
+    ]) {
+      expect(supportsRemoteUrls(id), `${id} should be supported`).toBe(true);
+    }
+  });
+
+  it('does not carry ids nothing emits', () => {
+    expect(supportsRemoteUrls('gitlab-self-hosted')).toBe(false);
+    expect(supportsRemoteUrls('bitbucket-server')).toBe(false);
+    expect(supportsRemoteUrls('nonsense')).toBe(false);
   });
 });
 
 describe('buildRemoteUrl', () => {
   it('returns undefined for an unknown provider rather than guessing', () => {
-    expect(buildRemoteUrl('azuredevops', gh, { kind: 'repo' })).toBeUndefined();
+    expect(buildRemoteUrl('nonsense', gh, { kind: 'repo' })).toBeUndefined();
   });
 
   it('builds repo, branch and commit urls for github', () => {
@@ -109,13 +123,77 @@ describe('buildRemoteUrl', () => {
     );
   });
 
-  it('routes enterprise and self-hosted ids to their forge shapes', () => {
+  it('routes github-enterprise to the github shape on its own host', () => {
     const ghe: RepoDescriptor = { ...gh, host: 'git.example.com' };
     expect(buildRemoteUrl('github-enterprise', ghe, { kind: 'commit', sha: 'a1' })).toBe(
       'https://git.example.com/danielwoz/gitglasses/commit/a1',
     );
-    expect(buildRemoteUrl('gitlab-self-hosted', ghe, { kind: 'commit', sha: 'a1' })).toBe(
-      'https://git.example.com/danielwoz/gitglasses/-/commit/a1',
-    );
+  });
+
+  // Data Center's layout is /projects/<KEY>/repos/<slug>/browse, not Cloud's
+  // /<owner>/<repo>/src — reusing the Cloud routes would 404.
+  describe('bitbucket data center', () => {
+    const dc: RepoDescriptor = {
+      provider: 'bitbucketDC',
+      host: 'git.corp.example',
+      owner: 'ENG',
+      name: 'gitglasses',
+    };
+
+    it('uses the projects/repos/browse layout', () => {
+      expect(buildRemoteUrl('bitbucketDC', dc, { kind: 'repo' })).toBe(
+        'https://git.corp.example/projects/ENG/repos/gitglasses/browse',
+      );
+    });
+
+    it('puts the ref in ?at= and the line in the fragment', () => {
+      expect(
+        buildRemoteUrl('bitbucketDC', dc, {
+          kind: 'file',
+          path: 'src/a.ts',
+          ref: 'main',
+          startLine: 5,
+          endLine: 9,
+        }),
+      ).toBe(
+        'https://git.corp.example/projects/ENG/repos/gitglasses/browse/src/a.ts?at=main#5-9',
+      );
+    });
+
+    it('links a commit under /commits', () => {
+      expect(buildRemoteUrl('bitbucketDC', dc, { kind: 'commit', sha: 'abc123' })).toBe(
+        'https://git.corp.example/projects/ENG/repos/gitglasses/commits/abc123',
+      );
+    });
+  });
+
+  describe('azure devops', () => {
+    const az: RepoDescriptor = {
+      provider: 'azuredevops',
+      host: 'dev.azure.com',
+      owner: 'contoso/ProjectX',
+      name: 'gitglasses',
+    };
+
+    it('addresses the repo through _git', () => {
+      expect(buildRemoteUrl('azuredevops', az, { kind: 'repo' })).toBe(
+        'https://dev.azure.com/contoso/ProjectX/_git/gitglasses',
+      );
+    });
+
+    it('passes path, version and line range as query parameters', () => {
+      const url = buildRemoteUrl('azuredevops', az, {
+        kind: 'file',
+        path: 'src/a.ts',
+        ref: 'main',
+        startLine: 5,
+        endLine: 9,
+      });
+      expect(url).toContain('/_git/gitglasses?');
+      expect(url).toContain('path=%2Fsrc%2Fa.ts');
+      expect(url).toContain('version=GBmain');
+      expect(url).toContain('line=5');
+      expect(url).toContain('lineEnd=9');
+    });
   });
 });

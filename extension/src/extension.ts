@@ -39,8 +39,10 @@ import { AuthManager } from './integrations/auth';
 import { IntegrationService } from './integrations/integrationService';
 import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
 import {
+  describeHunk,
   describeHunkCount,
   hunksIntersectingSelection,
+  selectionLineRange,
   toHunkRange,
 } from './scm/hunkStaging';
 import { LaunchpadService } from './integrations/launchpadService';
@@ -175,6 +177,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const repoGroups = new RepoGroupsManager(context, engine, repos);
 
+  // Whether the file differs between the working tree and the index. Staged
+  // hunk line numbers are only comparable to editor line numbers while this is
+  // false.
+  const hasUnstagedChanges = async (located: {
+    repoId: string;
+    relativePath: string;
+  }): Promise<boolean> => {
+    try {
+      const { hunks } = await engine.request('diff/fileHunks', {
+        repoId: located.repoId,
+        path: located.relativePath,
+        staged: false,
+      });
+      return hunks.length > 0;
+    } catch {
+      // Unknown: prefer the explicit picker over a possibly wrong guess.
+      return true;
+    }
+  };
+
   // Stage or unstage just the hunks the editor selection covers. Staging reads
   // the unstaged diff and unstaging reads the staged one, so each direction
   // offers the hunks that can actually move that way.
@@ -191,18 +213,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       return;
     }
+    // The unstaged diff is computed against the file on disk, so an unsaved
+    // buffer would have us match the selection against stale hunk positions.
+    if (editor.document.isDirty) {
+      const choice = await vscode.window.showWarningMessage(
+        'GitGlasses: this file has unsaved changes. Hunks are read from the file on disk.',
+        'Save and Continue',
+        'Cancel',
+      );
+      if (choice !== 'Save and Continue') return;
+      if (!(await editor.document.save())) return;
+    }
     try {
       const { hunks } = await engine.request('diff/fileHunks', {
         repoId: located.repoId,
         path: located.relativePath,
         staged: action === 'unstage',
       });
-      const selection = editor.selection;
-      const picked = hunksIntersectingSelection(
-        hunks,
-        selection.start.line + 1,
-        selection.end.line + 1,
-      );
+      if (hunks.length === 0) {
+        void vscode.window.showInformationMessage(
+          `GitGlasses: nothing to ${action} in this file.`,
+        );
+        return;
+      }
+
+      // Staged hunk positions address the index; the selection addresses the
+      // working tree. They agree only while the file has no unstaged changes,
+      // so when it does, the hunks are offered explicitly rather than guessed
+      // at from the cursor — matching there would silently unstage the wrong
+      // one.
+      let picked: typeof hunks;
+      if (action === 'unstage' && (await hasUnstagedChanges(located))) {
+        const items = hunks.map((hunk) => ({ ...describeHunk(hunk), hunk }));
+        const chosen = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Which staged hunk should be unstaged?',
+          canPickMany: true,
+        });
+        if (!chosen || chosen.length === 0) return;
+        picked = chosen.map((item) => item.hunk);
+      } else {
+        const range = selectionLineRange(
+          editor.selection.start.line,
+          editor.selection.end.line,
+          editor.selection.end.character,
+        );
+        picked = hunksIntersectingSelection(hunks, range.startLine, range.endLine);
+      }
+
       if (picked.length === 0) {
         void vscode.window.showInformationMessage(
           `GitGlasses: no ${action === 'stage' ? 'unstaged' : 'staged'} changes in the selection.`,
@@ -294,14 +351,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch {
       // Fall back to HEAD, which the supported forges resolve.
     }
-    const selection = editor.selection;
+    const range = selectionLineRange(
+      editor.selection.start.line,
+      editor.selection.end.line,
+      editor.selection.end.character,
+    );
     await revealOnRemote(
       {
         kind: 'file',
         path: located.relativePath,
         ref,
-        startLine: selection.start.line + 1,
-        endLine: selection.end.line + 1,
+        startLine: range.startLine,
+        endLine: range.endLine,
       },
       action,
       located.rootPath,
@@ -467,7 +528,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.copyRemoteUrl', () => openOnRemote('copy')),
     vscode.commands.registerCommand('gitglasses.openCommitOnRemote', async (node?: ViewNode) => {
       if (typeof node?.sha !== 'string') return;
-      await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open');
+      // The node carries no repo of its own, and the views resolve against the
+      // first workspace folder rather than the active editor. Resolving from
+      // the editor here would build the URL from a different repository's
+      // remote in a multi-root workspace, and fail outright with no editor
+      // open at all.
+      const repo = await firstWorkspaceRepo(repos);
+      if (!repo) {
+        void vscode.window.showInformationMessage('GitGlasses: no repository in this workspace.');
+        return;
+      }
+      await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
     }),
     vscode.commands.registerCommand('gitglasses.toggleLineBlame', () => lineBlame.toggle()),
     vscode.commands.registerCommand('gitglasses.toggleFileBlame', () =>

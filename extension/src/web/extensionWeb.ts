@@ -504,6 +504,22 @@ export async function activate(
     // Patch envelopes need node:crypto; contributed commands still resolve.
     vscode.commands.registerCommand('gitglasses.createPatch', notOnWeb('creating patches')),
     vscode.commands.registerCommand('gitglasses.applyPatch', notOnWeb('applying patches')),
+    // Remote detection reads .git/config through node:fs, which the web shim
+    // rejects, so these can never resolve a forge here. They are contributed
+    // unconditionally (editor context menu, walkthrough), so they must resolve
+    // to something rather than fail with "command not found".
+    vscode.commands.registerCommand('gitglasses.openOnRemote', notOnWeb('opening files on the remote')),
+    vscode.commands.registerCommand('gitglasses.copyRemoteUrl', notOnWeb('copying remote URLs')),
+    vscode.commands.registerCommand(
+      'gitglasses.openCommitOnRemote',
+      notOnWeb('opening commits on the remote'),
+    ),
+    // Staging would mutate the MEMFS mirror only, never the real repository.
+    vscode.commands.registerCommand('gitglasses.stageSelectedHunks', notOnWeb('staging hunks')),
+    vscode.commands.registerCommand(
+      'gitglasses.unstageSelectedHunks',
+      notOnWeb('unstaging hunks'),
+    ),
     ...registerHomeCommands(engine, repos, homeView, context.globalState),
     new ModeController(lineBlame, fileAnnotations, codeLens),
     registerStartWork(integrations, engine, repos),

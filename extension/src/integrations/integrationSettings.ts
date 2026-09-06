@@ -45,6 +45,11 @@ export function normalizeDomain(input: string): string {
   value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
   value = value.replace(/\/.*$/, '');
   value = value.replace(/^[^@]*@/, '');
+  // The remote matcher parses a port separately and drops it, so a domain
+  // stored with one could never match a remote — the integration would look
+  // configured and silently do nothing. Stripping it here keeps what is stored
+  // aligned with what can actually resolve.
+  value = value.replace(/:\d+$/, '');
   return value.toLowerCase();
 }
 
@@ -52,7 +57,7 @@ export function normalizeDomain(input: string): string {
 export function isValidDomain(input: string): boolean {
   const domain = normalizeDomain(input);
   if (domain === '') return false;
-  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d+)?$/.test(domain);
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain);
 }
 
 /** Appends a hosting entry, replacing any existing entry for the same domain. */
@@ -78,7 +83,10 @@ export function addIssueSetting(
   existing: readonly IssueSetting[],
   entry: IssueSetting,
 ): IssueSetting[] {
-  const host = entry.host === undefined ? undefined : normalizeDomain(entry.host);
+  // An empty host normalises to '' but is written as "no host", so treat the
+  // two as the same entry or add() can leave a duplicate behind.
+  const normalized = entry.host === undefined ? undefined : normalizeDomain(entry.host);
+  const host = normalized === '' ? undefined : normalized;
   const kept = existing.filter(
     (issue) =>
       !(

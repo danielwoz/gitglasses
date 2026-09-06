@@ -110,6 +110,39 @@ function findExportedProviderClass(providerId: string): (new (options: { host?: 
   return undefined;
 }
 
+/**
+ * The array to edit and the scope to write it back to.
+ *
+ * `get()` returns the merged effective value, and these arrays do not merge
+ * element-wise — the most specific scope wins outright. Reading the effective
+ * value and writing it to the workspace would copy globally configured entries
+ * into the repository's .vscode/settings.json, which commonly gets committed,
+ * publishing internal hostnames. Removal had the mirror-image problem: a
+ * workspace array written without a globally configured entry shadows global
+ * from then on.
+ *
+ * So the array is taken from, and written back to, the narrowest scope that
+ * actually defines it, defaulting to global for a brand new setting.
+ */
+function settingScope<T>(
+  section: string,
+): { values: T[]; target: vscode.ConfigurationTarget } {
+  const inspected = vscode.workspace.getConfiguration('gitglasses').inspect<T[]>(section);
+  if (inspected?.workspaceFolderValue !== undefined) {
+    return {
+      values: inspected.workspaceFolderValue,
+      target: vscode.ConfigurationTarget.WorkspaceFolder,
+    };
+  }
+  if (inspected?.workspaceValue !== undefined) {
+    return { values: inspected.workspaceValue, target: vscode.ConfigurationTarget.Workspace };
+  }
+  return {
+    values: inspected?.globalValue ?? [],
+    target: vscode.ConfigurationTarget.Global,
+  };
+}
+
 export class IntegrationService implements vscode.Disposable {
   private registry = new ProviderRegistry();
   private readonly providersByHost = new Map<string, HostingProvider>();
@@ -215,6 +248,15 @@ export class IntegrationService implements vscode.Disposable {
     if (!cached) {
       cached = this.resolveHosting(repoRoot);
       this.hostingCache.set(repoRoot, cached);
+      // A miss is only true for the .git/config as it stands. Adding a remote
+      // to a repo opened without one would otherwise keep reporting "no
+      // recognised remote" until the window reloaded, so misses are dropped
+      // and re-resolved on the next ask.
+      void cached.then((resolved) => {
+        if (!resolved && this.hostingCache.get(repoRoot) === cached) {
+          this.hostingCache.delete(repoRoot);
+        }
+      });
     }
     return cached;
   }
@@ -331,29 +373,27 @@ export class IntegrationService implements vscode.Disposable {
       host = normalizeDomain(entered);
     }
 
-    const config = vscode.workspace.getConfiguration('gitglasses');
-    const target =
-      vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
-        ? vscode.ConfigurationTarget.Workspace
-        : vscode.ConfigurationTarget.Global;
-
     if (kind.itemKind === 'hosting') {
-      const existing = config.get<HostSetting[]>('integrations.hosts') ?? [];
-      await config.update(
-        'integrations.hosts',
-        addHostSetting(existing, { domain: host, provider: provider.choice.id }),
-        target,
-      );
+      const scope = settingScope<HostSetting>('integrations.hosts');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.hosts',
+          addHostSetting(scope.values, { domain: host, provider: provider.choice.id }),
+          scope.target,
+        );
     } else {
-      const existing = config.get<IssueSetting[]>('integrations.issues') ?? [];
-      await config.update(
-        'integrations.issues',
-        addIssueSetting(existing, {
-          provider: provider.choice.id,
-          ...(host ? { host } : {}),
-        }),
-        target,
-      );
+      const scope = settingScope<IssueSetting>('integrations.issues');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.issues',
+          addIssueSetting(scope.values, {
+            provider: provider.choice.id,
+            ...(host ? { host } : {}),
+          }),
+          scope.target,
+        );
     }
 
     this.reloadConfiguration();
@@ -367,9 +407,10 @@ export class IntegrationService implements vscode.Disposable {
 
   /** Removes a configured integration from settings. */
   async removeIntegration(): Promise<void> {
-    const config = vscode.workspace.getConfiguration('gitglasses');
-    const hosts = config.get<HostSetting[]>('integrations.hosts') ?? [];
-    const issues = config.get<IssueSetting[]>('integrations.issues') ?? [];
+    // Read through the same scope resolution the write uses, so the list can
+    // never offer an entry the removal would not actually touch.
+    const hosts = settingScope<HostSetting>('integrations.hosts').values;
+    const issues = settingScope<IssueSetting>('integrations.issues').values;
 
     const items = [
       ...hosts.map((host) => ({
@@ -394,23 +435,24 @@ export class IntegrationService implements vscode.Disposable {
     });
     if (!picked) return;
 
-    const target =
-      vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
-        ? vscode.ConfigurationTarget.Workspace
-        : vscode.ConfigurationTarget.Global;
-
     if (picked.entry.itemKind === 'hosting') {
-      await config.update(
-        'integrations.hosts',
-        removeHostSetting(hosts, picked.entry.host.domain),
-        target,
-      );
+      const scope = settingScope<HostSetting>('integrations.hosts');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.hosts',
+          removeHostSetting(scope.values, picked.entry.host.domain),
+          scope.target,
+        );
     } else {
-      await config.update(
-        'integrations.issues',
-        removeIssueSetting(issues, picked.entry.issue.provider, picked.entry.issue.host),
-        target,
-      );
+      const scope = settingScope<IssueSetting>('integrations.issues');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.issues',
+          removeIssueSetting(scope.values, picked.entry.issue.provider, picked.entry.issue.host),
+          scope.target,
+        );
     }
     this.reloadConfiguration();
     void vscode.window.showInformationMessage('GitGlasses: integration removed.');

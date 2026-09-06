@@ -16,10 +16,33 @@ export interface HunkRange {
  * A hunk's footprint in the file being edited. Pure deletions have newLines 0
  * and would otherwise cover nothing, so they are treated as occupying the
  * single line they sit against — a cursor there can still stage them.
+ *
+ * Git reports newStart 0 when the new side is empty (`@@ -1,8 +0,0 @@`, a hunk
+ * deleting a file's entire contents). Editor lines are 1-based, so the
+ * footprint is clamped to line 1 or no cursor position could ever select it.
  */
 function footprint(hunk: HunkRange): { first: number; last: number } {
-  if (hunk.newLines <= 0) return { first: hunk.newStart, last: hunk.newStart };
-  return { first: hunk.newStart, last: hunk.newStart + hunk.newLines - 1 };
+  const start = Math.max(1, hunk.newStart);
+  if (hunk.newLines <= 0) return { first: start, last: start };
+  return { first: start, last: start + hunk.newLines - 1 };
+}
+
+/**
+ * The 1-based inclusive line range a selection covers.
+ *
+ * A whole-line selection (Ctrl+L, triple-click, Shift+Down from column 0) ends
+ * at the *next* line, column 0, with nothing on that line selected. Counting it
+ * would silently include an adjacent hunk the user never selected.
+ */
+export function selectionLineRange(
+  startLine: number,
+  endLine: number,
+  endCharacter: number,
+): { startLine: number; endLine: number } {
+  const first = Math.min(startLine, endLine);
+  let last = Math.max(startLine, endLine);
+  if (endCharacter === 0 && last > first) last -= 1;
+  return { startLine: first + 1, endLine: last + 1 };
 }
 
 /**
@@ -55,4 +78,29 @@ export function toHunkRange(hunk: HunkRange): HunkRange {
 export function describeHunkCount(count: number, action: 'stage' | 'unstage'): string {
   const verb = action === 'stage' ? 'Staged' : 'Unstaged';
   return `${verb} ${count} hunk${count === 1 ? '' : 's'}.`;
+}
+
+/** A hunk as the engine reports it, including its unified-diff body. */
+export interface DiffHunkLike extends HunkRange {
+  header: string;
+  lines: readonly string[];
+}
+
+/**
+ * Label and preview for picking a hunk out of a list.
+ *
+ * Unstaging cannot use the cursor: the staged diff's line numbers address the
+ * index, while the selection addresses the working tree, and the two differ as
+ * soon as the file has unstaged edits. So the staged hunks are offered
+ * explicitly instead, described by their content rather than their position.
+ */
+export function describeHunk(hunk: DiffHunkLike): { label: string; detail: string } {
+  const added = hunk.lines.filter((line) => line.startsWith('+')).length;
+  const removed = hunk.lines.filter((line) => line.startsWith('-')).length;
+  const firstChange = hunk.lines.find((line) => line.startsWith('+') || line.startsWith('-'));
+  const preview = firstChange ? firstChange.slice(0, 80) : hunk.header;
+  return {
+    label: `${hunk.header}  +${added} −${removed}`,
+    detail: preview.trim(),
+  };
 }

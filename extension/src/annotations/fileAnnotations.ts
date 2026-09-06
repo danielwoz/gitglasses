@@ -66,6 +66,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   private renderCounter = 0;
   private latestRender = new Map<string, number>();
   private disposables: vscode.Disposable[] = [];
+  private disposed = false;
 
   constructor(
     private readonly blame: BlameModel,
@@ -149,6 +150,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   }
 
   private async render(editor: vscode.TextEditor): Promise<void> {
+    if (this.disposed) return;
     const document = editor.document;
     if (document.uri.scheme !== 'file') return;
     const key = document.uri.toString();
@@ -183,6 +185,9 @@ export class FileAnnotationsController implements vscode.Disposable {
     // edited buffer will re-render via the debounced change handler.
     if (this.latestRender.get(key) !== renderId || document.version !== version) return;
     if (!vscode.window.visibleTextEditors.includes(editor)) return;
+    // Disposal can land while the blame request is in flight; the decoration
+    // types are gone by then.
+    if (this.disposed) return;
 
     if (mode === 'blame') this.applyGutterBlame(editor, fileBlame);
     else if (mode === 'changes') this.applyChanges(editor, fileBlame);
@@ -259,6 +264,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const timer of this.debounceTimers.values()) clearTimeout(timer);
     this.gutterHead.dispose();
     this.gutterTail.dispose();

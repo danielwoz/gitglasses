@@ -25,13 +25,23 @@ describe('normalizeDomain', () => {
     expect(normalizeDomain('  git.example.com  ')).toBe('git.example.com');
   });
 
+  // The remote matcher parses the port off separately and discards it, so a
+  // domain stored with one could never match and the integration would look
+  // configured while doing nothing.
+  it('drops a port so the stored domain can actually match a remote', () => {
+    expect(normalizeDomain('git.corp.example:8443')).toBe('git.corp.example');
+    expect(normalizeDomain('https://git.corp.example:8443/o/repo.git')).toBe(
+      'git.corp.example',
+    );
+  });
+
   it('returns empty for empty input', () => {
     expect(normalizeDomain('   ')).toBe('');
   });
 });
 
 describe('isValidDomain', () => {
-  it('accepts hostnames, including a port', () => {
+  it('accepts hostnames, with or without a pasted port', () => {
     expect(isValidDomain('git.example.com')).toBe(true);
     expect(isValidDomain('https://git.example.com/x')).toBe(true);
     expect(isValidDomain('git.example.com:8443')).toBe(true);

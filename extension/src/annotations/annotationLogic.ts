@@ -80,8 +80,15 @@ export function computeHeatmapRanges(blame: FileBlame): HeatmapRange[] {
     const time = blame.commits[hunk.sha]?.author.time;
     if (time !== undefined) times.push(time);
   }
-  const oldest = Math.min(...times);
-  const newest = Math.max(...times);
+  // Reduce rather than spread: Math.min(...times) throws RangeError once the
+  // argument count passes the engine's stack limit (~125k), and a file can
+  // have that many blame hunks.
+  let oldest = Number.POSITIVE_INFINITY;
+  let newest = Number.NEGATIVE_INFINITY;
+  for (const time of times) {
+    if (time < oldest) oldest = time;
+    if (time > newest) newest = time;
+  }
   const span = newest - oldest;
 
   return blame.hunks.map((hunk) => ({

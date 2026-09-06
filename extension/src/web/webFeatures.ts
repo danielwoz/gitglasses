@@ -79,6 +79,17 @@ export const WEB_FEATURES: Readonly<Record<string, WebFeature>> = {
     status: 'excluded',
     reason: 'reads .git/config through node:fs; the web shim always rejects',
   },
+  openOnRemote: {
+    status: 'excluded',
+    reason:
+      'depends on integrationsRemoteDetection, which cannot read .git/config on the web; stub commands explain',
+  },
+  hunkStaging: {
+    status: 'excluded',
+    reason:
+      'inherits stageMutations: staging would only touch the MEMFS mirror; stub commands explain',
+  },
+  onboardingWalkthrough: { status: 'included' },
   patches: {
     status: 'excluded',
     reason: 'envelope encryption uses node:crypto ciphers; stub commands explain',
