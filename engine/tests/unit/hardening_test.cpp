@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <sstream>
 #include <string>
 
@@ -12,6 +13,7 @@
 #include "rpc/dispatcher.h"
 #include "rpc/framing.h"
 #include "server.h"
+#include "util/temp_file.h"
 #include "test_fixtures.h"
 #include "test_session.h"
 
@@ -157,6 +159,50 @@ TEST(Hardening, OptionLookingRefIsRejectedBySwitch) {
   const Json response = responseFor(messages, 3);
   ASSERT_TRUE(response.contains("error")) << response.dump();
   EXPECT_EQ(response["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
+}
+
+// --- Param type errors ------------------------------------------------------
+//
+// nlohmann's value()/get<>() throw type_error on a wrong-typed field. That
+// reached the generic handler and was reported as Internal with the library's
+// raw "[json.exception...]" text, which tells a client nothing actionable.
+
+TEST(Hardening, WronglyTypedParamIsInvalidParamsNotInternal) {
+  auto messages = runSession({
+      {{"jsonrpc", "2.0"},
+       {"id", 1},
+       {"method", "initialize"},
+       {"params", {{"protocolVersion", 1}}}},
+  });
+
+  const Json response = responseFor(messages, 1);
+  ASSERT_TRUE(response.contains("error")) << response.dump();
+  EXPECT_EQ(response["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
+  const std::string message = response["error"]["message"];
+  EXPECT_EQ(message.find("json.exception"), std::string::npos)
+      << "library noise should not reach the client: " << message;
+  EXPECT_NE(message.find("must be string"), std::string::npos) << message;
+}
+
+// --- Temp files -------------------------------------------------------------
+//
+// Patch and blame-contents files hold the user's source in a world-readable
+// shared directory, and the hand-rolled cleanup they used to rely on was
+// skipped when readLine()/wait() threw CancelledError.
+
+TEST(Hardening, TempFileIsOwnerOnlyAndRemovedOnScopeExit) {
+  std::string path;
+  {
+    auto file = util::TempFile::create("secret diff\n", "gg-test-", ".patch");
+    ASSERT_TRUE(static_cast<bool>(file));
+    path = file.value().path();
+
+    const auto perms = std::filesystem::status(path).permissions();
+    EXPECT_EQ(perms & std::filesystem::perms::group_all, std::filesystem::perms::none);
+    EXPECT_EQ(perms & std::filesystem::perms::others_all, std::filesystem::perms::none);
+    EXPECT_TRUE(std::filesystem::exists(path));
+  }
+  EXPECT_FALSE(std::filesystem::exists(path)) << "temp file outlived its scope";
 }
 
 }  // namespace
