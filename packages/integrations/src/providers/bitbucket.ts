@@ -1,3 +1,4 @@
+import { governedFetch } from '../rateLimiter.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type {
   AuthContext,
@@ -15,7 +16,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { base64Encode, throwForStatus } from './shared.js';
+import { base64Encode, throwForStatus , escapeBbqlString, tokenFingerprint} from './shared.js';
 
 export interface BitbucketProviderOptions {
   /** Provider id used in RepoDescriptors. Default "bitbucket". */
@@ -134,7 +135,7 @@ export class BitbucketProvider implements HostingProvider {
   constructor(options: BitbucketProviderOptions = {}) {
     this.id = options.id ?? 'bitbucket';
     this.apiBaseUrl = (options.apiBaseUrl ?? 'https://api.bitbucket.org/2.0').replace(/\/+$/, '');
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -177,10 +178,14 @@ export class BitbucketProvider implements HostingProvider {
     repo: RepoDescriptor,
     branch: string
   ): Promise<PullRequest | undefined> {
-    const q = encodeURIComponent(`source.branch.name = "${branch}" AND state = "OPEN"`);
+    // Branch names come from the repository, so a name containing a quote
+    // would close the BBQL literal and rewrite the query's meaning.
+    const q = encodeURIComponent(
+      `source.branch.name = "${escapeBbqlString(branch)}" AND state = "OPEN"`,
+    );
     const json = (await this.get(
       auth,
-      `/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
+      `/repositories/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pullrequests?q=${q}`
     )) as { values?: BitbucketPullRequest[] } | undefined;
     const pr = json?.values?.[0];
     if (!pr) {
@@ -202,7 +207,7 @@ export class BitbucketProvider implements HostingProvider {
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const repoPath = `/repositories/${repo.owner}/${repo.name}`;
+    const repoPath = `/repositories/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
     const issue = (await this.get(auth, `${repoPath}/issues/${number}`)) as
       | Record<string, unknown>
       | undefined;
@@ -235,10 +240,12 @@ export class BitbucketProvider implements HostingProvider {
     if (!uuid) {
       return [];
     }
-    const q = encodeURIComponent(`state="OPEN" AND reviewers.uuid="${uuid}"`);
+    const q = encodeURIComponent(
+      `state="OPEN" AND reviewers.uuid="${escapeBbqlString(uuid)}"`,
+    );
     const json = (await this.get(
       auth,
-      `/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
+      `/repositories/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pullrequests?q=${q}`
     )) as { values?: BitbucketPullRequest[] } | undefined;
     return json?.values ?? [];
   }
@@ -306,7 +313,7 @@ export class BitbucketProvider implements HostingProvider {
 
   /** Own account profile from /2.0/user, cached per token. */
   private async user(auth: AuthContext): Promise<BitbucketAccount> {
-    if (this.cachedUser !== undefined && this.cachedUserToken === auth.token) {
+    if (this.cachedUser !== undefined && this.cachedUserToken === tokenFingerprint(auth.token)) {
       return this.cachedUser;
     }
     const user = (await this.get(auth, '/user')) as BitbucketAccount | undefined;
@@ -314,7 +321,7 @@ export class BitbucketProvider implements HostingProvider {
       throw new Error('Bitbucket /user returned no profile');
     }
     this.cachedUser = user;
-    this.cachedUserToken = auth.token;
+    this.cachedUserToken = tokenFingerprint(auth.token);
     return user;
   }
 

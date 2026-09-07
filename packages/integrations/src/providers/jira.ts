@@ -1,8 +1,9 @@
+import { governedFetch } from '../rateLimiter.js';
 import { AuthError, NotSupportedError } from '../errors.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
 import type { Account, AutolinkPattern, Issue } from '../models.js';
-import { base64Encode, slugify, throwForStatus } from './shared.js';
+import { base64Encode, slugify, throwForStatus , assertPlainHost} from './shared.js';
 
 export interface JiraProviderOptions {
   /** Cloud site name, e.g. "acme" for https://acme.atlassian.net. */
@@ -65,7 +66,11 @@ export class JiraProvider implements IssueProvider {
 
   constructor(options: JiraProviderOptions = {}) {
     this.id = options.id ?? 'jira';
-    const baseUrl = options.baseUrl ?? (options.site ? `https://${options.site}.atlassian.net` : undefined);
+    // `site` is documented as a bare site name and is interpolated into the
+    // base URL, so a value like "evil.example/x" would redirect credentialed
+    // requests. baseUrl stays free-form for self-hosted instances.
+    const site = options.site ? assertPlainHost(options.site, 'Jira site') : undefined;
+    const baseUrl = options.baseUrl ?? (site ? `https://${site}.atlassian.net` : undefined);
     if (!baseUrl) {
       throw new Error('JiraProvider requires either a site name or a baseUrl');
     }
@@ -75,7 +80,7 @@ export class JiraProvider implements IssueProvider {
       urlTemplate: `${this.baseUrl}/browse/$1`,
       title: 'Jira issue',
     };
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   async getMyIssues(auth: AuthContext, opts?: IssueQueryOptions): Promise<Issue[]> {

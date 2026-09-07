@@ -1,3 +1,4 @@
+import { governedFetch } from '../rateLimiter.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type {
   AuthContext,
@@ -115,7 +116,7 @@ export class BitbucketDCProvider implements HostingProvider {
     this.id = options.id ?? 'bitbucket-dc';
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.host = hostOfUrl(this.baseUrl);
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {

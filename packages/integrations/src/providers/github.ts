@@ -1,3 +1,4 @@
+import { governedFetch } from '../rateLimiter.js';
 import { AuthError, ProviderError, RateLimitError } from '../errors.js';
 import { defaultFetch, type FetchLike, type HttpResponseLike } from '../http.js';
 import type {
@@ -27,6 +28,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
+import { isGistRawOrigin, isSameOriginAs } from './shared.js';
 
 export interface GitHubProviderOptions {
   /** Provider id used in RepoDescriptors. Default "github". */
@@ -201,10 +203,12 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
 
   constructor(options: GitHubProviderOptions = {}) {
     this.id = options.id ?? 'github';
-    this.host = options.host ?? 'github.com';
+    // parseRemoteUrl lowercases the host it returns, so a configured host with
+    // any capitalization would match no remote at all, silently.
+    this.host = (options.host ?? 'github.com').toLowerCase();
     this.apiBaseUrl = options.apiBaseUrl ?? 'https://api.github.com';
     this.graphqlUrl = options.graphqlUrl ?? `${this.apiBaseUrl}/graphql`;
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -304,10 +308,15 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
       throw new ProviderError(`Gist ${id} has no files`);
     }
     if (file.truncated && file.raw_url) {
-      const response = await this.fetchFn(file.raw_url, {
-        method: 'GET',
-        headers: this.headers(auth),
-      });
+      // raw_url comes from the response body, so it is not ours to trust. The
+      // runtime strips Authorization across a redirect, but this is a fresh
+      // request and would carry the token wherever the body pointed. Gist raw
+      // content is public, so it is fetched without credentials, and only from
+      // an origin we already talk to.
+      if (!isSameOriginAs(file.raw_url, this.apiBaseUrl) && !isGistRawOrigin(file.raw_url)) {
+        throw new ProviderError(`Gist ${id} points its content at an unexpected host`);
+      }
+      const response = await this.fetchFn(file.raw_url, { method: 'GET' });
       this.throwForStatus(response);
       return response.text();
     }

@@ -19,14 +19,87 @@ export interface HttpRequestInit {
   method?: string;
   headers?: Record<string, string>;
   body?: string;
+  /** Aborts the request; defaultFetch supplies one when none is given. */
+  signal?: AbortSignal;
 }
 
 export type FetchLike = (url: string, init?: HttpRequestInit) => Promise<HttpResponseLike>;
 
-/** The runtime's global fetch, typed to the minimal shape above. */
-export const defaultFetch: FetchLike = (
-  globalThis as unknown as { fetch: FetchLike }
-).fetch;
+/** Ceiling on a single provider request. Node's fetch has no total timeout. */
+export const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
+
+/**
+ * Largest response body read before giving up.
+ *
+ * json()/text() buffer the whole body, so a hostile or malfunctioning forge
+ * could otherwise exhaust memory. Provider payloads are pages of PRs and
+ * issues; 16 MiB is far above any legitimate one.
+ */
+export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+/**
+ * The runtime's global fetch, with a total timeout and a response size bound.
+ *
+ * Redirects keep the runtime default ('follow'), which strips Authorization on
+ * a cross-origin hop — verified behaviour, and the reason a redirect is not an
+ * exfiltration path here.
+ */
+export const defaultFetch: FetchLike = async (url, init) => {
+  const rawFetch = (globalThis as unknown as { fetch: typeof globalThis.fetch }).fetch;
+
+  // Only owned when we create it, so a caller-supplied signal is not cancelled.
+  const controller = init?.signal ? undefined : new AbortController();
+  const timer = controller
+    ? setTimeout(() => controller.abort(new Error('request timed out')), DEFAULT_HTTP_TIMEOUT_MS)
+    : undefined;
+  // Node returns a Timeout with unref(); browsers return a number without it.
+  (timer as unknown as { unref?: () => void } | undefined)?.unref?.();
+
+  try {
+    const response = await rawFetch(url, {
+      method: init?.method,
+      headers: init?.headers,
+      body: init?.body,
+      signal: init?.signal ?? controller?.signal,
+    } as RequestInit);
+
+    const declared = Number(response.headers.get('content-length') ?? '');
+    if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+      throw new Error(`response too large: ${declared} bytes`);
+    }
+    return boundedResponse(response as unknown as HttpResponseLike);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Wraps a response so json()/text() refuse an oversized body even when no
+ * content-length was declared (chunked responses omit it).
+ */
+function boundedResponse(response: HttpResponseLike): HttpResponseLike {
+  let cached: string | undefined;
+  const readText = async (): Promise<string> => {
+    if (cached !== undefined) return cached;
+    const body = await response.text();
+    if (body.length > MAX_RESPONSE_BYTES) {
+      throw new Error(`response too large: ${body.length} bytes`);
+    }
+    cached = body;
+    return body;
+  };
+  return {
+    get ok() {
+      return response.ok;
+    },
+    get status() {
+      return response.status;
+    },
+    headers: response.headers,
+    text: readText,
+    json: async () => JSON.parse(await readText()) as unknown,
+  };
+}
 
 /** Header lookup over either a Headers-like object or a plain record (case-insensitive). */
 export function headerGetter(

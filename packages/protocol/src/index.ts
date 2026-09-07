@@ -14,6 +14,11 @@ import { RequestSchemas } from './schema/requests.js';
 
 export { PROTOCOL_VERSION } from './version.js';
 
+// The TypeBox schemas themselves, so consumers can validate at runtime rather
+// than only borrow the static types.
+export { models };
+export { patchEnvelopeError, schemaError } from './validate.js';
+
 /** SHA git uses for uncommitted (working tree / dirty buffer) lines. */
 export const UNCOMMITTED_SHA = '0'.repeat(40);
 

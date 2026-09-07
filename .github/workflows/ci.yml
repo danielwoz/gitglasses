@@ -250,6 +250,12 @@ jobs:
       - name: Build packages
         run: pnpm build
 
+      # The build re-emits protocol.schema.json into the working tree, so the
+      # drift test that regenerates and compares would pass even against a
+      # stale committed artifact. This is what actually catches the drift.
+      - name: Check the committed protocol schema is current
+        run: git diff --exit-code -- packages/protocol/protocol.schema.json
+
       - name: Typecheck extension
         working-directory: extension
         run: npx tsc -p tsconfig.json
