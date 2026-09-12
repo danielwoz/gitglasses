@@ -67,6 +67,14 @@ function createFixtureWorkspace(enginePath: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-'));
 
   git(root, 'init');
+  // Hermetic against the host's git config. Git for Windows ships
+  // system-level core.autocrlf=true, which would rewrite the checked-out bytes
+  // and shift every line the blame assertions depend on. The C++ fixture pins
+  // the same settings for the same reason.
+  git(root, 'config', 'core.autocrlf', 'false');
+  git(root, 'config', 'commit.gpgsign', 'false');
+  git(root, 'config', 'user.name', FIXTURE.authorName);
+  git(root, 'config', 'user.email', FIXTURE.authorEmail);
   write(root, FIXTURE.blameFile, FIXTURE.blameFileInitialContents);
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileCommittedContents);
   write(root, FIXTURE.renameSource, FIXTURE.renameContents);

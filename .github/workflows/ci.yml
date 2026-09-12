@@ -266,6 +266,85 @@ jobs:
           git config --global user.email ci@example.invalid
           pnpm test
 
+  # The extension is path-sensitive in ways only Windows exposes: the engine
+  # reports repo roots with forward slashes on every platform while VS Code's
+  # uri.fsPath uses backslashes, so a comparison that works on Linux can match
+  # nothing here and leave every path-dependent feature silently inert. Runs
+  # the unit suite and the real-VS-Code e2e suite on Windows for that reason.
+  extension-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      # VsDevCmd exports its own VCPKG_ROOT (VS-bundled vcpkg); re-point ours.
+      - name: Restore VCPKG_ROOT
+        shell: bash
+        run: echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Bootstrap vcpkg
+        shell: bash
+        run: |
+          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
+          "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/gitglasses/vcpkg_installed
+            ~/.cache/vcpkg/archives
+          key: vcpkg-windows-${{ hashFiles('vcpkg.json') }}
+
+      # The unit suite's engine-client tests and the whole e2e suite drive the
+      # real binary, so it has to be built here too.
+      - name: Build engine
+        shell: bash
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static \
+            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          cmake --preset release \
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static \
+            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed"
+          cmake --build --preset release
+
+      - name: Install workspace
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        shell: bash
+        run: pnpm build
+
+      - name: Typecheck extension
+        shell: bash
+        working-directory: extension
+        run: npx tsc -p tsconfig.json
+
+      - name: Test
+        shell: bash
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.invalid
+          pnpm test
+
+      # No xvfb wrapper: the runner has a desktop session, and headless.cjs
+      # passes straight through to node when a display is present.
+      - name: E2E test
+        shell: bash
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.invalid
+          pnpm --filter gitglasses run test:e2e
+
   extension-e2e:
     runs-on: ubuntu-22.04
     steps:

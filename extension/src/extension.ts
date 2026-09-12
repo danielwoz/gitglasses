@@ -59,12 +59,13 @@ function resolveEngineBinary(context: vscode.ExtensionContext): string | undefin
   const configured = vscode.workspace
     .getConfiguration('gitglasses')
     .get<string>('engine.path');
-  const bundled = context.asAbsolutePath(
-    path.join('bin', process.platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine'),
-  );
+  const exe = process.platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';
+  const bundled = context.asAbsolutePath(path.join('bin', exe));
   // Development fallbacks after the bundled binary: repo-local build outputs.
+  // These need the same .exe suffix as the bundled path, or running from source
+  // on Windows finds nothing and the extension disables itself.
   const dev = ['release', 'debug'].map((preset) =>
-    context.asAbsolutePath(path.join('..', 'build', preset, 'engine', 'gitglasses-engine')),
+    context.asAbsolutePath(path.join('..', 'build', preset, 'engine', exe)),
   );
   return findEngineBinary({
     configuredPath: configured || undefined,
