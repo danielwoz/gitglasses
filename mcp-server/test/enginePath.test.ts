@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveEnginePath } from '../src/engine.js';
+import { resolveEnginePath, engineBinaryName } from '../src/engine.js';
 
 const packageRoot = '/repo/mcp-server';
 const localBuild = path.resolve('/repo/build/release/engine/gitglasses-engine');
@@ -20,6 +20,7 @@ describe('resolveEnginePath', () => {
       env: { PATH: '/usr/bin' },
       exists: (candidate) => candidate === localBuild,
       packageRoot,
+      binaryName: 'gitglasses-engine',
     });
     expect(resolved).toBe(localBuild);
   });
@@ -31,6 +32,7 @@ describe('resolveEnginePath', () => {
       exists: (candidate) => candidate === hit,
       packageRoot,
       pathSeparator: ':',
+      binaryName: 'gitglasses-engine',
     });
     expect(resolved).toBe(hit);
   });
@@ -41,7 +43,16 @@ describe('resolveEnginePath', () => {
       exists: () => false,
       packageRoot,
       pathSeparator: ':',
+      binaryName: 'gitglasses-engine',
     });
     expect(resolved).toBeUndefined();
+  });
+});
+
+describe('engineBinaryName', () => {
+  it('suffixes .exe on Windows only', () => {
+    expect(engineBinaryName('win32')).toBe('gitglasses-engine.exe');
+    expect(engineBinaryName('linux')).toBe('gitglasses-engine');
+    expect(engineBinaryName('darwin')).toBe('gitglasses-engine');
   });
 });

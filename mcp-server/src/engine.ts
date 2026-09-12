@@ -62,9 +62,17 @@ export interface EnginePathOptions {
   packageRoot?: string;
   /** PATH separator, injectable for tests. Defaults to the platform's. */
   pathSeparator?: string;
+  /** Binary filename, injectable for tests. Defaults to the platform's. */
+  binaryName?: string;
 }
 
-const ENGINE_BINARY = 'gitglasses-engine';
+/**
+ * Executable name for this platform. Windows needs the .exe suffix or none of
+ * the candidate paths match and the server reports no engine at all.
+ */
+export function engineBinaryName(platform: string = process.platform): string {
+  return platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';
+}
 
 /**
  * Locate the engine binary: the GITGLASSES_ENGINE env var wins, then the
@@ -75,17 +83,18 @@ export function resolveEnginePath(options: EnginePathOptions = {}): string | und
   const exists = options.exists ?? existsSync;
   const packageRoot = options.packageRoot ?? path.resolve(import.meta.dirname, '..');
   const separator = options.pathSeparator ?? path.delimiter;
+  const binary = options.binaryName ?? engineBinaryName();
 
   if (env.GITGLASSES_ENGINE) {
     return env.GITGLASSES_ENGINE;
   }
-  const local = path.resolve(packageRoot, '..', 'build', 'release', 'engine', ENGINE_BINARY);
+  const local = path.resolve(packageRoot, '..', 'build', 'release', 'engine', binary);
   if (exists(local)) {
     return local;
   }
   for (const dir of (env.PATH ?? '').split(separator)) {
     if (dir === '') continue;
-    const candidate = path.join(dir, ENGINE_BINARY);
+    const candidate = path.join(dir, binary);
     if (exists(candidate)) {
       return candidate;
     }

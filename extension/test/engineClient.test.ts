@@ -12,8 +12,11 @@ import { BlameModel } from '../src/model/blameModel';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
+// Windows needs the .exe suffix, as the e2e runner and the extension's own
+// lookup both apply; without it nothing matches and the file fails to collect.
+const engineExe = process.platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';
 const enginePath = ['release', 'debug']
-  .map((p) => path.join(repoRoot, 'build', p, 'engine', 'gitglasses-engine'))
+  .map((p) => path.join(repoRoot, 'build', p, 'engine', engineExe))
   .find(existsSync);
 
 if (!enginePath) {
