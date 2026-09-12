@@ -197,9 +197,16 @@ TEST(Hardening, TempFileIsOwnerOnlyAndRemovedOnScopeExit) {
     ASSERT_TRUE(static_cast<bool>(file));
     path = file.value().path();
 
+#ifndef _WIN32
+    // POSIX only. Windows has no permission bits to narrow: its
+    // std::filesystem maps only the read-only attribute and synthesizes the
+    // rest as fully set, so asserting them would fail regardless of what the
+    // code did. Access there is governed by ACLs, and %TEMP% is already
+    // per-user, so the exposure this guards against does not arise.
     const auto perms = std::filesystem::status(path).permissions();
     EXPECT_EQ(perms & std::filesystem::perms::group_all, std::filesystem::perms::none);
     EXPECT_EQ(perms & std::filesystem::perms::others_all, std::filesystem::perms::none);
+#endif
     EXPECT_TRUE(std::filesystem::exists(path));
   }
   EXPECT_FALSE(std::filesystem::exists(path)) << "temp file outlived its scope";
