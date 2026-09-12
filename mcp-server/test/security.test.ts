@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   configuredGitHubHost,
@@ -101,29 +102,41 @@ describe('isPlainHostname', () => {
 
 // Without a bound, any path grants the repository containing it, because
 // repo/discover walks upwards.
+//
+// Paths are built with path.join/path.delimiter rather than POSIX literals:
+// the delimiter is ";" on Windows and path.resolve makes paths drive-relative
+// there, so hardcoded "/a:/b" strings describe nothing the code would see.
 describe('repository containment', () => {
-  const roots = parseAllowedRoots(['/srv/work', '/home/u/code'].join(':'));
+  const base = path.resolve('containment-fixture');
+  const work = path.join(base, 'work');
+  const code = path.join(base, 'code');
+  const roots = parseAllowedRoots([work, code].join(path.delimiter));
+
+  it('parses each entry to an absolute path', () => {
+    expect(roots).toEqual([work, code]);
+  });
 
   it('allows a root and paths inside it', () => {
-    expect(isWithinAllowedRoots('/srv/work', roots)).toBe(true);
-    expect(isWithinAllowedRoots('/srv/work/repoA', roots)).toBe(true);
-    expect(isWithinAllowedRoots('/home/u/code/x/y', roots)).toBe(true);
+    expect(isWithinAllowedRoots(work, roots)).toBe(true);
+    expect(isWithinAllowedRoots(path.join(work, 'repoA'), roots)).toBe(true);
+    expect(isWithinAllowedRoots(path.join(code, 'x', 'y'), roots)).toBe(true);
   });
 
   it('blocks traversal back out of a root', () => {
-    expect(isWithinAllowedRoots('/srv/work/../secret', roots)).toBe(false);
+    expect(isWithinAllowedRoots(path.join(work, '..', 'secret'), roots)).toBe(false);
   });
 
   it('blocks a sibling sharing a name prefix', () => {
-    expect(isWithinAllowedRoots('/srv/workshop/z', roots)).toBe(false);
+    expect(isWithinAllowedRoots(path.join(base, 'workshop', 'z'), roots)).toBe(false);
   });
 
   it('blocks unrelated paths', () => {
-    expect(isWithinAllowedRoots('/etc', roots)).toBe(false);
+    expect(isWithinAllowedRoots(path.resolve('somewhere-else'), roots)).toBe(false);
   });
 
   it('is unrestricted when unset, preserving existing setups', () => {
     expect(parseAllowedRoots(undefined)).toEqual([]);
-    expect(isWithinAllowedRoots('/anything', [])).toBe(true);
+    expect(parseAllowedRoots('   ')).toEqual([]);
+    expect(isWithinAllowedRoots(path.resolve('anything'), [])).toBe(true);
   });
 });
