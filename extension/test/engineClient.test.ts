@@ -1,7 +1,7 @@
 // Integration tests against the real engine binary — the same contract the
 // extension host exercises, minus VS Code.
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -30,13 +30,20 @@ function makeFixtureRepo(): string {
     GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z',
     GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z',
   };
-  const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: root, env });
-  git('init -q -b main');
-  git('config user.name Fixture');
-  git('config user.email fixture@example.invalid');
+  // argv array, not a shell string: cmd.exe does not strip the single quotes
+  // that sh does, so a quoted commit message arrived with the quotes embedded.
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root, env });
+  git('init', '-q', '-b', 'main');
+  // Hermetic against the host: Git for Windows sets core.autocrlf=true
+  // system-wide, which would rewrite the checked-out bytes the blame
+  // assertions depend on.
+  git('config', 'core.autocrlf', 'false');
+  git('config', 'commit.gpgsign', 'false');
+  git('config', 'user.name', 'Fixture');
+  git('config', 'user.email', 'fixture@example.invalid');
   writeFileSync(path.join(root, 'file.txt'), 'one\ntwo\nthree\n');
-  git('add file.txt');
-  git("commit -q -m 'initial'");
+  git('add', 'file.txt');
+  git('commit', '-q', '-m', 'initial');
   return root;
 }
 
