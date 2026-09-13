@@ -3,7 +3,13 @@ import { AuthError, NotSupportedError } from '../errors.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
 import type { Account, AutolinkPattern, Issue } from '../models.js';
-import { base64Encode, slugify, throwForStatus , assertPlainHost} from './shared.js';
+import {
+  assertPlainHost,
+  assertSecureBaseUrl,
+  base64Encode,
+  slugify,
+  throwForStatus,
+} from './shared.js';
 
 export interface JiraProviderOptions {
   /** Cloud site name, e.g. "acme" for https://acme.atlassian.net. */
@@ -74,7 +80,9 @@ export class JiraProvider implements IssueProvider {
     if (!baseUrl) {
       throw new Error('JiraProvider requires either a site name or a baseUrl');
     }
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    // Basic auth sends a reversible credential, so the transport must be
+    // encrypted.
+    this.baseUrl = assertSecureBaseUrl(baseUrl.replace(/\/+$/, ''), 'Jira baseUrl');
     this.autolinkPattern = {
       regex: JIRA_ISSUE_KEY_REGEX,
       urlTemplate: `${this.baseUrl}/browse/$1`,

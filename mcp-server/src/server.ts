@@ -2,6 +2,7 @@
 // hosting-provider integrations, and their registration on an McpServer.
 
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -22,8 +23,11 @@ import {
   formatGraph,
   formatHistory,
   formatLaunchpad,
+  formatPatchEnvelope,
   formatStatus,
+  parsePatchEnvelopeText,
   parsePatchSource,
+  truncateText,
 } from './format.js';
 
 /**
@@ -77,14 +81,44 @@ export function parseAllowedRoots(raw: string | undefined): string[] {
     .split(path.delimiter)
     .map((entry) => entry.trim())
     .filter((entry) => entry !== '')
-    .map((entry) => path.resolve(entry));
+    .map((entry) => canonicalPath(entry));
 }
 
-/** True when `target` is one of `roots` or sits inside one. */
+/**
+ * `target` as an absolute path with every symlink resolved. When the path does
+ * not exist, the deepest existing ancestor is resolved and the remaining
+ * segments appended, so a symlinked parent directory is still followed.
+ *
+ * Containment compares canonical paths on both sides: a lexical comparison
+ * accepts a symlink inside a root that points outside it.
+ */
+export function canonicalPath(target: string): string {
+  const resolved = path.resolve(target);
+  const remainder: string[] = [];
+  let current = resolved;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(current), ...remainder);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return resolved;
+      remainder.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * True when `target` is one of `roots` or sits inside one.
+ *
+ * Both sides are canonicalised here: a symlink under an allowed root resolves
+ * outside it, and a lexical comparison would admit it.
+ */
 export function isWithinAllowedRoots(target: string, roots: readonly string[]): boolean {
   if (roots.length === 0) return true;
+  const resolved = canonicalPath(target);
   return roots.some((root) => {
-    const relative = path.relative(root, target);
+    const relative = path.relative(canonicalPath(root), resolved);
     // Empty means target === root; a leading ".." or an absolute result means
     // it escaped. path.relative already normalises the "repoA/../secret" case.
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -95,6 +129,16 @@ export function isWithinAllowedRoots(target: string, roots: readonly string[]): 
 export const DEFAULT_BLAME_HUNKS = 200;
 /** Hard ceiling, mirroring the limit the other tools accept. */
 export const MAX_BLAME_HUNKS = 500;
+
+/** Characters a text result carries when the caller does not ask for more. */
+export const DEFAULT_RESULT_CHARS = 20_000;
+/** Ceiling a caller may raise the character limit to. */
+export const MAX_RESULT_CHARS = 200_000;
+
+/** The character limit for one call, clamped to MAX_RESULT_CHARS. */
+function resultChars(maxChars: number | undefined): number {
+  return Math.min(maxChars ?? DEFAULT_RESULT_CHARS, MAX_RESULT_CHARS);
+}
 
 export interface ToolContext {
   client: EngineClient;
@@ -119,7 +163,7 @@ export function createToolHandlers(context: ToolContext) {
   const allowedRoots = parseAllowedRoots(env.GITGLASSES_ALLOWED_ROOTS);
 
   function repoIdFor(repoPath: string): Promise<string> {
-    const key = path.resolve(repoPath);
+    const key = canonicalPath(repoPath);
     if (!isWithinAllowedRoots(key, allowedRoots)) {
       throw new Error(
         `path is outside GITGLASSES_ALLOWED_ROOTS: ${key}. ` +
@@ -234,7 +278,11 @@ export function createToolHandlers(context: ToolContext) {
       return formatHistory(args.file, result.entries);
     },
 
-    async git_commit_show(args: { repoPath: string; sha: string }): Promise<string> {
+    async git_commit_show(args: {
+      repoPath: string;
+      sha: string;
+      maxChars?: number;
+    }): Promise<string> {
       const repoId = await repoIdFor(args.repoPath);
       const [page, diff] = await Promise.all([
         client.request('log/commits', { repoId, ref: args.sha, limit: 1 }),
@@ -242,7 +290,11 @@ export function createToolHandlers(context: ToolContext) {
       ]);
       const commit = page.commits[0];
       if (!commit) throw new Error(`Commit ${args.sha} not found`);
-      return formatCommitShow(commit, diff.files);
+      return truncateText(
+        formatCommitShow(commit, diff.files),
+        resultChars(args.maxChars),
+        'a commit touching this many files; pass a higher "maxChars"',
+      );
     },
 
     async git_graph_summary(args: { repoPath: string; limit: number }): Promise<string> {
@@ -255,25 +307,48 @@ export function createToolHandlers(context: ToolContext) {
       return formatGraph(result.rows);
     },
 
-    async git_status(args: { repoPath: string }): Promise<string> {
+    async git_status(args: { repoPath: string; maxChars?: number }): Promise<string> {
       const repoId = await repoIdFor(args.repoPath);
       const status = await client.request('status/summary', { repoId });
-      return formatStatus(status);
+      return truncateText(
+        formatStatus(status),
+        resultChars(args.maxChars),
+        'pass a higher "maxChars"',
+      );
     },
 
-    async create_patch(args: { repoPath: string; source: string }): Promise<string> {
+    async create_patch(args: {
+      repoPath: string;
+      source: string;
+      maxChars?: number;
+    }): Promise<string> {
       const source = parsePatchSource(args.source);
       const repoId = await repoIdFor(args.repoPath);
       const result = await client.request('patch/create', { repoId, source });
-      return JSON.stringify(result.envelope, null, 2);
+      return truncateText(
+        formatPatchEnvelope(result.envelope),
+        resultChars(args.maxChars),
+        'a truncated patch cannot be applied; pass a higher "maxChars"',
+      );
     },
 
     async apply_patch(args: { repoPath: string; envelopeJson: string }): Promise<string> {
       let envelope: PatchEnvelope;
-      try {
-        envelope = JSON.parse(args.envelopeJson) as PatchEnvelope;
-      } catch {
-        throw new Error('envelopeJson is not valid JSON');
+      // Two accepted forms: a JSON envelope, or the metadata lines plus raw
+      // patch that create_patch returns.
+      if (args.envelopeJson.trimStart().startsWith('{')) {
+        try {
+          envelope = JSON.parse(args.envelopeJson) as PatchEnvelope;
+        } catch {
+          throw new Error('envelopeJson is not valid JSON');
+        }
+      } else {
+        try {
+          envelope = parsePatchEnvelopeText(args.envelopeJson);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`envelopeJson is not create_patch output: ${message}`);
+        }
       }
       // The envelope is agent-supplied and was forwarded to the engine after a
       // single format check. The engine rejects a malformed one, but a local
@@ -329,6 +404,19 @@ function asToolResult<A>(fn: (args: A) => Promise<string>): (args: A) => Promise
 
 const repoPath = z.string().describe('Absolute path to (or inside) the git repository');
 
+const maxChars = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_RESULT_CHARS)
+  .optional()
+  .describe(
+    `Maximum characters to return before truncation (default ${DEFAULT_RESULT_CHARS}, max ${MAX_RESULT_CHARS})`,
+  );
+
+/** Tools that only read the repository and the hosting provider. */
+const readOnly = { readOnlyHint: true } as const;
+
 export function createServer(context: ToolContext): McpServer {
   const handlers = createToolHandlers(context);
   const server = new McpServer({ name: 'gitglasses', version: '0.1.0' });
@@ -350,6 +438,7 @@ export function createServer(context: ToolContext): McpServer {
           .optional()
           .describe(`Maximum blame hunks to return (default ${DEFAULT_BLAME_HUNKS})`),
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_blame),
   );
@@ -365,6 +454,7 @@ export function createServer(context: ToolContext): McpServer {
         sha: z.string().optional().describe('Commit sha (prefix) filter'),
         limit: z.number().int().min(1).max(500).default(20),
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_log_search),
   );
@@ -378,6 +468,7 @@ export function createServer(context: ToolContext): McpServer {
         file: z.string().describe('File path relative to the repository root'),
         limit: z.number().int().min(1).max(500).default(20),
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_file_history),
   );
@@ -386,7 +477,12 @@ export function createServer(context: ToolContext): McpServer {
     'git_commit_show',
     {
       description: 'Commit metadata plus changed files with addition/deletion counts.',
-      inputSchema: { repoPath, sha: z.string().describe('Commit sha (or unique prefix)') },
+      inputSchema: {
+        repoPath,
+        sha: z.string().describe('Commit sha (or unique prefix)'),
+        maxChars,
+      },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_commit_show),
   );
@@ -396,6 +492,7 @@ export function createServer(context: ToolContext): McpServer {
     {
       description: 'Text rendering of the commit graph: lane-indented sha, summary and refs.',
       inputSchema: { repoPath, limit: z.number().int().min(1).max(500).default(30) },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_graph_summary),
   );
@@ -404,7 +501,8 @@ export function createServer(context: ToolContext): McpServer {
     'git_status',
     {
       description: 'Branch, ahead/behind, staged, unstaged, untracked and conflicted files.',
-      inputSchema: { repoPath },
+      inputSchema: { repoPath, maxChars },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_status),
   );
@@ -413,11 +511,13 @@ export function createServer(context: ToolContext): McpServer {
     'create_patch',
     {
       description:
-        "Create a shareable gitglasses patch envelope (JSON) from 'wip', 'stash:<n>' or 'commit:<sha>'.",
+        "Create a shareable gitglasses patch from 'wip', 'stash:<n>' or 'commit:<sha>': envelope metadata lines followed by the raw patch.",
       inputSchema: {
         repoPath,
         source: z.string().describe("Patch source: 'wip', 'stash:<n>' or 'commit:<sha>'"),
+        maxChars,
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.create_patch),
   );
@@ -425,11 +525,15 @@ export function createServer(context: ToolContext): McpServer {
   server.registerTool(
     'apply_patch',
     {
-      description: 'Apply a gitglasses patch envelope (JSON string) to the repository.',
+      description:
+        'Apply a gitglasses patch to the repository, writing to the working tree.',
       inputSchema: {
         repoPath,
-        envelopeJson: z.string().describe('Patch envelope JSON produced by create_patch'),
+        envelopeJson: z
+          .string()
+          .describe('create_patch output, or an equivalent patch envelope as JSON'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     asToolResult(handlers.apply_patch),
   );
@@ -442,6 +546,7 @@ export function createServer(context: ToolContext): McpServer {
       inputSchema: {
         provider: z.literal('github'),
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.list_my_prs),
   );

@@ -17,7 +17,14 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { base64Encode, hostOfUrl, throwForStatus , tokenFingerprint} from './shared.js';
+import {
+  assertPlainHost,
+  assertSecureBaseUrl,
+  base64Encode,
+  hostOfUrl,
+  throwForStatus,
+  tokenFingerprint,
+} from './shared.js';
 
 const API_VERSION = '7.1';
 
@@ -149,9 +156,14 @@ export class AzureDevOpsProvider implements HostingProvider {
 
   constructor(options: AzureDevOpsProviderOptions) {
     this.id = options.id ?? 'azuredevops';
-    this.organization = options.organization;
+    // The organization is the first path segment of every credentialed
+    // request, so it is restricted to the same bare-label form a hostname has.
+    this.organization = assertPlainHost(options.organization, 'Azure DevOps organization');
     this.project = options.project;
-    this.baseUrl = (options.baseUrl ?? 'https://dev.azure.com').replace(/\/+$/, '');
+    this.baseUrl = assertSecureBaseUrl(
+      (options.baseUrl ?? 'https://dev.azure.com').replace(/\/+$/, ''),
+      'Azure DevOps baseUrl'
+    );
     this.host = hostOfUrl(this.baseUrl);
     this.fetchFn = options.fetchFn ?? governedFetch;
   }

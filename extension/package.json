@@ -29,6 +29,23 @@
   "extensionKind": [
     "workspace"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Blame, history and the commit graph work in Restricted Mode. Settings that choose an executable, a network endpoint or a link target are taken from user settings only.",
+      "restrictedConfigurations": [
+        "gitglasses.engine.path",
+        "gitglasses.web.maxRepoBytes",
+        "gitglasses.integrations.hosts",
+        "gitglasses.integrations.issues",
+        "gitglasses.ai.provider",
+        "gitglasses.ai.model",
+        "gitglasses.ai.openai.baseUrl",
+        "gitglasses.ai.ollama.host",
+        "gitglasses.autolinks"
+      ]
+    }
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -673,6 +690,7 @@
       "properties": {
         "gitglasses.mode": {
           "type": "string",
+          "scope": "window",
           "enum": [
             "normal",
             "zen",
@@ -688,31 +706,37 @@
         },
         "gitglasses.currentLine.enabled": {
           "type": "boolean",
+          "scope": "window",
           "default": true,
           "description": "Show blame annotation for the current line"
         },
         "gitglasses.fileAnnotations.dateFormat": {
           "type": "string",
+          "scope": "window",
           "default": "relative",
           "description": "Date format for file annotations (only 'relative' is supported for now)"
         },
         "gitglasses.codeLens.enabled": {
           "type": "boolean",
+          "scope": "window",
           "default": true,
           "description": "Show git blame CodeLens above files and top-level symbols"
         },
         "gitglasses.engine.path": {
           "type": "string",
+          "scope": "machine-overridable",
           "default": "",
           "description": "Path to gitglasses-engine (defaults to the bundled binary)"
         },
         "gitglasses.web.maxRepoBytes": {
           "type": "number",
+          "scope": "machine-overridable",
           "default": 209715200,
           "description": "Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB)"
         },
         "gitglasses.engine.logLevel": {
           "type": "string",
+          "scope": "window",
           "enum": [
             "trace",
             "debug",
@@ -725,6 +749,7 @@
         },
         "gitglasses.integrations.hosts": {
           "type": "array",
+          "scope": "machine-overridable",
           "default": [],
           "description": "Self-hosted git hosting instances, e.g. [{ \"domain\": \"github.example.com\", \"provider\": \"github-enterprise\" }]",
           "items": {
@@ -747,6 +772,7 @@
         },
         "gitglasses.integrations.issues": {
           "type": "array",
+          "scope": "machine-overridable",
           "default": [],
           "description": "Issue tracker integrations, e.g. [{ \"provider\": \"jira\", \"host\": \"mycompany.atlassian.net\" }]",
           "items": {
@@ -768,6 +794,7 @@
         },
         "gitglasses.ai.provider": {
           "type": "string",
+          "scope": "machine-overridable",
           "enum": [
             "vscode-lm",
             "anthropic",
@@ -787,21 +814,25 @@
         },
         "gitglasses.ai.model": {
           "type": "string",
+          "scope": "machine-overridable",
           "default": "",
           "description": "Model id for the selected AI provider (empty = provider default)"
         },
         "gitglasses.ai.openai.baseUrl": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Base URL for OpenAI-compatible endpoints (empty = https://api.openai.com/v1)"
         },
         "gitglasses.ai.ollama.host": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Ollama server URL (empty = http://localhost:11434)"
         },
         "gitglasses.autolinks": {
           "type": "array",
+          "scope": "machine-overridable",
           "default": [],
           "description": "Custom autolink patterns applied to commit messages, e.g. [{ \"regex\": \"TICKET-(\\\\d+)\", \"urlTemplate\": \"https://tracker.example.com/browse/TICKET-$1\" }]",
           "items": {

@@ -1,6 +1,9 @@
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  canonicalPath,
   configuredGitHubHost,
   createToolHandlers,
   isPlainHostname,
@@ -138,5 +141,97 @@ describe('repository containment', () => {
     expect(parseAllowedRoots(undefined)).toEqual([]);
     expect(parseAllowedRoots('   ')).toEqual([]);
     expect(isWithinAllowedRoots(path.resolve('anything'), [])).toBe(true);
+  });
+});
+
+// path.resolve collapses "..", but it does not follow symlinks, so a lexical
+// comparison accepts a link inside a root that resolves outside it.
+describe('symlinked repository containment', () => {
+  let base: string;
+  let jail: string;
+  let secret: string;
+  let escaping: string;
+  let internal: string;
+
+  beforeAll(() => {
+    base = canonicalPath(mkdtempSync(path.join(os.tmpdir(), 'gitglasses-roots-')));
+    jail = path.join(base, 'jail');
+    secret = path.join(base, 'elsewhere', 'secret');
+    mkdirSync(path.join(jail, 'proj'), { recursive: true });
+    mkdirSync(path.join(jail, 'other'), { recursive: true });
+    mkdirSync(secret, { recursive: true });
+    writeFileSync(path.join(secret, 'marker'), 'secret\n');
+    escaping = path.join(jail, 'proj', 'link');
+    symlinkSync(secret, escaping, 'junction');
+    internal = path.join(jail, 'proj', 'sibling');
+    symlinkSync(path.join(jail, 'other'), internal, 'junction');
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('resolves a symlink to its target', () => {
+    expect(canonicalPath(escaping)).toBe(secret);
+    expect(canonicalPath(path.join(escaping, 'nested', 'deeper'))).toBe(
+      path.join(secret, 'nested', 'deeper'),
+    );
+  });
+
+  it('blocks a symlink pointing out of a root', () => {
+    const roots = parseAllowedRoots(jail);
+    expect(isWithinAllowedRoots(canonicalPath(escaping), roots)).toBe(false);
+    expect(isWithinAllowedRoots(canonicalPath(path.join(escaping, 'inner')), roots)).toBe(
+      false,
+    );
+  });
+
+  it('allows a symlink that stays inside a root', () => {
+    const roots = parseAllowedRoots(jail);
+    expect(isWithinAllowedRoots(canonicalPath(internal), roots)).toBe(true);
+    expect(isWithinAllowedRoots(canonicalPath(path.join(internal, 'inner')), roots)).toBe(
+      true,
+    );
+  });
+
+  it('canonicalises the roots too, so a symlinked root still matches', () => {
+    const linkedRoot = path.join(base, 'jail-link');
+    symlinkSync(jail, linkedRoot, 'junction');
+    const roots = parseAllowedRoots(linkedRoot);
+    expect(roots).toEqual([jail]);
+    expect(isWithinAllowedRoots(canonicalPath(path.join(jail, 'proj')), roots)).toBe(true);
+  });
+
+  it('keeps a non-existent path lexical rather than allowing it', () => {
+    const missing = path.join(base, 'no-such-dir', 'repo');
+    expect(canonicalPath(missing)).toBe(missing);
+    expect(isWithinAllowedRoots(missing, parseAllowedRoots(jail))).toBe(false);
+  });
+
+  it('rejects a tool call naming a path that symlinks out of a root', async () => {
+    const handlers = createToolHandlers({
+      client: {} as never,
+      env: { GITGLASSES_ALLOWED_ROOTS: jail },
+    });
+    await expect(handlers.git_status({ repoPath: escaping })).rejects.toThrow(
+      /outside GITGLASSES_ALLOWED_ROOTS/,
+    );
+  });
+
+  it('lets a tool call through when the symlink stays inside a root', async () => {
+    const requested: string[] = [];
+    const handlers = createToolHandlers({
+      client: {
+        request: async (_method: string, params: { path: string }) => {
+          requested.push(params.path);
+          throw new Error('reached the engine');
+        },
+      } as never,
+      env: { GITGLASSES_ALLOWED_ROOTS: jail },
+    });
+    await expect(handlers.git_status({ repoPath: internal })).rejects.toThrow(
+      'reached the engine',
+    );
+    expect(requested).toEqual([path.join(jail, 'other')]);
   });
 });

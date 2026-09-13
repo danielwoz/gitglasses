@@ -9,9 +9,24 @@ import {
   type FileChange,
   type FileHistoryEntry,
   type GraphRow,
+  type PatchEnvelope,
   type RequestResult,
 } from '@gitglasses/protocol';
 import type { LaunchpadGroup } from '@gitglasses/integrations';
+
+/** Trailing marker a truncated result carries. */
+const TRUNCATION_FOOTER = /\n\n\(truncated to \d+ characters; [^\n]*\)$/;
+
+/**
+ * `text` cut to `limit` characters on a line boundary, with a footer naming
+ * the limit and `hint` when anything was dropped.
+ */
+export function truncateText(text: string, limit: number, hint: string): string {
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  const lastNewline = cut.lastIndexOf('\n');
+  return `${lastNewline > 0 ? cut.slice(0, lastNewline) : cut}\n\n(truncated to ${limit} characters; ${hint})`;
+}
 
 export function shortSha(sha: string): string {
   return sha.slice(0, 7);
@@ -182,6 +197,57 @@ export function parsePatchSource(source: string): PatchSourceParam {
     return { kind: 'commit', sha: commit[1] };
   }
   throw new Error(`Invalid patch source "${source}"; expected 'wip', 'stash:<n>' or 'commit:<sha>'`);
+}
+
+/** Line separating envelope metadata from the raw patch text. */
+export const PATCH_BODY_DELIMITER = '--- patch ---';
+
+/** Envelope fields rendered as metadata, in order. `patch` follows the delimiter. */
+const ENVELOPE_METADATA_FIELDS = [
+  'format',
+  'version',
+  'baseSha',
+  'branch',
+  'summary',
+  'remoteFingerprint',
+  'createdAtIso',
+] as const;
+
+/**
+ * An envelope as metadata lines followed by the raw patch. Metadata values are
+ * JSON so each occupies exactly one line; the patch keeps its real newlines.
+ */
+export function formatPatchEnvelope(envelope: PatchEnvelope): string {
+  const lines = ENVELOPE_METADATA_FIELDS.filter(
+    (field) => envelope[field] !== undefined,
+  ).map((field) => `${field}: ${JSON.stringify(envelope[field])}`);
+  return [...lines, PATCH_BODY_DELIMITER, envelope.patch].join('\n');
+}
+
+/** Read back the rendering `formatPatchEnvelope` produces. */
+export function parsePatchEnvelopeText(text: string): PatchEnvelope {
+  if (TRUNCATION_FOOTER.test(text)) {
+    throw new Error('the patch is truncated; re-run create_patch with a higher "maxChars"');
+  }
+  const marker = `\n${PATCH_BODY_DELIMITER}\n`;
+  const split = text.indexOf(marker);
+  if (split < 0) {
+    throw new Error(`no "${PATCH_BODY_DELIMITER}" line`);
+  }
+  const envelope: Record<string, unknown> = {};
+  for (const line of text.slice(0, split).split('\n')) {
+    const field = /^([A-Za-z]+): (.*)$/.exec(line);
+    if (!field) {
+      throw new Error(`not a "field: value" line: ${JSON.stringify(line)}`);
+    }
+    try {
+      envelope[field[1]] = JSON.parse(field[2]);
+    } catch {
+      throw new Error(`field "${field[1]}" is not a JSON value`);
+    }
+  }
+  envelope.patch = text.slice(split + marker.length);
+  return envelope as PatchEnvelope;
 }
 
 // --- launchpad ---------------------------------------------------------------

@@ -3,7 +3,7 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -68,6 +68,40 @@ describe.skipIf(!enginePath)('engine integration', () => {
     expect(text).toContain('Test Author');
     expect(text).toContain('Initial commit');
     expect(text).toMatch(/L1-3 [0-9a-f]{7} /);
+  });
+
+  it('round-trips a work-in-progress patch through create_patch and apply_patch', async () => {
+    const file = path.join(repoDir, 'hello.txt');
+    // A "wip" patch includes untracked files, and applying it back would
+    // collide with the fixture's own untracked file.
+    await rm(path.join(repoDir, 'untracked.txt'), { force: true });
+    await writeFile(file, 'one\nTWO\nthree\n');
+    const patch = await handlers.create_patch({ repoPath: repoDir, source: 'wip' });
+    expect(patch).toContain('format: "gitglasses-patch"');
+    // The patch keeps its real newlines rather than arriving JSON-escaped.
+    expect(patch).toContain('\n--- patch ---\n');
+    expect(patch).not.toContain('\\n');
+
+    git(repoDir, 'checkout', '--', 'hello.txt');
+    const applied = await handlers.apply_patch({ repoPath: repoDir, envelopeJson: patch });
+    expect(applied).toContain('applied: true');
+    expect(await readFile(file, 'utf8')).toBe('one\nTWO\nthree\n');
+
+    git(repoDir, 'checkout', '--', 'hello.txt');
+  });
+
+  it('refuses to apply a truncated patch', async () => {
+    await writeFile(path.join(repoDir, 'hello.txt'), 'one\nTWO\nthree\n');
+    const patch = await handlers.create_patch({
+      repoPath: repoDir,
+      source: 'wip',
+      maxChars: 200,
+    });
+    expect(patch).toMatch(/\(truncated to 200 characters;/);
+    await expect(
+      handlers.apply_patch({ repoPath: repoDir, envelopeJson: patch }),
+    ).rejects.toThrow(/truncated/);
+    git(repoDir, 'checkout', '--', 'hello.txt');
   });
 
   it('surfaces engine errors as plain messages', async () => {

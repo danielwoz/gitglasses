@@ -8,8 +8,11 @@ import {
   formatGraph,
   formatHistory,
   formatLaunchpad,
+  formatPatchEnvelope,
   formatStatus,
+  parsePatchEnvelopeText,
   parsePatchSource,
+  truncateText,
 } from '../src/format.js';
 
 const sig = (name: string, time: number) => ({ name, email: `${name}@example.com`, time });
@@ -268,5 +271,75 @@ describe('formatLaunchpad', () => {
       'waiting (1):',
       '  #7 Fix login [o/r] by alice https://github.com/o/r/pull/7',
     ]);
+  });
+});
+
+describe('truncateText', () => {
+  const text = 'one\ntwo\nthree\n';
+
+  it('returns text that fits unchanged', () => {
+    expect(truncateText(text, 100, 'raise it')).toBe(text);
+  });
+
+  it('cuts on a line boundary and names the limit', () => {
+    expect(truncateText(text, 8, 'raise it')).toBe(
+      'one\ntwo\n\n(truncated to 8 characters; raise it)',
+    );
+  });
+
+  it('cuts mid-line when the first line already exceeds the limit', () => {
+    expect(truncateText('averylongline\nnext', 5, 'raise it')).toBe(
+      'avery\n\n(truncated to 5 characters; raise it)',
+    );
+  });
+});
+
+describe('patch envelope rendering', () => {
+  const envelope = {
+    format: 'gitglasses-patch',
+    version: 1,
+    baseSha: 'c'.repeat(40),
+    branch: 'feature/x',
+    summary: 'Fix the parser',
+    patch: 'diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-one\n+two\n',
+    createdAtIso: '2024-05-01T00:00:00Z',
+  } as const;
+
+  it('renders metadata as lines and the patch with real newlines', () => {
+    const text = formatPatchEnvelope(envelope);
+    expect(text.split('\n').slice(0, 7)).toEqual([
+      'format: "gitglasses-patch"',
+      'version: 1',
+      `baseSha: "${'c'.repeat(40)}"`,
+      'branch: "feature/x"',
+      'summary: "Fix the parser"',
+      'createdAtIso: "2024-05-01T00:00:00Z"',
+      '--- patch ---',
+    ]);
+    expect(text).toContain('\n-one\n+two\n');
+    expect(text).not.toContain('\\n');
+  });
+
+  it('omits fields the envelope does not carry', () => {
+    const { branch: _branch, ...rest } = envelope;
+    expect(formatPatchEnvelope(rest)).not.toContain('branch:');
+  });
+
+  it('round-trips through parsePatchEnvelopeText', () => {
+    expect(parsePatchEnvelopeText(formatPatchEnvelope(envelope))).toEqual(envelope);
+  });
+
+  it('round-trips a multi-line summary', () => {
+    const multiline = { ...envelope, summary: 'Fix the parser\n\nand the lexer' };
+    expect(parsePatchEnvelopeText(formatPatchEnvelope(multiline))).toEqual(multiline);
+  });
+
+  it('refuses a truncated rendering', () => {
+    const text = truncateText(formatPatchEnvelope(envelope), 140, 'pass a higher "maxChars"');
+    expect(() => parsePatchEnvelopeText(text)).toThrow(/truncated/);
+  });
+
+  it('rejects text that is not a rendering', () => {
+    expect(() => parsePatchEnvelopeText('nothing to see')).toThrow(/--- patch ---/);
   });
 });

@@ -28,7 +28,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { hostOfUrl, throwForStatus , tokenFingerprint} from './shared.js';
+import { assertSecureBaseUrl, hostOfUrl, throwForStatus , tokenFingerprint} from './shared.js';
 
 export interface GitLabProviderOptions {
   /** Provider id used in RepoDescriptors. Default "gitlab". */
@@ -159,13 +159,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
   constructor(options: GitLabProviderOptions = {}) {
     this.id = options.id ?? 'gitlab';
     const baseUrl = (options.baseUrl ?? 'https://gitlab.com').replace(/\/+$/, '');
-    // A plaintext base URL would put the token on the wire in the clear.
-    if (!/^https:\/\//i.test(baseUrl) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(baseUrl)) {
-      throw new Error(
-        `GitLab baseUrl must use https (loopback may use http), got ${JSON.stringify(baseUrl)}`,
-      );
-    }
-    this.baseUrl = baseUrl;
+    this.baseUrl = assertSecureBaseUrl(baseUrl, 'GitLab baseUrl');
     this.host = hostOfUrl(this.baseUrl);
     this.fetchFn = options.fetchFn ?? governedFetch;
   }

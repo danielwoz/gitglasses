@@ -16,7 +16,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { hostOfUrl, throwForStatus } from './shared.js';
+import { assertSecureBaseUrl, hostOfUrl, throwForStatus } from './shared.js';
 
 export interface BitbucketDCProviderOptions {
   /** Instance base URL, e.g. "https://git.corp.example". Required. */
@@ -114,7 +114,10 @@ export class BitbucketDCProvider implements HostingProvider {
 
   constructor(options: BitbucketDCProviderOptions) {
     this.id = options.id ?? 'bitbucket-dc';
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.baseUrl = assertSecureBaseUrl(
+      options.baseUrl.replace(/\/+$/, ''),
+      'Bitbucket Data Center baseUrl'
+    );
     this.host = hostOfUrl(this.baseUrl);
     this.fetchFn = options.fetchFn ?? governedFetch;
   }

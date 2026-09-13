@@ -3,6 +3,7 @@
 // cheap and offline-safe, so everything here is string work only.
 
 import type { AutolinkPattern } from '@gitglasses/integrations';
+import { escapeMarkdown, markdownLinkDestination } from '../system/markdown';
 
 interface LinkedRange {
   start: number;
@@ -10,13 +11,22 @@ interface LinkedRange {
   replacement: string;
 }
 
-/** Fills $1, $2, ... in a URL template from regex capture groups ($0 = whole match). */
+/**
+ * Fills $1, $2, ... in a URL template from regex capture groups ($0 = whole
+ * match). Group values come from repository text, so they are percent-encoded
+ * and land in one path/query segment of the template's URL.
+ */
 function fillTemplate(template: string, match: RegExpMatchArray): string {
-  return template.replace(/\$(\d+)/g, (_all, index: string) => match[Number(index)] ?? '');
+  return template.replace(/\$(\d+)/g, (_all, index: string) =>
+    encodeURIComponent(match[Number(index)] ?? ''),
+  );
 }
 
 /**
- * Replace every pattern match in `text` with a markdown link `[match](url)`.
+ * Render `text` as markdown, replacing every pattern match with a link
+ * `[match](url)`. Text outside a match is escaped and so is the link text, so
+ * the result carries no markup the repository put there.
+ *
  * Patterns are applied in order; when matches overlap, the earlier pattern in
  * the list wins and later overlapping matches are skipped. Invalid regexes are
  * ignored so one bad user-configured pattern never breaks the rest.
@@ -35,22 +45,23 @@ export function applyAutolinks(text: string, patterns: readonly AutolinkPattern[
       const end = start + match[0].length;
       if (match[0].length === 0) continue;
       if (ranges.some((taken) => start < taken.end && end > taken.start)) continue;
+      const destination = markdownLinkDestination(fillTemplate(pattern.urlTemplate, match));
       ranges.push({
         start,
         end,
-        replacement: `[${match[0]}](${fillTemplate(pattern.urlTemplate, match)})`,
+        replacement: `[${escapeMarkdown(match[0])}](${destination})`,
       });
     }
   }
-  if (ranges.length === 0) return text;
+  if (ranges.length === 0) return escapeMarkdown(text);
   ranges.sort((a, b) => a.start - b.start);
   let result = '';
   let cursor = 0;
   for (const range of ranges) {
-    result += text.slice(cursor, range.start) + range.replacement;
+    result += escapeMarkdown(text.slice(cursor, range.start)) + range.replacement;
     cursor = range.end;
   }
-  return result + text.slice(cursor);
+  return result + escapeMarkdown(text.slice(cursor));
 }
 
 /** Default #123 pattern for a GitHub/GitLab-style repo. */
@@ -77,7 +88,11 @@ export function jiraPattern(host: string): AutolinkPattern {
   };
 }
 
-/** Validate user-configured autolink settings into safe patterns. */
+/**
+ * Validate user-configured autolink settings into safe patterns. A template is
+ * kept only when it is an http(s) URL: the template becomes the target of a
+ * link the user clicks, and any other scheme is a different kind of action.
+ */
 export function userPatterns(raw: unknown): AutolinkPattern[] {
   if (!Array.isArray(raw)) return [];
   const patterns: AutolinkPattern[] = [];
@@ -85,6 +100,7 @@ export function userPatterns(raw: unknown): AutolinkPattern[] {
     if (typeof entry !== 'object' || entry === null) continue;
     const { regex, urlTemplate } = entry as Record<string, unknown>;
     if (typeof regex !== 'string' || typeof urlTemplate !== 'string' || regex === '') continue;
+    if (!/^https?:\/\/\S/i.test(urlTemplate)) continue;
     patterns.push({ regex, urlTemplate });
   }
   return patterns;

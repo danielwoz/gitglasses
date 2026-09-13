@@ -174,6 +174,21 @@ export function assertPlainHost(value: string, what: string): string {
 }
 
 /**
+ * A base URL that carries credentials: https, or http on loopback for a local
+ * test instance. Plaintext elsewhere puts the token on the wire in the clear.
+ */
+export function assertSecureBaseUrl(baseUrl: string, what: string): string {
+  const isHttps = /^https:\/\//i.test(baseUrl);
+  const isLoopbackHttp = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(baseUrl);
+  if (!isHttps && !isLoopbackHttp) {
+    throw new Error(
+      `${what} must use https (loopback may use http), got ${JSON.stringify(baseUrl)}`
+    );
+  }
+  return baseUrl;
+}
+
+/**
  * A short non-reversible fingerprint of a token, for use as a cache key.
  *
  * Keying a cache on the raw token keeps the secret resident in a long-lived

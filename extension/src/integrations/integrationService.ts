@@ -203,15 +203,17 @@ export class IntegrationService implements vscode.Disposable {
   }
 
   private createHostingProvider(providerId: string, domain: string): HostingProvider | undefined {
-    if (providerId === 'github') {
-      return new GitHubProvider(domain === 'github.com' ? {} : { host: domain });
-    }
-    if (providerId === 'github-enterprise') {
-      return createGitHubEnterpriseProvider(domain);
-    }
-    const ctor = findExportedProviderClass(providerId);
-    if (!ctor) return undefined;
+    // A provider constructor rejects a domain it cannot safely put in a base
+    // URL; one bad settings entry drops that entry, not the whole reload.
     try {
+      if (providerId === 'github') {
+        return new GitHubProvider(domain === 'github.com' ? {} : { host: domain });
+      }
+      if (providerId === 'github-enterprise') {
+        return createGitHubEnterpriseProvider(domain);
+      }
+      const ctor = findExportedProviderClass(providerId);
+      if (!ctor) return undefined;
       return new ctor({ host: domain }) as HostingProvider;
     } catch {
       return undefined;
@@ -314,7 +316,8 @@ export class IntegrationService implements vscode.Disposable {
 
   /**
    * Autolink issue references in `text` as markdown links. Pure substitution:
-   * never touches the network, safe on the hover path.
+   * never touches the network, safe on the hover path. The result is markdown
+   * with everything outside a link escaped.
    */
   async autolinkText(text: string, repoRoot: string): Promise<string> {
     const patterns: AutolinkPattern[] = [];

@@ -28,7 +28,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { isGistRawOrigin, isSameOriginAs } from './shared.js';
+import { assertPlainHost, isGistRawOrigin, isSameOriginAs } from './shared.js';
 
 export interface GitHubProviderOptions {
   /** Provider id used in RepoDescriptors. Default "github". */
@@ -203,9 +203,12 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
 
   constructor(options: GitHubProviderOptions = {}) {
     this.id = options.id ?? 'github';
-    // parseRemoteUrl lowercases the host it returns, so a configured host with
-    // any capitalization would match no remote at all, silently.
-    this.host = (options.host ?? 'github.com').toLowerCase();
+    // The host reaches a base URL that carries the token, so it must be a bare
+    // hostname. parseRemoteUrl lowercases the host it returns, so a configured
+    // host with any capitalization would match no remote at all, silently.
+    this.host = (
+      options.host === undefined ? 'github.com' : assertPlainHost(options.host, 'GitHub host')
+    ).toLowerCase();
     this.apiBaseUrl = options.apiBaseUrl ?? 'https://api.github.com';
     this.graphqlUrl = options.graphqlUrl ?? `${this.apiBaseUrl}/graphql`;
     this.fetchFn = options.fetchFn ?? governedFetch;
@@ -592,6 +595,9 @@ export function createGitHubEnterpriseProvider(
   host: string,
   fetchFn?: FetchLike
 ): GitHubProvider {
+  // The host is interpolated into both API base URLs, which then carry the
+  // user's token, so it must be a bare hostname.
+  assertPlainHost(host, 'GitHub Enterprise host');
   return new GitHubProvider({
     id: 'github-enterprise',
     host,
