@@ -8,6 +8,21 @@
 
 namespace gg::services::mutate_detail {
 
+const std::string& requirePositional(const std::string& value, const char* what) {
+  if (exec::looksLikeGitOption(value)) {
+    throw rpc::HandlerError{
+        {ErrorCode::InvalidParams,
+         std::string(what) + " may not begin with '-' (would be parsed as a git option)"}};
+  }
+  return value;
+}
+
+const std::vector<std::string>& requirePositionals(const std::vector<std::string>& values,
+                                                   const char* what) {
+  for (const auto& value : values) requirePositional(value, what);
+  return values;
+}
+
 std::string repoCwd(const core::Repo& repo) {
   return repo.workdir().empty() ? repo.gitdir() : repo.workdir();
 }

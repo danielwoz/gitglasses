@@ -148,7 +148,13 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithCli(
     args.push_back("--contents");
     args.push_back(contentsFile->path());
   }
-  if (request.rev) args.push_back(*request.rev);
+  if (request.rev) {
+    // Sits before the "--" separator, so it must not look like an option.
+    if (exec::looksLikeGitOption(*request.rev)) {
+      return Error{ErrorCode::InvalidParams, "'rev' may not begin with '-'"};
+    }
+    args.push_back(*request.rev);
+  }
   args.push_back("--");
   args.push_back(request.path);
 

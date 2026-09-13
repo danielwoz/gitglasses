@@ -129,3 +129,64 @@ export function hostOfUrl(baseUrl: string): string {
   const match = /^[a-z][a-z0-9+.-]*:\/\/([^/:]+)/i.exec(baseUrl);
   return (match?.[1] ?? baseUrl).toLowerCase();
 }
+
+/** True when both URLs share scheme, host and port. */
+export function isSameOriginAs(candidate: string, reference: string): boolean {
+  try {
+    const a = new URL(candidate);
+    const b = new URL(reference);
+    return a.protocol === b.protocol && a.host === b.host;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The origin github.com serves raw gist content from. Gist file bodies name it
+ * in raw_url, and it is a different host from the API, so same-origin alone
+ * would reject a legitimate response.
+ */
+export function isGistRawOrigin(candidate: string): boolean {
+  try {
+    const url = new URL(candidate);
+    return url.protocol === 'https:' && url.host === 'gist.githubusercontent.com';
+  } catch {
+    return false;
+  }
+}
+
+/** Escapes a value for use inside a double-quoted BBQL string literal. */
+export function escapeBbqlString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * A bare hostname (no scheme, userinfo, path or whitespace), optionally with a
+ * port. Config values reaching a base URL go through this: a value like
+ * "api.example.com@attacker.example" reads as the real host but resolves
+ * elsewhere, and would carry credentials there.
+ */
+export function assertPlainHost(value: string, what: string): string {
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(value)) {
+    throw new Error(`${what} must be a plain hostname, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/**
+ * A short non-reversible fingerprint of a token, for use as a cache key.
+ *
+ * Keying a cache on the raw token keeps the secret resident in a long-lived
+ * instance field and puts it in any heap dump. Only equality matters here, so
+ * a digest does the same job.
+ */
+export function tokenFingerprint(token: string): string {
+  // FNV-1a, 32-bit: not cryptographic, and it does not need to be — it never
+  // leaves the process and only ever answers "is this the same token".
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < token.length; i++) {
+    hash ^= token.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}

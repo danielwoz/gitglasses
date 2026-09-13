@@ -89,13 +89,14 @@ int runServer(std::istream& in, std::ostream& out) {
   std::atomic<bool> shutdownRequested{false};
 
   rpc::Dispatcher dispatcher(pool, [&writer](const rpc::Json& message) {
-    writer.write(message.dump());
+    writer.write(rpc::dumpForWire(message));
   });
 
   // Server-initiated notifications (watcher pushes) go through the same
   // serialized frame writer as dispatcher responses.
   context.broadcast = [&writer](const std::string& method, const rpc::Json& params) {
-    writer.write(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}.dump());
+    writer.write(rpc::dumpForWire(
+        rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}));
   };
 
   configureDispatcher(dispatcher, context, shutdownRequested);

@@ -1,3 +1,4 @@
+import { governedFetch } from '../rateLimiter.js';
 import { ProviderError } from '../errors.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
@@ -97,7 +98,7 @@ export class LinearProvider implements IssueProvider {
   constructor(options: LinearProviderOptions = {}) {
     this.id = options.id ?? 'linear';
     this.apiUrl = options.apiUrl ?? 'https://api.linear.app/graphql';
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   async getMyIssues(auth: AuthContext, opts?: IssueQueryOptions): Promise<Issue[]> {

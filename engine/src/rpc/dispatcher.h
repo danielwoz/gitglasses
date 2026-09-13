@@ -16,6 +16,17 @@ namespace gg::rpc {
 
 using Json = nlohmann::json;
 
+// Serializes a message for the wire. Values reaching us from git can carry
+// bytes that are not valid UTF-8 (hook output, remote URLs, refnames written
+// by other tools). nlohmann's default dump() throws type_error.316 on those,
+// and because it is reached from inside catch handlers the throw escapes and
+// terminates the process, so invalid sequences are replaced instead.
+std::string dumpForWire(const Json& message);
+
+// Maximum nesting depth accepted from the client. Deeply nested JSON blows the
+// stack in nlohmann's recursive parser long before any handler sees it.
+inline constexpr int kMaxParseDepth = 256;
+
 // Sends a server->client notification (used by streaming handlers).
 using NotifyFn = std::function<void(const std::string& method, const Json& params)>;
 

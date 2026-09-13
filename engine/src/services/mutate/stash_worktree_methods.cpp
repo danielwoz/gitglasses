@@ -14,6 +14,7 @@ namespace {
 using mutate_detail::openRepo;
 using mutate_detail::requireString;
 using mutate_detail::runConflictAware;
+using mutate_detail::requirePositional;
 using mutate_detail::runGitOrThrow;
 
 std::string requireStashRef(const rpc::Json& params) {
@@ -80,7 +81,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"stash", "push"};
         if (params.value("includeUntracked", false)) args.push_back("--include-untracked");
-        const std::string message = params.value("message", "");
+        const std::string message = requirePositional(params.value("message", ""), "message");
         if (!message.empty()) {
           args.push_back("-m");
           args.push_back(message);
@@ -135,14 +136,16 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
         const std::string path = requireString(params, "path");
-        const std::string ref = requireString(params, "ref");
-        const std::string createBranch = params.value("createBranch", "");
+        const std::string ref = requirePositional(requireString(params, "ref"), "ref");
+        const std::string createBranch =
+            requirePositional(params.value("createBranch", ""), "createBranch");
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"worktree", "add"};
         if (!createBranch.empty()) {
           args.push_back("-b");
           args.push_back(createBranch);
         }
+        args.push_back("--");
         args.push_back(path);
         args.push_back(ref);
         runGitOrThrow(repo, std::move(args), token, "git worktree add");
@@ -159,6 +162,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"worktree", "remove"};
         if (params.value("force", false)) args.push_back("--force");
+        args.push_back("--");
         args.push_back(path);
         runGitOrThrow(repo, std::move(args), token, "git worktree remove");
         return rpc::Json::object();

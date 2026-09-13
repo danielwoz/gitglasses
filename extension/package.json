@@ -13,7 +13,18 @@
     "vscode": "^1.90.0"
   },
   "categories": [
+    "SCM Providers",
+    "Visualization",
+    "Education",
     "Other"
+  ],
+  "keywords": [
+    "git",
+    "blame",
+    "commit graph",
+    "history",
+    "worktrees",
+    "gitlens"
   ],
   "extensionKind": [
     "workspace"
@@ -36,6 +47,10 @@
       {
         "command": "gitglasses.toggleHeatmap",
         "title": "GitGlasses: Toggle File Heatmap Annotations"
+      },
+      {
+        "command": "gitglasses.toggleChanges",
+        "title": "GitGlasses: Toggle File Changes Annotations"
       },
       {
         "command": "gitglasses.clearAnnotations",
@@ -228,6 +243,41 @@
       {
         "command": "gitglasses.home.dismissGetStarted",
         "title": "Dismiss Get Started"
+      },
+      {
+        "command": "gitglasses.openWalkthrough",
+        "title": "GitGlasses: Get Started"
+      },
+      {
+        "command": "gitglasses.openOnRemote",
+        "title": "GitGlasses: Open File on Remote",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "gitglasses.copyRemoteUrl",
+        "title": "GitGlasses: Copy Remote File URL"
+      },
+      {
+        "command": "gitglasses.openCommitOnRemote",
+        "title": "Open Commit on Remote"
+      },
+      {
+        "command": "gitglasses.stageSelectedHunks",
+        "title": "GitGlasses: Stage Selected Hunk(s)",
+        "enablement": "gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.unstageSelectedHunks",
+        "title": "GitGlasses: Unstage Selected Hunk(s)",
+        "enablement": "gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.addIntegration",
+        "title": "GitGlasses: Add Integration…"
+      },
+      {
+        "command": "gitglasses.removeIntegration",
+        "title": "GitGlasses: Remove Integration…"
       }
     ],
     "viewsContainers": {
@@ -290,11 +340,159 @@
     "viewsWelcome": [
       {
         "view": "gitglasses.views.searchCompare",
-        "contents": "Search commits by message text or SHA.\n[Search Commits…](command:gitglasses.searchCommits)"
+        "contents": "Search commits by message text or SHA.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)"
+      },
+      {
+        "view": "gitglasses.views.home",
+        "contents": "The Commit Graph is the fastest way to see how this repository fits together.\n[Show Commit Graph](command:gitglasses.showGraph)\n\nNew to GitGlasses? Take the tour.\n[Get Started](command:gitglasses.openWalkthrough)"
+      },
+      {
+        "view": "gitglasses.views.worktrees",
+        "contents": "Worktrees let you check out several branches at once, without stashing.\n[Add Worktree…](command:gitglasses.worktrees.add)"
+      },
+      {
+        "view": "gitglasses.views.stashes",
+        "contents": "No stashes yet. Stashes you create will appear here."
+      },
+      {
+        "view": "gitglasses.views.launchpad",
+        "contents": "Launchpad collects your pull requests and issues in one place.\n[Add Integration…](command:gitglasses.addIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required."
+      },
+      {
+        "view": "gitglasses.views.fileHistory",
+        "contents": "Open a file to see its history here.\n[Show Visual File History](command:gitglasses.showFileHistory)"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "gitglasses.getStarted",
+        "title": "Get Started with GitGlasses",
+        "description": "Every feature is free and works offline. There is no account to create and nothing to sign in to.",
+        "steps": [
+          {
+            "id": "graph",
+            "title": "Read your history in the Commit Graph",
+            "description": "The graph shows branches, merges and authorship together, on public and private repositories alike.\n[Show Commit Graph](command:gitglasses.showGraph)",
+            "media": {
+              "markdown": "media/walkthrough/graph.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.showGraph"
+            ]
+          },
+          {
+            "id": "blame",
+            "title": "See who changed a line, as you type",
+            "description": "Inline blame annotates the current line. File blame and the heatmap annotate the whole file.\n[Toggle Inline Blame](command:gitglasses.toggleLineBlame)",
+            "media": {
+              "markdown": "media/walkthrough/blame.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.toggleLineBlame"
+            ]
+          },
+          {
+            "id": "fileHistory",
+            "title": "Trace a file over time",
+            "description": "Visual File History plots each revision by size and author, so churn is obvious at a glance.\n[Show Visual File History](command:gitglasses.showFileHistory)",
+            "media": {
+              "markdown": "media/walkthrough/history.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.showFileHistory"
+            ]
+          },
+          {
+            "id": "remote",
+            "title": "Jump to the file on your forge",
+            "description": "Open the current file, at the current line, on GitHub, GitLab or Bitbucket.\n[Open File on Remote](command:gitglasses.openOnRemote)",
+            "media": {
+              "markdown": "media/walkthrough/remote.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.openOnRemote"
+            ]
+          },
+          {
+            "id": "worktrees",
+            "title": "Work on two branches at once",
+            "description": "Worktrees check out another branch in a separate folder, so you can review a pull request without stashing.\n[Add Worktree…](command:gitglasses.worktrees.add)",
+            "media": {
+              "markdown": "media/walkthrough/worktrees.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.worktrees.add"
+            ]
+          },
+          {
+            "id": "ai",
+            "title": "Bring your own AI key, or none at all",
+            "description": "Explain a commit or draft a commit message using your own API key or a local Ollama model. Nothing is metered and nothing is sent to us.\n[Set AI API Key…](command:gitglasses.ai.setApiKey)",
+            "media": {
+              "markdown": "media/walkthrough/ai.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.ai.setApiKey",
+              "onCommand:gitglasses.ai.explainCommit"
+            ]
+          },
+          {
+            "id": "integrations",
+            "title": "Connect issues and pull requests",
+            "description": "Launchpad gathers your pull requests and issues. Add a self-hosted forge or issue tracker without editing settings by hand.\n[Add Integration…](command:gitglasses.addIntegration)",
+            "media": {
+              "markdown": "media/walkthrough/integrations.md"
+            },
+            "completionEvents": [
+              "onCommand:gitglasses.addIntegration",
+              "onCommand:gitglasses.connectIntegration"
+            ]
+          }
+        ]
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "gitglasses.showGraph",
+        "key": "ctrl+shift+g g",
+        "mac": "cmd+shift+g g"
+      },
+      {
+        "command": "gitglasses.toggleLineBlame",
+        "key": "ctrl+shift+g b",
+        "mac": "cmd+shift+g b",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "gitglasses.toggleFileBlame",
+        "key": "ctrl+shift+g shift+b",
+        "mac": "cmd+shift+g shift+b",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "gitglasses.showFileHistory",
+        "key": "ctrl+shift+g h",
+        "mac": "cmd+shift+g h",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "gitglasses.searchCommits",
+        "key": "ctrl+shift+g f",
+        "mac": "cmd+shift+g f"
+      },
+      {
+        "command": "gitglasses.gitCommands",
+        "key": "ctrl+shift+g c",
+        "mac": "cmd+shift+g c"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "gitglasses.showGraph",
+          "when": "view =~ /^gitglasses\\.views\\./",
+          "group": "navigation@0"
+        },
         {
           "command": "gitglasses.refreshViews",
           "when": "view =~ /^gitglasses\\.views\\./ && view != gitglasses.views.launchpad",
@@ -338,6 +536,26 @@
           "command": "gitglasses.suggestChange",
           "when": "editorHasSelection && resourceScheme == file",
           "group": "gitglasses@1"
+        },
+        {
+          "command": "gitglasses.openOnRemote",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@2"
+        },
+        {
+          "command": "gitglasses.copyRemoteUrl",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@3"
+        },
+        {
+          "command": "gitglasses.stageSelectedHunks",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@4"
+        },
+        {
+          "command": "gitglasses.unstageSelectedHunks",
+          "when": "resourceScheme == file",
+          "group": "gitglasses@5"
         }
       ],
       "view/item/context": [
@@ -347,6 +565,10 @@
         },
         {
           "command": "gitglasses.openCommitDiff",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry)$/"
+        },
+        {
+          "command": "gitglasses.openCommitOnRemote",
           "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|FileHistoryEntry)$/"
         },
         {

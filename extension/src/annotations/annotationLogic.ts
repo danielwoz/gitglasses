@@ -80,8 +80,15 @@ export function computeHeatmapRanges(blame: FileBlame): HeatmapRange[] {
     const time = blame.commits[hunk.sha]?.author.time;
     if (time !== undefined) times.push(time);
   }
-  const oldest = Math.min(...times);
-  const newest = Math.max(...times);
+  // Reduce rather than spread: Math.min(...times) throws RangeError once the
+  // argument count passes the engine's stack limit (~125k), and a file can
+  // have that many blame hunks.
+  let oldest = Number.POSITIVE_INFINITY;
+  let newest = Number.NEGATIVE_INFINITY;
+  for (const time of times) {
+    if (time < oldest) oldest = time;
+    if (time > newest) newest = time;
+  }
   const span = newest - oldest;
 
   return blame.hunks.map((hunk) => ({
@@ -102,6 +109,41 @@ function bucketForHunk(
   if (time === undefined) return 0;
   if (span <= 0) return HEATMAP_BUCKETS - 1;
   return Math.min(HEATMAP_BUCKETS - 1, Math.floor(((time - oldest) / span) * HEATMAP_BUCKETS));
+}
+
+// --- Changes annotation -----------------------------------------------------
+
+export interface ChangedRange {
+  /** 1-based first line of the run. */
+  startLine: number;
+  lineCount: number;
+}
+
+/**
+ * Runs of lines not yet committed, derived from the blame the file already
+ * carries rather than a separate diff request. Adjacent uncommitted hunks are
+ * merged so the editor gets one decoration per visual run.
+ */
+export function computeChangedRanges(blame: FileBlame): ChangedRange[] {
+  const uncommitted = blame.hunks
+    .filter((hunk) => hunk.sha === UNCOMMITTED_SHA && hunk.lineCount > 0)
+    .sort((a, b) => a.resultLine - b.resultLine);
+
+  const ranges: ChangedRange[] = [];
+  for (const hunk of uncommitted) {
+    const previous = ranges[ranges.length - 1];
+    if (previous && hunk.resultLine <= previous.startLine + previous.lineCount) {
+      // Overlapping or touching: extend to cover the union.
+      const end = Math.max(
+        previous.startLine + previous.lineCount,
+        hunk.resultLine + hunk.lineCount,
+      );
+      previous.lineCount = end - previous.startLine;
+      continue;
+    }
+    ranges.push({ startLine: hunk.resultLine, lineCount: hunk.lineCount });
+  }
+  return ranges;
 }
 
 // --- CodeLens aggregation ---------------------------------------------------

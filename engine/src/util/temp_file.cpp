@@ -30,6 +30,15 @@ Result<TempFile> TempFile::create(const std::string& contents, const std::string
   file.path_ = randomTempPath(prefix, suffix).string();
   std::ofstream out(file.path_, std::ios::binary | std::ios::trunc);
   if (!out) return Error{ErrorCode::Internal, "failed to create temp file"};
+  // These files hold the user's source and diffs and live in a world-readable
+  // shared directory, so drop group/other access before any contents land.
+  // Narrowed while the file is still empty, so nothing is ever exposed.
+  // No-op on Windows, which has no permission bits here and whose %TEMP% is
+  // already per-user; harmless to call either way.
+  std::error_code permsEc;
+  std::filesystem::permissions(
+      file.path_, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace, permsEc);
   out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
   out.flush();
   if (!out) {

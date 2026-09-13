@@ -37,6 +37,8 @@ std::optional<std::string> FrameReader::read() {
       while (!value.empty() && value.front() == ' ') value.remove_prefix(1);
       auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), contentLength);
       if (ec != std::errc()) return std::nullopt;
+      // Refuse before allocating: the body has not been read yet.
+      if (contentLength > kMaxFrameBytes) return std::nullopt;
       (void)ptr;
       sawLength = true;
     }

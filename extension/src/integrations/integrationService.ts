@@ -16,6 +16,17 @@ import {
 import { AuthManager, type AuthInfo } from './auth';
 import { applyAutolinks, jiraPattern, repoIssuePatterns, userPatterns } from './autolinks';
 import { orderedRemoteUrls, parseGitConfigRemotes } from './gitConfig';
+import {
+  addHostSetting,
+  addIssueSetting,
+  describeIssueSetting,
+  HOSTING_PROVIDER_CHOICES,
+  ISSUE_PROVIDER_CHOICES,
+  isValidDomain,
+  normalizeDomain,
+  removeHostSetting,
+  removeIssueSetting,
+} from './integrationSettings';
 
 export interface HostSetting {
   domain: string;
@@ -97,6 +108,39 @@ function findExportedProviderClass(providerId: string): (new (options: { host?: 
     }
   }
   return undefined;
+}
+
+/**
+ * The array to edit and the scope to write it back to.
+ *
+ * `get()` returns the merged effective value, and these arrays do not merge
+ * element-wise — the most specific scope wins outright. Reading the effective
+ * value and writing it to the workspace would copy globally configured entries
+ * into the repository's .vscode/settings.json, which commonly gets committed,
+ * publishing internal hostnames. Removal had the mirror-image problem: a
+ * workspace array written without a globally configured entry shadows global
+ * from then on.
+ *
+ * So the array is taken from, and written back to, the narrowest scope that
+ * actually defines it, defaulting to global for a brand new setting.
+ */
+function settingScope<T>(
+  section: string,
+): { values: T[]; target: vscode.ConfigurationTarget } {
+  const inspected = vscode.workspace.getConfiguration('gitglasses').inspect<T[]>(section);
+  if (inspected?.workspaceFolderValue !== undefined) {
+    return {
+      values: inspected.workspaceFolderValue,
+      target: vscode.ConfigurationTarget.WorkspaceFolder,
+    };
+  }
+  if (inspected?.workspaceValue !== undefined) {
+    return { values: inspected.workspaceValue, target: vscode.ConfigurationTarget.Workspace };
+  }
+  return {
+    values: inspected?.globalValue ?? [],
+    target: vscode.ConfigurationTarget.Global,
+  };
 }
 
 export class IntegrationService implements vscode.Disposable {
@@ -204,6 +248,15 @@ export class IntegrationService implements vscode.Disposable {
     if (!cached) {
       cached = this.resolveHosting(repoRoot);
       this.hostingCache.set(repoRoot, cached);
+      // A miss is only true for the .git/config as it stands. Adding a remote
+      // to a repo opened without one would otherwise keep reporting "no
+      // recognised remote" until the window reloaded, so misses are dropped
+      // and re-resolved on the next ask.
+      void cached.then((resolved) => {
+        if (!resolved && this.hostingCache.get(repoRoot) === cached) {
+          this.hostingCache.delete(repoRoot);
+        }
+      });
     }
     return cached;
   }
@@ -274,6 +327,137 @@ export class IntegrationService implements vscode.Disposable {
   }
 
   /** Connect flow: pick an integration, authenticate, validate, greet. */
+  /**
+   * Adds an integration to settings through prompts, so a self-hosted forge or
+   * issue tracker can be set up without hand-editing settings.json. Writes to
+   * the workspace scope when a workspace is open, otherwise globally.
+   */
+  async addIntegration(): Promise<void> {
+    const kind = await vscode.window.showQuickPick(
+      [
+        {
+          label: '$(repo) Git hosting instance',
+          detail: 'GitHub Enterprise, GitLab, Bitbucket, Azure DevOps',
+          itemKind: 'hosting' as const,
+        },
+        {
+          label: '$(issues) Issue tracker',
+          detail: 'Jira, Linear',
+          itemKind: 'issues' as const,
+        },
+      ],
+      { placeHolder: 'What would you like to add?' },
+    );
+    if (!kind) return;
+
+    const choices =
+      kind.itemKind === 'hosting' ? HOSTING_PROVIDER_CHOICES : ISSUE_PROVIDER_CHOICES;
+    const provider = await vscode.window.showQuickPick(
+      choices.map((choice) => ({ label: choice.label, detail: choice.detail, choice })),
+      { placeHolder: 'Which provider?' },
+    );
+    if (!provider) return;
+
+    let host = '';
+    if (provider.choice.needsHost) {
+      const entered = await vscode.window.showInputBox({
+        prompt: `Hostname for ${provider.choice.label}`,
+        placeHolder: 'git.example.com',
+        validateInput: (value) =>
+          value.trim() === '' || isValidDomain(value)
+            ? undefined
+            : 'Enter a hostname such as git.example.com',
+      });
+      if (entered === undefined) return;
+      if (!isValidDomain(entered)) return;
+      host = normalizeDomain(entered);
+    }
+
+    if (kind.itemKind === 'hosting') {
+      const scope = settingScope<HostSetting>('integrations.hosts');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.hosts',
+          addHostSetting(scope.values, { domain: host, provider: provider.choice.id }),
+          scope.target,
+        );
+    } else {
+      const scope = settingScope<IssueSetting>('integrations.issues');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.issues',
+          addIssueSetting(scope.values, {
+            provider: provider.choice.id,
+            ...(host ? { host } : {}),
+          }),
+          scope.target,
+        );
+    }
+
+    this.reloadConfiguration();
+    const added = host ? `${provider.choice.label} (${host})` : provider.choice.label;
+    const next = await vscode.window.showInformationMessage(
+      `GitGlasses: added ${added}.`,
+      'Connect Now',
+    );
+    if (next === 'Connect Now') await this.connectIntegration();
+  }
+
+  /** Removes a configured integration from settings. */
+  async removeIntegration(): Promise<void> {
+    // Read through the same scope resolution the write uses, so the list can
+    // never offer an entry the removal would not actually touch.
+    const hosts = settingScope<HostSetting>('integrations.hosts').values;
+    const issues = settingScope<IssueSetting>('integrations.issues').values;
+
+    const items = [
+      ...hosts.map((host) => ({
+        label: `$(repo) ${host.domain}`,
+        description: host.provider,
+        entry: { itemKind: 'hosting' as const, host },
+      })),
+      ...issues.map((issue) => ({
+        label: `$(issues) ${describeIssueSetting(issue)}`,
+        description: 'issue tracker',
+        entry: { itemKind: 'issues' as const, issue },
+      })),
+    ];
+    if (items.length === 0) {
+      void vscode.window.showInformationMessage(
+        'GitGlasses: no configured integrations to remove.',
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Remove which integration?',
+    });
+    if (!picked) return;
+
+    if (picked.entry.itemKind === 'hosting') {
+      const scope = settingScope<HostSetting>('integrations.hosts');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.hosts',
+          removeHostSetting(scope.values, picked.entry.host.domain),
+          scope.target,
+        );
+    } else {
+      const scope = settingScope<IssueSetting>('integrations.issues');
+      await vscode.workspace
+        .getConfiguration('gitglasses')
+        .update(
+          'integrations.issues',
+          removeIssueSetting(scope.values, picked.entry.issue.provider, picked.entry.issue.host),
+          scope.target,
+        );
+    }
+    this.reloadConfiguration();
+    void vscode.window.showInformationMessage('GitGlasses: integration removed.');
+  }
+
   async connectIntegration(): Promise<void> {
     interface Candidate extends vscode.QuickPickItem {
       itemKind: 'hosting' | 'issues';
@@ -297,7 +481,11 @@ export class IntegrationService implements vscode.Disposable {
       });
     }
     if (candidates.length === 0) {
-      void vscode.window.showInformationMessage('GitGlasses: no integrations configured.');
+      const add = await vscode.window.showInformationMessage(
+        'GitGlasses: no integrations configured yet.',
+        'Add Integration…',
+      );
+      if (add === 'Add Integration…') await this.addIntegration();
       return;
     }
     const picked = await vscode.window.showQuickPick(candidates, {

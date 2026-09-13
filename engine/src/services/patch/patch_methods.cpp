@@ -24,6 +24,7 @@ using mutate_detail::openRepo;
 using mutate_detail::repoCwd;
 using mutate_detail::requireString;
 using mutate_detail::runGit;
+using mutate_detail::requirePositional;
 using mutate_detail::runGitOrThrow;
 
 Error patchGitError(const std::string& context) {
@@ -69,6 +70,9 @@ RawGitOutput runGitRawOrThrow(const core::Repo& repo, std::vector<std::string> a
 // Resolves `spec` to a full commit sha or throws GitError.
 std::string resolveCommit(const core::Repo& repo, const std::string& spec,
                           const CancelToken& token) {
+  // Concatenated into a rev-parse argument, so a leading '-' would survive as
+  // an option ("--output=x" -> "--output=x^{commit}").
+  requirePositional(spec, "sha");
   auto output = runGitOrThrow(repo, {"rev-parse", "--verify", spec + "^{commit}"}, token,
                               "git rev-parse " + spec);
   if (output.lines.empty()) {

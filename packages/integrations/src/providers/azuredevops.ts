@@ -1,3 +1,4 @@
+import { governedFetch } from '../rateLimiter.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type {
   AuthContext,
@@ -16,7 +17,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { base64Encode, hostOfUrl, throwForStatus } from './shared.js';
+import { base64Encode, hostOfUrl, throwForStatus , tokenFingerprint} from './shared.js';
 
 const API_VERSION = '7.1';
 
@@ -152,7 +153,7 @@ export class AzureDevOpsProvider implements HostingProvider {
     this.project = options.project;
     this.baseUrl = (options.baseUrl ?? 'https://dev.azure.com').replace(/\/+$/, '');
     this.host = hostOfUrl(this.baseUrl);
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -274,7 +275,7 @@ export class AzureDevOpsProvider implements HostingProvider {
   }
 
   private async profileId(auth: AuthContext): Promise<string> {
-    if (this.cachedProfileId !== undefined && this.cachedProfileToken === auth.token) {
+    if (this.cachedProfileId !== undefined && this.cachedProfileToken === tokenFingerprint(auth.token)) {
       return this.cachedProfileId;
     }
     const json = (await this.get(
@@ -286,7 +287,7 @@ export class AzureDevOpsProvider implements HostingProvider {
       throw new Error('Azure DevOps connectionData returned no authenticated user');
     }
     this.cachedProfileId = id;
-    this.cachedProfileToken = auth.token;
+    this.cachedProfileToken = tokenFingerprint(auth.token);
     return id;
   }
 

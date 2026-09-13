@@ -1,5 +1,5 @@
 import { systemClock, type Clock } from './cache.js';
-import { headerGetter, type HttpHeadersLike } from './http.js';
+import { defaultFetch, headerGetter, type FetchLike, type HttpHeadersLike } from './http.js';
 
 export type SleepFn = (ms: number) => Promise<void>;
 
@@ -32,6 +32,9 @@ interface HostState {
  * quota drops below `lowRemainingRatio`, requests are spaced out so the quota
  * lasts until the reset time.
  */
+/** Backoff applied when a forge reports zero remaining but no reset time. */
+export const DEFAULT_EXHAUSTED_BACKOFF_MS = 60_000;
+
 export class RateLimiter {
   private readonly capacity: number;
   private readonly refillPerSecond: number;
@@ -92,7 +95,7 @@ export class RateLimiter {
       }
     }
 
-    const remainingRaw = get('x-ratelimit-remaining');
+    const remainingRaw = (get('x-ratelimit-remaining') ?? get('ratelimit-remaining'));
     if (remainingRaw === undefined) {
       return;
     }
@@ -100,20 +103,20 @@ export class RateLimiter {
     if (!Number.isFinite(remaining)) {
       return;
     }
-    const resetRaw = get('x-ratelimit-reset');
+    const resetRaw = (get('x-ratelimit-reset') ?? get('ratelimit-reset'));
     const resetMs =
       resetRaw !== undefined && Number.isFinite(Number(resetRaw))
         ? Number(resetRaw) * 1000
         : undefined;
 
     if (remaining <= 0) {
-      if (resetMs !== undefined) {
-        state.blockedUntil = Math.max(state.blockedUntil, resetMs);
-      }
+      // No reset header is the common case on forges that only send
+      // "remaining"; sailing through would spend the next window instantly.
+      state.blockedUntil = Math.max(state.blockedUntil, resetMs ?? now + DEFAULT_EXHAUSTED_BACKOFF_MS);
       return;
     }
 
-    const limitRaw = get('x-ratelimit-limit');
+    const limitRaw = (get('x-ratelimit-limit') ?? get('ratelimit-limit'));
     const limit =
       limitRaw !== undefined && Number(limitRaw) > 0 ? Number(limitRaw) : this.capacity;
     if (remaining / limit < this.lowRemainingRatio) {
@@ -148,3 +151,39 @@ export class RateLimiter {
     state.lastRefill = now;
   }
 }
+
+/**
+ * Wraps a fetch so every request is admitted by `limiter` and every response
+ * feeds its headers back in, keyed by the request's host.
+ *
+ * The limiter existed but nothing called it, so provider fan-out — GitLab
+ * issues one /approvals request per merge request concurrently, Bitbucket up
+ * to ten — ran entirely ungoverned and ignored Retry-After.
+ */
+export function rateLimitedFetch(inner: FetchLike, limiter: RateLimiter): FetchLike {
+  return async (url, init) => {
+    let host: string;
+    try {
+      host = new URL(url).host;
+    } catch {
+      // Not addressable per-host; pass through rather than fail the request.
+      return inner(url, init);
+    }
+    await limiter.acquire(host);
+    const response = await inner(url, init);
+    limiter.updateFromHeaders(host, response.headers);
+    return response;
+  };
+}
+
+/**
+ * Process-wide limiter shared by every provider, so concurrent calls against
+ * one host queue behind each other rather than each keeping its own budget.
+ */
+export const sharedRateLimiter = new RateLimiter();
+
+/**
+ * The default transport for providers: the runtime fetch with a timeout and a
+ * size bound, admitted through the shared limiter.
+ */
+export const governedFetch: FetchLike = rateLimitedFetch(defaultFetch, sharedRateLimiter);

@@ -1,3 +1,4 @@
+import { governedFetch } from '../rateLimiter.js';
 import { ProviderError } from '../errors.js';
 import { defaultFetch, type FetchLike } from '../http.js';
 import type {
@@ -27,7 +28,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { hostOfUrl, throwForStatus } from './shared.js';
+import { hostOfUrl, throwForStatus , tokenFingerprint} from './shared.js';
 
 export interface GitLabProviderOptions {
   /** Provider id used in RepoDescriptors. Default "gitlab". */
@@ -157,9 +158,16 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
 
   constructor(options: GitLabProviderOptions = {}) {
     this.id = options.id ?? 'gitlab';
-    this.baseUrl = (options.baseUrl ?? 'https://gitlab.com').replace(/\/+$/, '');
+    const baseUrl = (options.baseUrl ?? 'https://gitlab.com').replace(/\/+$/, '');
+    // A plaintext base URL would put the token on the wire in the clear.
+    if (!/^https:\/\//i.test(baseUrl) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(baseUrl)) {
+      throw new Error(
+        `GitLab baseUrl must use https (loopback may use http), got ${JSON.stringify(baseUrl)}`,
+      );
+    }
+    this.baseUrl = baseUrl;
     this.host = hostOfUrl(this.baseUrl);
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -420,7 +428,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
   }
 
   private async username(auth: AuthContext): Promise<string> {
-    if (this.cachedUsername !== undefined && this.cachedUsernameToken === auth.token) {
+    if (this.cachedUsername !== undefined && this.cachedUsernameToken === tokenFingerprint(auth.token)) {
       return this.cachedUsername;
     }
     const user = (await this.get(auth, '/user')) as GitLabUser | undefined;
@@ -428,7 +436,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
       throw new Error('GitLab /user returned no profile');
     }
     this.cachedUsername = user.username;
-    this.cachedUsernameToken = auth.token;
+    this.cachedUsernameToken = tokenFingerprint(auth.token);
     return user.username;
   }
 

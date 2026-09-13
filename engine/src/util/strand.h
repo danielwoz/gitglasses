@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spdlog/spdlog.h>
+
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -38,7 +40,16 @@ class Strand {
         task = std::move(queue_.front());
         queue_.pop_front();
       }
-      task();
+      // A task that throws must not escape: unwinding out of drain() leaves
+      // draining_ true forever, wedging every later post on this strand, and
+      // reaches the pool's thread entry where it would terminate the process.
+      try {
+        task();
+      } catch (const std::exception& e) {
+        spdlog::error("strand task threw: {}", e.what());
+      } catch (...) {
+        spdlog::error("strand task threw a non-std exception");
+      }
     }
   }
 

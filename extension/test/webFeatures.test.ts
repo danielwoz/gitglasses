@@ -11,6 +11,7 @@ describe('web feature manifest', () => {
       'documentOverlaySync',
       'engineWasmTransport',
       'graphWebview',
+      'onboardingWalkthrough',
       'repoGroups',
       'revisionContentProvider',
       'searchView',
@@ -22,7 +23,9 @@ describe('web feature manifest', () => {
   it('keeps node-only and mutating features off the web', () => {
     expect(webFeaturesByStatus('excluded')).toEqual([
       'engineWatch',
+      'hunkStaging',
       'integrationsRemoteDetection',
+      'openOnRemote',
       'patches',
       'processEngine',
       'stageMutations',
@@ -40,5 +43,14 @@ describe('web feature manifest', () => {
     expect(WEB_FEATURES.stageMutations.status).toBe('excluded'); // read-only v1
     expect(WEB_FEATURES.engineWatch.status).toBe('excluded'); // bridge synthesizes
     expect(WEB_FEATURES.processEngine.status).toBe('excluded'); // no spawn on web
+  });
+
+  // These are contributed unconditionally in package.json — the editor context
+  // menu and the walkthrough both reference them — so they must resolve to a
+  // stub on the web rather than fail with "command not found".
+  it('excludes remote and staging commands but still contributes them', () => {
+    expect(WEB_FEATURES.openOnRemote.status).toBe('excluded');
+    expect(WEB_FEATURES.hunkStaging.status).toBe('excluded');
+    expect(WEB_FEATURES.onboardingWalkthrough.status).toBe('included');
   });
 });

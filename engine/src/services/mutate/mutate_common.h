@@ -19,6 +19,24 @@ struct GitOutput {
   std::string stderrText;
 };
 
+// Rejects a value that git's option parser would read as a flag.
+//
+// Refnames, remotes, paths and stash messages reach argv as positionals. Git
+// parses anything starting with '-' as an option wherever it appears, so a
+// value like "--upload-pack=..." or "--output=..." turns a data field into an
+// arbitrary-command or file-write primitive. These values are not always
+// client-supplied: refnames come out of the repository itself, so a hostile
+// repo is enough. Callers pass every user- or repo-derived positional through
+// this, and add a "--" separator wherever the subcommand supports one.
+//
+// Throws HandlerError(InvalidParams) when the value would be parsed as an
+// option. `what` names the field for the error message.
+const std::string& requirePositional(const std::string& value, const char* what);
+
+// Same, applied to each element of a list (e.g. cherry-pick shas).
+const std::vector<std::string>& requirePositionals(const std::vector<std::string>& values,
+                                                   const char* what);
+
 // Directory git commands run in: the working tree, or the gitdir for bare
 // repositories.
 std::string repoCwd(const core::Repo& repo);

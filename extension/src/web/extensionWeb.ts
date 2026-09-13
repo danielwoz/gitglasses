@@ -405,6 +405,9 @@ export async function activate(
     vscode.commands.registerCommand('gitglasses.toggleFileBlame', () =>
       fileAnnotations.toggle('blame'),
     ),
+    vscode.commands.registerCommand('gitglasses.toggleChanges', () =>
+      fileAnnotations.toggle('changes'),
+    ),
     vscode.commands.registerCommand('gitglasses.toggleHeatmap', () =>
       fileAnnotations.toggle('heatmap'),
     ),
@@ -422,6 +425,13 @@ export async function activate(
       refreshViews();
     }),
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
+    vscode.commands.registerCommand('gitglasses.openWalkthrough', () =>
+      vscode.commands.executeCommand(
+        'workbench.action.openWalkthrough',
+        'gitglasses.gitglasses#gitglasses.getStarted',
+        false,
+      ),
+    ),
     vscode.commands.registerCommand('gitglasses.loadMore', (loadMore: unknown) => {
       if (typeof loadMore === 'function') (loadMore as () => void)();
     }),
@@ -479,6 +489,12 @@ export async function activate(
     vscode.commands.registerCommand('gitglasses.groups.delete', () => repoGroups.delete()),
     vscode.commands.registerCommand('gitglasses.groups.export', () => repoGroups.export()),
     vscode.commands.registerCommand('gitglasses.groups.import', () => repoGroups.import()),
+    vscode.commands.registerCommand('gitglasses.addIntegration', () =>
+      integrations.addIntegration(),
+    ),
+    vscode.commands.registerCommand('gitglasses.removeIntegration', () =>
+      integrations.removeIntegration(),
+    ),
     vscode.commands.registerCommand('gitglasses.connectIntegration', () =>
       integrations.connectIntegration(),
     ),
@@ -488,6 +504,22 @@ export async function activate(
     // Patch envelopes need node:crypto; contributed commands still resolve.
     vscode.commands.registerCommand('gitglasses.createPatch', notOnWeb('creating patches')),
     vscode.commands.registerCommand('gitglasses.applyPatch', notOnWeb('applying patches')),
+    // Remote detection reads .git/config through node:fs, which the web shim
+    // rejects, so these can never resolve a forge here. They are contributed
+    // unconditionally (editor context menu, walkthrough), so they must resolve
+    // to something rather than fail with "command not found".
+    vscode.commands.registerCommand('gitglasses.openOnRemote', notOnWeb('opening files on the remote')),
+    vscode.commands.registerCommand('gitglasses.copyRemoteUrl', notOnWeb('copying remote URLs')),
+    vscode.commands.registerCommand(
+      'gitglasses.openCommitOnRemote',
+      notOnWeb('opening commits on the remote'),
+    ),
+    // Staging would mutate the MEMFS mirror only, never the real repository.
+    vscode.commands.registerCommand('gitglasses.stageSelectedHunks', notOnWeb('staging hunks')),
+    vscode.commands.registerCommand(
+      'gitglasses.unstageSelectedHunks',
+      notOnWeb('unstaging hunks'),
+    ),
     ...registerHomeCommands(engine, repos, homeView, context.globalState),
     new ModeController(lineBlame, fileAnnotations, codeLens),
     registerStartWork(integrations, engine, repos),

@@ -37,6 +37,8 @@ interface Pending {
   reject: (error: Error) => void;
   generation: number;
   method: string;
+  /** Cancellation listener for this request; disposed wherever it settles. */
+  cancelSub?: { dispose(): void };
 }
 
 export interface EngineClientOptions {
@@ -117,12 +119,26 @@ export class EngineClient {
     await transport.start();
     this.transportAlive = true;
 
-    const init = await this.request('initialize', { protocolVersion: PROTOCOL_VERSION });
-    if (init.protocolVersion !== PROTOCOL_VERSION) {
-      throw new EngineError(
-        ErrorCodes.InvalidRequest,
-        `engine protocol ${init.protocolVersion} != client ${PROTOCOL_VERSION}`,
-      );
+    let init: Awaited<ReturnType<typeof this.request<'initialize'>>>;
+    try {
+      init = await this.request('initialize', { protocolVersion: PROTOCOL_VERSION });
+      if (init.protocolVersion !== PROTOCOL_VERSION) {
+        throw new EngineError(
+          ErrorCodes.InvalidRequest,
+          `engine protocol ${init.protocolVersion} != client ${PROTOCOL_VERSION}`,
+        );
+      }
+    } catch (error) {
+      // A failed handshake must not leave the process running with nothing
+      // driving it, nor cache the rejected promise so every later call fails.
+      this.transportAlive = false;
+      try {
+        this.transport?.kill();
+      } catch {
+        // Teardown failures must not mask the handshake error.
+      }
+      this.ready = undefined;
+      throw error;
     }
     this.caps = init.capabilities;
     this.respawns = 0;
@@ -146,7 +162,10 @@ export class EngineClient {
   }
 
   private failAllPending(error: Error): void {
-    for (const pending of this.pending.values()) pending.reject(error);
+    for (const pending of this.pending.values()) {
+      pending.cancelSub?.dispose();
+      pending.reject(error);
+    }
     this.pending.clear();
   }
 
@@ -167,6 +186,9 @@ export class EngineClient {
     const pending = this.pending.get(message.id);
     if (!pending) return; // cancelled or from a previous generation
     this.pending.delete(message.id);
+    // The token outlives the request (an editor's token can back many calls),
+    // so the listener must go or it accumulates for the token's lifetime.
+    pending.cancelSub?.dispose();
     if (message.error) {
       if (message.error.code === ErrorCodes.MethodNotSupported) {
         this.options.onMethodNotSupported?.(pending.method, message.error.message);
@@ -199,10 +221,13 @@ export class EngineClient {
       const sub = token?.onCancellationRequested(() => {
         // Reject locally right away; tell the engine so it stops working.
         if (this.pending.delete(id)) {
+          sub?.dispose();
           this.notify('$/cancelRequest', { id });
           reject(new EngineError(ErrorCodes.Cancelled, 'cancelled'));
         }
       });
+      const entry = this.pending.get(id);
+      if (entry) entry.cancelSub = sub;
       if (token?.isCancellationRequested) {
         this.pending.delete(id);
         sub?.dispose();

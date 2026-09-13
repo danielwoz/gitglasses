@@ -62,9 +62,17 @@ export interface EnginePathOptions {
   packageRoot?: string;
   /** PATH separator, injectable for tests. Defaults to the platform's. */
   pathSeparator?: string;
+  /** Binary filename, injectable for tests. Defaults to the platform's. */
+  binaryName?: string;
 }
 
-const ENGINE_BINARY = 'gitglasses-engine';
+/**
+ * Executable name for this platform. Windows needs the .exe suffix or none of
+ * the candidate paths match and the server reports no engine at all.
+ */
+export function engineBinaryName(platform: string = process.platform): string {
+  return platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';
+}
 
 /**
  * Locate the engine binary: the GITGLASSES_ENGINE env var wins, then the
@@ -75,17 +83,18 @@ export function resolveEnginePath(options: EnginePathOptions = {}): string | und
   const exists = options.exists ?? existsSync;
   const packageRoot = options.packageRoot ?? path.resolve(import.meta.dirname, '..');
   const separator = options.pathSeparator ?? path.delimiter;
+  const binary = options.binaryName ?? engineBinaryName();
 
   if (env.GITGLASSES_ENGINE) {
     return env.GITGLASSES_ENGINE;
   }
-  const local = path.resolve(packageRoot, '..', 'build', 'release', 'engine', ENGINE_BINARY);
+  const local = path.resolve(packageRoot, '..', 'build', 'release', 'engine', binary);
   if (exists(local)) {
     return local;
   }
   for (const dir of (env.PATH ?? '').split(separator)) {
     if (dir === '') continue;
-    const candidate = path.join(dir, ENGINE_BINARY);
+    const candidate = path.join(dir, binary);
     if (exists(candidate)) {
       return candidate;
     }
@@ -107,12 +116,19 @@ export class EngineError extends Error {
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  /** Cleared wherever the request settles, so a reply cancels the timeout. */
+  timer: NodeJS.Timeout;
 }
+
+/** Default ceiling on a single engine request. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 export interface EngineClientOptions {
   /** Resolved engine binary path; undefined defers the failure to first use. */
   enginePath: string | undefined;
   onLog?: (line: string) => void;
+  /** Per-request ceiling; defaults to DEFAULT_REQUEST_TIMEOUT_MS. */
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -128,7 +144,11 @@ export class EngineClient {
   private ready: Promise<void> | undefined;
   private disposed = false;
 
-  constructor(private readonly options: EngineClientOptions) {}
+  private readonly requestTimeoutMs: number;
+
+  constructor(private readonly options: EngineClientOptions) {
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  }
 
   /** Spawn the engine and complete the initialize handshake. Idempotent. */
   start(): Promise<void> {
@@ -172,7 +192,10 @@ export class EngineClient {
   }
 
   private failAllPending(error: Error): void {
-    for (const pending of this.pending.values()) pending.reject(error);
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
     this.pending.clear();
   }
 
@@ -192,6 +215,7 @@ export class EngineClient {
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);
+    clearTimeout(pending.timer);
     if (message.error) {
       pending.reject(new EngineError(message.error.code, message.error.message));
     } else {
@@ -218,7 +242,21 @@ export class EngineClient {
     }
     const id = this.nextId++;
     return new Promise<RequestResult<M>>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+      // An engine that wedges without exiting would otherwise leave the tool
+      // call pending forever and grow this.pending without bound: the only
+      // other rejection paths are process exit/error and dispose().
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          reject(new Error(`engine request '${method}' timed out after ${this.requestTimeoutMs}ms`));
+        }
+      }, this.requestTimeoutMs);
+      timer.unref?.();
+
+      this.pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timer,
+      });
       stdin.write(frame(JSON.stringify({ jsonrpc: '2.0', id, method, params })));
     });
   }

@@ -244,7 +244,14 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
             [&parsed](const exec::HistoryEntry& entry) { parsed.push_back(entry); });
         std::vector<std::string> args = {"log", "--follow", "--numstat", kLogFormat,
                                          "--max-count=" + std::to_string(limit + 1)};
-        if (!startRev.empty()) args.push_back(startRev);
+        if (!startRev.empty()) {
+          // Precedes the "--" separator; reject option-looking revs.
+          if (exec::looksLikeGitOption(startRev)) {
+            throw rpc::HandlerError{
+                {ErrorCode::InvalidParams, "'startRev' may not begin with '-'"}};
+          }
+          args.push_back(startRev);
+        }
         args.push_back("--");
         args.push_back(startPath);
         auto run = runGitLog(repo.value(), std::move(args), token, parser);

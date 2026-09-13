@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { BlameModel, FileBlame } from '../model/blameModel';
 import { RepositoryService } from '../model/repositoryService';
 import {
+  computeChangedRanges,
   computeHeatmapRanges,
   continuationLabel,
   formatGutterLabel,
@@ -11,7 +12,7 @@ import {
 const RENDER_DEBOUNCE_MS = 300;
 const NBSP = '\u00a0';
 
-export type AnnotationMode = 'off' | 'blame' | 'heatmap';
+export type AnnotationMode = 'off' | 'blame' | 'heatmap' | 'changes';
 
 /** Decoration contentText collapses regular spaces; keep alignment with nbsp. */
 function toDecorationText(label: string): string {
@@ -47,6 +48,16 @@ export class FileAnnotationsController implements vscode.Disposable {
     }),
   );
 
+  private readonly changedType = vscode.window.createTextEditorDecorationType({
+    borderWidth: '0 0 0 3px',
+    borderStyle: 'solid',
+    borderColor: new vscode.ThemeColor('editorGutter.modifiedBackground'),
+    overviewRulerColor: new vscode.ThemeColor('editorOverviewRuler.modifiedForeground'),
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    isWholeLine: true,
+    rangeBehavior: vscode.DecorationRangeBehavior.ClosedOpen,
+  });
+
   /** Active mode keyed by document uri (survives tab switches). */
   private modes = new Map<string, AnnotationMode>();
   /** Controller-level switch (mode switching); per-document modes are kept. */
@@ -55,6 +66,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   private renderCounter = 0;
   private latestRender = new Map<string, number>();
   private disposables: vscode.Disposable[] = [];
+  private disposed = false;
 
   constructor(
     private readonly blame: BlameModel,
@@ -87,7 +99,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   }
 
   /** Toggles the mode for the active editor; switching clears the other mode. */
-  toggle(mode: 'blame' | 'heatmap'): void {
+  toggle(mode: 'blame' | 'heatmap' | 'changes'): void {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document.uri.scheme !== 'file') return;
     const key = editor.document.uri.toString();
@@ -138,6 +150,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   }
 
   private async render(editor: vscode.TextEditor): Promise<void> {
+    if (this.disposed) return;
     const document = editor.document;
     if (document.uri.scheme !== 'file') return;
     const key = document.uri.toString();
@@ -172,13 +185,34 @@ export class FileAnnotationsController implements vscode.Disposable {
     // edited buffer will re-render via the debounced change handler.
     if (this.latestRender.get(key) !== renderId || document.version !== version) return;
     if (!vscode.window.visibleTextEditors.includes(editor)) return;
+    // Disposal can land while the blame request is in flight; the decoration
+    // types are gone by then.
+    if (this.disposed) return;
 
     if (mode === 'blame') this.applyGutterBlame(editor, fileBlame);
+    else if (mode === 'changes') this.applyChanges(editor, fileBlame);
     else this.applyHeatmap(editor, fileBlame);
+  }
+
+  private applyChanges(editor: vscode.TextEditor, fileBlame: FileBlame): void {
+    editor.setDecorations(this.gutterHead, []);
+    editor.setDecorations(this.gutterTail, []);
+    for (const type of this.heatTypes) editor.setDecorations(type, []);
+
+    const lineCount = editor.document.lineCount;
+    const ranges: vscode.Range[] = [];
+    for (const { startLine, lineCount: runLines } of computeChangedRanges(fileBlame)) {
+      const first = startLine - 1;
+      if (first >= lineCount) continue;
+      const last = Math.min(first + runLines - 1, lineCount - 1);
+      ranges.push(new vscode.Range(first, 0, last, 0));
+    }
+    editor.setDecorations(this.changedType, ranges);
   }
 
   private applyGutterBlame(editor: vscode.TextEditor, fileBlame: FileBlame): void {
     for (const type of this.heatTypes) editor.setDecorations(type, []);
+    editor.setDecorations(this.changedType, []);
 
     const lineCount = editor.document.lineCount;
     const heads: vscode.DecorationOptions[] = [];
@@ -209,6 +243,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   private applyHeatmap(editor: vscode.TextEditor, fileBlame: FileBlame): void {
     editor.setDecorations(this.gutterHead, []);
     editor.setDecorations(this.gutterTail, []);
+    editor.setDecorations(this.changedType, []);
 
     const lineCount = editor.document.lineCount;
     const byBucket: vscode.Range[][] = this.heatTypes.map(() => []);
@@ -224,13 +259,16 @@ export class FileAnnotationsController implements vscode.Disposable {
   private clearDecorations(editor: vscode.TextEditor): void {
     editor.setDecorations(this.gutterHead, []);
     editor.setDecorations(this.gutterTail, []);
+    editor.setDecorations(this.changedType, []);
     for (const type of this.heatTypes) editor.setDecorations(type, []);
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const timer of this.debounceTimers.values()) clearTimeout(timer);
     this.gutterHead.dispose();
     this.gutterTail.dispose();
+    this.changedType.dispose();
     for (const type of this.heatTypes) type.dispose();
     for (const d of this.disposables) d.dispose();
     this.latestRender.clear();

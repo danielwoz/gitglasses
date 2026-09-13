@@ -8,6 +8,38 @@ export interface LocatedFile {
   relativePath: string;
 }
 
+/**
+ * The repo-relative path of `fsPath` inside `rootPath`, or undefined when it
+ * lies outside.
+ *
+ * The two sides come from different worlds. rootPath is libgit2's
+ * git_repository_workdir(), which uses forward slashes on every platform;
+ * fsPath is VS Code's, which uses backslashes on Windows. A raw startsWith
+ * between them never matches there, which would leave blame, annotations,
+ * staging and open-on-remote silently doing nothing on Windows. Drive letters
+ * also vary in case between the two, and NTFS is case-insensitive anyway.
+ */
+export function relativeWithinRoot(
+  rootPath: string,
+  fsPath: string,
+  caseInsensitive: boolean = process.platform === 'win32',
+): string | undefined {
+  const normalize = (value: string): string => {
+    const slashed = value.replace(/\\/g, '/').replace(/\/+$/, '');
+    return caseInsensitive ? slashed.toLowerCase() : slashed;
+  };
+
+  const root = normalize(rootPath);
+  const target = normalize(fsPath);
+  if (root === '') return undefined;
+  if (target === root) return '';
+  if (!target.startsWith(`${root}/`)) return undefined;
+
+  // Slice the original (not the case-folded copy) so the path keeps its case.
+  const rawTarget = fsPath.replace(/\\/g, '/');
+  return rawTarget.slice(root.length + 1);
+}
+
 // Maps workspace files to engine repo ids, discovering repos lazily on first
 // touch of a file inside them.
 export class RepositoryService {
@@ -25,12 +57,9 @@ export class RepositoryService {
       (a, b) => b[1].length - a[1].length,
     );
     for (const [repoId, rootPath] of sorted) {
-      if (!fsPath.startsWith(rootPath)) continue;
-      const rest = fsPath.slice(rootPath.length);
-      if (rest === '' || rest.startsWith(path.sep)) {
-        const relative = rest.startsWith(path.sep) ? rest.slice(1) : '';
-        return { repoId, rootPath, relativePath: relative.split(path.sep).join('/') };
-      }
+      const relative = relativeWithinRoot(rootPath, fsPath);
+      if (relative === undefined) continue;
+      return { repoId, rootPath, relativePath: relative };
     }
     return undefined;
   }

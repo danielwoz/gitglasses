@@ -37,6 +37,17 @@ function findEngineBinary(): string {
   );
 }
 
+// An empty file standing in for the user's global git config. os.devNull is
+// \\.\nul on Windows, which git's path layer rewrites to //./nul and rejects.
+let emptyConfigPath: string | undefined;
+function emptyGitConfig(): string {
+  if (!emptyConfigPath) {
+    emptyConfigPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gg-gitconfig-')), 'empty');
+    fs.writeFileSync(emptyConfigPath, '');
+  }
+  return emptyConfigPath;
+}
+
 // Runs git with a pinned identity, pinned timestamps, and user/system config
 // masked out, so every fixture repo is byte-for-byte reproducible.
 function git(cwd: string, ...args: string[]): void {
@@ -51,8 +62,9 @@ function git(cwd: string, ...args: string[]): void {
       GIT_COMMITTER_EMAIL: FIXTURE.authorEmail,
       GIT_AUTHOR_DATE: '2024-01-02T03:04:05Z',
       GIT_COMMITTER_DATE: '2024-01-02T03:04:05Z',
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: emptyGitConfig(),
+      GIT_CONFIG_SYSTEM: emptyGitConfig(),
     },
   });
 }
@@ -67,6 +79,14 @@ function createFixtureWorkspace(enginePath: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-'));
 
   git(root, 'init');
+  // Hermetic against the host's git config. Git for Windows ships
+  // system-level core.autocrlf=true, which would rewrite the checked-out bytes
+  // and shift every line the blame assertions depend on. The C++ fixture pins
+  // the same settings for the same reason.
+  git(root, 'config', 'core.autocrlf', 'false');
+  git(root, 'config', 'commit.gpgsign', 'false');
+  git(root, 'config', 'user.name', FIXTURE.authorName);
+  git(root, 'config', 'user.email', FIXTURE.authorEmail);
   write(root, FIXTURE.blameFile, FIXTURE.blameFileInitialContents);
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileCommittedContents);
   write(root, FIXTURE.renameSource, FIXTURE.renameContents);
@@ -79,6 +99,8 @@ function createFixtureWorkspace(enginePath: string): string {
 
   git(root, 'mv', FIXTURE.renameSource, FIXTURE.renameTarget);
   git(root, 'commit', '-m', 'rename beta to gamma');
+
+  git(root, 'remote', 'add', FIXTURE.remoteName, FIXTURE.remoteUrl);
 
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileWorkingContents);
 

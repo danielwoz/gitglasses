@@ -54,6 +54,24 @@ claude mcp add gitglasses -- npx gitglasses-mcp
 | `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server looks for `../build/release/engine/gitglasses-engine` relative to this package, then searches `PATH`. |
 | `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
+| `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
+| `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server may read. Unset means **any repository the process can read**. |
+
+## Security model
+
+The server runs with the privileges of whoever starts it, and every tool takes
+an absolute `repoPath`. Read that literally: by default, an agent can name any
+path on the machine and read the history, diffs, status and blame of whatever
+repository contains it — not just the project under discussion. `repo/discover`
+walks *upwards*, so a path inside a repository grants that repository.
+
+Set `GITGLASSES_ALLOWED_ROOTS` to bound this. Paths outside it are rejected
+before reaching the engine, including via `..` traversal.
+
+The GitHub host is deliberately **not** a tool argument. A token and the host
+it authenticates to are inseparable, so both come from the environment; if the
+agent could name the host, a prompt injection would be enough to have the
+token sent somewhere else.
 
 ## Development
 

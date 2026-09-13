@@ -145,20 +145,6 @@ std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBl
   return out;
 }
 
-// Writes `contents` to a throwaway file for `git apply`; removed by caller.
-Result<std::filesystem::path> writeTempPatch(const std::string& contents) {
-  const std::filesystem::path file = util::randomTempPath("gg-hunk-", ".patch");
-  std::FILE* f = std::fopen(file.string().c_str(), "wb");
-  if (!f) return Error{ErrorCode::Internal, "cannot create temp patch file"};
-  const size_t written = std::fwrite(contents.data(), 1, contents.size(), f);
-  std::fclose(f);
-  if (written != contents.size()) {
-    std::error_code ec;
-    std::filesystem::remove(file, ec);
-    return Error{ErrorCode::Internal, "cannot write temp patch file"};
-  }
-  return file;
-}
 
 }  // namespace
 
@@ -318,22 +304,19 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
             throw rpc::HandlerError{{statusGitError("apply hunks to index")}};
           }
         } else {
-          auto file = writeTempPatch(subset);
+          // TempFile, not a bare path: readLine()/wait() throw CancelledError,
+          // which skipped the hand-rolled remove() and left the user's diff in
+          // the shared temp directory.
+          auto file = util::TempFile::create(subset, "gg-hunk-", ".patch");
           if (!file) throw rpc::HandlerError{{file.error()}};
           auto process = exec::GitProcess::spawn(
               repo.value().workdir(),
-              {"apply", "--cached", "--reverse", file.value().string()});
-          if (!process) {
-            std::error_code ec;
-            std::filesystem::remove(file.value(), ec);
-            throw rpc::HandlerError{{process.error()}};
-          }
+              {"apply", "--cached", "--reverse", file.value().path()});
+          if (!process) throw rpc::HandlerError{{process.error()}};
           std::string line;
           while (process.value().readLine(line, token)) {
           }
           const int exitCode = process.value().wait(token);
-          std::error_code ec;
-          std::filesystem::remove(file.value(), ec);
           if (exitCode != 0) {
             throw rpc::HandlerError{
                 {ErrorCode::GitError, "git apply --cached --reverse failed (" +

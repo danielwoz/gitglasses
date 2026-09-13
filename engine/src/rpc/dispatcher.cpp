@@ -4,6 +4,38 @@
 
 namespace gg::rpc {
 
+std::string dumpForWire(const Json& message) {
+  return message.dump(/*indent=*/-1, /*indent_char=*/' ', /*ensure_ascii=*/false,
+                      Json::error_handler_t::replace);
+}
+
+namespace {
+
+// Rejects payloads nested deeper than kMaxParseDepth before handing them to
+// the parser, which recurses per level and would otherwise overflow the stack.
+bool exceedsDepthLimit(const std::string& payload) {
+  int depth = 0;
+  bool inString = false;
+  bool escaped = false;
+  for (const char c : payload) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c == '\\') escaped = true;
+      else if (c == '"') inString = false;
+      continue;
+    }
+    if (c == '"') inString = true;
+    else if (c == '[' || c == '{') {
+      if (++depth > kMaxParseDepth) return true;
+    } else if (c == ']' || c == '}') {
+      --depth;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 Dispatcher::Dispatcher(TaskPool& pool, SendFn send)
     : pool_(pool), send_(std::move(send)), serialStrand_(pool, Priority::Interactive) {
   notification("$/cancelRequest", [this](const Json& params) { cancelRequest(params); });
@@ -18,6 +50,10 @@ void Dispatcher::notification(const std::string& name, NotificationHandler handl
 }
 
 void Dispatcher::dispatch(const std::string& payload) {
+  if (exceedsDepthLimit(payload)) {
+    sendError(nullptr, {ErrorCode::InvalidRequest, "message nesting too deep"});
+    return;
+  }
   Json message = Json::parse(payload, nullptr, /*allow_exceptions=*/false);
   if (message.is_discarded() || !message.is_object()) {
     sendError(nullptr, {ErrorCode::InvalidRequest, "malformed JSON"});
@@ -86,8 +122,24 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
       sendError(id, {ErrorCode::Cancelled, "request cancelled"});
     } catch (const HandlerError& e) {
       sendError(id, e.error);
+    } catch (const Json::type_error& e) {
+      // A param of the wrong JSON type is the caller's mistake, not ours:
+      // nlohmann's value()/get<>() throw here and would otherwise be reported
+      // as Internal. The library prefixes its text with "[json.exception...]",
+      // which is noise to a client, so only the explanation is kept.
+      std::string detail = e.what();
+      if (const auto close = detail.find("] "); close != std::string::npos) {
+        detail = detail.substr(close + 2);
+      }
+      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + detail});
+    } catch (const Json::out_of_range& e) {
+      std::string detail = e.what();
+      if (const auto close = detail.find("] "); close != std::string::npos) {
+        detail = detail.substr(close + 2);
+      }
+      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + detail});
     } catch (const std::exception& e) {
-      spdlog::error("handler '{}' failed: {}", id.dump(), e.what());
+      spdlog::error("handler '{}' failed: {}", dumpForWire(id), e.what());
       sendError(id, {ErrorCode::Internal, e.what()});
     }
 
