@@ -37,6 +37,17 @@ function findEngineBinary(): string {
   );
 }
 
+// An empty file standing in for the user's global git config. os.devNull is
+// \\.\nul on Windows, which git's path layer rewrites to //./nul and rejects.
+let emptyConfigPath: string | undefined;
+function emptyGitConfig(): string {
+  if (!emptyConfigPath) {
+    emptyConfigPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gg-gitconfig-')), 'empty');
+    fs.writeFileSync(emptyConfigPath, '');
+  }
+  return emptyConfigPath;
+}
+
 // Runs git with a pinned identity, pinned timestamps, and user/system config
 // masked out, so every fixture repo is byte-for-byte reproducible.
 function git(cwd: string, ...args: string[]): void {
@@ -51,8 +62,9 @@ function git(cwd: string, ...args: string[]): void {
       GIT_COMMITTER_EMAIL: FIXTURE.authorEmail,
       GIT_AUTHOR_DATE: '2024-01-02T03:04:05Z',
       GIT_COMMITTER_DATE: '2024-01-02T03:04:05Z',
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: emptyGitConfig(),
+      GIT_CONFIG_SYSTEM: emptyGitConfig(),
     },
   });
 }
