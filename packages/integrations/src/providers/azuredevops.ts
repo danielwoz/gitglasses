@@ -1,5 +1,5 @@
 import { governedFetch } from '../rateLimiter.js';
-import { defaultFetch, type FetchLike } from '../http.js';
+import type { FetchLike } from '../http.js';
 import type {
   AuthContext,
   HostingCapability,
@@ -17,14 +17,8 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import {
-  assertPlainHost,
-  assertSecureBaseUrl,
-  base64Encode,
-  hostOfUrl,
-  throwForStatus,
-  tokenFingerprint,
-} from './shared.js';
+import { CachedIdentity, mergeByRole, p, Path, ProviderClient, segments } from './client.js';
+import { assertPlainHost, base64Encode } from './shared.js';
 
 const API_VERSION = '7.1';
 
@@ -149,10 +143,8 @@ export class AzureDevOpsProvider implements HostingProvider {
 
   private readonly organization: string;
   private readonly project?: string;
-  private readonly baseUrl: string;
-  private readonly fetchFn: FetchLike;
-  private cachedProfileId?: string;
-  private cachedProfileToken?: string;
+  private readonly client: ProviderClient;
+  private readonly profile = new CachedIdentity<string>();
 
   constructor(options: AzureDevOpsProviderOptions) {
     this.id = options.id ?? 'azuredevops';
@@ -160,12 +152,16 @@ export class AzureDevOpsProvider implements HostingProvider {
     // request, so it is restricted to the same bare-label form a hostname has.
     this.organization = assertPlainHost(options.organization, 'Azure DevOps organization');
     this.project = options.project;
-    this.baseUrl = assertSecureBaseUrl(
-      (options.baseUrl ?? 'https://dev.azure.com').replace(/\/+$/, ''),
-      'Azure DevOps baseUrl'
-    );
-    this.host = hostOfUrl(this.baseUrl);
-    this.fetchFn = options.fetchFn ?? governedFetch;
+    this.client = new ProviderClient({
+      name: 'Azure DevOps',
+      baseUrl: options.baseUrl ?? 'https://dev.azure.com',
+      baseUrlLabel: 'Azure DevOps baseUrl',
+      headers: { accept: 'application/json' },
+      // The PAT goes in as basic auth with an empty username.
+      authorize: (auth) => `Basic ${base64Encode(`:${auth.token}`)}`,
+      fetchFn: options.fetchFn ?? governedFetch,
+    });
+    this.host = this.client.host;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -183,25 +179,25 @@ export class AzureDevOpsProvider implements HostingProvider {
     const me = await this.profileId(auth);
     const limit = opts?.limit ?? 50;
     const scope = this.project
-      ? `${this.organization}/${encodeURIComponent(this.project)}`
-      : this.organization;
-    const base =
-      `/${scope}/_apis/git/pullrequests?searchCriteria.status=active` +
-      `&$top=${limit}&api-version=${API_VERSION}`;
+      ? p`/${this.organization}/${this.project}`
+      : p`/${this.organization}`;
+    const criteria = p`searchCriteria.status=active&$top=${limit}`;
+    const base = p`${scope}/_apis/git/pullrequests?${criteria}&api-version=${API_VERSION}`;
     const [authored, reviewing] = await Promise.all([
-      this.get(auth, `${base}&searchCriteria.creatorId=${me}`),
-      this.get(auth, `${base}&searchCriteria.reviewerId=${me}`),
+      this.pullRequests(auth, p`${base}&searchCriteria.creatorId=${me}`),
+      this.pullRequests(auth, p`${base}&searchCriteria.reviewerId=${me}`),
     ]);
-    const results = new Map<number, PullRequest>();
-    for (const pr of ((authored as { value?: AdoPullRequest[] } | undefined)?.value ?? [])) {
-      results.set(pr.pullRequestId, this.mapPullRequest(pr, 'author'));
-    }
-    for (const pr of ((reviewing as { value?: AdoPullRequest[] } | undefined)?.value ?? [])) {
-      if (!results.has(pr.pullRequestId)) {
-        results.set(pr.pullRequestId, this.mapPullRequest(pr, 'reviewer'));
-      }
-    }
-    return [...results.values()].slice(0, limit);
+    return mergeByRole(
+      authored.map((pr) => this.mapPullRequest(pr, 'author')),
+      reviewing.map((pr) => this.mapPullRequest(pr, 'reviewer')),
+      (pr) => pr.number,
+      limit
+    );
+  }
+
+  private async pullRequests(auth: AuthContext, path: Path): Promise<AdoPullRequest[]> {
+    const json = await this.client.getJson<{ value?: AdoPullRequest[] }>(auth, path);
+    return json?.value ?? [];
   }
 
   async getPullRequestForBranch(
@@ -209,14 +205,15 @@ export class AzureDevOpsProvider implements HostingProvider {
     repo: RepoDescriptor,
     branch: string
   ): Promise<PullRequest | undefined> {
-    const json = (await this.get(
+    // repo.owner is "organization/project", so it spans two path segments.
+    const repoPath = p`/${segments(repo.owner)}/_apis/git/repositories/${repo.name}`;
+    const ref = `refs/heads/${branch}`;
+    const criteria = p`searchCriteria.status=active&searchCriteria.sourceRefName=${ref}`;
+    const prs = await this.pullRequests(
       auth,
-      `/${repo.owner}/_apis/git/repositories/${encodeURIComponent(repo.name)}/pullrequests` +
-        `?searchCriteria.status=active&searchCriteria.sourceRefName=${encodeURIComponent(
-          `refs/heads/${branch}`
-        )}&api-version=${API_VERSION}`
-    )) as { value?: AdoPullRequest[] } | undefined;
-    const pr = json?.value?.[0];
+      p`${repoPath}/pullrequests?${criteria}&api-version=${API_VERSION}`
+    );
+    const pr = prs[0];
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
 
@@ -230,10 +227,10 @@ export class AzureDevOpsProvider implements HostingProvider {
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const json = (await this.get(
+    const json = await this.client.getJson<{ id?: number; fields?: Record<string, unknown> }>(
       auth,
-      `/${this.organization}/_apis/wit/workitems/${number}?api-version=${API_VERSION}`
-    )) as { id?: number; fields?: Record<string, unknown> } | undefined;
+      p`/${this.organization}/_apis/wit/workitems/${number}?api-version=${API_VERSION}`
+    );
     if (json === undefined) {
       return undefined;
     }
@@ -244,9 +241,9 @@ export class AzureDevOpsProvider implements HostingProvider {
       id: String(json.id ?? number),
       key: `AB#${json.id ?? number}`,
       title: String(fields['System.Title'] ?? ''),
-      url: `${this.baseUrl}/${this.organization}/${encodeURIComponent(project)}/_workitems/edit/${
-        json.id ?? number
-      }`,
+      url: `${this.client.baseUrl}/${this.organization}/${encodeURIComponent(
+        project
+      )}/_workitems/edit/${json.id ?? number}`,
       state: String(fields['System.State'] ?? ''),
       assignee: assignedTo ? mapAccount(assignedTo) : undefined,
       updatedAt: String(fields['System.ChangedDate'] ?? ''),
@@ -262,7 +259,7 @@ export class AzureDevOpsProvider implements HostingProvider {
       number: pr.pullRequestId,
       title: pr.title,
       url:
-        `${this.baseUrl}/${this.organization}/${encodeURIComponent(projectName)}` +
+        `${this.client.baseUrl}/${this.organization}/${encodeURIComponent(projectName)}` +
         `/_git/${encodeURIComponent(repoName)}/pullrequest/${pr.pullRequestId}`,
       state: mapState(pr.status),
       draft: pr.isDraft ?? false,
@@ -287,36 +284,16 @@ export class AzureDevOpsProvider implements HostingProvider {
   }
 
   private async profileId(auth: AuthContext): Promise<string> {
-    if (this.cachedProfileId !== undefined && this.cachedProfileToken === tokenFingerprint(auth.token)) {
-      return this.cachedProfileId;
-    }
-    const json = (await this.get(
-      auth,
-      `/${this.organization}/_apis/connectionData`
-    )) as { authenticatedUser?: { id?: string } } | undefined;
-    const id = json?.authenticatedUser?.id;
-    if (!id) {
-      throw new Error('Azure DevOps connectionData returned no authenticated user');
-    }
-    this.cachedProfileId = id;
-    this.cachedProfileToken = tokenFingerprint(auth.token);
-    return id;
-  }
-
-  /** REST GET; returns undefined on 404. */
-  private async get(auth: AuthContext, path: string): Promise<unknown | undefined> {
-    const response = await this.fetchFn(`${this.baseUrl}${path}`, {
-      method: 'GET',
-      headers: {
-        authorization: `Basic ${base64Encode(`:${auth.token}`)}`,
-        accept: 'application/json',
-        'user-agent': 'gitglasses',
-      },
+    return this.profile.get(auth.token, async () => {
+      const json = await this.client.getJson<{ authenticatedUser?: { id?: string } }>(
+        auth,
+        p`/${this.organization}/_apis/connectionData`
+      );
+      const id = json?.authenticatedUser?.id;
+      if (!id) {
+        throw new Error('Azure DevOps connectionData returned no authenticated user');
+      }
+      return id;
     });
-    if (response.status === 404) {
-      return undefined;
-    }
-    throwForStatus('Azure DevOps', response);
-    return response.json();
   }
 }

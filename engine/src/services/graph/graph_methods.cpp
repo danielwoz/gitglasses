@@ -3,9 +3,9 @@
 #include <git2.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <map>
-#include <memory>
 #include <optional>
 #include <queue>
 #include <set>
@@ -15,74 +15,29 @@
 #include <utility>
 #include <vector>
 
+#include "core/git2.h"
+#include "core/git2_json.h"
+#include "services/params.h"
+
 namespace gg::services {
 
 namespace {
 
-// Sanity ceiling on page sizes so a bad client cannot request an unbounded
-// response frame.
-constexpr std::int64_t kMaxLimit = 100000;
-
 // Sha of the synthetic uncommitted-changes row (protocol UNCOMMITTED_SHA).
 constexpr const char* kWipSha = "0000000000000000000000000000000000000000";
-
-struct CommitDeleter {
-  void operator()(git_commit* commit) const { git_commit_free(commit); }
-};
-using CommitPtr = std::unique_ptr<git_commit, CommitDeleter>;
-
-struct ReferenceDeleter {
-  void operator()(git_reference* ref) const { git_reference_free(ref); }
-};
-using ReferencePtr = std::unique_ptr<git_reference, ReferenceDeleter>;
-
-struct BranchIteratorDeleter {
-  void operator()(git_branch_iterator* iter) const { git_branch_iterator_free(iter); }
-};
-using BranchIteratorPtr = std::unique_ptr<git_branch_iterator, BranchIteratorDeleter>;
-
-struct ReferenceIteratorDeleter {
-  void operator()(git_reference_iterator* iter) const { git_reference_iterator_free(iter); }
-};
-using ReferenceIteratorPtr = std::unique_ptr<git_reference_iterator, ReferenceIteratorDeleter>;
-
-struct StatusListDeleter {
-  void operator()(git_status_list* list) const { git_status_list_free(list); }
-};
-using StatusListPtr = std::unique_ptr<git_status_list, StatusListDeleter>;
-
-// Always reports GitError: an unresolvable object is GIT_ENOTFOUND to
-// libgit2, but not a missing repository.
-Error graphGitError(const std::string& context) {
-  const git_error* err = git_error_last();
-  const std::string detail = err && err->message ? err->message : "unknown libgit2 error";
-  return {ErrorCode::GitError, context + ": " + detail};
-}
-
-std::string oidToHex(const git_oid& oid) {
-  char hex[GIT_OID_HEXSZ + 1] = {};
-  git_oid_fmt(hex, &oid);
-  return hex;
-}
-
-// Sha of the commit a ref ultimately points at (peels annotated tags and
-// symbolic refs). Empty when the ref does not resolve to a commit.
-std::string commitShaOf(git_reference* ref) {
-  git_object* obj = nullptr;
-  if (git_reference_peel(&obj, ref, GIT_OBJECT_COMMIT) != 0) return {};
-  std::unique_ptr<git_object, decltype(&git_object_free)> guard(obj, git_object_free);
-  return oidToHex(*git_object_id(obj));
-}
-
-rpc::Json signatureJson(const git_signature* sig) {
-  return {{"name", sig && sig->name ? sig->name : ""},
-          {"email", sig && sig->email ? sig->email : ""},
-          {"time", sig ? static_cast<std::int64_t>(sig->when.time) : 0}};
-}
 
 // --- base64 (opaque cursor encoding) ---------------------------------------
 
 constexpr char kBase64Chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Reverse of kBase64Chars, indexed by byte value; -1 outside the alphabet.
+constexpr std::array<int, 256> makeBase64Table() {
+  std::array<int, 256> table{};
+  for (int& entry : table) entry = -1;
+  for (int c = 0; c < 64; ++c) table[static_cast<unsigned char>(kBase64Chars[c])] = c;
+  return table;
+}
+constexpr std::array<int, 256> kBase64Table = makeBase64Table();
 
 std::string base64Encode(const std::string& in) {
   std::string out;
@@ -117,9 +72,6 @@ std::string base64Encode(const std::string& in) {
 
 std::optional<std::string> base64Decode(const std::string& in) {
   if (in.size() % 4 != 0) return std::nullopt;
-  int table[256];
-  std::fill(std::begin(table), std::end(table), -1);
-  for (int c = 0; c < 64; ++c) table[static_cast<unsigned char>(kBase64Chars[c])] = c;
   std::string out;
   out.reserve(in.size() / 4 * 3);
   for (size_t i = 0; i < in.size(); i += 4) {
@@ -132,7 +84,7 @@ std::optional<std::string> base64Decode(const std::string& in) {
         ++pad;
         continue;
       }
-      vals[j] = table[static_cast<unsigned char>(c)];
+      vals[j] = kBase64Table[static_cast<unsigned char>(c)];
       if (vals[j] < 0 || pad > 0) return std::nullopt;
     }
     const unsigned v = static_cast<unsigned>((vals[0] << 18) | (vals[1] << 12) | (vals[2] << 6) |
@@ -280,22 +232,22 @@ Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
   {
     git_branch_iterator* rawIter = nullptr;
     if (git_branch_iterator_new(&rawIter, raw, GIT_BRANCH_LOCAL) != 0) {
-      return graphGitError("list local branches");
+      return core::gitError("list local branches");
     }
-    BranchIteratorPtr iter(rawIter);
+    core::BranchIteratorPtr iter(rawIter);
     git_reference* rawRef = nullptr;
     git_branch_t type;
     while (git_branch_next(&rawRef, &type, iter.get()) == 0) {
-      ReferencePtr ref(rawRef);
+      core::ReferencePtr ref(rawRef);
       const char* name = nullptr;
       if (git_branch_name(&name, ref.get()) != 0) continue;
-      const std::string sha = commitShaOf(ref.get());
+      const std::string sha = core::commitShaOf(ref.get());
       if (sha.empty()) continue;
       rpc::Json decoration = {{"name", name}, {"kind", "branch"}};
       git_reference* rawUpstream = nullptr;
       if (git_branch_upstream(&rawUpstream, ref.get()) == 0) {
-        ReferencePtr upstream(rawUpstream);
-        const std::string upstreamSha = commitShaOf(upstream.get());
+        core::ReferencePtr upstream(rawUpstream);
+        const std::string upstreamSha = core::commitShaOf(upstream.get());
         const char* upstreamName = git_reference_shorthand(upstream.get());
         if (!upstreamSha.empty() && upstreamName) {
           git_oid localOid, upstreamOid;
@@ -319,18 +271,18 @@ Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
   {
     git_branch_iterator* rawIter = nullptr;
     if (git_branch_iterator_new(&rawIter, raw, GIT_BRANCH_REMOTE) != 0) {
-      return graphGitError("list remote branches");
+      return core::gitError("list remote branches");
     }
-    BranchIteratorPtr iter(rawIter);
+    core::BranchIteratorPtr iter(rawIter);
     git_reference* rawRef = nullptr;
     git_branch_t type;
     while (git_branch_next(&rawRef, &type, iter.get()) == 0) {
-      ReferencePtr ref(rawRef);
+      core::ReferencePtr ref(rawRef);
       // Skip symbolic refs like refs/remotes/origin/HEAD.
       if (git_reference_type(ref.get()) == GIT_REFERENCE_SYMBOLIC) continue;
       const char* name = nullptr;
       if (git_branch_name(&name, ref.get()) != 0) continue;
-      const std::string sha = commitShaOf(ref.get());
+      const std::string sha = core::commitShaOf(ref.get());
       if (sha.empty()) continue;
       fnvMix(hash, "r:" + std::string(name) + ":" + sha);
       decorations.emplace_back(2, name, sha, rpc::Json{{"name", name}, {"kind", "remote"}});
@@ -342,13 +294,13 @@ Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
   {
     git_reference_iterator* rawIter = nullptr;
     if (git_reference_iterator_glob_new(&rawIter, raw, "refs/tags/*") != 0) {
-      return graphGitError("list tags");
+      return core::gitError("list tags");
     }
-    ReferenceIteratorPtr iter(rawIter);
+    core::ReferenceIteratorPtr iter(rawIter);
     git_reference* rawRef = nullptr;
     while (git_reference_next(&rawRef, iter.get()) == 0) {
-      ReferencePtr ref(rawRef);
-      const std::string sha = commitShaOf(ref.get());
+      core::ReferencePtr ref(rawRef);
+      const std::string sha = core::commitShaOf(ref.get());
       if (sha.empty()) continue;  // tag of a tree/blob: not a commit ref
       const std::string name = git_reference_shorthand(ref.get());
       fnvMix(hash, "t:" + name + ":" + sha);
@@ -361,11 +313,11 @@ Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
     auto callback = [](size_t index, const char* message, const git_oid* stashId,
                        void* payload) -> int {
       auto& out = *static_cast<std::vector<StashInfo>*>(payload);
-      out.push_back({index, oidToHex(*stashId), message ? message : ""});
+      out.push_back({index, core::oidToHex(*stashId), message ? message : ""});
       return 0;
     };
     if (git_stash_foreach(raw, callback, &snap.stashes) != 0) {
-      return graphGitError("list stashes");
+      return core::gitError("list stashes");
     }
     for (const auto& stash : snap.stashes) fnvMix(hash, "s:" + stash.sha);
   }
@@ -406,19 +358,19 @@ Result<NodeMap> collectNodes(const core::Repo& repo, const std::vector<std::stri
     if (nodes.find(sha) != nodes.end()) continue;
     git_oid oid;
     if (git_oid_fromstr(&oid, sha.c_str()) != 0) {
-      return graphGitError("parse oid " + sha);
+      return core::gitError("parse oid " + sha);
     }
     git_commit* rawCommit = nullptr;
     if (git_commit_lookup(&rawCommit, repo.raw(), &oid) != 0) {
-      return graphGitError("lookup commit " + sha);
+      return core::gitError("lookup commit " + sha);
     }
-    CommitPtr commit(rawCommit);
+    core::CommitPtr commit(rawCommit);
     Node node;
     node.time = static_cast<std::int64_t>(git_commit_time(commit.get()));
     const unsigned int parentCount = git_commit_parentcount(commit.get());
     node.parents.reserve(parentCount);
     for (unsigned int i = 0; i < parentCount; ++i) {
-      node.parents.push_back(oidToHex(*git_commit_parent_id(commit.get(), i)));
+      node.parents.push_back(core::oidToHex(*git_commit_parent_id(commit.get(), i)));
     }
     for (const auto& parent : node.parents) stack.push_back(parent);
     nodes.emplace(sha, std::move(node));
@@ -442,18 +394,10 @@ Result<bool> workdirDirty(const core::Repo& repo) {
   opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED | GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS;
   git_status_list* rawList = nullptr;
   if (git_status_list_new(&rawList, repo.raw(), &opts) != 0) {
-    return graphGitError("workdir status");
+    return core::gitError("workdir status");
   }
-  StatusListPtr list(rawList);
+  core::StatusListPtr list(rawList);
   return git_status_list_entrycount(list.get()) > 0;
-}
-
-std::int64_t requireLimit(const rpc::Json& params) {
-  const std::int64_t limit = params.value("limit", std::int64_t{0});
-  if (limit <= 0) {
-    throw rpc::HandlerError{{ErrorCode::InvalidParams, "'limit' must be a positive integer"}};
-  }
-  return std::min(limit, kMaxLimit);
 }
 
 struct Cursor {
@@ -532,11 +476,11 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
             git_commit* rawCommit = nullptr;
             if (git_oid_fromstr(&oid, stash.sha.c_str()) != 0 ||
                 git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
-              throw rpc::HandlerError{{graphGitError("lookup stash " + stash.sha)}};
+              throw rpc::HandlerError{{core::gitError("lookup stash " + stash.sha)}};
             }
-            CommitPtr commit(rawCommit);
+            core::CommitPtr commit(rawCommit);
             if (git_commit_parentcount(commit.get()) == 0) continue;
-            const std::string base = oidToHex(*git_commit_parent_id(commit.get(), 0));
+            const std::string base = core::oidToHex(*git_commit_parent_id(commit.get(), 0));
             if (nodes.value().find(base) != nodes.value().end()) {
               stashesByBase[base].push_back(stash);  // foreach order: index asc
             }
@@ -555,14 +499,14 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         std::size_t pos = 0;
         std::optional<std::string> nextCursor;
 
-        auto lookupCommit = [&](const std::string& sha) -> CommitPtr {
+        auto lookupCommit = [&](const std::string& sha) -> core::CommitPtr {
           git_oid oid;
           git_commit* rawCommit = nullptr;
           if (git_oid_fromstr(&oid, sha.c_str()) != 0 ||
               git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
-            throw rpc::HandlerError{{graphGitError("lookup commit " + sha)}};
+            throw rpc::HandlerError{{core::gitError("lookup commit " + sha)}};
           }
-          return CommitPtr(rawCommit);
+          return core::CommitPtr(rawCommit);
         };
 
         // Emits one row of the deterministic sequence. Rows before the cursor
@@ -583,8 +527,8 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
                            {"lane", layout.lane},  {"laneEdges", std::move(layout.edges)},
                            {"kind", kind}};
           if (stash) {
-            CommitPtr commit = lookupCommit(sha);
-            row["author"] = signatureJson(git_commit_author(commit.get()));
+            core::CommitPtr commit = lookupCommit(sha);
+            row["author"] = core::signatureJson(git_commit_author(commit.get()));
             row["time"] = static_cast<std::int64_t>(git_commit_time(commit.get()));
             row["summary"] = stash->message;
             row["refs"] = rpc::Json::array(
@@ -596,8 +540,8 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
             row["summary"] = "Uncommitted changes";
             row["refs"] = rpc::Json::array();
           } else {
-            CommitPtr commit = lookupCommit(sha);
-            row["author"] = signatureJson(git_commit_author(commit.get()));
+            core::CommitPtr commit = lookupCommit(sha);
+            row["author"] = core::signatureJson(git_commit_author(commit.get()));
             row["time"] = static_cast<std::int64_t>(git_commit_time(commit.get()));
             const char* summary = git_commit_summary(commit.get());
             row["summary"] = summary ? summary : "";

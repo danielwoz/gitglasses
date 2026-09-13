@@ -7,25 +7,13 @@
 #include <utility>
 #include <vector>
 
+#include "core/git2.h"
+#include "services/params.h"
 #include "services/status/diff_common.h"
 
 namespace gg::services {
 
 namespace {
-
-using status_detail::DiffPtr;
-using status_detail::PatchPtr;
-using status_detail::statusGitError;
-
-struct CommitDeleter {
-  void operator()(git_commit* commit) const { git_commit_free(commit); }
-};
-using CommitPtr = std::unique_ptr<git_commit, CommitDeleter>;
-
-struct TreeDeleter {
-  void operator()(git_tree* tree) const { git_tree_free(tree); }
-};
-using TreePtr = std::unique_ptr<git_tree, TreeDeleter>;
 
 char statusLetter(git_delta_t status) {
   switch (status) {
@@ -48,23 +36,23 @@ char statusLetter(git_delta_t status) {
 }
 
 // Resolves a revspec to the commit it names (peeling annotated tags).
-Result<CommitPtr> resolveCommit(const core::Repo& repo, const std::string& rev) {
+Result<core::CommitPtr> resolveCommit(const core::Repo& repo, const std::string& rev) {
   git_object* obj = nullptr;
   if (git_revparse_single(&obj, repo.raw(), rev.c_str()) != 0) {
-    return statusGitError("resolve '" + rev + "'");
+    return core::gitError("resolve '" + rev + "'");
   }
   std::unique_ptr<git_object, decltype(&git_object_free)> guard(obj, git_object_free);
   git_object* peeled = nullptr;
   if (git_object_peel(&peeled, obj, GIT_OBJECT_COMMIT) != 0) {
-    return statusGitError("'" + rev + "' does not point to a commit");
+    return core::gitError("'" + rev + "' does not point to a commit");
   }
-  return CommitPtr(reinterpret_cast<git_commit*>(peeled));
+  return core::CommitPtr(reinterpret_cast<git_commit*>(peeled));
 }
 
-Result<TreePtr> commitTree(git_commit* commit) {
+Result<core::TreePtr> commitTree(git_commit* commit) {
   git_tree* tree = nullptr;
-  if (git_commit_tree(&tree, commit) != 0) return statusGitError("read commit tree");
-  return TreePtr(tree);
+  if (git_commit_tree(&tree, commit) != 0) return core::gitError("read commit tree");
+  return core::TreePtr(tree);
 }
 
 // FileChange list for a tree diff: rename detection on, per-file line stats
@@ -73,7 +61,7 @@ rpc::Json fileChangesJson(git_diff* diff, const CancelToken& token) {
   git_diff_find_options findOpts;
   git_diff_find_options_init(&findOpts, GIT_DIFF_FIND_OPTIONS_VERSION);
   if (git_diff_find_similar(diff, &findOpts) != 0) {
-    throw rpc::HandlerError{{statusGitError("detect renames")}};
+    throw rpc::HandlerError{{core::gitError("detect renames")}};
   }
   rpc::Json files = rpc::Json::array();
   const size_t count = git_diff_num_deltas(diff);
@@ -91,7 +79,7 @@ rpc::Json fileChangesJson(git_diff* diff, const CancelToken& token) {
     if ((delta->flags & GIT_DIFF_FLAG_BINARY) == 0) {
       git_patch* rawPatch = nullptr;
       if (git_patch_from_diff(&rawPatch, diff, i) == 0 && rawPatch) {
-        PatchPtr patch(rawPatch);
+        core::PatchPtr patch(rawPatch);
         size_t contextLines = 0, additions = 0, deletions = 0;
         if (git_patch_line_stats(&contextLines, &additions, &deletions, patch.get()) == 0) {
           file["additions"] = additions;
@@ -104,15 +92,6 @@ rpc::Json fileChangesJson(git_diff* diff, const CancelToken& token) {
   return files;
 }
 
-std::string requireParam(const rpc::Json& params, const char* key) {
-  const std::string value = params.value(key, "");
-  if (value.empty()) {
-    throw rpc::HandlerError{
-        {ErrorCode::InvalidParams, std::string("'") + key + "' is required"}};
-  }
-  return value;
-}
-
 }  // namespace
 
 void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
@@ -122,7 +101,7 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
       "diff/commit",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
-        const std::string sha = requireParam(params, "sha");
+        const std::string sha = requireString(params, "sha");
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
@@ -131,13 +110,13 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         auto tree = commitTree(commit.value().get());
         if (!tree) throw rpc::HandlerError{{tree.error()}};
 
-        TreePtr parentTree;
+        core::TreePtr parentTree;
         if (git_commit_parentcount(commit.value().get()) > 0) {
           git_commit* rawParent = nullptr;
           if (git_commit_parent(&rawParent, commit.value().get(), 0) != 0) {
-            throw rpc::HandlerError{{statusGitError("lookup parent of " + sha)}};
+            throw rpc::HandlerError{{core::gitError("lookup parent of " + sha)}};
           }
-          CommitPtr parent(rawParent);
+          core::CommitPtr parent(rawParent);
           auto parentTreeResult = commitTree(parent.get());
           if (!parentTreeResult) throw rpc::HandlerError{{parentTreeResult.error()}};
           parentTree = std::move(parentTreeResult.value());
@@ -146,9 +125,9 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         git_diff* rawDiff = nullptr;
         if (git_diff_tree_to_tree(&rawDiff, repo.value().raw(), parentTree.get(),
                                   tree.value().get(), nullptr) != 0) {
-          throw rpc::HandlerError{{statusGitError("diff commit " + sha)}};
+          throw rpc::HandlerError{{core::gitError("diff commit " + sha)}};
         }
-        DiffPtr diff(rawDiff);
+        core::DiffPtr diff(rawDiff);
         return {{"files", fileChangesJson(diff.get(), token)}};
       },
       rpc::Mode::Concurrent);
@@ -158,8 +137,8 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
       "diff/refs",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
-        const std::string base = requireParam(params, "base");
-        const std::string head = requireParam(params, "head");
+        const std::string base = requireString(params, "base");
+        const std::string head = requireString(params, "head");
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
@@ -175,9 +154,9 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         git_diff* rawDiff = nullptr;
         if (git_diff_tree_to_tree(&rawDiff, repo.value().raw(), baseTree.value().get(),
                                   headTree.value().get(), nullptr) != 0) {
-          throw rpc::HandlerError{{statusGitError("diff " + base + ".." + head)}};
+          throw rpc::HandlerError{{core::gitError("diff " + base + ".." + head)}};
         }
-        DiffPtr diff(rawDiff);
+        core::DiffPtr diff(rawDiff);
         return {{"files", fileChangesJson(diff.get(), token)}};
       },
       rpc::Mode::Concurrent);
@@ -190,7 +169,7 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
       "diff/fileHunks",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
-        const std::string path = requireParam(params, "path");
+        const std::string path = requireString(params, "path");
         const bool staged = params.value("staged", false);
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
@@ -204,16 +183,16 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         }
         git_patch* rawPatch = nullptr;
         if (git_patch_from_diff(&rawPatch, diff.value().get(), 0) != 0) {
-          throw rpc::HandlerError{{statusGitError("build patch for '" + path + "'")}};
+          throw rpc::HandlerError{{core::gitError("build patch for '" + path + "'")}};
         }
-        PatchPtr patch(rawPatch);
+        core::PatchPtr patch(rawPatch);
         const size_t hunkCount = git_patch_num_hunks(patch.get());
         for (size_t h = 0; h < hunkCount; ++h) {
           token.throwIfCancelled();
           const git_diff_hunk* hunk = nullptr;
           size_t lineCount = 0;
           if (git_patch_get_hunk(&hunk, &lineCount, patch.get(), h) != 0) {
-            throw rpc::HandlerError{{statusGitError("read hunk of '" + path + "'")}};
+            throw rpc::HandlerError{{core::gitError("read hunk of '" + path + "'")}};
           }
           std::string header(hunk->header, hunk->header_len);
           while (!header.empty() && (header.back() == '\n' || header.back() == '\r')) {
@@ -223,7 +202,7 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
           for (size_t l = 0; l < lineCount; ++l) {
             const git_diff_line* line = nullptr;
             if (git_patch_get_line_in_hunk(&line, patch.get(), h, l) != 0) {
-              throw rpc::HandlerError{{statusGitError("read line of '" + path + "'")}};
+              throw rpc::HandlerError{{core::gitError("read line of '" + path + "'")}};
             }
             char prefix = 0;
             switch (line->origin) {

@@ -10,8 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include "exec/git_process.h"
+#include "core/git2.h"
+#include "exec/git_runner.h"
 #include "services/mutate/mutate_common.h"
+#include "services/params.h"
 #include "util/sha256.h"
 #include "util/temp_file.h"
 
@@ -22,16 +24,9 @@ namespace {
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
 using mutate_detail::repoCwd;
-using mutate_detail::requireString;
 using mutate_detail::runGit;
 using mutate_detail::requirePositional;
 using mutate_detail::runGitOrThrow;
-
-Error patchGitError(const std::string& context) {
-  const git_error* err = git_error_last();
-  const std::string detail = err && err->message ? err->message : "unknown libgit2 error";
-  return {ErrorCode::GitError, context + ": " + detail};
-}
 
 // Captured `git` invocation whose stdout is kept byte-exact. Patch text must
 // survive round-trips unchanged (CR characters, exact trailing newlines), so
@@ -44,14 +39,16 @@ struct RawGitOutput {
 
 Result<RawGitOutput> runGitRaw(const core::Repo& repo, std::vector<std::string> args,
                                const CancelToken& token) {
-  exec::SpawnOpts opts;
+  exec::RunOpts opts;
   opts.rawOutput = true;
-  auto process = exec::GitProcess::spawn(repoCwd(repo), std::move(args), opts);
-  if (!process) return process.error();
   RawGitOutput output;
-  output.stdoutText = process.value().readAll(token);
-  output.exitCode = process.value().wait(token);
-  output.stderrText = process.value().stderrOutput();
+  auto status = exec::runGit(repoCwd(repo), std::move(args), opts, token,
+                             [&output](std::string bytes) {
+                               output.stdoutText = std::move(bytes);
+                             });
+  if (!status) return status.error();
+  output.exitCode = status.value().exitCode;
+  output.stderrText = status.value().stderrText;
   return output;
 }
 
@@ -254,7 +251,7 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         auto repo = openRepo(context, params);
         git_strarray names{};
         if (git_remote_list(&names, repo.raw()) != 0) {
-          throw rpc::HandlerError{{patchGitError("list remotes")}};
+          throw rpc::HandlerError{{core::gitError("list remotes")}};
         }
         rpc::Json remotes = rpc::Json::array();
         for (size_t i = 0; i < names.count; ++i) {

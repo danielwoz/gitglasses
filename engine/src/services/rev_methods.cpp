@@ -2,27 +2,11 @@
 
 #include <git2.h>
 
-#include <memory>
 #include <string>
 
+#include "core/git2.h"
+
 namespace gg::services {
-
-namespace {
-
-struct ObjectDeleter {
-  void operator()(git_object* object) const { git_object_free(object); }
-};
-using ObjectPtr = std::unique_ptr<git_object, ObjectDeleter>;
-
-// Unlike core::lastGitError, always reports GitError: an unresolvable rev or
-// path is GIT_ENOTFOUND to libgit2, but not a missing repository.
-Error revGitError(const std::string& context) {
-  const git_error* err = git_error_last();
-  const std::string detail = err && err->message ? err->message : "unknown libgit2 error";
-  return {ErrorCode::GitError, context + ": " + detail};
-}
-
-}  // namespace
 
 void registerRevMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
   dispatcher.method(
@@ -40,9 +24,9 @@ void registerRevMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         const std::string spec = rev + ":" + path;
         git_object* raw = nullptr;
         if (git_revparse_single(&raw, repo.value().raw(), spec.c_str()) != 0) {
-          throw rpc::HandlerError{{revGitError("resolve '" + spec + "'")}};
+          throw rpc::HandlerError{{core::gitError("resolve '" + spec + "'")}};
         }
-        ObjectPtr object(raw);
+        core::ObjectPtr object(raw);
         if (git_object_type(raw) != GIT_OBJECT_BLOB) {
           throw rpc::HandlerError{{ErrorCode::GitError, "'" + spec + "' is not a file"}};
         }

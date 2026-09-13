@@ -19,18 +19,9 @@ struct GitOutput {
   std::string stderrText;
 };
 
-// Rejects a value that git's option parser would read as a flag.
-//
-// Refnames, remotes, paths and stash messages reach argv as positionals. Git
-// parses anything starting with '-' as an option wherever it appears, so a
-// value like "--upload-pack=..." or "--output=..." turns a data field into an
-// arbitrary-command or file-write primitive. These values are not always
-// client-supplied: refnames come out of the repository itself, so a hostile
-// repo is enough. Callers pass every user- or repo-derived positional through
-// this, and add a "--" separator wherever the subcommand supports one.
-//
-// Throws HandlerError(InvalidParams) when the value would be parsed as an
-// option. `what` names the field for the error message.
+// Rejects a value that git's option parser would read as a flag (see
+// exec::looksLikeGitOption for why this matters), throwing
+// HandlerError(InvalidParams). `what` names the field for the error message.
 const std::string& requirePositional(const std::string& value, const char* what);
 
 // Same, applied to each element of a list (e.g. cherry-pick shas).
@@ -74,12 +65,5 @@ bool inConflictState(const core::Repo& repo);
 core::Repo openRepo(ServiceContext& context, const rpc::Json& params);
 
 std::string headSha(const core::Repo& repo, const CancelToken& token);
-
-// Fetches a required non-empty string param or throws InvalidParams.
-std::string requireString(const rpc::Json& params, const char* key);
-
-// Fetches a required non-empty array of non-empty strings or throws
-// InvalidParams.
-std::vector<std::string> requireStringArray(const rpc::Json& params, const char* key);
 
 }  // namespace gg::services::mutate_detail

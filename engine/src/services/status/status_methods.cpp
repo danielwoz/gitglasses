@@ -2,27 +2,14 @@
 
 #include <git2.h>
 
-#include <memory>
 #include <string>
 #include <utility>
 
-#include "services/status/diff_common.h"
+#include "core/git2.h"
 
 namespace gg::services {
 
 namespace {
-
-using status_detail::statusGitError;
-
-struct ReferenceDeleter {
-  void operator()(git_reference* ref) const { git_reference_free(ref); }
-};
-using ReferencePtr = std::unique_ptr<git_reference, ReferenceDeleter>;
-
-struct StatusListDeleter {
-  void operator()(git_status_list* list) const { git_status_list_free(list); }
-};
-using StatusListPtr = std::unique_ptr<git_status_list, StatusListDeleter>;
 
 // A FileChange entry. additions/deletions are always 0 here: computing per
 // file line stats needs a content diff per entry, which is too expensive for
@@ -56,10 +43,10 @@ void registerStatusMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         if (!head.value().unborn && !head.value().detached) {
           git_reference* rawHead = nullptr;
           if (git_repository_head(&rawHead, raw) == 0) {
-            ReferencePtr headRef(rawHead);
+            core::ReferencePtr headRef(rawHead);
             git_reference* rawUpstream = nullptr;
             if (git_branch_upstream(&rawUpstream, headRef.get()) == 0) {
-              ReferencePtr upstream(rawUpstream);
+              core::ReferencePtr upstream(rawUpstream);
               const char* shorthand = git_reference_shorthand(upstream.get());
               const git_oid* localOid = git_reference_target(headRef.get());
               const git_oid* upstreamOid = git_reference_target(upstream.get());
@@ -78,9 +65,9 @@ void registerStatusMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
                      GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX;
         git_status_list* rawList = nullptr;
         if (git_status_list_new(&rawList, raw, &opts) != 0) {
-          throw rpc::HandlerError{{statusGitError("read status")}};
+          throw rpc::HandlerError{{core::gitError("read status")}};
         }
-        StatusListPtr list(rawList);
+        core::StatusListPtr list(rawList);
 
         rpc::Json staged = rpc::Json::array();
         rpc::Json unstaged = rpc::Json::array();

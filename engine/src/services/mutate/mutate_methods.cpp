@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "services/mutate/mutate_common.h"
+#include "services/params.h"
 
 namespace gg::services {
 
@@ -12,8 +13,6 @@ namespace {
 
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
-using mutate_detail::requireString;
-using mutate_detail::requireStringArray;
 using mutate_detail::runConflictAware;
 using mutate_detail::runGit;
 using mutate_detail::requirePositional;

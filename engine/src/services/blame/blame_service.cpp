@@ -7,6 +7,7 @@
 #include <sstream>
 #include <utility>
 
+#include "core/git2.h"
 #include "exec/git_process.h"
 #include "exec/parsers/incremental_blame.h"
 #include "util/temp_file.h"
@@ -58,21 +59,6 @@ std::optional<std::pair<std::string, std::string>> resolveOids(const core::Repo&
     blobHex = hex;
   }
   return std::make_pair(std::string(commitHex), blobHex);
-}
-
-// Blame-scoped libgit2 error: always GitError — an unresolvable rev or a
-// path missing from the tree is GIT_ENOTFOUND to libgit2, but the repository
-// itself exists.
-Error blameGitError(const std::string& context) {
-  const git_error* err = git_error_last();
-  const std::string detail = err && err->message ? err->message : "unknown libgit2 error";
-  return {ErrorCode::GitError, context + ": " + detail};
-}
-
-std::string oidHex(const git_oid& oid) {
-  char hex[GIT_OID_HEXSZ + 1] = {};
-  git_oid_fmt(hex, &oid);
-  return hex;
 }
 
 // git_time offset (minutes east of UTC) -> "+HHMM"/"-HHMM".
@@ -199,17 +185,17 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2
   // Default flags mirror `git blame` defaults (no -M/-C copy tracking).
   git_blame_options options;
   if (git_blame_options_init(&options, GIT_BLAME_OPTIONS_VERSION) != 0) {
-    return blameGitError("blame options");
+    return core::gitError("blame options");
   }
   if (request.rev) {
     git_object* obj = nullptr;
     if (git_revparse_single(&obj, repo.raw(), request.rev->c_str()) != 0) {
-      return blameGitError("resolve '" + *request.rev + "'");
+      return core::gitError("resolve '" + *request.rev + "'");
     }
     std::unique_ptr<git_object, decltype(&git_object_free)> objGuard(obj, git_object_free);
     git_object* peeled = nullptr;
     if (git_object_peel(&peeled, obj, GIT_OBJECT_COMMIT) != 0) {
-      return blameGitError("'" + *request.rev + "' does not point to a commit");
+      return core::gitError("'" + *request.rev + "' does not point to a commit");
     }
     std::unique_ptr<git_object, decltype(&git_object_free)> peeledGuard(peeled, git_object_free);
     git_oid_cpy(&options.newest_commit, git_object_id(peeled));
@@ -218,7 +204,7 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2
   token.throwIfCancelled();
   git_blame* rawBase = nullptr;
   if (git_blame_file(&rawBase, repo.raw(), request.path.c_str(), &options) != 0) {
-    return blameGitError("blame '" + request.path + "'");
+    return core::gitError("blame '" + request.path + "'");
   }
   BlamePtr base(rawBase);
 
@@ -243,7 +229,7 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2
     token.throwIfCancelled();
     git_blame* rawBuffer = nullptr;
     if (git_blame_buffer(&rawBuffer, base.get(), contents.data(), contents.size()) != 0) {
-      return blameGitError("blame buffer for '" + request.path + "'");
+      return core::gitError("blame buffer for '" + request.path + "'");
     }
     buffer.reset(rawBuffer);
     effective = buffer.get();
@@ -258,7 +244,7 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2
 
     const bool uncommitted = git_oid_is_zero(&raw->final_commit_id) != 0;
     exec::BlameHunk hunk;
-    hunk.sha = uncommitted ? exec::kUncommittedSha : oidHex(raw->final_commit_id);
+    hunk.sha = uncommitted ? exec::kUncommittedSha : core::oidToHex(raw->final_commit_id);
     hunk.resultLine = static_cast<std::uint32_t>(raw->final_start_line_number);
     hunk.originalLine = static_cast<std::uint32_t>(raw->orig_start_line_number);
     hunk.lineCount = static_cast<std::uint32_t>(raw->lines_in_hunk);
@@ -281,7 +267,7 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2
       } else {
         git_commit* rawCommit = nullptr;
         if (git_commit_lookup(&rawCommit, repo.raw(), &raw->final_commit_id) != 0) {
-          return blameGitError("lookup commit " + hunk.sha);
+          return core::gitError("lookup commit " + hunk.sha);
         }
         core::CommitPtr commitGuard(rawCommit);
         commit.author = toBlameSignature(git_commit_author(rawCommit));

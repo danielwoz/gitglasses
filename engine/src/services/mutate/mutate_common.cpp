@@ -3,10 +3,30 @@
 #include <git2.h>
 
 #include <filesystem>
+#include <utility>
 
 #include "exec/git_process.h"
+#include "exec/git_runner.h"
 
 namespace gg::services::mutate_detail {
+
+namespace {
+
+// Collects a run's stdout lines and exit status into a GitOutput.
+Result<GitOutput> collectLines(const std::string& cwd, std::vector<std::string> args,
+                               const exec::RunOpts& opts, const CancelToken& token) {
+  GitOutput output;
+  auto status = exec::runGit(cwd, std::move(args), opts, token,
+                             [&output](std::string line) {
+                               output.lines.push_back(std::move(line));
+                             });
+  if (!status) return status.error();
+  output.exitCode = status.value().exitCode;
+  output.stderrText = status.value().stderrText;
+  return output;
+}
+
+}  // namespace
 
 const std::string& requirePositional(const std::string& value, const char* what) {
   if (exec::looksLikeGitOption(value)) {
@@ -29,33 +49,16 @@ std::string repoCwd(const core::Repo& repo) {
 
 Result<GitOutput> runGit(const core::Repo& repo, std::vector<std::string> args,
                          const CancelToken& token) {
-  auto process = exec::GitProcess::spawn(repoCwd(repo), std::move(args));
-  if (!process) return process.error();
-  GitOutput output;
-  std::string line;
-  while (process.value().readLine(line, token)) output.lines.push_back(line);
-  output.exitCode = process.value().wait(token);
-  output.stderrText = process.value().stderrOutput();
-  return output;
+  return collectLines(repoCwd(repo), std::move(args), {}, token);
 }
 
 Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string> args,
                                 const std::vector<std::pair<std::string, std::string>>& extraEnv,
                                 const CancelToken& token) {
-  exec::SpawnOpts opts;
+  exec::RunOpts opts;
   opts.extraEnv.reserve(extraEnv.size());
   for (const auto& [name, value] : extraEnv) opts.extraEnv.push_back(name + "=" + value);
-  auto process = exec::GitProcess::spawn(cwd, std::move(args), opts);
-  if (!process) return process.error();
-  GitOutput output;
-  std::string line;
-  while (process.value().readLine(line, token)) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    output.lines.push_back(line);
-  }
-  output.exitCode = process.value().wait(token);
-  output.stderrText = process.value().stderrOutput();
-  return output;
+  return collectLines(cwd, std::move(args), opts, token);
 }
 
 GitOutput runGitOrThrow(const core::Repo& repo, std::vector<std::string> args,
@@ -115,31 +118,6 @@ std::string headSha(const core::Repo& repo, const CancelToken& token) {
     throw rpc::HandlerError{{ErrorCode::GitError, "git rev-parse HEAD produced no output"}};
   }
   return output.lines.front();
-}
-
-std::string requireString(const rpc::Json& params, const char* key) {
-  const std::string value = params.value(key, "");
-  if (value.empty()) {
-    throw rpc::HandlerError{
-        {ErrorCode::InvalidParams, std::string("'") + key + "' is required"}};
-  }
-  return value;
-}
-
-std::vector<std::string> requireStringArray(const rpc::Json& params, const char* key) {
-  if (!params.contains(key) || !params[key].is_array() || params[key].empty()) {
-    throw rpc::HandlerError{{ErrorCode::InvalidParams,
-                             std::string("'") + key + "' must be a non-empty array"}};
-  }
-  std::vector<std::string> values;
-  for (const auto& entry : params[key]) {
-    if (!entry.is_string() || entry.get<std::string>().empty()) {
-      throw rpc::HandlerError{{ErrorCode::InvalidParams,
-                               std::string("'") + key + "' entries must be non-empty strings"}};
-    }
-    values.push_back(entry.get<std::string>());
-  }
-  return values;
 }
 
 }  // namespace gg::services::mutate_detail

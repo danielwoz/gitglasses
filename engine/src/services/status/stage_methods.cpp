@@ -11,27 +11,14 @@
 #include <utility>
 #include <vector>
 
-#include "exec/git_process.h"
+#include "core/git2.h"
+#include "exec/git_runner.h"
 #include "services/status/diff_common.h"
 #include "util/temp_file.h"
 
 namespace gg::services {
 
 namespace {
-
-using status_detail::DiffPtr;
-using status_detail::PatchPtr;
-using status_detail::statusGitError;
-
-struct IndexDeleter {
-  void operator()(git_index* index) const { git_index_free(index); }
-};
-using IndexPtr = std::unique_ptr<git_index, IndexDeleter>;
-
-struct ObjectDeleter {
-  void operator()(git_object* object) const { git_object_free(object); }
-};
-using ObjectPtr = std::unique_ptr<git_object, ObjectDeleter>;
 
 std::string requireAction(const rpc::Json& params) {
   const std::string action = params.value("action", "");
@@ -166,9 +153,9 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (action == "stage") {
           git_index* rawIndex = nullptr;
           if (git_repository_index(&rawIndex, raw) != 0) {
-            throw rpc::HandlerError{{statusGitError("open index")}};
+            throw rpc::HandlerError{{core::gitError("open index")}};
           }
-          IndexPtr index(rawIndex);
+          core::IndexPtr index(rawIndex);
           for (const auto& entry : paths) {
             const std::string path = entry.get<std::string>();
             // A path deleted from the working tree stages as a removal.
@@ -178,21 +165,21 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
                                     .type() != std::filesystem::file_type::not_found;
             const int rc = exists ? git_index_add_bypath(index.get(), path.c_str())
                                   : git_index_remove_bypath(index.get(), path.c_str());
-            if (rc != 0) throw rpc::HandlerError{{statusGitError("stage '" + path + "'")}};
+            if (rc != 0) throw rpc::HandlerError{{core::gitError("stage '" + path + "'")}};
           }
           if (git_index_write(index.get()) != 0) {
-            throw rpc::HandlerError{{statusGitError("write index")}};
+            throw rpc::HandlerError{{core::gitError("write index")}};
           }
         } else {
           // git_reset_default restores index entries from HEAD's tree (or
           // removes them when HEAD is unborn or lacks the path).
-          ObjectPtr head;
+          core::ObjectPtr head;
           auto headState = repo.value().head();
           if (!headState) throw rpc::HandlerError{{headState.error()}};
           if (!headState.value().unborn) {
             git_object* rawHead = nullptr;
             if (git_revparse_single(&rawHead, raw, "HEAD") != 0) {
-              throw rpc::HandlerError{{statusGitError("resolve HEAD")}};
+              throw rpc::HandlerError{{core::gitError("resolve HEAD")}};
             }
             head.reset(rawHead);
           }
@@ -203,7 +190,7 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           for (auto& path : owned) pointers.push_back(path.data());
           git_strarray pathspec{pointers.data(), pointers.size()};
           if (git_reset_default(raw, head.get(), &pathspec) != 0) {
-            throw rpc::HandlerError{{statusGitError("unstage paths")}};
+            throw rpc::HandlerError{{core::gitError("unstage paths")}};
           }
         }
         return rpc::Json::object();
@@ -247,12 +234,12 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         }
         git_patch* rawPatch = nullptr;
         if (git_patch_from_diff(&rawPatch, diff.value().get(), 0) != 0) {
-          throw rpc::HandlerError{{statusGitError("build patch for '" + path + "'")}};
+          throw rpc::HandlerError{{core::gitError("build patch for '" + path + "'")}};
         }
-        PatchPtr patch(rawPatch);
+        core::PatchPtr patch(rawPatch);
         git_buf buf = GIT_BUF_INIT;
         if (git_patch_to_buf(&buf, patch.get()) != 0) {
-          throw rpc::HandlerError{{statusGitError("format patch for '" + path + "'")}};
+          throw rpc::HandlerError{{core::gitError("format patch for '" + path + "'")}};
         }
         std::string patchText(buf.ptr, buf.size);
         git_buf_dispose(&buf);
@@ -296,12 +283,12 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (action == "stage") {
           git_diff* rawSubset = nullptr;
           if (git_diff_from_buffer(&rawSubset, subset.data(), subset.size()) != 0) {
-            throw rpc::HandlerError{{statusGitError("parse subset patch")}};
+            throw rpc::HandlerError{{core::gitError("parse subset patch")}};
           }
-          DiffPtr subsetDiff(rawSubset);
+          core::DiffPtr subsetDiff(rawSubset);
           if (git_apply(repo.value().raw(), subsetDiff.get(), GIT_APPLY_LOCATION_INDEX,
                         nullptr) != 0) {
-            throw rpc::HandlerError{{statusGitError("apply hunks to index")}};
+            throw rpc::HandlerError{{core::gitError("apply hunks to index")}};
           }
         } else {
           // TempFile, not a bare path: readLine()/wait() throw CancelledError,
@@ -309,19 +296,15 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           // the shared temp directory.
           auto file = util::TempFile::create(subset, "gg-hunk-", ".patch");
           if (!file) throw rpc::HandlerError{{file.error()}};
-          auto process = exec::GitProcess::spawn(
-              repo.value().workdir(),
-              {"apply", "--cached", "--reverse", file.value().path()});
-          if (!process) throw rpc::HandlerError{{process.error()}};
-          std::string line;
-          while (process.value().readLine(line, token)) {
-          }
-          const int exitCode = process.value().wait(token);
-          if (exitCode != 0) {
+          auto status = exec::runGit(repo.value().workdir(),
+                                     {"apply", "--cached", "--reverse", file.value().path()},
+                                     {}, token, [](std::string) {});
+          if (!status) throw rpc::HandlerError{{status.error()}};
+          if (status.value().exitCode != 0) {
             throw rpc::HandlerError{
                 {ErrorCode::GitError, "git apply --cached --reverse failed (" +
-                                          std::to_string(exitCode) +
-                                          "): " + process.value().stderrOutput()}};
+                                          std::to_string(status.value().exitCode) +
+                                          "): " + status.value().stderrText}};
           }
         }
         return rpc::Json::object();

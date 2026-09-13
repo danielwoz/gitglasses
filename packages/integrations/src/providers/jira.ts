@@ -1,15 +1,10 @@
 import { governedFetch } from '../rateLimiter.js';
 import { AuthError, NotSupportedError } from '../errors.js';
-import { defaultFetch, type FetchLike } from '../http.js';
+import type { FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
 import type { Account, AutolinkPattern, Issue } from '../models.js';
-import {
-  assertPlainHost,
-  assertSecureBaseUrl,
-  base64Encode,
-  slugify,
-  throwForStatus,
-} from './shared.js';
+import { p, ProviderClient } from './client.js';
+import { assertPlainHost, base64Encode, slugify } from './shared.js';
 
 export interface JiraProviderOptions {
   /** Cloud site name, e.g. "acme" for https://acme.atlassian.net. */
@@ -68,7 +63,7 @@ export class JiraProvider implements IssueProvider {
   /** Pattern turning "PROJ-42" style references into links on this site. */
   readonly autolinkPattern: AutolinkPattern;
 
-  private readonly fetchFn: FetchLike;
+  private readonly client: ProviderClient;
 
   constructor(options: JiraProviderOptions = {}) {
     this.id = options.id ?? 'jira';
@@ -82,32 +77,45 @@ export class JiraProvider implements IssueProvider {
     }
     // Basic auth sends a reversible credential, so the transport must be
     // encrypted.
-    this.baseUrl = assertSecureBaseUrl(baseUrl.replace(/\/+$/, ''), 'Jira baseUrl');
+    this.client = new ProviderClient({
+      name: 'Jira',
+      baseUrl,
+      baseUrlLabel: 'Jira baseUrl',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      authorize: (auth) => {
+        if (!auth.username) {
+          throw new AuthError('Jira requires the account email in AuthContext.username');
+        }
+        return `Basic ${base64Encode(`${auth.username}:${auth.token}`)}`;
+      },
+      fetchFn: options.fetchFn ?? governedFetch,
+    });
+    this.baseUrl = this.client.baseUrl;
     this.autolinkPattern = {
       regex: JIRA_ISSUE_KEY_REGEX,
       urlTemplate: `${this.baseUrl}/browse/$1`,
       title: 'Jira issue',
     };
-    this.fetchFn = options.fetchFn ?? governedFetch;
   }
 
   async getMyIssues(auth: AuthContext, opts?: IssueQueryOptions): Promise<Issue[]> {
-    const json = (await this.request(auth, '/rest/api/3/search/jql', {
-      method: 'POST',
-      body: JSON.stringify({
+    const json = await this.client.postJsonOptional<{ issues?: JiraIssuePayload[] }>(
+      auth,
+      p`/rest/api/3/search/jql`,
+      {
         jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC',
         fields: ISSUE_FIELDS,
         maxResults: opts?.limit ?? 50,
-      }),
-    })) as { issues?: JiraIssuePayload[] } | undefined;
+      }
+    );
     return (json?.issues ?? []).map((issue) => this.mapIssue(issue));
   }
 
   async getIssue(auth: AuthContext, key: string): Promise<Issue | undefined> {
-    const json = (await this.request(
+    const json = await this.client.getJson<JiraIssuePayload>(
       auth,
-      `/rest/api/3/issue/${encodeURIComponent(key)}?fields=${ISSUE_FIELDS.join(',')}`
-    )) as JiraIssuePayload | undefined;
+      p`/rest/api/3/issue/${key}?fields=${ISSUE_FIELDS}`
+    );
     return json ? this.mapIssue(json) : undefined;
   }
 
@@ -137,11 +145,8 @@ export class JiraProvider implements IssueProvider {
     if (!branch.url) {
       throw new NotSupportedError('branch URL required');
     }
-    await this.request(auth, `/rest/api/3/issue/${encodeURIComponent(issue.key)}/remotelink`, {
-      method: 'POST',
-      body: JSON.stringify({
-        object: { url: branch.url, title: `branch: ${branch.name}` },
-      }),
+    await this.client.postJsonOptional(auth, p`/rest/api/3/issue/${issue.key}/remotelink`, {
+      object: { url: branch.url, title: `branch: ${branch.name}` },
     });
   }
 
@@ -157,31 +162,5 @@ export class JiraProvider implements IssueProvider {
       updatedAt: fields.updated ?? '',
       type: fields.issuetype?.name,
     };
-  }
-
-  /** HTTP request; returns undefined on 404. */
-  private async request(
-    auth: AuthContext,
-    path: string,
-    init?: { method?: string; body?: string }
-  ): Promise<unknown | undefined> {
-    if (!auth.username) {
-      throw new AuthError('Jira requires the account email in AuthContext.username');
-    }
-    const response = await this.fetchFn(`${this.baseUrl}${path}`, {
-      method: init?.method ?? 'GET',
-      headers: {
-        authorization: `Basic ${base64Encode(`${auth.username}:${auth.token}`)}`,
-        accept: 'application/json',
-        'content-type': 'application/json',
-        'user-agent': 'gitglasses',
-      },
-      body: init?.body,
-    });
-    if (response.status === 404) {
-      return undefined;
-    }
-    throwForStatus('Jira', response);
-    return response.json();
   }
 }

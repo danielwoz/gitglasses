@@ -34,6 +34,16 @@ bool exceedsDepthLimit(const std::string& payload) {
   return false;
 }
 
+// Explanation out of an nlohmann exception message. The library prefixes its
+// text with "[json.exception...] ", which is noise to a client.
+std::string jsonExceptionDetail(const std::exception& e) {
+  std::string detail = e.what();
+  if (const auto close = detail.find("] "); close != std::string::npos) {
+    detail = detail.substr(close + 2);
+  }
+  return detail;
+}
+
 }  // namespace
 
 Dispatcher::Dispatcher(TaskPool& pool, SendFn send)
@@ -125,19 +135,10 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
     } catch (const Json::type_error& e) {
       // A param of the wrong JSON type is the caller's mistake, not ours:
       // nlohmann's value()/get<>() throw here and would otherwise be reported
-      // as Internal. The library prefixes its text with "[json.exception...]",
-      // which is noise to a client, so only the explanation is kept.
-      std::string detail = e.what();
-      if (const auto close = detail.find("] "); close != std::string::npos) {
-        detail = detail.substr(close + 2);
-      }
-      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + detail});
+      // as Internal.
+      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});
     } catch (const Json::out_of_range& e) {
-      std::string detail = e.what();
-      if (const auto close = detail.find("] "); close != std::string::npos) {
-        detail = detail.substr(close + 2);
-      }
-      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + detail});
+      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});
     } catch (const std::exception& e) {
       spdlog::error("handler '{}' failed: {}", dumpForWire(id), e.what());
       sendError(id, {ErrorCode::Internal, e.what()});

@@ -3,8 +3,8 @@
 export class ProviderError extends Error {
   readonly status?: number;
 
-  constructor(message: string, status?: number) {
-    super(message);
+  constructor(message: string, status?: number, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = 'ProviderError';
     this.status = status;
   }

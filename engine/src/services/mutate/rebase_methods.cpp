@@ -8,6 +8,7 @@
 
 #include "exec/sequence_editor.h"
 #include "services/mutate/mutate_common.h"
+#include "services/params.h"
 #include "util/temp_file.h"
 
 namespace gg::services {
@@ -17,7 +18,6 @@ namespace {
 using mutate_detail::GitOutput;
 using mutate_detail::openRepo;
 using mutate_detail::rebaseInProgress;
-using mutate_detail::requireString;
 using mutate_detail::runGitOrThrow;
 using mutate_detail::runGitWithEnv;
 
