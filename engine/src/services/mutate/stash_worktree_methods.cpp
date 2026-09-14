@@ -1,6 +1,7 @@
 #include "services/mutate/stash_worktree_methods.h"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,11 +19,8 @@ using mutate_detail::requirePositional;
 using mutate_detail::runGitOrThrow;
 
 std::string requireStashRef(const rpc::Json& params) {
-  const std::int64_t index = params.value("index", std::int64_t{-1});
-  if (index < 0) {
-    throw rpc::HandlerError{
-        {ErrorCode::InvalidParams, "'index' must be a non-negative integer"}};
-  }
+  const std::int64_t index =
+      requireInteger(params, "index", 0, std::numeric_limits<std::int64_t>::max());
   return "stash@{" + std::to_string(index) + "}";
 }
 
@@ -81,7 +79,8 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"stash", "push"};
         if (params.value("includeUntracked", false)) args.push_back("--include-untracked");
-        const std::string message = requirePositional(params.value("message", ""), "message");
+        const std::string message =
+            requirePositional(optionalString(params, "message"), "message");
         if (!message.empty()) {
           args.push_back("-m");
           args.push_back(message);
@@ -97,7 +96,8 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
         const std::string stashRef = requireStashRef(params);
-        const bool pop = params.value("pop", false);
+        // Apply and pop are not interchangeable, so the caller states which.
+        const bool pop = requireBool(params, "pop");
         auto repo = openRepo(context, params);
         // Conflict semantics mirror merge; on conflict git keeps the stash
         // entry even for pop.
@@ -138,7 +138,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
         const std::string path = requireString(params, "path");
         const std::string ref = requirePositional(requireString(params, "ref"), "ref");
         const std::string createBranch =
-            requirePositional(params.value("createBranch", ""), "createBranch");
+            requirePositional(optionalString(params, "createBranch"), "createBranch");
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"worktree", "add"};
         if (!createBranch.empty()) {

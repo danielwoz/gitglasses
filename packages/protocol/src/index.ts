@@ -80,6 +80,7 @@ export type GraphRow = Static<typeof models.GraphRow>;
 export type DiffHunk = Static<typeof models.DiffHunk>;
 export type RebaseEntry = Static<typeof models.RebaseEntry>;
 export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
+export type SequencerState = Static<typeof models.SequencerState>;
 
 // --- Method map (derived from src/schema/requests.ts) -----------------------
 
@@ -99,6 +100,8 @@ export interface EngineCapabilities {
   [key: string]: unknown;
 }
 
+// Per-method prose lives with the schemas in src/schema/requests.ts, so it
+// reaches protocol.schema.json instead of being stripped at the type boundary.
 export interface Requests {
   initialize: {
     params: P<'initialize'>;
@@ -110,29 +113,20 @@ export interface Requests {
   'repo/list': { params: Empty; result: R<'repo/list'> };
   'repo/state': { params: P<'repo/state'>; result: R<'repo/state'> };
   'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
-  /** Topo-ordered commit page from a ref (default HEAD). */
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
-  /** File history following renames, newest first. */
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
-  /** History of a line range (1-based, inclusive). */
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };
-  /** Commit search; matches stream via search/matches notifications. */
   'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };
-  /** Full contents of a file at a revision (virtual docs, quick diff). */
   'rev/fileAtRev': { params: P<'rev/fileAtRev'>; result: R<'rev/fileAtRev'> };
-  /** Refs listing for views: branches, remotes, tags. */
   'refs/list': { params: P<'refs/list'>; result: R<'refs/list'> };
-  /** Stash entries. */
   'stash/list': { params: P<'stash/list'>; result: R<'stash/list'> };
 
   // --- P2: status / graph / diff / staging / mutations / rebase ------------
 
   'status/summary': { params: P<'status/summary'>; result: R<'status/summary'> };
-  /** Graph rows with engine-computed lane layout, topo order, paged. */
   'graph/rows': { params: P<'graph/rows'>; result: R<'graph/rows'> };
   'diff/commit': { params: P<'diff/commit'>; result: R<'diff/commit'> };
   'diff/refs': { params: P<'diff/refs'>; result: R<'diff/refs'> };
-  /** Hunks of a file's working-tree (or staged) diff, for hunk staging. */
   'diff/fileHunks': { params: P<'diff/fileHunks'>; result: R<'diff/fileHunks'> };
   'stage/files': { params: P<'stage/files'>; result: Empty };
   'stage/hunks': { params: P<'stage/hunks'>; result: Empty };
@@ -153,10 +147,7 @@ export interface Requests {
   'worktree/list': { params: P<'worktree/list'>; result: R<'worktree/list'> };
   'worktree/add': { params: P<'worktree/add'>; result: Empty };
   'worktree/remove': { params: P<'worktree/remove'>; result: Empty };
-  /** Commits upstream..HEAD, oldest first — the editable rebase plan. */
   'rebase/preview': { params: P<'rebase/preview'>; result: R<'rebase/preview'> };
-  /** Executes an interactive rebase with the given plan via sequence-editor
-   * interception. Conflicts pause the rebase (sequencer state watchable). */
   'rebase/start': { params: P<'rebase/start'>; result: R<'rebase/start'> };
   'rebase/continue': { params: P<'rebase/continue'>; result: R<'rebase/continue'> };
   'rebase/abort': { params: P<'rebase/abort'>; result: Empty };
@@ -164,9 +155,7 @@ export interface Requests {
   // --- P4: remotes / open patches ------------------------------------------
 
   'remote/list': { params: P<'remote/list'>; result: R<'remote/list'> };
-  /** Creates a shareable patch envelope from WIP, a stash, a commit, or a range. */
   'patch/create': { params: P<'patch/create'>; result: R<'patch/create'> };
-  /** Applies a patch envelope; 3-way when the base is missing. */
   'patch/apply': { params: P<'patch/apply'>; result: R<'patch/apply'> };
 }
 
@@ -195,7 +184,6 @@ export interface EngineNotifications {
   'search/matches': {
     params: Static<(typeof EngineNotificationSchemas)['search/matches']['params']>;
   };
-  /** Pushed when the repo's git state changes (refs, HEAD, index, stash). */
   'repo/didChange': {
     params: Static<(typeof EngineNotificationSchemas)['repo/didChange']['params']>;
   };

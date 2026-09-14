@@ -27,7 +27,7 @@ struct GraphStash {
 
 // The whole topological walk for one repository state, plus where stash rows
 // attach to it. Everything here is a function of the commit DAG and the ref
-// tips, so it is valid for exactly one `generation` fingerprint.
+// tips, so it is valid for exactly one refs fingerprint.
 struct GraphPlan {
   std::vector<GraphPlanRow> commits;  // topological order, children first
   std::vector<GraphStash> stashes;    // newest first (stash@{0} first)
@@ -37,9 +37,9 @@ struct GraphPlan {
   std::size_t byteSize() const;
 };
 
-// Byte-budgeted LRU of graph plans, keyed by (repoId, snapshot generation).
-// The generation fingerprint changes whenever any ref moves, so entries never
-// go stale; they are only evicted. Thread-safe.
+// Byte-budgeted LRU of graph plans, keyed by (repoId, refs fingerprint).
+// The fingerprint changes whenever any ref moves, so entries never go stale;
+// they are only evicted. Thread-safe.
 class GraphCache {
  public:
   explicit GraphCache(std::size_t byteBudget = 64 << 20) : budget_(byteBudget) {}
@@ -47,7 +47,7 @@ class GraphCache {
   std::shared_ptr<const GraphPlan> get(const std::string& key);
   void put(const std::string& key, std::shared_ptr<const GraphPlan> plan);
 
-  static std::string makeKey(const std::string& repoId, std::uint64_t generation);
+  static std::string makeKey(const std::string& repoId, std::uint64_t refsFingerprint);
 
   // Drops every plan belonging to a repository (repo/close).
   void dropRepo(const std::string& repoId);

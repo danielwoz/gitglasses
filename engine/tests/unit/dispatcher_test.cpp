@@ -372,6 +372,10 @@ TEST_F(DispatcherTest, LargePayloadDoesNotDelayTheNextMessage) {
     release = true;
   }
   cv.notify_all();
+  // The released handler still has to reacquire `m` on its way out, so the
+  // pool is drained here rather than in the fixture destructor: `m`, `cv` and
+  // `release` are locals of this frame and must outlive the last use of them.
+  pool.shutdown();
 #endif
 }
 

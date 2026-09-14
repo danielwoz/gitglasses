@@ -49,5 +49,5 @@ stopped.
 
 Each row carries `refs`: branch/tag/remote/stash/HEAD pointers at that sha,
 with upstream ahead/behind for local branches. Decorations are recomputed on
-refs generation bumps without relaying out the graph (layout depends only on
-the commit DAG).
+every change of the `refsFingerprint` without relaying out the graph (layout
+depends only on the commit DAG).

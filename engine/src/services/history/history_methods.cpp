@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -136,9 +137,10 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       "log/commits",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
-        const std::int64_t limit = requireLimit(params);
-        const std::string ref = params.value("ref", "HEAD");
-        const std::string cursor = params.value("cursor", "");
+        const std::int64_t limit = pageLimit(params);
+        std::string ref = optionalString(params, "ref");
+        if (ref.empty()) ref = "HEAD";
+        const std::string cursor = optionalString(params, "cursor");
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
@@ -186,12 +188,11 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::int64_t limit = requireLimit(params);
+        const std::int64_t limit = pageLimit(params);
         const std::string path = requireString(params, "path");
         std::string startRev;
         std::string startPath = path;
-        if (params.contains("cursor") && params["cursor"].is_string()) {
-          const std::string cursor = params["cursor"].get<std::string>();
+        if (const std::string cursor = optionalString(params, "cursor"); !cursor.empty()) {
           if (cursor.size() < GIT_OID_HEXSZ + 2 || cursor[GIT_OID_HEXSZ] != ':') {
             throw rpc::HandlerError{{ErrorCode::InvalidParams, "invalid cursor"}};
           }
@@ -246,11 +247,13 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
         const std::string path = requireString(params, "path");
-        const std::int64_t startLine = params.value("startLine", std::int64_t{0});
-        const std::int64_t endLine = params.value("endLine", std::int64_t{0});
-        if (startLine < 1 || endLine < startLine) {
+        const std::int64_t startLine =
+            requireInteger(params, "startLine", 1, std::numeric_limits<std::int64_t>::max());
+        const std::int64_t endLine =
+            requireInteger(params, "endLine", 1, std::numeric_limits<std::int64_t>::max());
+        if (endLine < startLine) {
           throw rpc::HandlerError{
-              {ErrorCode::InvalidParams, "'startLine'/'endLine' must satisfy 1 <= start <= end"}};
+              {ErrorCode::InvalidParams, "'endLine' must not be before 'startLine'"}};
         }
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
@@ -279,12 +282,12 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       "search/commits",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn& notify) -> rpc::Json {
-        const std::int64_t limit = requireLimit(params);
-        const std::string streamId = params.value("streamId", "");
-        const rpc::Json query = params.value("query", rpc::Json::object());
-        const std::string text = toLower(query.value("text", ""));
-        const std::string author = toLower(query.value("author", ""));
-        const std::string shaPrefix = toLower(query.value("sha", ""));
+        const std::int64_t limit = pageLimit(params);
+        const std::string streamId = requireString(params, "streamId");
+        const rpc::Json query = optionalObject(params, "query");
+        const std::string text = toLower(optionalString(query, "text"));
+        const std::string author = toLower(optionalString(query, "author"));
+        const std::string shaPrefix = toLower(optionalString(query, "sha"));
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 

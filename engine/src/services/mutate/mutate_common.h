@@ -1,6 +1,8 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -59,6 +61,23 @@ rpc::Json runConflictAware(const core::Repo& repo, std::vector<std::string> args
 
 // True when an interactive or am-style rebase is in progress.
 bool rebaseInProgress(const core::Repo& repo);
+
+// Multi-step operation the repository is stopped in the middle of, read from
+// the sequencer state in the gitdir.
+struct SequencerState {
+  // "none", "rebase", "merge", "cherry-pick" or "revert".
+  std::string operation = "none";
+  // Index holds unmerged entries.
+  bool conflicted = false;
+  // Position and length of a running rebase; absent for the other operations
+  // and for rebases whose counters git has not written.
+  std::optional<std::int64_t> step;
+  std::optional<std::int64_t> total;
+};
+
+// Reads the repository's sequencer state. An idle repository reports
+// operation "none" with no conflicts.
+SequencerState sequencerState(const core::Repo& repo);
 
 // True when the repository is mid-conflict: sequencer heads present
 // (MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase dirs) or conflict

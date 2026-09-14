@@ -3,6 +3,7 @@
 #include <git2.h>
 
 #include <filesystem>
+#include <fstream>
 #include <utility>
 
 #include "exec/git_process.h"
@@ -24,6 +25,15 @@ Result<GitOutput> collectLines(const std::string& cwd, std::vector<std::string> 
   output.exitCode = status.value().exitCode;
   output.stderrText = status.value().stderrText;
   return output;
+}
+
+// Reads a positive counter git writes one-per-line into the sequencer
+// directory (msgnum/end, next/last).
+std::optional<std::int64_t> readCounter(const std::filesystem::path& file) {
+  std::ifstream in(file);
+  std::int64_t value = 0;
+  if (in >> value && value > 0) return value;
+  return std::nullopt;
 }
 
 }  // namespace
@@ -92,6 +102,38 @@ bool rebaseInProgress(const core::Repo& repo) {
   const fs::path gitdir(repo.gitdir());
   std::error_code ec;
   return fs::exists(gitdir / "rebase-merge", ec) || fs::exists(gitdir / "rebase-apply", ec);
+}
+
+SequencerState sequencerState(const core::Repo& repo) {
+  namespace fs = std::filesystem;
+  const fs::path gitdir(repo.gitdir());
+  std::error_code ec;
+  SequencerState state;
+
+  // Rebase first: a conflicted step also leaves CHERRY_PICK_HEAD behind,
+  // which on its own would read as a plain cherry-pick.
+  if (fs::exists(gitdir / "rebase-merge", ec)) {
+    state.operation = "rebase";
+    state.step = readCounter(gitdir / "rebase-merge" / "msgnum");
+    state.total = readCounter(gitdir / "rebase-merge" / "end");
+  } else if (fs::exists(gitdir / "rebase-apply", ec)) {
+    state.operation = "rebase";
+    state.step = readCounter(gitdir / "rebase-apply" / "next");
+    state.total = readCounter(gitdir / "rebase-apply" / "last");
+  } else if (fs::exists(gitdir / "CHERRY_PICK_HEAD", ec)) {
+    state.operation = "cherry-pick";
+  } else if (fs::exists(gitdir / "REVERT_HEAD", ec)) {
+    state.operation = "revert";
+  } else if (fs::exists(gitdir / "MERGE_HEAD", ec)) {
+    state.operation = "merge";
+  }
+
+  git_index* rawIndex = nullptr;
+  if (git_repository_index(&rawIndex, repo.raw()) == 0) {
+    state.conflicted = git_index_has_conflicts(rawIndex) != 0;
+    git_index_free(rawIndex);
+  }
+  return state;
 }
 
 bool inConflictState(const core::Repo& repo) {

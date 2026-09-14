@@ -2,6 +2,7 @@
 
 #include <git2.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,12 +14,44 @@
 
 #include "core/git2.h"
 #include "exec/git_runner.h"
+#include "services/params.h"
 #include "services/status/diff_common.h"
 #include "util/temp_file.h"
 
 namespace gg::services {
 
 namespace {
+
+// Ceiling on hunk offsets: past it the value cannot address a real diff, and
+// the cast to long stays well defined on every supported platform.
+constexpr std::int64_t kMaxLine = 1LL << 40;
+
+// One requested hunk, addressed by the ranges diff/fileHunks reported.
+struct HunkRange {
+  long oldStart = 0;
+  long oldLines = 0;
+  long newStart = 0;
+  long newLines = 0;
+};
+
+// Reads the 'hunks' param. The ranges must select hunks of a diff the engine
+// re-derives, so they are validated up front: a fractional, negative or
+// missing offset can never match and is a client bug, not a stale diff.
+std::vector<HunkRange> requireHunkRanges(const rpc::Json& params) {
+  const rpc::Json requested = params.value("hunks", rpc::Json::array());
+  if (!requested.is_array() || requested.empty()) {
+    throw rpc::HandlerError{{ErrorCode::InvalidParams, "'hunks' must be a non-empty array"}};
+  }
+  std::vector<HunkRange> ranges;
+  ranges.reserve(requested.size());
+  for (const auto& want : requested) {
+    ranges.push_back({static_cast<long>(requireInteger(want, "oldStart", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "oldLines", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "newStart", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "newLines", 0, kMaxLine))});
+  }
+  return ranges;
+}
 
 std::string requireAction(const rpc::Json& params) {
   const std::string action = params.value("action", "");
@@ -212,15 +245,8 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         // Unstaging hunks reverse-applies through the git CLI (libgit2 has no
         // reverse apply); staging stays libgit2-only and needs no CLI.
         if (action == "unstage") requireGitCli(context);
-        const std::string path = params.value("path", "");
-        const rpc::Json requested = params.value("hunks", rpc::Json::array());
-        if (path.empty()) {
-          throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
-        }
-        if (!requested.is_array() || requested.empty()) {
-          throw rpc::HandlerError{
-              {ErrorCode::InvalidParams, "'hunks' must be a non-empty array"}};
-        }
+        const std::string path = requireString(params, "path");
+        const std::vector<HunkRange> requested = requireHunkRanges(params);
         auto repo = openWorktreeRepo(context, params);
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
@@ -252,15 +278,11 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         size_t matched = 0;
         for (const auto& want : requested) {
           token.throwIfCancelled();
-          const long oldStart = want.value("oldStart", -1L);
-          const long oldLines = want.value("oldLines", -1L);
-          const long newStart = want.value("newStart", -1L);
-          const long newLines = want.value("newLines", -1L);
           bool found = false;
           for (size_t i = 0; i < blocks.size(); ++i) {
-            if (!selected[i] && blocks[i].oldStart == oldStart &&
-                blocks[i].oldLines == oldLines && blocks[i].newStart == newStart &&
-                blocks[i].newLines == newLines) {
+            if (!selected[i] && blocks[i].oldStart == want.oldStart &&
+                blocks[i].oldLines == want.oldLines && blocks[i].newStart == want.newStart &&
+                blocks[i].newLines == want.newLines) {
               selected[i] = true;
               ++matched;
               found = true;

@@ -19,8 +19,8 @@ std::size_t GraphPlan::byteSize() const {
   return bytes;
 }
 
-std::string GraphCache::makeKey(const std::string& repoId, std::uint64_t generation) {
-  return repoId + ":" + std::to_string(generation);
+std::string GraphCache::makeKey(const std::string& repoId, std::uint64_t refsFingerprint) {
+  return repoId + ":" + std::to_string(refsFingerprint);
 }
 
 std::shared_ptr<const GraphPlan> GraphCache::get(const std::string& key) {

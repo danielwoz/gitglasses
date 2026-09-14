@@ -192,7 +192,7 @@ struct GraphSnapshot {
   std::vector<std::string> tips;  // deduplicated walk roots
   std::map<std::string, rpc::Json> refsBySha;  // decoration arrays, pre-ordered
   std::vector<GraphStash> stashes;  // newest first (stash@{0} first)
-  std::uint64_t generation = 0;
+  std::uint64_t refsFingerprint = 0;
 };
 
 void fnvMix(std::uint64_t& hash, std::string_view text) {
@@ -202,11 +202,11 @@ void fnvMix(std::uint64_t& hash, std::string_view text) {
   }
 }
 
-// Collects HEAD + branch/remote/tag/stash pointers. `generation` is a stable
-// 53-bit fingerprint of this snapshot: the watcher's per-repo generation
-// counter is not reachable from ServiceContext, so instead of a monotonic
-// counter the fingerprint stays constant while refs are unchanged (pages of
-// one logical snapshot agree) and changes whenever any ref moves.
+// Collects HEAD + branch/remote/tag/stash pointers. `refsFingerprint` is a
+// stable 53-bit hash of this snapshot: it stays constant while refs are
+// unchanged, so the pages of one logical snapshot agree, and changes whenever
+// any ref moves. It is a content hash, not the monotonic per-repo counter
+// repo/didChange carries.
 Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
   GraphSnapshot snap;
   git_repository* raw = repo.raw();
@@ -332,7 +332,7 @@ Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
     list.push_back(std::move(std::get<3>(decoration)));
   }
   snap.tips.assign(tipSet.begin(), tipSet.end());
-  snap.generation = hash & ((1ull << 53) - 1);
+  snap.refsFingerprint = hash & ((1ull << 53) - 1);
   return snap;
 }
 
@@ -513,13 +513,13 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
       "graph/rows",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
-        const std::int64_t limit = requireLimit(params);
-        const rpc::Json include = params.value("include", rpc::Json::object());
+        const std::int64_t limit = pageLimit(params);
+        const rpc::Json include = optionalObject(params, "include");
         const bool includeStashes = include.value("stashes", false);
         const bool includeWip = include.value("wip", false);
         Cursor cursor;
-        if (params.contains("cursor") && params["cursor"].is_string()) {
-          cursor = decodeCursor(params["cursor"].get<std::string>());
+        if (const std::string encoded = optionalString(params, "cursor"); !encoded.empty()) {
+          cursor = decodeCursor(encoded);
         }
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
@@ -530,13 +530,14 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
 
         rpc::Json rows = rpc::Json::array();
         if (snap.tips.empty()) {
-          return {{"rows", std::move(rows)}, {"generation", snap.generation}};  // unborn HEAD
+          // Unborn HEAD: no tips to walk.
+          return {{"rows", std::move(rows)}, {"refsFingerprint", snap.refsFingerprint}};
         }
 
-        // The whole walk depends only on the refs, which `generation`
-        // fingerprints, so page 0 builds it and later pages slice it.
+        // The whole walk depends only on the refs, which `refsFingerprint`
+        // hashes, so page 0 builds it and later pages slice it.
         const std::string cacheKey =
-            cache::GraphCache::makeKey(params.value("repoId", ""), snap.generation);
+            cache::GraphCache::makeKey(params.value("repoId", ""), snap.refsFingerprint);
         std::shared_ptr<const cache::GraphPlan> plan = context.graphCache.get(cacheKey);
         if (!plan) {
           auto nodes = collectNodes(repo.value(), snap.tips, token);
@@ -658,7 +659,8 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           more = emitRow(row.sha, row.parents, "commit", nullptr);
         }
 
-        rpc::Json result = {{"rows", std::move(rows)}, {"generation", snap.generation}};
+        rpc::Json result = {{"rows", std::move(rows)},
+                            {"refsFingerprint", snap.refsFingerprint}};
         if (nextCursor) result["nextCursor"] = *nextCursor;
         return result;
       },

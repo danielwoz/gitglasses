@@ -48,6 +48,10 @@ std::string classify(const std::string& rel) {
   if (rel == "packed-refs") return "refs";
   if (rel == "refs/stash") return "stash";
   if (rel == "refs" || startsWith(rel, "refs/")) return "refs";
+  // Linked worktrees keep their admin state (HEAD, index, locks) under
+  // $GIT_DIR/worktrees/<name>; from this repository's side any of it is a
+  // worktree change.
+  if (rel == "worktrees" || startsWith(rel, "worktrees/")) return "worktrees";
   if (rel == "MERGE_HEAD" || rel == "CHERRY_PICK_HEAD" || rel == "rebase-merge" ||
       rel == "rebase-apply" || startsWith(rel, "rebase-merge/") ||
       startsWith(rel, "rebase-apply/")) {
@@ -62,7 +66,8 @@ std::string classify(const std::string& rel) {
 bool isRecursiveRoot(const std::string& rel) {
   return rel == "refs" || startsWith(rel, "refs/") || rel == "rebase-merge" ||
          startsWith(rel, "rebase-merge/") || rel == "rebase-apply" ||
-         startsWith(rel, "rebase-apply/");
+         startsWith(rel, "rebase-apply/") || rel == "worktrees" ||
+         startsWith(rel, "worktrees/");
 }
 
 std::string joinRel(const std::string& dir, const std::string& name) {
@@ -123,6 +128,7 @@ class InotifyHub {
     // A rebase or cherry-pick may already be in flight when the watch starts.
     addDirTreeLocked(repoId, state, "rebase-merge");
     addDirTreeLocked(repoId, state, "rebase-apply");
+    addDirTreeLocked(repoId, state, "worktrees");
     if (state.wds.empty()) {
       repos_.erase(repoId);
       return false;
@@ -346,7 +352,7 @@ class RepoWatch {
     for (const char* rel : {"HEAD", "index", "packed-refs", "MERGE_HEAD", "CHERRY_PICK_HEAD"}) {
       scanEntry(snapshot, rel);
     }
-    for (const char* root : {"refs", "rebase-merge", "rebase-apply"}) {
+    for (const char* root : {"refs", "rebase-merge", "rebase-apply", "worktrees"}) {
       scanEntry(snapshot, root);
       std::error_code ec;
       fs::recursive_directory_iterator it(fs::path(gitdir_) / root,

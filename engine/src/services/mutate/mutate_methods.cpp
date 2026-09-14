@@ -46,7 +46,7 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         requireGitCli(context);
         const std::string name = requirePositional(requireString(params, "name"), "name");
         const std::string startPoint =
-            requirePositional(params.value("startPoint", ""), "startPoint");
+            requirePositional(optionalString(params, "startPoint"), "startPoint");
         auto repo = openRepo(context, params);
         std::vector<std::string> args;
         if (params.value("checkout", false)) {
@@ -166,7 +166,7 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"fetch"};
         if (params.value("prune", false)) args.push_back("--prune");
-        const std::string remote = requirePositional(params.value("remote", ""), "remote");
+        const std::string remote = requirePositional(optionalString(params, "remote"), "remote");
         if (!remote.empty()) {
           args.push_back("--");
           args.push_back(remote);

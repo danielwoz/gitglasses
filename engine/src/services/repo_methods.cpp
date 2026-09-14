@@ -1,5 +1,9 @@
 #include "services/repo_methods.h"
 
+#include <utility>
+
+#include "services/mutate/mutate_common.h"
+
 namespace gg::services {
 
 void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
@@ -54,17 +58,26 @@ void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
     return {{"repos", repos}};
   });
 
+  // HEAD plus the sequencer state: a repository stopped mid-rebase reports a
+  // detached HEAD, and only `sequencer` tells a client why.
   dispatcher.method("repo/state", [&registry](const rpc::Json& params, const CancelToken&,
                                               const rpc::NotifyFn&) -> rpc::Json {
     auto repo = registry.open(params.value("repoId", ""));
     if (!repo) throw rpc::HandlerError{{repo.error()}};
     auto head = repo.value().head();
     if (!head) throw rpc::HandlerError{{head.error()}};
+
+    const auto state = mutate_detail::sequencerState(repo.value());
+    rpc::Json sequencer = {{"operation", state.operation}, {"conflicted", state.conflicted}};
+    if (state.step) sequencer["step"] = *state.step;
+    if (state.total) sequencer["total"] = *state.total;
+
     return {{"head",
              {{"oid", head.value().oid},
               {"branch", head.value().branch},
               {"detached", head.value().detached},
-              {"unborn", head.value().unborn}}}};
+              {"unborn", head.value().unborn}}},
+            {"sequencer", std::move(sequencer)}};
   });
 
   // Queued: an editor buffer can be tens of megabytes, and copying it into

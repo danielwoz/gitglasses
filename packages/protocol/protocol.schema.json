@@ -3,6 +3,7 @@
   "protocolVersion": "0.1.0",
   "methods": {
     "initialize": {
+      "description": "Handshake. The engine rejects a protocolVersion it does not implement, so this must be the first request of a session.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -11,6 +12,7 @@
         ],
         "properties": {
           "protocolVersion": {
+            "minLength": 1,
             "type": "string"
           }
         }
@@ -70,6 +72,7 @@
       }
     },
     "shutdown": {
+      "description": "Asks the engine to stop accepting work and exit.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -82,6 +85,7 @@
       }
     },
     "repo/discover": {
+      "description": "Registers the repository containing `path`, walking up like `git rev-parse --git-dir`, and starts watching it. The returned repoId addresses it for the rest of the session.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -90,6 +94,8 @@
         ],
         "properties": {
           "path": {
+            "minLength": 1,
+            "description": "Any path inside the repository.",
             "type": "string"
           }
         }
@@ -116,6 +122,7 @@
       }
     },
     "repo/close": {
+      "description": "Releases everything held for a repository: its watch, its cached graph plans and its registry entry. Later requests for the id fail with RepoNotFound.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -135,6 +142,7 @@
       }
     },
     "repo/list": {
+      "description": "Repositories registered in this session.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -174,6 +182,7 @@
       }
     },
     "repo/state": {
+      "description": "Where HEAD points and what multi-step operation, if any, the repository is stopped in the middle of.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -190,7 +199,8 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "head"
+          "head",
+          "sequencer"
         ],
         "properties": {
           "head": {
@@ -216,11 +226,59 @@
                 "type": "boolean"
               }
             }
+          },
+          "sequencer": {
+            "additionalProperties": false,
+            "description": "What the repository is in the middle of. Complements `head`: a repository stopped mid-rebase reports a detached HEAD, and only this tells a client why.",
+            "type": "object",
+            "required": [
+              "operation",
+              "conflicted"
+            ],
+            "properties": {
+              "operation": {
+                "description": "Multi-step operation the repository is stopped in the middle of, read from the sequencer state in the gitdir.",
+                "anyOf": [
+                  {
+                    "const": "none",
+                    "type": "string"
+                  },
+                  {
+                    "const": "rebase",
+                    "type": "string"
+                  },
+                  {
+                    "const": "merge",
+                    "type": "string"
+                  },
+                  {
+                    "const": "cherry-pick",
+                    "type": "string"
+                  },
+                  {
+                    "const": "revert",
+                    "type": "string"
+                  }
+                ]
+              },
+              "conflicted": {
+                "type": "boolean"
+              },
+              "step": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "total": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            }
           }
         }
       }
     },
     "blame/file": {
+      "description": "Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -234,12 +292,19 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Path relative to the repository root.",
             "type": "string"
           },
           "rev": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to blame. Omitted blames the working tree.",
             "type": "string"
           },
           "streamId": {
+            "minLength": 1,
+            "description": "Correlates the blame/hunks notifications of this request.",
             "type": "string"
           }
         }
@@ -258,7 +323,8 @@
             "type": "string"
           },
           "totalLines": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           },
           "fromCache": {
             "type": "boolean"
@@ -292,7 +358,7 @@
                         "type": "string"
                       },
                       "time": {
-                        "type": "number"
+                        "type": "integer"
                       }
                     }
                   },
@@ -312,7 +378,7 @@
                         "type": "string"
                       },
                       "time": {
-                        "type": "number"
+                        "type": "integer"
                       }
                     }
                   },
@@ -330,25 +396,32 @@
       }
     },
     "log/commits": {
+      "description": "Topo-ordered commit page from a ref (default HEAD).",
       "params": {
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "repoId",
-          "limit"
+          "repoId"
         ],
         "properties": {
           "repoId": {
             "type": "string"
           },
           "ref": {
+            "minLength": 1,
+            "description": "Revision to walk from. Omitted means HEAD.",
             "type": "string"
           },
           "cursor": {
+            "minLength": 1,
             "type": "string"
           },
           "limit": {
-            "type": "number"
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
           }
         }
       },
@@ -373,11 +446,15 @@
               ],
               "properties": {
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "parents": {
                   "type": "array",
                   "items": {
+                    "pattern": "^[0-9a-f]{40}$",
+                    "description": "Full 40-character lowercase hex object id.",
                     "type": "string"
                   }
                 },
@@ -397,7 +474,7 @@
                       "type": "string"
                     },
                     "time": {
-                      "type": "number"
+                      "type": "integer"
                     }
                   }
                 },
@@ -417,7 +494,7 @@
                       "type": "string"
                     },
                     "time": {
-                      "type": "number"
+                      "type": "integer"
                     }
                   }
                 },
@@ -434,26 +511,33 @@
       }
     },
     "history/file": {
+      "description": "File history following renames, newest first.",
       "params": {
         "additionalProperties": false,
         "type": "object",
         "required": [
           "repoId",
-          "path",
-          "limit"
+          "path"
         ],
         "properties": {
           "repoId": {
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Path relative to the repository root.",
             "type": "string"
           },
           "cursor": {
+            "minLength": 1,
             "type": "string"
           },
           "limit": {
-            "type": "number"
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
           }
         }
       },
@@ -479,6 +563,8 @@
               ],
               "properties": {
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "author": {
@@ -497,7 +583,7 @@
                       "type": "string"
                     },
                     "time": {
-                      "type": "number"
+                      "type": "integer"
                     }
                   }
                 },
@@ -508,10 +594,12 @@
                   "type": "string"
                 },
                 "additions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "deletions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             }
@@ -523,6 +611,7 @@
       }
     },
     "history/line": {
+      "description": "History of a line range (1-based, inclusive).",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -537,13 +626,17 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Path relative to the repository root.",
             "type": "string"
           },
           "startLine": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           },
           "endLine": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           }
         }
       },
@@ -569,6 +662,8 @@
               ],
               "properties": {
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "author": {
@@ -587,7 +682,7 @@
                       "type": "string"
                     },
                     "time": {
-                      "type": "number"
+                      "type": "integer"
                     }
                   }
                 },
@@ -598,10 +693,12 @@
                   "type": "string"
                 },
                 "additions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "deletions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             }
@@ -610,36 +707,46 @@
       }
     },
     "search/commits": {
+      "description": "Commit search over HEAD history. Matches stream as search/matches notifications tagged with `streamId`; the result carries only the totals.",
       "params": {
         "additionalProperties": false,
         "type": "object",
         "required": [
           "repoId",
-          "streamId",
-          "limit",
-          "query"
+          "streamId"
         ],
         "properties": {
           "repoId": {
             "type": "string"
           },
           "streamId": {
+            "minLength": 1,
+            "description": "Correlates the search/matches notifications of this request.",
             "type": "string"
           },
           "limit": {
-            "type": "number"
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
           },
           "query": {
             "additionalProperties": false,
+            "default": {},
+            "description": "Criteria, ANDed together. An absent or empty query matches every commit, so the page is bounded only by `limit`.",
             "type": "object",
             "properties": {
               "text": {
+                "minLength": 1,
                 "type": "string"
               },
               "author": {
+                "minLength": 1,
                 "type": "string"
               },
               "sha": {
+                "minLength": 1,
                 "type": "string"
               }
             }
@@ -659,7 +766,8 @@
             "type": "string"
           },
           "total": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           },
           "truncated": {
             "type": "boolean"
@@ -668,6 +776,7 @@
       }
     },
     "rev/fileAtRev": {
+      "description": "Contents of a file at a revision, passed through the repository's checkout filters so it compares byte-for-byte against an editor buffer. Binary blobs are reported, not returned.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -681,10 +790,21 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Path relative to the repository root.",
             "type": "string"
           },
           "rev": {
+            "minLength": 1,
+            "description": "Revision the file is read from.",
             "type": "string"
+          },
+          "maxBytes": {
+            "minimum": 1,
+            "maximum": 16777216,
+            "default": 4194304,
+            "description": "Cap on the returned contents. Omitted means 4194304.",
+            "type": "integer"
           }
         }
       },
@@ -692,16 +812,30 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "contents"
+          "contents",
+          "size",
+          "truncated",
+          "binary"
         ],
         "properties": {
           "contents": {
             "type": "string"
+          },
+          "size": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "binary": {
+            "type": "boolean"
           }
         }
       }
     },
     "refs/list": {
+      "description": "Refs listing for views: branches, remotes, tags.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -738,6 +872,8 @@
                   "type": "string"
                 },
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "current": {
@@ -776,6 +912,8 @@
                         "type": "string"
                       },
                       "sha": {
+                        "pattern": "^[0-9a-f]{40}$",
+                        "description": "Full 40-character lowercase hex object id.",
                         "type": "string"
                       }
                     }
@@ -798,6 +936,8 @@
                   "type": "string"
                 },
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 }
               }
@@ -807,6 +947,7 @@
       }
     },
     "stash/list": {
+      "description": "Stash entries, most recent first.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -838,9 +979,12 @@
               ],
               "properties": {
                 "index": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "message": {
@@ -856,6 +1000,7 @@
       }
     },
     "status/summary": {
+      "description": "Working tree and index summary, plus upstream divergence.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -888,10 +1033,12 @@
             "type": "string"
           },
           "ahead": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           },
           "behind": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           },
           "staged": {
             "type": "array",
@@ -944,10 +1091,12 @@
                   "type": "string"
                 },
                 "additions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "deletions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             }
@@ -1003,10 +1152,12 @@
                   "type": "string"
                 },
                 "additions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "deletions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             }
@@ -1027,31 +1178,36 @@
       }
     },
     "graph/rows": {
+      "description": "Graph rows with engine-computed lane layout, topo order, paged.",
       "params": {
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "repoId",
-          "limit",
-          "include"
+          "repoId"
         ],
         "properties": {
           "repoId": {
             "type": "string"
           },
           "cursor": {
+            "minLength": 1,
             "type": "string"
           },
           "limit": {
-            "type": "number"
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
           },
           "include": {
             "additionalProperties": false,
+            "default": {
+              "stashes": false,
+              "wip": false
+            },
+            "description": "Synthetic rows to mix in among the commits. Absent members default to false.",
             "type": "object",
-            "required": [
-              "stashes",
-              "wip"
-            ],
             "properties": {
               "stashes": {
                 "type": "boolean"
@@ -1068,7 +1224,7 @@
         "type": "object",
         "required": [
           "rows",
-          "generation"
+          "refsFingerprint"
         ],
         "properties": {
           "rows": {
@@ -1089,16 +1245,21 @@
               ],
               "properties": {
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "parents": {
                   "type": "array",
                   "items": {
+                    "pattern": "^[0-9a-f]{40}$",
+                    "description": "Full 40-character lowercase hex object id.",
                     "type": "string"
                   }
                 },
                 "lane": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "laneEdges": {
                   "type": "array",
@@ -1112,10 +1273,12 @@
                     ],
                     "properties": {
                       "fromLane": {
-                        "type": "number"
+                        "minimum": 0,
+                        "type": "integer"
                       },
                       "toLane": {
-                        "type": "number"
+                        "minimum": 0,
+                        "type": "integer"
                       },
                       "kind": {
                         "anyOf": [
@@ -1152,12 +1315,12 @@
                       "type": "string"
                     },
                     "time": {
-                      "type": "number"
+                      "type": "integer"
                     }
                   }
                 },
                 "time": {
-                  "type": "number"
+                  "type": "integer"
                 },
                 "summary": {
                   "type": "string"
@@ -1212,10 +1375,12 @@
                             "type": "string"
                           },
                           "ahead": {
-                            "type": "number"
+                            "minimum": 0,
+                            "type": "integer"
                           },
                           "behind": {
-                            "type": "number"
+                            "minimum": 0,
+                            "type": "integer"
                           }
                         }
                       }
@@ -1244,13 +1409,16 @@
           "nextCursor": {
             "type": "string"
           },
-          "generation": {
-            "type": "number"
+          "refsFingerprint": {
+            "minimum": 0,
+            "description": "Content hash of the ref set the page was sliced from. Constant across the pages of one snapshot and different once any ref moves; unrelated to the monotonic counter in repo/didChange.",
+            "type": "integer"
           }
         }
       }
     },
     "diff/commit": {
+      "description": "Files changed by one commit, against its first parent's tree.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1263,6 +1431,8 @@
             "type": "string"
           },
           "sha": {
+            "minLength": 1,
+            "description": "Revision naming the commit.",
             "type": "string"
           }
         }
@@ -1325,10 +1495,12 @@
                   "type": "string"
                 },
                 "additions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "deletions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             }
@@ -1337,6 +1509,7 @@
       }
     },
     "diff/refs": {
+      "description": "Files changed between two revisions' trees.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1350,9 +1523,11 @@
             "type": "string"
           },
           "base": {
+            "minLength": 1,
             "type": "string"
           },
           "head": {
+            "minLength": 1,
             "type": "string"
           }
         }
@@ -1415,10 +1590,12 @@
                   "type": "string"
                 },
                 "additions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "deletions": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             }
@@ -1427,22 +1604,26 @@
       }
     },
     "diff/fileHunks": {
+      "description": "Hunks of a file's working-tree (or staged) diff, for hunk staging.",
       "params": {
         "additionalProperties": false,
         "type": "object",
         "required": [
           "repoId",
-          "path",
-          "staged"
+          "path"
         ],
         "properties": {
           "repoId": {
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Path relative to the repository root.",
             "type": "string"
           },
           "staged": {
+            "default": false,
+            "description": "Diff the index against HEAD instead of the working tree against the index.",
             "type": "boolean"
           }
         }
@@ -1472,16 +1653,20 @@
                   "type": "string"
                 },
                 "oldStart": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "oldLines": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "newStart": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "newLines": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "lines": {
                   "type": "array",
@@ -1496,6 +1681,7 @@
       }
     },
     "stage/files": {
+      "description": "Stages or unstages whole files.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1509,6 +1695,7 @@
             "type": "string"
           },
           "paths": {
+            "minItems": 1,
             "type": "array",
             "items": {
               "type": "string"
@@ -1535,6 +1722,7 @@
       }
     },
     "stage/hunks": {
+      "description": "Stages or unstages individual hunks. The ranges are matched against a freshly taken diff, so a request built from a stale diff/fileHunks page fails instead of applying the wrong lines.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1549,6 +1737,8 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Path relative to the repository root.",
             "type": "string"
           },
           "action": {
@@ -1564,6 +1754,8 @@
             ]
           },
           "hunks": {
+            "minItems": 1,
+            "description": "Hunk ranges exactly as diff/fileHunks reported them.",
             "type": "array",
             "items": {
               "additionalProperties": false,
@@ -1576,16 +1768,20 @@
               ],
               "properties": {
                 "oldStart": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "oldLines": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "newStart": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "newLines": {
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             }
@@ -1599,6 +1795,7 @@
       }
     },
     "mutate/commit": {
+      "description": "Commits the index.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1611,6 +1808,7 @@
             "type": "string"
           },
           "message": {
+            "minLength": 1,
             "type": "string"
           },
           "amend": {
@@ -1629,12 +1827,15 @@
         ],
         "properties": {
           "sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
             "type": "string"
           }
         }
       }
     },
     "mutate/branchCreate": {
+      "description": "Creates a branch, optionally checking it out.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1647,9 +1848,15 @@
             "type": "string"
           },
           "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Branch to create.",
             "type": "string"
           },
           "startPoint": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to branch from. Omitted means HEAD.",
             "type": "string"
           },
           "checkout": {
@@ -1664,6 +1871,7 @@
       }
     },
     "mutate/branchDelete": {
+      "description": "Deletes a branch.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1676,6 +1884,9 @@
             "type": "string"
           },
           "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Branch to delete.",
             "type": "string"
           },
           "force": {
@@ -1690,6 +1901,7 @@
       }
     },
     "mutate/switch": {
+      "description": "Checks out a ref, detaching HEAD when it is not a local branch.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1702,6 +1914,9 @@
             "type": "string"
           },
           "ref": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to check out.",
             "type": "string"
           }
         }
@@ -1713,6 +1928,7 @@
       }
     },
     "mutate/merge": {
+      "description": "Merges a ref into HEAD. Conflicts are a result, not an error.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1725,6 +1941,9 @@
             "type": "string"
           },
           "ref": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to merge in.",
             "type": "string"
           },
           "noFf": {
@@ -1746,6 +1965,7 @@
       }
     },
     "mutate/cherryPick": {
+      "description": "Cherry-picks commits onto HEAD. Conflicts are a result, not an error.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1758,8 +1978,12 @@
             "type": "string"
           },
           "shas": {
+            "minItems": 1,
             "type": "array",
             "items": {
+              "minLength": 1,
+              "pattern": "^[^-]",
+              "description": "Revision to pick.",
               "type": "string"
             }
           }
@@ -1779,6 +2003,7 @@
       }
     },
     "mutate/revert": {
+      "description": "Reverts commits on HEAD. Conflicts are a result, not an error.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1791,8 +2016,12 @@
             "type": "string"
           },
           "shas": {
+            "minItems": 1,
             "type": "array",
             "items": {
+              "minLength": 1,
+              "pattern": "^[^-]",
+              "description": "Revision to revert.",
               "type": "string"
             }
           }
@@ -1812,6 +2041,7 @@
       }
     },
     "mutate/reset": {
+      "description": "Moves HEAD to a revision, optionally rewriting index and working tree.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1825,6 +2055,9 @@
             "type": "string"
           },
           "ref": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to reset onto.",
             "type": "string"
           },
           "mode": {
@@ -1852,6 +2085,7 @@
       }
     },
     "mutate/fetch": {
+      "description": "Fetches from a remote.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1863,6 +2097,9 @@
             "type": "string"
           },
           "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to fetch. Omitted uses git's default.",
             "type": "string"
           },
           "prune": {
@@ -1877,6 +2114,7 @@
       }
     },
     "mutate/pull": {
+      "description": "Pulls into the current branch using git's configured strategy.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1899,6 +2137,7 @@
       }
     },
     "mutate/push": {
+      "description": "Pushes the current branch.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1925,6 +2164,7 @@
       }
     },
     "stash/push": {
+      "description": "Stashes the working tree.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1936,6 +2176,9 @@
             "type": "string"
           },
           "message": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Stash message. Omitted uses git's generated one.",
             "type": "string"
           },
           "includeUntracked": {
@@ -1950,6 +2193,7 @@
       }
     },
     "stash/apply": {
+      "description": "Applies a stash entry. Conflicts are a result, not an error; git keeps the entry on conflict even for a pop.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1963,9 +2207,11 @@
             "type": "string"
           },
           "index": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           },
           "pop": {
+            "description": "Drops the entry after a clean apply. Required: the two behaviours are not interchangeable, so the engine will not guess.",
             "type": "boolean"
           }
         }
@@ -1984,6 +2230,7 @@
       }
     },
     "stash/drop": {
+      "description": "Deletes a stash entry.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -1996,7 +2243,8 @@
             "type": "string"
           },
           "index": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           }
         }
       },
@@ -2007,6 +2255,7 @@
       }
     },
     "worktree/list": {
+      "description": "Worktrees attached to the repository.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2060,6 +2309,7 @@
       }
     },
     "worktree/add": {
+      "description": "Adds a worktree checked out at a revision.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2073,12 +2323,20 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Directory to create the worktree in.",
             "type": "string"
           },
           "ref": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to check out.",
             "type": "string"
           },
           "createBranch": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Branch to create at `ref` for the new worktree.",
             "type": "string"
           }
         }
@@ -2090,6 +2348,7 @@
       }
     },
     "worktree/remove": {
+      "description": "Removes a worktree.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2102,6 +2361,8 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
+            "description": "Worktree directory to remove.",
             "type": "string"
           },
           "force": {
@@ -2116,6 +2377,7 @@
       }
     },
     "rebase/preview": {
+      "description": "Commits upstream..HEAD, oldest first — the editable rebase plan.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2128,6 +2390,9 @@
             "type": "string"
           },
           "upstream": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to rebase onto.",
             "type": "string"
           }
         }
@@ -2150,6 +2415,8 @@
               ],
               "properties": {
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "summary": {
@@ -2162,6 +2429,7 @@
       }
     },
     "rebase/start": {
+      "description": "Executes an interactive rebase with the given plan via sequence-editor interception. Conflicts pause the rebase; repo/state then reports the sequencer step.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2175,9 +2443,13 @@
             "type": "string"
           },
           "upstream": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to rebase onto.",
             "type": "string"
           },
           "plan": {
+            "description": "Steps in execution order. An empty plan rebases nothing.",
             "type": "array",
             "items": {
               "additionalProperties": false,
@@ -2217,6 +2489,7 @@
                   ]
                 },
                 "sha": {
+                  "minLength": 1,
                   "type": "string"
                 },
                 "summary": {
@@ -2248,6 +2521,7 @@
       }
     },
     "rebase/continue": {
+      "description": "Resumes a paused rebase once the conflicts are staged.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2278,6 +2552,7 @@
       }
     },
     "rebase/abort": {
+      "description": "Restores the pre-rebase state.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2297,6 +2572,7 @@
       }
     },
     "remote/list": {
+      "description": "Configured remotes and their URLs.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2342,6 +2618,7 @@
       }
     },
     "patch/create": {
+      "description": "Creates a shareable patch envelope from WIP, a stash, a commit, or a range.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2384,7 +2661,8 @@
                     "type": "string"
                   },
                   "index": {
-                    "type": "number"
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 }
               },
@@ -2401,6 +2679,9 @@
                     "type": "string"
                   },
                   "sha": {
+                    "minLength": 1,
+                    "pattern": "^[^-]",
+                    "description": "Revision to capture.",
                     "type": "string"
                   }
                 }
@@ -2419,9 +2700,15 @@
                     "type": "string"
                   },
                   "base": {
+                    "minLength": 1,
+                    "pattern": "^[^-]",
+                    "description": "Revision the range starts after.",
                     "type": "string"
                   },
                   "head": {
+                    "minLength": 1,
+                    "pattern": "^[^-]",
+                    "description": "Revision the range ends at.",
                     "type": "string"
                   }
                 }
@@ -2429,6 +2716,8 @@
             ]
           },
           "summary": {
+            "minLength": 1,
+            "description": "Overrides the summary derived from the source.",
             "type": "string"
           }
         }
@@ -2470,6 +2759,7 @@
                 "type": "string"
               },
               "patch": {
+                "minLength": 1,
                 "type": "string"
               },
               "remoteFingerprint": {
@@ -2484,6 +2774,7 @@
       }
     },
     "patch/apply": {
+      "description": "Applies a patch envelope; 3-way when the base is missing.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2525,6 +2816,7 @@
                 "type": "string"
               },
               "patch": {
+                "minLength": 1,
                 "type": "string"
               },
               "remoteFingerprint": {
@@ -2562,6 +2854,7 @@
   "notifications": {
     "doc/didChange": {
       "direction": "client",
+      "description": "Pushes an editor buffer into the engine so working-tree blame reflects unsaved edits.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2576,19 +2869,22 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
             "type": "string"
           },
           "contents": {
             "type": "string"
           },
           "version": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           }
         }
       }
     },
     "doc/didClose": {
       "direction": "client",
+      "description": "Drops a pushed buffer; blame reverts to the file on disk.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2601,6 +2897,7 @@
             "type": "string"
           },
           "path": {
+            "minLength": 1,
             "type": "string"
           }
         }
@@ -2608,6 +2905,7 @@
     },
     "$/cancelRequest": {
       "direction": "client",
+      "description": "Asks the engine to abandon an in-flight request.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2616,13 +2914,14 @@
         ],
         "properties": {
           "id": {
-            "type": "number"
+            "type": "integer"
           }
         }
       }
     },
     "blame/hunks": {
       "direction": "engine",
+      "description": "A batch of blame hunks for the blame/file request carrying this streamId.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2632,6 +2931,7 @@
         ],
         "properties": {
           "streamId": {
+            "minLength": 1,
             "type": "string"
           },
           "hunks": {
@@ -2648,16 +2948,21 @@
               ],
               "properties": {
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "resultLine": {
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "originalLine": {
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "lineCount": {
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "path": {
                   "type": "string"
@@ -2671,6 +2976,8 @@
                   ],
                   "properties": {
                     "sha": {
+                      "pattern": "^[0-9a-f]{40}$",
+                      "description": "Full 40-character lowercase hex object id.",
                       "type": "string"
                     },
                     "path": {
@@ -2686,6 +2993,7 @@
     },
     "search/matches": {
       "direction": "engine",
+      "description": "A batch of matches for the search/commits request carrying this streamId.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2695,6 +3003,7 @@
         ],
         "properties": {
           "streamId": {
+            "minLength": 1,
             "type": "string"
           },
           "matches": {
@@ -2711,11 +3020,15 @@
               ],
               "properties": {
                 "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
                   "type": "string"
                 },
                 "parents": {
                   "type": "array",
                   "items": {
+                    "pattern": "^[0-9a-f]{40}$",
+                    "description": "Full 40-character lowercase hex object id.",
                     "type": "string"
                   }
                 },
@@ -2735,7 +3048,7 @@
                       "type": "string"
                     },
                     "time": {
-                      "type": "number"
+                      "type": "integer"
                     }
                   }
                 },
@@ -2755,7 +3068,7 @@
                       "type": "string"
                     },
                     "time": {
-                      "type": "number"
+                      "type": "integer"
                     }
                   }
                 },
@@ -2770,6 +3083,7 @@
     },
     "repo/didChange": {
       "direction": "engine",
+      "description": "Pushed when the repository's git state changes on disk. Categories are debounced and coalesced, so one notification can carry several.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2783,9 +3097,12 @@
             "type": "string"
           },
           "generation": {
-            "type": "number"
+            "minimum": 1,
+            "description": "Per-repo counter, incremented once per pushed notification. Unrelated to the ref-set hash in graph/rows.",
+            "type": "integer"
           },
           "changed": {
+            "minItems": 1,
             "type": "array",
             "items": {
               "anyOf": [

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <ctime>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -174,12 +175,9 @@ EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
   }
 
   if (kind == "stash") {
-    if (!source.contains("index") || !source["index"].is_number_integer() ||
-        source["index"].get<std::int64_t>() < 0) {
-      throw rpc::HandlerError{
-          {ErrorCode::InvalidParams, "'source.index' must be a non-negative integer"}};
-    }
-    const std::string ref = "stash@{" + std::to_string(source["index"].get<std::int64_t>()) + "}";
+    const std::int64_t index =
+        requireInteger(source, "index", 0, std::numeric_limits<std::int64_t>::max());
+    const std::string ref = "stash@{" + std::to_string(index) + "}";
     // The stash's first parent is the commit the stash was taken on.
     auto parent = runGitOrThrow(repo, {"rev-parse", "--verify", ref + "^1"}, token,
                                 "git rev-parse " + ref);
@@ -280,12 +278,12 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (!params.contains("source") || !params["source"].is_object()) {
           throw rpc::HandlerError{{ErrorCode::InvalidParams, "'source' is required"}};
         }
+        const std::string summaryOverride = optionalString(params, "summary");
         auto repo = openRepo(context, params);
         EnvelopeSource source = buildSource(repo, params["source"], token);
         if (source.patch.empty()) {
           throw rpc::HandlerError{{ErrorCode::GitError, "nothing to include in patch"}};
         }
-        const std::string summaryOverride = params.value("summary", "");
 
         rpc::Json envelope = {{"format", "gitglasses-patch"},
                               {"version", 1},

@@ -240,6 +240,10 @@ TEST(MutateService, MergeConflictThenResolveWithCommit) {
   Json summary = statusSummary(session, 11, repoId);
   EXPECT_EQ(summary["conflicted"], Json::array({"c.txt"}));
 
+  Json state = session.request(req(13, "repo/state", {{"repoId", repoId}}));
+  EXPECT_EQ(state["result"]["sequencer"]["operation"], "merge");
+  EXPECT_TRUE(state["result"]["sequencer"]["conflicted"].get<bool>());
+
   // Manual resolution completes through mutate/commit.
   fixture.writeFile("c.txt", "merged\n");
   fixture.run("git add c.txt");
@@ -287,6 +291,9 @@ TEST(MutateService, CherryPickCleanMultipleAndConflict) {
   ASSERT_TRUE(conflict.contains("result")) << conflict.dump();
   EXPECT_TRUE(conflict["result"]["conflicts"].get<bool>());
   EXPECT_TRUE(std::filesystem::exists(fixture.root() / ".git/CHERRY_PICK_HEAD"));
+  Json state = session.request(req(13, "repo/state", {{"repoId", repoId}}));
+  EXPECT_EQ(state["result"]["sequencer"]["operation"], "cherry-pick");
+  EXPECT_TRUE(state["result"]["sequencer"]["conflicted"].get<bool>());
   fixture.run("git cherry-pick --abort");
 
   Json bad = session.request(
