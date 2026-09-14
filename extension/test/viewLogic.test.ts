@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateContributors,
   appendPage,
+  clampPageSize,
   commitDescription,
   emptyPageState,
   findShaMatches,
@@ -153,5 +154,23 @@ describe('commit rendering', () => {
     expect(doc).toContain('author  Ada <ada@example.com>');
     expect(doc).toContain('date    ');
     expect(doc).toContain('Fix the flux capacitor');
+  });
+});
+
+describe('clampPageSize', () => {
+  it('accepts a configured value inside the bounds', () => {
+    expect(clampPageSize(120, 50, { min: 10, max: 1000 })).toBe(120);
+  });
+
+  it('rounds a fractional value', () => {
+    expect(clampPageSize(75.4, 50, { min: 10, max: 1000 })).toBe(75);
+  });
+
+  it('falls back for out-of-range, missing, and non-numeric values', () => {
+    expect(clampPageSize(0, 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize(5000, 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize(undefined, 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize('80', 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize(Number.NaN, 50, { min: 10, max: 1000 })).toBe(50);
   });
 });

@@ -45,7 +45,7 @@ export const WEB_FEATURES: Readonly<Record<string, WebFeature>> = {
   treeViews: {
     status: 'degraded',
     reason:
-      'firstWorkspaceRepo requires a file-scheme workspace folder; on virtual schemes the views show "no repository"',
+      'activeWorkspaceRepo requires a file-scheme workspace folder; on virtual schemes the views show "no repository"',
   },
   searchView: { status: 'included' },
   homeView: {

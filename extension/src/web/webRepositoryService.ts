@@ -4,7 +4,7 @@
 //
 // Matching is scheme-agnostic on purpose: real documents carry the workspace
 // folder's scheme (file: on vscode.dev local folders, vscode-test-web: under
-// the test harness), while shared helpers like firstWorkspaceRepo probe with
+// the test harness), while shared helpers like activeWorkspaceRepo probe with
 // synthetic file:// URIs built from fsPath — both share the same path space.
 
 import * as vscode from 'vscode';

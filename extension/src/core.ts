@@ -8,7 +8,10 @@ import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { BlameModel } from './model/blameModel';
-import { RepositoryService } from './model/repositoryService';
+import { RepositoryService, repoName } from './model/repositoryService';
+import { ActiveRepoManager } from './model/activeRepo';
+import { RefsModel } from './model/refsModel';
+import { ConflictWatcher } from './model/conflictWatcher';
 import { LineBlameController } from './annotations/lineBlame';
 import { FileAnnotationsController } from './annotations/fileAnnotations';
 import { BlameHoverProvider } from './annotations/hoverProvider';
@@ -18,7 +21,7 @@ import {
   encodeRevisionUri,
 } from './scm/revisionContentProvider';
 import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
-import { ViewBase, ViewNode } from './views/viewBase';
+import { ViewBase, ViewNode, setActiveRepoResolver } from './views/viewBase';
 import { CommitsViewProvider } from './views/commitsView';
 import {
   BranchesViewProvider,
@@ -120,7 +123,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
 
   const blame = new BlameModel(engine);
   const lineBlame = new LineBlameController(blame, repos);
-  const fileAnnotations = new FileAnnotationsController(blame, repos);
+  const fileAnnotations = new FileAnnotationsController(blame, repos, context.workspaceState);
   const codeLens = new BlameCodeLensProvider(blame, repos);
   const revisionContent = new RevisionContentProvider(engine);
 
@@ -133,10 +136,21 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const launchpad = new LaunchpadService(integrations, context.globalState);
   const prChips = new PrChipProvider(integrations);
 
+  // Which repository the views and repo-scoped commands act on, persisted per
+  // workspace; every call site resolves through this once it is installed.
+  const activeRepo = new ActiveRepoManager(repos, context.workspaceState);
+  setActiveRepoResolver(() => activeRepo.resolve());
+
+  // Branches, remotes and tags render slices of one refs/list.
+  const refsModel = new RefsModel(engine);
+
+  // Conflicts left by an operation started anywhere, shown in the status bar.
+  const conflicts = new ConflictWatcher(engine, repos);
+
   // Sidebar views (activity bar container "gitglasses").
   const searchView = new SearchViewProvider(engine, repos);
   const worktreesView = new WorktreesViewProvider(engine, repos);
-  const branchesView = new BranchesViewProvider(engine, repos);
+  const branchesView = new BranchesViewProvider(engine, repos, refsModel);
   branchesView.setPrChipProvider(prChips);
   const homeView = new HomeViewProvider(engine, repos, launchpad, context.globalState);
   const views: Record<string, ViewBase> = {
@@ -144,15 +158,18 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     'gitglasses.views.worktrees': worktreesView,
     'gitglasses.views.commits': new CommitsViewProvider(engine, repos),
     'gitglasses.views.branches': branchesView,
-    'gitglasses.views.remotes': new RemotesViewProvider(engine, repos),
+    'gitglasses.views.remotes': new RemotesViewProvider(engine, repos, refsModel),
     'gitglasses.views.stashes': new StashesViewProvider(engine, repos),
-    'gitglasses.views.tags': new TagsViewProvider(engine, repos),
+    'gitglasses.views.tags': new TagsViewProvider(engine, repos, refsModel),
     'gitglasses.views.fileHistory': new FileHistoryViewProvider(engine, repos),
     'gitglasses.views.searchCompare': searchView,
     'gitglasses.views.contributors': new ContributorsViewProvider(engine, repos),
   };
 
   const refreshViews = (ids?: string[]): void => {
+    // Refreshed views re-read refs, so the shared fetch must not answer from
+    // the pre-refresh cache.
+    refsModel.invalidate();
     for (const [viewId, provider] of Object.entries(views)) {
       if (!ids || ids.includes(viewId)) provider.refresh();
     }
@@ -170,13 +187,18 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const onHeadChanged = (repoId: string): void => {
     refreshViews(HISTORY_VIEWS);
     refreshAnnotations(repoId);
+    conflicts.schedule();
   };
   const refreshAll = (): void => {
     refreshAnnotations();
     refreshViews();
+    conflicts.schedule();
   };
   const reload = async (): Promise<void> => {
     await repos.rediscoverAll();
+    // Repo ids are fresh after a respawn, so the workspace repos are looked
+    // up again on the next resolve.
+    activeRepo.reset();
     docSync.resync();
     refreshAll();
   };
@@ -205,12 +227,40 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     scm,
     auth,
     integrations,
+    activeRepo,
+    conflicts,
     engine.onDidChangeCapabilities(() => updateCapabilityContext()),
   ];
 
+  const treeViews: vscode.TreeView<ViewNode>[] = [];
   for (const [viewId, provider] of Object.entries(views)) {
-    disposables.push(provider, vscode.window.registerTreeDataProvider(viewId, provider));
+    const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: provider });
+    treeViews.push(treeView);
+    disposables.push(provider, treeView);
   }
+
+  // Which repository the views describe, shown next to each view's title. A
+  // single-repo workspace needs no such label.
+  const updateRepoLabels = async (): Promise<void> => {
+    const all = await activeRepo.all().catch(() => []);
+    const active = all.length > 1 ? await activeRepo.resolve() : undefined;
+    const label = active ? repoName(active.rootPath) : undefined;
+    for (const treeView of treeViews) treeView.description = label;
+    void vscode.commands.executeCommand(
+      'setContext',
+      'gitglasses.multiRepoWorkspace',
+      all.length > 1,
+    );
+  };
+  void updateRepoLabels();
+  disposables.push(
+    activeRepo.onDidChange(() => {
+      void updateRepoLabels();
+      refreshAll();
+    }),
+    // The handshake is the first moment repositories can be discovered.
+    engine.onDidChangeCapabilities(() => void updateRepoLabels()),
+  );
 
   disposables.push(
     vscode.window.registerTerminalLinkProvider(new ShaTerminalLinkProvider(engine, repos)),
@@ -272,6 +322,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       await reload();
     }),
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
+    vscode.commands.registerCommand('gitglasses.selectRepository', () => activeRepo.pick()),
     vscode.commands.registerCommand('gitglasses.openWalkthrough', () =>
       vscode.commands.executeCommand(
         'workbench.action.openWalkthrough',

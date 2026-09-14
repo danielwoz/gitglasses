@@ -2,9 +2,17 @@ import * as vscode from 'vscode';
 import { FileHistoryEntry } from '@gitglasses/protocol';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
 import { EngineClient } from '@gitglasses/rpc';
-import { ActiveRepo, ViewBase, ViewNode, loadMoreNode, messageNode } from './viewBase';
+import {
+  ActiveRepo,
+  ViewBase,
+  ViewNode,
+  loadMoreNode,
+  messageNode,
+  setViewState,
+} from './viewBase';
 import { fileHistoryNode } from './nodes';
-import { PAGE_SIZE, PageState, appendPage, emptyPageState } from './viewLogic';
+import { PageState, appendPage, emptyPageState } from './viewLogic';
+import { viewPageSize } from '../system/settings';
 
 // Follows the active editor and pages that file's history (rename-following
 // is the engine's job; entries carry the path at each commit).
@@ -49,11 +57,13 @@ export class FileHistoryViewProvider extends ViewBase {
 
   override async getChildren(node?: ViewNode): Promise<ViewNode[]> {
     if (node) return node.children ? ((await node.children()) ?? []) : [];
-    if (!this.current) return [messageNode('Open a file to see its history')];
+    // No tracked file and engine failures both leave the tree empty so the
+    // view's welcome content explains the state.
+    if (!this.current) return [];
     try {
       return await this.buildNodes(this.current);
     } catch {
-      return [messageNode('GitGlasses engine unavailable')];
+      return setViewState('engineUnavailable');
     }
   }
 
@@ -80,7 +90,7 @@ export class FileHistoryViewProvider extends ViewBase {
       repoId: file.repoId,
       path: file.relativePath,
       cursor: this.state.nextCursor,
-      limit: PAGE_SIZE,
+      limit: viewPageSize(),
     });
     this.state = appendPage(this.state, { items: result.entries, nextCursor: result.nextCursor });
   }

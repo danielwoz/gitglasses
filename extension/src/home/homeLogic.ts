@@ -10,6 +10,7 @@ export interface BranchStatus {
   staged: readonly unknown[];
   unstaged: readonly unknown[];
   untracked: readonly string[];
+  conflicted: readonly string[];
 }
 
 /** "↑n ↓m" arrows; empty string when in sync with the upstream. */
@@ -20,9 +21,12 @@ export function formatAheadBehind(ahead: number, behind: number): string {
   return parts.join(' ');
 }
 
-/** "n staged, n unstaged, n untracked" listing only non-zero counts. */
+/** "n conflicted, n staged, n unstaged, n untracked" listing only non-zero
+ *  counts. Conflicts come first: nothing else can proceed until they are
+ *  resolved. */
 export function formatDirtySummary(status: BranchStatus): string {
   const parts: string[] = [];
+  if (status.conflicted.length > 0) parts.push(`${status.conflicted.length} conflicted`);
   if (status.staged.length > 0) parts.push(`${status.staged.length} staged`);
   if (status.unstaged.length > 0) parts.push(`${status.unstaged.length} unstaged`);
   if (status.untracked.length > 0) parts.push(`${status.untracked.length} untracked`);

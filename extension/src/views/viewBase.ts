@@ -1,38 +1,38 @@
 import * as vscode from 'vscode';
-import * as path from 'node:path';
 import { CommitSummaryInfo } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
+import { ActiveRepo, discoverWorkspaceRepos } from '../model/activeRepo';
 import { errorMessage } from '../commands/ui';
 import { DiffSpec } from './viewLogic';
 
-export interface ActiveRepo {
-  repoId: string;
-  rootPath: string;
+export type { ActiveRepo };
+
+type ActiveRepoResolver = () => Promise<ActiveRepo | undefined>;
+
+let resolveActive: ActiveRepoResolver | undefined;
+
+/** Installs the workspace's active-repo selection (core does this at startup);
+ *  without one, the first workspace folder that is a repository is used. */
+export function setActiveRepoResolver(resolver: ActiveRepoResolver | undefined): void {
+  resolveActive = resolver;
 }
 
-/** Resolves the first workspace folder that is (in) a git repository. */
-export async function firstWorkspaceRepo(
+/** The repository the repo-scoped commands and views act on. */
+export async function activeWorkspaceRepo(
   repos: RepositoryService,
 ): Promise<ActiveRepo | undefined> {
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    if (folder.uri.scheme !== 'file') continue;
-    // locateOrDiscover keys discovery on the file's parent directory, so a
-    // synthetic child path makes it discover the folder itself.
-    const probe = vscode.Uri.file(path.join(folder.uri.fsPath, '.gitglasses'));
-    const located = await repos.locateOrDiscover(probe);
-    if (located) return { repoId: located.repoId, rootPath: located.rootPath };
-  }
-  return undefined;
+  if (resolveActive) return resolveActive();
+  return (await discoverWorkspaceRepos(repos))[0];
 }
 
-/** Resolves the workspace repo, reporting when there is none. */
+/** Resolves the active repo, reporting when there is none. */
 export async function requireRepo(
   repos: RepositoryService,
 ): Promise<ActiveRepo | undefined> {
   let repo: ActiveRepo | undefined;
   try {
-    repo = await firstWorkspaceRepo(repos);
+    repo = await activeWorkspaceRepo(repos);
   } catch {
     repo = undefined;
   }
@@ -56,6 +56,30 @@ export async function withRepo(
   } catch (error) {
     void vscode.window.showErrorMessage(`GitGlasses: ${label} failed: ${errorMessage(error)}`);
   }
+}
+
+type ViewState = 'ready' | 'noRepository' | 'engineUnavailable';
+
+let lastViewState: ViewState | undefined;
+
+/** Publishes the workspace-wide view state as when-clause context keys, which
+ *  select the welcome content an empty view shows. Returns no nodes so the
+ *  welcome content is what the user sees. */
+export function setViewState(state: ViewState): ViewNode[] {
+  if (state !== lastViewState) {
+    lastViewState = state;
+    void vscode.commands.executeCommand(
+      'setContext',
+      'gitglasses.noRepository',
+      state === 'noRepository',
+    );
+    void vscode.commands.executeCommand(
+      'setContext',
+      'gitglasses.engineUnavailable',
+      state === 'engineUnavailable',
+    );
+  }
+  return [];
 }
 
 /** Tree element: a prebuilt item plus payload the command handlers read. */
@@ -117,14 +141,17 @@ export abstract class ViewBase implements vscode.TreeDataProvider<ViewNode>, vsc
     return node.item;
   }
 
+  // An empty result is what makes VS Code show the view's welcome content, so
+  // the "no repository" and "engine unavailable" states return no nodes and
+  // set the context keys the viewsWelcome entries are keyed on.
   async getChildren(node?: ViewNode): Promise<ViewNode[]> {
     if (node) return node.children ? ((await node.children()) ?? []) : [];
 
     let repo: ActiveRepo | undefined;
     try {
-      repo = await firstWorkspaceRepo(this.repos);
+      repo = await activeWorkspaceRepo(this.repos);
     } catch {
-      return [messageNode('GitGlasses engine unavailable')];
+      return setViewState('engineUnavailable');
     }
     if (!repo) {
       // Discovery failures swallow errors, so probe the engine to tell
@@ -132,14 +159,16 @@ export abstract class ViewBase implements vscode.TreeDataProvider<ViewNode>, vsc
       try {
         await this.engine.request('repo/list', {});
       } catch {
-        return [messageNode('GitGlasses engine unavailable')];
+        return setViewState('engineUnavailable');
       }
-      return [messageNode('No git repository in this workspace')];
+      return setViewState('noRepository');
     }
     try {
-      return await this.getRootNodes(repo);
+      const nodes = await this.getRootNodes(repo);
+      setViewState('ready');
+      return nodes;
     } catch {
-      return [messageNode('GitGlasses engine unavailable')];
+      return setViewState('engineUnavailable');
     }
   }
 

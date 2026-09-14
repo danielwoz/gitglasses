@@ -2,17 +2,21 @@ import * as vscode from 'vscode';
 import { BlameModel, FileBlame } from '../model/blameModel';
 import { RepositoryService } from '../model/repositoryService';
 import {
+  ANNOTATION_MODES_KEY,
+  AnnotationMode,
   computeChangedRanges,
   computeHeatmapRanges,
   continuationLabel,
   formatGutterLabel,
   HEATMAP_COLORS,
+  parseStoredModes,
+  serializeModes,
 } from './annotationLogic';
+
+export type { AnnotationMode };
 
 const RENDER_DEBOUNCE_MS = 300;
 const NBSP = '\u00a0';
-
-export type AnnotationMode = 'off' | 'blame' | 'heatmap' | 'changes';
 
 /** Decoration contentText collapses regular spaces; keep alignment with nbsp. */
 function toDecorationText(label: string): string {
@@ -74,7 +78,10 @@ export class FileAnnotationsController implements vscode.Disposable {
   constructor(
     private readonly blame: BlameModel,
     private readonly repos: RepositoryService,
+    /** Stores the per-document modes, so annotations survive a window reload. */
+    private readonly workspaceState?: vscode.Memento,
   ) {
+    this.modes = parseStoredModes(workspaceState?.get(ANNOTATION_MODES_KEY));
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (editor) void this.render(editor);
@@ -82,6 +89,10 @@ export class FileAnnotationsController implements vscode.Disposable {
       vscode.window.onDidChangeVisibleTextEditors((editors) => {
         for (const editor of editors) void this.render(editor);
       }),
+      // A closed document keeps no annotation state: its mode is forgotten and
+      // its per-document bookkeeping is dropped, so neither map grows with the
+      // window's lifetime.
+      vscode.workspace.onDidCloseTextDocument((document) => this.forget(document.uri)),
       vscode.workspace.onDidChangeTextDocument((e) => {
         const key = e.document.uri.toString();
         if (this.getMode(key) === 'off') return;
@@ -101,14 +112,33 @@ export class FileAnnotationsController implements vscode.Disposable {
     return this.modes.get(uriKey) ?? 'off';
   }
 
+  /** Records a document's mode ('off' removes it) and persists the map. */
+  private setMode(uriKey: string, mode: AnnotationMode): void {
+    if (mode === 'off') this.modes.delete(uriKey);
+    else this.modes.set(uriKey, mode);
+    this.persist();
+  }
+
+  private forget(uri: vscode.Uri): void {
+    const key = uri.toString();
+    const timer = this.debounceTimers.get(key);
+    if (timer !== undefined) clearTimeout(timer);
+    this.debounceTimers.delete(key);
+    this.latestRender.delete(key);
+    if (this.modes.delete(key)) this.persist();
+  }
+
+  private persist(): void {
+    void this.workspaceState?.update(ANNOTATION_MODES_KEY, serializeModes(this.modes));
+  }
+
   /** Toggles the mode for the active editor; switching clears the other mode. */
   toggle(mode: 'blame' | 'heatmap' | 'changes'): void {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document.uri.scheme !== 'file') return;
     const key = editor.document.uri.toString();
     const next: AnnotationMode = this.getMode(key) === mode ? 'off' : mode;
-    if (next === 'off') this.modes.delete(key);
-    else this.modes.set(key, next);
+    this.setMode(key, next);
     void this.render(editor);
   }
 
@@ -116,7 +146,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   clear(): void {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
-    this.modes.delete(editor.document.uri.toString());
+    this.setMode(editor.document.uri.toString(), 'off');
     this.clearDecorations(editor);
   }
 
@@ -135,9 +165,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   /** Sets the annotation mode for an editor's document and renders (mode switching). */
   setDocumentMode(editor: vscode.TextEditor, mode: AnnotationMode): void {
     if (editor.document.uri.scheme !== 'file') return;
-    const key = editor.document.uri.toString();
-    if (mode === 'off') this.modes.delete(key);
-    else this.modes.set(key, mode);
+    this.setMode(editor.document.uri.toString(), mode);
     void this.render(editor);
   }
 

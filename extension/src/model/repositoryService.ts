@@ -40,6 +40,22 @@ export function relativeWithinRoot(
   return rawTarget.slice(root.length + 1);
 }
 
+/** Whether two repository roots are the same path, ignoring a trailing
+ *  separator, separator style, and case on Windows. */
+export function sameRoot(a: string, b: string): boolean {
+  const normalize = (value: string): string => {
+    const slashed = value.replace(/\\/g, '/').replace(/\/+$/, '');
+    return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
+  };
+  return normalize(a) === normalize(b);
+}
+
+/** A repository's display name: the last segment of its root path. */
+export function repoName(rootPath: string): string {
+  const parts = rootPath.replace(/\\/g, '/').replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || rootPath;
+}
+
 // Maps workspace files to engine repo ids, discovering repos lazily on first
 // touch of a file inside them.
 export class RepositoryService {

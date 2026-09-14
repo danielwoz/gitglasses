@@ -264,6 +264,7 @@ export async function activate(
     log('engine started: wasm (in-process)');
     await repos.discover();
     core.lineBlame.refresh();
+    core.fileAnnotations.refresh();
     core.refreshViews();
   } catch (error) {
     if (error instanceof RepoTooLargeError) {

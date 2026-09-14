@@ -15,6 +15,7 @@ const post = (message: WebviewToHostMessage): void => vscode.postMessage(message
 document.body.innerHTML = `
   <canvas id="canvas"></canvas>
   <div id="scroller" tabindex="0"><div id="spacer"></div></div>
+  <div id="error"></div>
   <div id="context-menu">
     <button data-action="createBranch">Create Branch Here…</button>
     <button data-action="switchDetached">Switch to Commit (Detached)</button>
@@ -32,6 +33,7 @@ const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const scroller = document.getElementById('scroller') as HTMLDivElement;
 const spacer = document.getElementById('spacer') as HTMLDivElement;
 const contextMenu = document.getElementById('context-menu') as HTMLDivElement;
+const errorBox = document.getElementById('error') as HTMLDivElement;
 
 const store = new GraphStore();
 const renderer = new GraphRenderer(canvas);
@@ -74,6 +76,12 @@ function maybeLoadMore(): void {
   );
   const cursor = store.beginLoadMore(range.end);
   if (cursor !== undefined) post({ type: 'loadMore', cursor });
+}
+
+/** Shows the host's explanation over the canvas, or clears it. */
+function showError(message: string | undefined): void {
+  errorBox.textContent = message ?? '';
+  errorBox.style.display = message === undefined ? 'none' : 'flex';
 }
 
 function rowIndexFromEvent(event: MouseEvent): number | undefined {
@@ -200,11 +208,16 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
     case 'reset':
       store.reset();
       scroller.scrollTop = 0;
+      showError(undefined);
       render();
       break;
     case 'rows':
       store.appendPage(message.rows, message.nextCursor);
+      showError(undefined);
       render();
+      break;
+    case 'error':
+      showError(message.message);
       break;
     case 'theme':
       theme = readThemeColors(getComputedStyle(document.body));

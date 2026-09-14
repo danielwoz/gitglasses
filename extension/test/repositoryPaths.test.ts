@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { relativeWithinRoot } from '../src/model/repositoryService';
+import { relativeWithinRoot, repoName, sameRoot } from '../src/model/repositoryService';
 
 // The engine reports the repo root as libgit2's git_repository_workdir(),
 // which uses forward slashes everywhere; VS Code's uri.fsPath uses backslashes
@@ -72,5 +72,29 @@ describe('relativeWithinRoot (edge cases)', () => {
   it('handles nested repositories by exact prefix', () => {
     expect(relativeWithinRoot('/r/outer/inner', '/r/outer/inner/a.ts', false)).toBe('a.ts');
     expect(relativeWithinRoot('/r/outer', '/r/outer/inner/a.ts', false)).toBe('inner/a.ts');
+  });
+});
+
+describe('sameRoot', () => {
+  it('ignores a trailing separator and separator style', () => {
+    expect(sameRoot('/home/u/repo', '/home/u/repo/')).toBe(true);
+    expect(sameRoot('C:\\src\\repo', 'C:/src/repo')).toBe(true);
+  });
+
+  it('separates distinct roots, including prefixes', () => {
+    expect(sameRoot('/home/u/repo', '/home/u/repo-2')).toBe(false);
+    expect(sameRoot('/home/u/repo', '/home/u')).toBe(false);
+  });
+});
+
+describe('repoName', () => {
+  it('is the last path segment', () => {
+    expect(repoName('/home/u/projects/gitglasses')).toBe('gitglasses');
+    expect(repoName('/home/u/projects/gitglasses/')).toBe('gitglasses');
+    expect(repoName('C:\\src\\engine')).toBe('engine');
+  });
+
+  it('falls back to the whole path when there is no segment', () => {
+    expect(repoName('/')).toBe('/');
   });
 });

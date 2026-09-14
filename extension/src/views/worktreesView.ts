@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
-import { ActiveRepo, ViewBase, ViewNode, firstWorkspaceRepo, messageNode } from './viewBase';
+import { ActiveRepo, ViewBase, ViewNode, activeWorkspaceRepo } from './viewBase';
 import {
   defaultWorktreePath,
   isSameWorktreePath,
@@ -36,7 +36,8 @@ export class WorktreesViewProvider extends ViewBase {
 
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
     const { worktrees } = await this.engine.request('worktree/list', { repoId: repo.repoId });
-    if (worktrees.length === 0) return [messageNode('No worktrees')];
+    // An empty list lets the view's welcome content explain worktrees.
+    if (worktrees.length === 0) return [];
     return worktrees.map((worktree) => {
       const current = isSameWorktreePath(worktree.path, repo.rootPath);
       const item = new vscode.TreeItem(
@@ -58,7 +59,7 @@ export class WorktreesViewProvider extends ViewBase {
 async function activeRepoOrWarn(repos: RepositoryService): Promise<ActiveRepo | undefined> {
   let repo: ActiveRepo | undefined;
   try {
-    repo = await firstWorkspaceRepo(repos);
+    repo = await activeWorkspaceRepo(repos);
   } catch {
     repo = undefined;
   }

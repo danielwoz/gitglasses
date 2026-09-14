@@ -7,7 +7,7 @@ import { CommitSummaryInfo, GraphRow } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
-import { firstWorkspaceRepo } from '../views/viewBase';
+import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
 import { openCommitDoc } from '../views/nodes';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { renderWebviewHtml } from './webviewHtml';
@@ -23,8 +23,9 @@ import {
   setStatus,
   showConflictGuidance,
 } from '../commands/ui';
+import { allowedDespiteConflicts } from '../commands/conflictGuard';
+import { graphPageSize } from '../system/settings';
 
-const PAGE_LIMIT = 200;
 const REFRESH_DEBOUNCE_MS = 300;
 
 type GraphActionId =
@@ -46,6 +47,17 @@ const ACTION_LABELS: Record<GraphActionId, string> = {
   rebase: 'rebase',
 };
 
+// Actions git refuses while a merge, rebase or cherry-pick is unresolved.
+// Creating a branch is not one of them.
+const CONFLICT_GUARDED: readonly GraphActionId[] = [
+  'switchDetached',
+  'cherryPick',
+  'revert',
+  'reset',
+  'merge',
+  'rebase',
+];
+
 // Engine method each context-menu action leads with, for capability gating.
 const ACTION_METHODS: Record<GraphActionId, string> = {
   createBranch: 'mutate/branchCreate',
@@ -60,7 +72,8 @@ const ACTION_METHODS: Record<GraphActionId, string> = {
 type HostToWebviewMessage =
   | { type: 'reset' }
   | { type: 'rows'; rows: GraphRow[]; nextCursor?: string }
-  | { type: 'theme' };
+  | { type: 'theme' }
+  | { type: 'error'; message: string };
 
 type WebviewToHostMessage =
   | { type: 'ready' }
@@ -86,10 +99,31 @@ export class GraphWebviewHost implements vscode.Disposable {
     private readonly openRebase: (upstream: string) => void | Promise<void>,
   ) {}
 
-  show(): void {
+  /** Opens the graph. The repository is resolved first: without one there is
+   *  nothing to draw, so the user gets an explanation instead of an empty
+   *  panel. */
+  async show(): Promise<void> {
     if (this.panel) {
       this.panel.reveal();
       return;
+    }
+    if (this.repoId === undefined) {
+      let repo: ActiveRepo | undefined;
+      try {
+        repo = await activeWorkspaceRepo(this.repos);
+      } catch {
+        void vscode.window.showErrorMessage(
+          'GitGlasses: cannot show the commit graph — the engine is unavailable.',
+        );
+        return;
+      }
+      if (!repo) {
+        void vscode.window.showWarningMessage(
+          'GitGlasses: no git repository in this workspace, so there is no commit graph to show.',
+        );
+        return;
+      }
+      this.repoId = repo.repoId;
     }
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webviews');
     const panel = vscode.window.createWebviewPanel(
@@ -177,6 +211,12 @@ export class GraphWebviewHost implements vscode.Disposable {
       void vscode.window.showWarningMessage(
         `GitGlasses: cannot ${ACTION_LABELS[action]}. ${CLI_UNAVAILABLE_MESSAGE}.`,
       );
+      return;
+    }
+    if (
+      CONFLICT_GUARDED.includes(action) &&
+      !(await allowedDespiteConflicts(this.engine, repoId, ACTION_LABELS[action]))
+    ) {
       return;
     }
     try {
@@ -281,14 +321,20 @@ export class GraphWebviewHost implements vscode.Disposable {
     if (!this.panel) return;
     try {
       if (!this.repoId) {
-        const repo = await firstWorkspaceRepo(this.repos);
-        if (!repo) return;
+        const repo = await activeWorkspaceRepo(this.repos);
+        if (!repo) {
+          await this.post({
+            type: 'error',
+            message: 'No git repository in this workspace.',
+          });
+          return;
+        }
         this.repoId = repo.repoId;
       }
       const result = await this.engine.request('graph/rows', {
         repoId: this.repoId,
         cursor,
-        limit: PAGE_LIMIT,
+        limit: graphPageSize(),
         include: { stashes: true, wip: true },
       });
       for (const row of result.rows) {
@@ -301,8 +347,12 @@ export class GraphWebviewHost implements vscode.Disposable {
         });
       }
       await this.post({ type: 'rows', rows: result.rows, nextCursor: result.nextCursor });
-    } catch {
-      // Engine unavailable or restarting; the next repo change refetches.
+    } catch (error) {
+      // The panel shows why it is empty; the next repo change refetches.
+      await this.post({
+        type: 'error',
+        message: `Could not load the commit graph: ${errorMessage(error)}`,
+      });
     }
   }
 

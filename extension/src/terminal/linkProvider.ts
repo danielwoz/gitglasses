@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { CommitSummaryInfo } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
-import { firstWorkspaceRepo } from '../views/viewBase';
+import { activeWorkspaceRepo } from '../views/viewBase';
 import { findShaMatches } from '../views/viewLogic';
 import { openCommitDoc } from '../views/nodes';
 
@@ -32,7 +32,7 @@ export class ShaTerminalLinkProvider implements vscode.TerminalLinkProvider<ShaT
   async handleTerminalLink(link: ShaTerminalLink): Promise<void> {
     let repo;
     try {
-      repo = await firstWorkspaceRepo(this.repos);
+      repo = await activeWorkspaceRepo(this.repos);
     } catch {
       repo = undefined;
     }

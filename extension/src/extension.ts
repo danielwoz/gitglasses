@@ -13,7 +13,7 @@ import { errorMessage } from './commands/ui';
 import { HeadChangeTracker } from './engine/capabilityGate';
 import { DocumentSync } from './engine/documentSync';
 import { RepositoryService } from './model/repositoryService';
-import { ViewNode, firstWorkspaceRepo, requireRepo } from './views/viewBase';
+import { ViewNode, activeWorkspaceRepo, requireRepo } from './views/viewBase';
 import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
 import {
   describeHunk,
@@ -297,7 +297,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!vscode.window.state.focused) return;
     const editor = activeEditor();
     const located = editor && repos.locate(editor.document.uri);
-    const repoId = located?.repoId ?? (await firstWorkspaceRepo(repos))?.repoId;
+    const repoId = located?.repoId ?? (await activeWorkspaceRepo(repos))?.repoId;
     if (!repoId) return;
     const { head } = await engine.request('repo/state', { repoId });
     if (headTracker.update(repoId, head.oid)) core.onHeadChanged(repoId);
@@ -361,6 +361,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await engine.start();
     log(`engine started: ${enginePath}`);
     core.lineBlame.refresh();
+    // Annotation modes restored from the previous session paint once the
+    // engine can answer blame.
+    core.fileAnnotations.refresh();
   } catch (error) {
     log(`engine failed to start: ${String(error)}`);
     void vscode.window.showErrorMessage('GitGlasses: engine failed to start; see output.');

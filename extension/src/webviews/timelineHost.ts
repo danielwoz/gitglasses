@@ -10,8 +10,8 @@ import { LocatedFile, RepositoryService } from '../model/repositoryService';
 import { encodeRevisionUri } from '../scm/revisionContentProvider';
 import { historyEntryDiffSpec } from '../views/viewLogic';
 import { renderWebviewHtml } from './webviewHtml';
+import { graphPageSize } from '../system/settings';
 
-const PAGE_LIMIT = 200;
 const REFRESH_DEBOUNCE_MS = 300;
 
 type HostToWebviewMessage =
@@ -142,7 +142,7 @@ export class TimelineWebviewHost implements vscode.Disposable {
         repoId: target.repoId,
         path: target.relativePath,
         cursor,
-        limit: PAGE_LIMIT,
+        limit: graphPageSize(),
       });
       // A re-target while the request was in flight makes this page stale.
       if (this.target !== target) return;

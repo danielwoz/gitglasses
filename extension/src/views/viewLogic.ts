@@ -5,7 +5,23 @@ import { CommitSummaryInfo, FileHistoryEntry } from '@gitglasses/protocol';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { relativeTime } from '../system/dates';
 
+/** Commits (or history entries) per page in the tree views. */
 export const PAGE_SIZE = 50;
+/** Rows per page in the graph and timeline webviews. */
+export const GRAPH_PAGE_SIZE = 200;
+
+/** A configured page size, falling back for anything that is not a whole
+ *  number in range. */
+export function clampPageSize(
+  value: unknown,
+  fallback: number,
+  bounds: { min: number; max: number },
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  if (rounded < bounds.min || rounded > bounds.max) return fallback;
+  return rounded;
+}
 
 // --- Cursor paging ----------------------------------------------------------
 

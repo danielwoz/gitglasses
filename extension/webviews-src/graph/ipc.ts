@@ -9,7 +9,9 @@ export type { GraphRef, GraphRow };
 export type HostToWebviewMessage =
   | { type: 'reset' }
   | { type: 'rows'; rows: GraphRow[]; nextCursor?: string }
-  | { type: 'theme' };
+  | { type: 'theme' }
+  /** Why the graph is empty: no repository, or a failed graph/rows. */
+  | { type: 'error'; message: string };
 
 /** Graph mutation actions the context menu can request from the host. */
 export type GraphActionId =
