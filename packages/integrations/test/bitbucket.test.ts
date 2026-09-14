@@ -258,14 +258,13 @@ describe('BitbucketProvider.getMyPullRequests checksStatus', () => {
     expect((await stopped.getMyPullRequests(auth))[0].checksStatus).toBe('none');
   });
 
-  it('only enriches the first 10 PRs; later ones stay none', async () => {
+  it('enriches every PR, one statuses request each', async () => {
     const { fetchFn, requests } = checksStub([{ state: 'SUCCESSFUL' }], 12);
     const provider = new BitbucketProvider({ fetchFn });
     const prs = await provider.getMyPullRequests(auth);
     expect(prs).toHaveLength(12);
-    expect(requests.filter((r) => r.url.includes('/statuses'))).toHaveLength(10);
-    expect(prs.slice(0, 10).every((p) => p.checksStatus === 'passing')).toBe(true);
-    expect(prs.slice(10).every((p) => p.checksStatus === 'none')).toBe(true);
+    expect(requests.filter((r) => r.url.includes('/statuses'))).toHaveLength(12);
+    expect(prs.every((p) => p.checksStatus === 'passing')).toBe(true);
   });
 });
 

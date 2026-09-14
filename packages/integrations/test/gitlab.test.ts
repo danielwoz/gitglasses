@@ -188,16 +188,14 @@ describe('GitLabProvider fan-out', () => {
     return { fetchFn, stats: () => ({ approvalCalls, peakInFlight }) };
   }
 
-  it('asks for approvals on only the first page of results', async () => {
+  it('asks for approvals on every result', async () => {
     const { fetchFn, stats } = approvalsStub(50);
     const prs = await new GitLabProvider({ fetchFn }).getMyPullRequests(auth, { limit: 50 });
     expect(prs).toHaveLength(50);
-    expect(stats().approvalCalls).toBe(10);
-    // Enriched results carry a decision; the rest report none rather than
-    // asserting one that was never read.
-    expect(prs[0].reviewDecision).toBe('approved');
-    expect(prs[9].reviewDecision).toBe('approved');
-    expect(prs[10].reviewDecision).toBeUndefined();
+    expect(stats().approvalCalls).toBe(50);
+    // The mergeable bucket needs a decision on every result, not just the
+    // first page.
+    expect(prs.every((pr) => pr.reviewDecision === 'approved')).toBe(true);
   });
 
   it('keeps the enrichment fan-out to a bounded number of open requests', async () => {

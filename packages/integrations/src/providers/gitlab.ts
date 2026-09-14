@@ -36,7 +36,6 @@ import {
   mapPooled,
   mergeByRole,
   p,
-  PR_ENRICHMENT_CAP,
   ProviderClient,
 } from './client.js';
 
@@ -208,11 +207,10 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     ]);
     const reviewerIds = new Set(reviewing.map((mr) => mr.id));
     const mrs = mergeByRole(authored, reviewing, (mr) => mr.id, limit);
-    // Approvals cost one request per merge request, so only the first
-    // PR_ENRICHMENT_CAP results ask for them and no more than
-    // FANOUT_CONCURRENCY of those are in flight at once.
-    return mapPooled(mrs, FANOUT_CONCURRENCY, (mr, index) =>
-      this.enrichAndMap(auth, mr, me, reviewerIds.has(mr.id), index < PR_ENRICHMENT_CAP)
+    // Approvals cost one request per merge request; at most
+    // FANOUT_CONCURRENCY are in flight at once.
+    return mapPooled(mrs, FANOUT_CONCURRENCY, (mr) =>
+      this.enrichAndMap(auth, mr, me, reviewerIds.has(mr.id), true)
     );
   }
 

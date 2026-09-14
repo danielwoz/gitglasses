@@ -57,13 +57,6 @@ export function segments(value: string): Path {
   return new Path(value.split('/').map(encodeURIComponent).join('/'));
 }
 
-/**
- * Per-result enrichment (approvals, check statuses) costs one request each, so
- * providers that fan out enrich only this many results and leave the rest of
- * the page unenriched. A launchpad page shows far fewer than a full limit of
- * 50 above the fold.
- */
-export const PR_ENRICHMENT_CAP = 10;
 
 /** In-flight requests a provider keeps open while fanning out over results. */
 export const FANOUT_CONCURRENCY = 6;

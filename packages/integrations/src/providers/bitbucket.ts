@@ -23,7 +23,6 @@ import {
   mapPooled,
   mergeByRole,
   p,
-  PR_ENRICHMENT_CAP,
   ProviderClient,
 } from './client.js';
 import { base64Encode, escapeBbqlString } from './shared.js';
@@ -121,7 +120,7 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
  * Without a repo context all results carry viewerRole "author".
  *
  * checksStatus comes from the per-PR `/statuses` endpoint at one extra
- * request per PR; to bound the fan-out only the first PR_ENRICHMENT_CAP
+ * request per PR; the fan-out is bounded by FANOUT_CONCURRENCY
  * results are enriched (first page of statuses only) and the rest stay
  * "none". The Cloud API exposes no mergeability signal at all (hence no
  * "mergeability" capability flag).
@@ -261,15 +260,11 @@ export class BitbucketProvider implements HostingProvider {
   }
 
   /**
-   * Fills checksStatus from the per-PR statuses endpoint (first page only)
-   * for at most the first PR_ENRICHMENT_CAP PRs; later PRs keep "none" to
-   * bound the request fan-out, and at most FANOUT_CONCURRENCY are in flight.
+   * Fills checksStatus from the per-PR statuses endpoint (first page only).
+   * One request per PR, at most FANOUT_CONCURRENCY in flight.
    */
   private async withChecksStatus(auth: AuthContext, prs: PullRequest[]): Promise<PullRequest[]> {
-    return mapPooled(prs, FANOUT_CONCURRENCY, async (pr, index) => {
-      if (index >= PR_ENRICHMENT_CAP) {
-        return pr;
-      }
+    return mapPooled(prs, FANOUT_CONCURRENCY, async (pr) => {
       const json = await this.client.getJson<{ values?: BitbucketCommitStatus[] }>(
         auth,
         p`/repositories/${pr.repo.owner}/${pr.repo.name}/pullrequests/${pr.number}/statuses`
