@@ -8,7 +8,7 @@
 // synthetic file:// URIs built from fsPath — both share the same path space.
 
 import * as vscode from 'vscode';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
 
 export class WebRepositoryService extends RepositoryService {

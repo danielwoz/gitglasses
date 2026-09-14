@@ -4,19 +4,18 @@
 
 import * as vscode from 'vscode';
 import { GraphRow } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { firstWorkspaceRepo } from '../views/viewBase';
 import { openCommitDoc } from '../views/nodes';
-import { shortSha } from '../views/viewLogic';
+import { shortSha } from '@gitglasses/protocol/sha';
 import { renderWebviewHtml } from './webviewHtml';
 import {
   confirmCherryPick,
   confirmMerge,
   confirmResetHard,
   confirmRevert,
-  sha7,
 } from '../commands/confirmations';
 import {
   confirmDestructive,
@@ -193,7 +192,7 @@ export class GraphWebviewHost implements vscode.Disposable {
           break;
         case 'switchDetached':
           await this.engine.request('mutate/switch', { repoId, ref: sha });
-          setStatus(`Checked out ${sha7(sha)} (detached HEAD)`);
+          setStatus(`Checked out ${shortSha(sha)} (detached HEAD)`);
           break;
         case 'cherryPick': {
           // The webview sends selection newest-first; apply oldest-first.
@@ -219,10 +218,10 @@ export class GraphWebviewHost implements vscode.Disposable {
           break;
         case 'merge': {
           const branch = await this.currentBranch(repoId);
-          if (!(await confirmDestructive(confirmMerge(sha7(sha), branch)))) return;
+          if (!(await confirmDestructive(confirmMerge(shortSha(sha), branch)))) return;
           const { conflicts } = await this.engine.request('mutate/merge', { repoId, ref: sha });
           if (conflicts) showConflictGuidance('Merge');
-          else setStatus(`Merged ${sha7(sha)} into '${branch}'`);
+          else setStatus(`Merged ${shortSha(sha)} into '${branch}'`);
           break;
         }
         case 'rebase':
@@ -245,12 +244,12 @@ export class GraphWebviewHost implements vscode.Disposable {
 
   private async createBranchAt(repoId: string, sha: string): Promise<void> {
     const name = await vscode.window.showInputBox({
-      prompt: `Branch name (created at ${sha7(sha)})`,
+      prompt: `Branch name (created at ${shortSha(sha)})`,
       validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
     });
     if (!name?.trim()) return;
     const mode = await vscode.window.showQuickPick(['Create', 'Create and Switch'], {
-      placeHolder: `Create '${name.trim()}' at ${sha7(sha)}`,
+      placeHolder: `Create '${name.trim()}' at ${shortSha(sha)}`,
     });
     if (!mode) return;
     await this.engine.request('mutate/branchCreate', {
@@ -259,7 +258,7 @@ export class GraphWebviewHost implements vscode.Disposable {
       startPoint: sha,
       checkout: mode === 'Create and Switch',
     });
-    setStatus(`Created branch '${name.trim()}' at ${sha7(sha)}`);
+    setStatus(`Created branch '${name.trim()}' at ${shortSha(sha)}`);
   }
 
   private async resetTo(repoId: string, sha: string): Promise<void> {
@@ -274,14 +273,14 @@ export class GraphWebviewHost implements vscode.Disposable {
           mode: 'hard' as const,
         },
       ],
-      { placeHolder: `Reset '${branch}' to ${sha7(sha)}` },
+      { placeHolder: `Reset '${branch}' to ${shortSha(sha)}` },
     );
     if (!mode) return;
-    if (mode.mode === 'hard' && !(await confirmDestructive(confirmResetHard(branch, sha7(sha))))) {
+    if (mode.mode === 'hard' && !(await confirmDestructive(confirmResetHard(branch, shortSha(sha))))) {
       return;
     }
     await this.engine.request('mutate/reset', { repoId, ref: sha, mode: mode.mode });
-    setStatus(`Reset '${branch}' to ${sha7(sha)} (${mode.mode})`);
+    setStatus(`Reset '${branch}' to ${shortSha(sha)} (${mode.mode})`);
   }
 
   private async fetchAndPost(cursor?: string): Promise<void> {

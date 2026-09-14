@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 
 export interface LocatedFile {
   repoId: string;

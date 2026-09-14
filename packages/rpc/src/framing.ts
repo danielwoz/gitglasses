@@ -1,5 +1,6 @@
-// LSP-style Content-Length framing over a byte stream. Kept free of any
-// vscode/node-process dependency so it is unit-testable with plain buffers.
+// LSP-style Content-Length framing over a byte stream. Buffer-only, with no
+// node module imports, so it is unit-testable with plain buffers and usable
+// by any byte-stream transport.
 
 export class FrameParser {
   private buffer: Buffer = Buffer.alloc(0);
@@ -32,6 +33,7 @@ export class FrameParser {
   }
 }
 
+/** Wraps one payload in a Content-Length header block. */
 export function frame(payload: string): Buffer {
   const body = Buffer.from(payload, 'utf8');
   return Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body]);

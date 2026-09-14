@@ -7,7 +7,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { EngineClient, resolveEnginePath } from '../src/engine.js';
+import type { EngineClient } from '@gitglasses/rpc';
+import { createEngineClient, resolveEnginePath } from '../src/engine.js';
 import { createToolHandlers, type ToolHandlers } from '../src/server.js';
 
 const packageRoot = path.resolve(import.meta.dirname, '..');
@@ -40,7 +41,7 @@ describe.skipIf(!enginePath)('engine integration', () => {
     git(repoDir, 'commit', '-m', 'Initial commit');
     await writeFile(path.join(repoDir, 'untracked.txt'), 'later\n');
 
-    client = new EngineClient({ enginePath });
+    client = createEngineClient({ enginePath });
     handlers = createToolHandlers({ client, env: {} });
   }, 30000);
 

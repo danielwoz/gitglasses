@@ -3,6 +3,7 @@
 // No vscode imports — everything here is unit-tested directly.
 
 import type { PatchEnvelope } from '@gitglasses/protocol';
+import { shortSha } from '@gitglasses/protocol/sha';
 
 export type EnvelopeParseResult =
   | { ok: true; envelope: PatchEnvelope }
@@ -150,7 +151,7 @@ export function confirmDetail(envelope: PatchEnvelope, stat: DiffStatEntry[]): s
   const deletions = stat.reduce((sum, entry) => sum + entry.deletions, 0);
   const lines = [
     envelope.summary === '' ? '(no summary)' : envelope.summary,
-    `Base: ${envelope.baseSha.slice(0, 7)}${envelope.branch ? ` (branch ${envelope.branch})` : ''}`,
+    `Base: ${shortSha(envelope.baseSha)}${envelope.branch ? ` (branch ${envelope.branch})` : ''}`,
   ];
   if (envelope.createdAtIso !== '') lines.push(`Created: ${envelope.createdAtIso}`);
   lines.push(

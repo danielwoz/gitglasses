@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FrameParser, frame } from '../src/engine/transport';
+import { FrameParser, frame } from '../src/framing.js';
 
 describe('FrameParser', () => {
   it('parses a single frame', () => {
@@ -19,7 +19,7 @@ describe('FrameParser', () => {
 
   it('handles multi-byte utf8 payloads', () => {
     const parser = new FrameParser();
-    const payload = JSON.stringify({ name: 'Grüße 你好' });
+    const payload = JSON.stringify({ name: 'Grüße 你好', summary: 'café → résumé' });
     expect(parser.push(frame(payload))).toEqual([payload]);
   });
 

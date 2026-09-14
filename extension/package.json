@@ -866,7 +866,8 @@
   },
   "dependencies": {
     "@gitglasses/integrations": "workspace:*",
-    "@gitglasses/protocol": "workspace:*"
+    "@gitglasses/protocol": "workspace:*",
+    "@gitglasses/rpc": "workspace:*"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

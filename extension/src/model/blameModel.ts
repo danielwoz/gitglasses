@@ -1,5 +1,5 @@
 import { BlameCommit, BlameHunk } from '@gitglasses/protocol';
-import { CancellationLike, EngineClient } from '../engine/engineClient';
+import { CancellationLike, EngineClient } from '@gitglasses/rpc';
 
 export interface FileBlame {
   hunks: BlameHunk[];

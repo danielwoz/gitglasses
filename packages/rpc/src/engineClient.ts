@@ -10,7 +10,7 @@ import {
   RequestResult,
   RpcResponse,
 } from '@gitglasses/protocol';
-import { EngineTransport } from './engineTransport';
+import { EngineTransport } from './transport.js';
 
 export class EngineError extends Error {
   constructor(
@@ -37,6 +37,8 @@ interface Pending {
   reject: (error: Error) => void;
   generation: number;
   method: string;
+  /** Deadline for this request; cleared wherever it settles. */
+  timer: ReturnType<typeof setTimeout>;
   /** Cancellation listener for this request; disposed wherever it settles. */
   cancelSub?: { dispose(): void };
 }
@@ -50,16 +52,25 @@ export interface EngineClientOptions {
    *  (-32003); receives the engine's message verbatim so the UI can surface
    *  it even where call sites would otherwise swallow the rejection. */
   onMethodNotSupported?: (method: string, message: string) => void;
+  /** Per-request ceiling; defaults to DEFAULT_REQUEST_TIMEOUT_MS. */
+  requestTimeoutMs?: number;
+  /** Spawns the engine on the first request, so callers need not call start()
+   *  themselves. Off by default: requests before start() reject instead. */
+  autoStart?: boolean;
 }
 
 const BACKOFF_START_MS = 250;
 const BACKOFF_MAX_MS = 8000;
 const MAX_RESPAWNS = 5;
 
+/** Default ceiling on a single engine request. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
 // Typed JSON-RPC client over a pluggable engine transport. Crash-safe:
 // pending requests reject with EngineRestartedError on respawn (a generation
 // counter guarantees no stale result ever resolves), and callers re-query.
-// Each respawn gets a fresh transport from the injected factory.
+// Each respawn gets a fresh transport from the injected factory. Every request
+// carries a deadline so a wedged engine cannot hold a caller forever.
 export class EngineClient {
   private transport: EngineTransport | undefined;
   private transportAlive = false;
@@ -73,12 +84,16 @@ export class EngineClient {
   private capabilityHandlers = new Set<() => void>();
   private caps: EngineCapabilities | undefined;
   private ready: Promise<void> | undefined;
+  private readonly requestTimeoutMs: number;
 
   constructor(
     private readonly createTransport: () => EngineTransport,
     private readonly options: EngineClientOptions = {},
-  ) {}
+  ) {
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  }
 
+  /** Bring the engine up and complete the initialize handshake. Idempotent. */
   start(): Promise<void> {
     this.ready ??= this.spawnEngine();
     return this.ready;
@@ -99,6 +114,7 @@ export class EngineClient {
   }
 
   private async spawnEngine(): Promise<void> {
+    if (this.disposed) throw new Error('engine client disposed');
     this.generation += 1;
     const generation = this.generation;
     const transport = this.createTransport();
@@ -119,9 +135,11 @@ export class EngineClient {
     await transport.start();
     this.transportAlive = true;
 
-    let init: Awaited<ReturnType<typeof this.request<'initialize'>>>;
+    let init: Awaited<ReturnType<typeof this.send<'initialize'>>>;
     try {
-      init = await this.request('initialize', { protocolVersion: PROTOCOL_VERSION });
+      // send(), not request(): request() may await start(), which is this
+      // very promise.
+      init = await this.send('initialize', { protocolVersion: PROTOCOL_VERSION });
       if (init.protocolVersion !== PROTOCOL_VERSION) {
         throw new EngineError(
           ErrorCodes.InvalidRequest,
@@ -163,6 +181,7 @@ export class EngineClient {
 
   private failAllPending(error: Error): void {
     for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
       pending.cancelSub?.dispose();
       pending.reject(error);
     }
@@ -184,8 +203,9 @@ export class EngineClient {
     }
     if (typeof message.id !== 'number') return;
     const pending = this.pending.get(message.id);
-    if (!pending) return; // cancelled or from a previous generation
+    if (!pending) return; // cancelled, timed out, or from a previous generation
     this.pending.delete(message.id);
+    clearTimeout(pending.timer);
     // The token outlives the request (an editor's token can back many calls),
     // so the listener must go or it accumulates for the token's lifetime.
     pending.cancelSub?.dispose();
@@ -199,7 +219,16 @@ export class EngineClient {
     }
   }
 
-  request<M extends RequestMethod>(
+  async request<M extends RequestMethod>(
+    method: M,
+    params: RequestParams<M>,
+    token?: CancellationLike,
+  ): Promise<RequestResult<M>> {
+    if (this.options.autoStart) await this.start();
+    return this.send(method, params, token);
+  }
+
+  private send<M extends RequestMethod>(
     method: M,
     params: RequestParams<M>,
     token?: CancellationLike,
@@ -212,15 +241,31 @@ export class EngineClient {
     const generation = this.generation;
 
     return new Promise<RequestResult<M>>((resolve, reject) => {
+      // An engine that wedges without exiting would otherwise leave the call
+      // pending forever and grow this.pending without bound: the other
+      // rejection paths are transport exit, cancellation and dispose().
+      const timer = setTimeout(() => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        entry.cancelSub?.dispose();
+        reject(
+          new Error(`engine request '${method}' timed out after ${this.requestTimeoutMs}ms`),
+        );
+      }, this.requestTimeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
         generation,
         method,
+        timer,
       });
       const sub = token?.onCancellationRequested(() => {
         // Reject locally right away; tell the engine so it stops working.
         if (this.pending.delete(id)) {
+          clearTimeout(timer);
           sub?.dispose();
           this.notify('$/cancelRequest', { id });
           reject(new EngineError(ErrorCodes.Cancelled, 'cancelled'));
@@ -230,6 +275,7 @@ export class EngineClient {
       if (entry) entry.cancelSub = sub;
       if (token?.isCancellationRequested) {
         this.pending.delete(id);
+        clearTimeout(timer);
         sub?.dispose();
         reject(new EngineError(ErrorCodes.Cancelled, 'cancelled'));
         return;
@@ -272,6 +318,7 @@ export class EngineClient {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     this.failAllPending(new EngineRestartedError());
     this.transport?.kill();

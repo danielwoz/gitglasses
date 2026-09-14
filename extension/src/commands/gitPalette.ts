@@ -2,7 +2,7 @@
 // small multi-step flow (quickFlow) with back navigation to the root picker.
 
 import * as vscode from 'vscode';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, firstWorkspaceRepo } from '../views/viewBase';
@@ -14,8 +14,8 @@ import {
   confirmMerge,
   confirmResetHard,
   confirmStashDrop,
-  sha7,
 } from './confirmations';
+import { shortSha } from '@gitglasses/protocol/sha';
 import {
   confirmDestructive,
   errorMessage,
@@ -97,7 +97,7 @@ async function pickBranch(
   const picked = await showPick(
     candidates.map((branch) => ({
       label: branch.name,
-      description: `${sha7(branch.sha)}${branch.current ? ' (current)' : ''}`,
+      description: `${shortSha(branch.sha)}${branch.current ? ' (current)' : ''}`,
     })),
     { title: options.title, placeholder: options.placeholder, back: true },
   );
@@ -143,7 +143,7 @@ async function commitFlow(ctx: PaletteContext): Promise<FlowStatus> {
     repoId: repo.repoId,
     message: flow.state.message,
   });
-  setStatus(`Committed ${sha7(sha)}`);
+  setStatus(`Committed ${shortSha(sha)}`);
   return 'completed';
 }
 

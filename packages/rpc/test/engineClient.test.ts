@@ -9,8 +9,8 @@ import {
   EngineClientOptions,
   EngineError,
   EngineRestartedError,
-} from '../src/engine/engineClient';
-import { EngineTransport } from '../src/engine/engineTransport';
+} from '../src/engineClient.js';
+import { EngineTransport } from '../src/transport.js';
 
 const CAPS_FULL: EngineCapabilities = { gitCli: true, watch: true, threads: true };
 
@@ -310,6 +310,63 @@ describe('EngineClient over a fake transport', () => {
       (e: unknown) => e instanceof EngineError && e.code === ErrorCodes.Cancelled,
     );
     expect(transports[0].sent.filter((m) => m.method === 'repo/list')).toHaveLength(0);
+    client.dispose();
+  });
+
+  it('rejects a request the engine never answers once the deadline passes', async () => {
+    const { client } = makeClient({ requestTimeoutMs: 30 });
+    await client.start();
+
+    // No responder for repo/list: the engine is wedged but still alive.
+    await expect(client.request('repo/list', {})).rejects.toThrow(
+      /engine request 'repo\/list' timed out after 30ms/,
+    );
+    client.dispose();
+  });
+
+  it('a reply before the deadline clears the timer and drops the pending entry', async () => {
+    const { client, transports } = makeClient({ requestTimeoutMs: 30 });
+    await client.start();
+    transports[0].responders.set('repo/list', (msg) =>
+      transports[0].respond(msg.id, { repos: [] }),
+    );
+
+    await expect(client.request('repo/list', {})).resolves.toEqual({ repos: [] });
+    await sleep(50); // past the deadline: nothing fires, nothing leaks
+    client.dispose();
+  });
+
+  it('autoStart spawns the engine on the first request', async () => {
+    const { client, transports } = makeClient({ autoStart: true }, () => {
+      const transport = new FakeTransport();
+      transport.responders.set('repo/list', (msg) => transport.respond(msg.id, { repos: [] }));
+      return transport;
+    });
+    expect(transports).toHaveLength(0); // nothing spawned without start()
+
+    await expect(client.request('repo/list', {})).resolves.toEqual({ repos: [] });
+    expect(transports).toHaveLength(1);
+    expect(transports[0].sent[0].method).toBe('initialize');
+    client.dispose();
+  });
+
+  it('autoStart serves requests again after a crash instead of wedging', async () => {
+    const { client, transports } = makeClient({ autoStart: true }, () => {
+      const transport = new FakeTransport();
+      transport.responders.set('repo/list', (msg) =>
+        transport.respond(msg.id, { repos: [{ repoId: 'r1' }] }),
+      );
+      return transport;
+    });
+    await client.start();
+
+    transports[0].crash(1);
+    await sleep(400); // respawn backoff starts at 250ms
+
+    await expect(client.request('repo/list', {})).resolves.toEqual({
+      repos: [{ repoId: 'r1' }],
+    });
+    expect(transports).toHaveLength(2);
     client.dispose();
   });
 });

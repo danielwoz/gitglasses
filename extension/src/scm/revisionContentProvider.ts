@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 
 // gitglasses:/<repo-relative-path>?repoId=<id>&rev=<rev>
 // Read-only virtual documents showing a file at a specific revision — used by

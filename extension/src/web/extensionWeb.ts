@@ -11,7 +11,8 @@
 // existing capability gating greys their entry points.
 
 import * as vscode from 'vscode';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
+import { shortSha } from '@gitglasses/protocol/sha';
 import {
   createWasmTransportFactory,
   WasmEngineModule,
@@ -438,7 +439,7 @@ export async function activate(
     vscode.commands.registerCommand('gitglasses.copySha', async (node?: ViewNode) => {
       if (typeof node?.sha !== 'string') return;
       await vscode.env.clipboard.writeText(node.sha);
-      vscode.window.setStatusBarMessage(`Copied ${node.sha.slice(0, 8)}`, 3000);
+      vscode.window.setStatusBarMessage(`Copied ${shortSha(node.sha)}`, 3000);
     }),
     vscode.commands.registerCommand('gitglasses.openCommitDiff', (node?: ViewNode) =>
       openCommitDiff(node),

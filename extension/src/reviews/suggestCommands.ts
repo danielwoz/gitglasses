@@ -13,7 +13,7 @@ import {
   supportsSnippets,
   type PullRequest,
 } from '@gitglasses/integrations';
-import type { EngineClient } from '../engine/engineClient';
+import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
 import type { ConnectedHosting, IntegrationService } from '../integrations/integrationService';
 import { errorMessage } from '../commands/ui';

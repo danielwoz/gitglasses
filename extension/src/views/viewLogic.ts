@@ -2,6 +2,7 @@
 // commit labels, diff pair construction, contributor stats, sha detection.
 
 import { CommitSummaryInfo, FileHistoryEntry } from '@gitglasses/protocol';
+import { shortSha } from '@gitglasses/protocol/sha';
 import { relativeTime } from '../system/dates';
 
 export const PAGE_SIZE = 50;
@@ -27,10 +28,6 @@ export function appendPage<T>(
 }
 
 // --- Commit rendering -------------------------------------------------------
-
-export function shortSha(sha: string): string {
-  return sha.slice(0, 8);
-}
 
 export function commitDescription(
   commit: Pick<CommitSummaryInfo, 'sha' | 'author'>,

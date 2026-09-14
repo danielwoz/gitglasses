@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import { FileHistoryEntry } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
 import { encodeRevisionUri } from '../scm/revisionContentProvider';
 import { historyEntryDiffSpec } from '../views/viewLogic';

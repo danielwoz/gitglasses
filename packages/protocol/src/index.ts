@@ -19,8 +19,8 @@ export { PROTOCOL_VERSION } from './version.js';
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
 
-/** SHA git uses for uncommitted (working tree / dirty buffer) lines. */
-export const UNCOMMITTED_SHA = '0'.repeat(40);
+// Sha helpers also have their own lean entry point: @gitglasses/protocol/sha.
+export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
 
 // --- JSON-RPC envelope ------------------------------------------------------
 // Hand-written: the envelope is JSON-RPC boilerplate with open `unknown`

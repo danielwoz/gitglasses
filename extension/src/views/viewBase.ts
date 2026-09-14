@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { CommitSummaryInfo } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { DiffSpec } from './viewLogic';
 

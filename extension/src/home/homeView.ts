@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { PullRequest } from '@gitglasses/integrations';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
+import { shortSha } from '@gitglasses/protocol/sha';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, ViewBase, ViewNode, firstWorkspaceRepo, messageNode } from '../views/viewBase';
 import { commitNode } from '../views/nodes';
@@ -215,7 +216,7 @@ export function registerHomeCommands(
         const picked = await vscode.window.showQuickPick(
           candidates.map((branch) => ({
             label: branch.name,
-            description: branch.sha.slice(0, 7),
+            description: shortSha(branch.sha),
           })),
           { placeHolder: 'Branch to switch to' },
         );

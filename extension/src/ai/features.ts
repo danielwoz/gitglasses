@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import { CommitSummaryInfo, DiffHunk } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, firstWorkspaceRepo, ViewNode } from '../views/viewBase';
 import { openCommitDoc } from '../views/nodes';
-import { shortSha } from '../views/viewLogic';
+import { shortSha } from '@gitglasses/protocol/sha';
 import {
   AI_PROVIDER_IDS,
   AI_PROVIDER_LABELS,

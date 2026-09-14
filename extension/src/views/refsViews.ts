@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ActiveRepo, ViewBase, ViewNode, messageNode } from './viewBase';
-import { shortSha } from './viewLogic';
+import { shortSha } from '@gitglasses/protocol/sha';
 import type { PrChipProvider } from '../integrations/prChips';
 
 // Branches, remotes, tags, and stashes: stateless views re-fetched per render.

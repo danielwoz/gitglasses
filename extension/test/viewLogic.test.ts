@@ -49,7 +49,7 @@ describe('history entry diff spec', () => {
     const spec = historyEntryDiffSpec('repo-1', { sha, path: 'src/app.ts' });
     expect(spec.left).toEqual({ repoId: 'repo-1', path: 'src/app.ts', rev: `${sha}~1` });
     expect(spec.right).toEqual({ repoId: 'repo-1', path: 'src/app.ts', rev: sha });
-    expect(spec.title).toBe('src/app.ts (aabbccdd~1 ↔ aabbccdd)');
+    expect(spec.title).toBe('src/app.ts (aabbccd~1 ↔ aabbccd)');
   });
 
   it('uses the entry path at that commit (rename-aware), not the current path', () => {
@@ -143,7 +143,7 @@ describe('commit rendering', () => {
 
   it('describes a commit as shortSha author relative-date', () => {
     const now = 1_700_000_000 + 3 * 24 * 60 * 60;
-    expect(commitDescription(commit, now)).toBe('aabbccdd Ada 3 days ago');
+    expect(commitDescription(commit, now)).toBe('aabbccd Ada 3 days ago');
   });
 
   it('renders a plain-text commit doc with sha, author, date, and summary', () => {

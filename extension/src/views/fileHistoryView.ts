@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { FileHistoryEntry } from '@gitglasses/protocol';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { ActiveRepo, ViewBase, ViewNode, loadMoreNode, messageNode } from './viewBase';
 import { fileHistoryNode } from './nodes';
 import { PAGE_SIZE, PageState, appendPage, emptyPageState } from './viewLogic';

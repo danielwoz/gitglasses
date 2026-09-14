@@ -6,8 +6,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EngineClient, EngineError } from '../src/engine/engineClient';
-import { createProcessTransportFactory } from '../src/engine/processTransport';
+import { EngineClient, EngineError } from '@gitglasses/rpc';
+import { createProcessTransportFactory } from '@gitglasses/rpc/node';
 import { BlameModel } from '../src/model/blameModel';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 

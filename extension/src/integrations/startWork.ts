@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AuthError, type Issue, type IssueProvider } from '@gitglasses/integrations';
-import type { EngineClient } from '../engine/engineClient';
+import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
 import { firstWorkspaceRepo } from '../views/viewBase';
 import type { IntegrationService, IssueProviderEntry } from './integrationService';

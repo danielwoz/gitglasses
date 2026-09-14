@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { CommitSummaryInfo } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { firstWorkspaceRepo } from '../views/viewBase';
 import { findShaMatches } from '../views/viewLogic';

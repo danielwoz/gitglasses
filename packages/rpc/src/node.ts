@@ -1,17 +1,18 @@
 // Child-process engine transport: spawns gitglasses-engine and speaks
 // Content-Length framing over its stdio.
 //
-// NODE-ONLY MODULE: this is the only file under src/engine that may import
-// node:child_process / node:fs. The future web entry point must never import
-// this module — it gets a worker/wasm transport implementing EngineTransport.
+// NODE-ONLY ENTRY POINT: the only module in this package that imports
+// node:child_process / node:fs. Browser and wasm hosts import the root entry
+// point and supply their own EngineTransport.
 
 import { ChildProcess, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
-import { frame, FrameParser } from './transport';
-import { EngineTransport } from './engineTransport';
+import { frame, FrameParser } from './framing.js';
+import { EngineTransport } from './transport.js';
 
 export interface ProcessTransportOptions {
   enginePath: string;
+  /** Passed through as `--log-level`; omitted from argv when undefined. */
   logLevel?: string;
   onLog?: (line: string) => void;
 }
@@ -52,11 +53,9 @@ export class ProcessTransport implements EngineTransport {
   }
 
   start(): Promise<void> {
-    const child = spawn(
-      this.options.enginePath,
-      ['--stdio', '--log-level', this.options.logLevel ?? 'warn'],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+    const args = ['--stdio'];
+    if (this.options.logLevel !== undefined) args.push('--log-level', this.options.logLevel);
+    const child = spawn(this.options.enginePath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     this.process = child;
     child.stdout.on('data', (chunk: Buffer) => {
       for (const payload of this.parser.push(chunk)) this.messageHandler?.(payload);

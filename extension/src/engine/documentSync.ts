@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { EngineClient } from './engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 
 const DEBOUNCE_MS = 150;

@@ -6,8 +6,8 @@ import {
   commitDescription,
   formatCommitDoc,
   historyEntryDiffSpec,
-  shortSha,
 } from './viewLogic';
+import { shortSha } from '@gitglasses/protocol/sha';
 import { ViewNode } from './viewBase';
 
 /** Commit node: click copies the sha and opens the plain-text summary doc. */

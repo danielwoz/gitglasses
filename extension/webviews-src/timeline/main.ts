@@ -3,6 +3,7 @@
 
 import './timeline.css';
 import type { FileHistoryEntry, HostToWebviewMessage, WebviewToHostMessage } from './ipc';
+import { shortSha } from '@gitglasses/protocol/sha';
 import {
   TimeDomain,
   assignAuthorLanes,
@@ -99,7 +100,7 @@ function showTooltip(entry: FileHistoryEntry, clientX: number, clientY: number):
     tooltip.appendChild(div);
   };
   addLine('tooltip-summary', entry.summary);
-  addLine('tooltip-meta', `${entry.sha.slice(0, 7)}  ${entry.author.name}`);
+  addLine('tooltip-meta', `${shortSha(entry.sha)}  ${entry.author.name}`);
   addLine('tooltip-meta', formatDate(entry.author.time));
   const churn = document.createElement('div');
   const adds = document.createElement('span');

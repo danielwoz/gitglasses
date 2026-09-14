@@ -15,7 +15,7 @@ import {
   type FetchLike,
   type HostingProvider,
 } from '@gitglasses/integrations';
-import type { EngineClient } from './engine.js';
+import type { EngineClient } from '@gitglasses/rpc';
 import {
   formatBlame,
   formatCommitShow,

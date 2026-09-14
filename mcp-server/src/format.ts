@@ -12,6 +12,7 @@ import {
   type PatchEnvelope,
   type RequestResult,
 } from '@gitglasses/protocol';
+import { shortSha } from '@gitglasses/protocol/sha';
 import type { LaunchpadGroup } from '@gitglasses/integrations';
 
 /** Trailing marker a truncated result carries. */
@@ -26,10 +27,6 @@ export function truncateText(text: string, limit: number, hint: string): string 
   const cut = text.slice(0, limit);
   const lastNewline = cut.lastIndexOf('\n');
   return `${lastNewline > 0 ? cut.slice(0, lastNewline) : cut}\n\n(truncated to ${limit} characters; ${hint})`;
-}
-
-export function shortSha(sha: string): string {
-  return sha.slice(0, 7);
 }
 
 export function isoDate(unixSeconds: number): string {

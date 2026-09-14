@@ -4,7 +4,7 @@
 
 import * as vscode from 'vscode';
 import { RebaseEntry } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { firstWorkspaceRepo } from '../views/viewBase';

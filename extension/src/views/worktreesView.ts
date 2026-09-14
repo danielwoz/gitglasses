@@ -4,7 +4,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, ViewBase, ViewNode, firstWorkspaceRepo, messageNode } from './viewBase';
 import {
@@ -15,7 +15,7 @@ import {
 } from './worktreeLogic';
 import { confirmWorktreeForceRemove, confirmWorktreeRemove } from '../commands/confirmations';
 import { confirmDestructive, errorMessage, setStatus, showPick } from '../commands/ui';
-import { shortSha } from './viewLogic';
+import { shortSha } from '@gitglasses/protocol/sha';
 
 interface WorktreeNode extends ViewNode {
   worktreePath?: string;

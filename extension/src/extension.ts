@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { EngineClient } from './engine/engineClient';
-import { createProcessTransportFactory, findEngineBinary } from './engine/processTransport';
+import { EngineClient } from '@gitglasses/rpc';
+import { shortSha } from '@gitglasses/protocol/sha';
+import { createProcessTransportFactory, findEngineBinary } from '@gitglasses/rpc/node';
 import { HeadChangeTracker } from './engine/capabilityGate';
 import { DocumentSync } from './engine/documentSync';
 import { BlameModel } from './model/blameModel';
@@ -576,7 +577,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.copySha', async (node?: ViewNode) => {
       if (typeof node?.sha !== 'string') return;
       await vscode.env.clipboard.writeText(node.sha);
-      vscode.window.setStatusBarMessage(`Copied ${node.sha.slice(0, 8)}`, 3000);
+      vscode.window.setStatusBarMessage(`Copied ${shortSha(node.sha)}`, 3000);
     }),
     vscode.commands.registerCommand('gitglasses.openCommitDiff', (node?: ViewNode) =>
       openCommitDiff(node),
