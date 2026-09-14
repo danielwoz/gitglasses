@@ -11,3 +11,6 @@ vcpkg_installed/
 .turbo/
 *.log
 .DS_Store
+
+# Downloaded VS Code Web build; test:web fetches it on demand.
+extension/.vscode-test-web/
