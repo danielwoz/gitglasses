@@ -123,7 +123,7 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         }
         return {{"entries", std::move(entries)}};
       },
-      rpc::Mode::Serial);
+      rpc::Mode::Concurrent);
 
   dispatcher.method(
       "rebase/start",

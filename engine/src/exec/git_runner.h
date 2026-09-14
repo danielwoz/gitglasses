@@ -1,9 +1,11 @@
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
 
+#include "exec/git_process.h"
 #include "util/cancel.h"
 #include "util/result.h"
 
@@ -17,6 +19,8 @@ struct RunOpts {
   // Patch text needs this: CR characters and exact trailing newlines must
   // survive a round-trip.
   bool rawOutput = false;
+  // Wall-clock ceiling on the invocation; remote-facing commands raise it.
+  std::chrono::milliseconds timeout = kDefaultGitTimeout;
 };
 
 // Receives the child's stdout: one call per line with the newline removed, or
@@ -29,10 +33,11 @@ struct RunStatus {
   std::string stderrText;
 };
 
-// Runs `git <args>` in `cwd` and drains its stdout into `sink`. Only spawn
-// failures are Errors; a nonzero exit comes back in RunStatus::exitCode for
-// the caller to interpret (conflict-aware methods treat some of them as
-// results, not errors). Throws CancelledError when `token` fires.
+// Runs `git <args>` in `cwd` and drains its stdout into `sink`. Spawn
+// failures and timeouts are Errors; a nonzero exit comes back in
+// RunStatus::exitCode for the caller to interpret (conflict-aware methods
+// treat some of them as results, not errors). Throws CancelledError when
+// `token` fires.
 Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args,
                          const RunOpts& opts, const CancelToken& token, const GitSink& sink);
 

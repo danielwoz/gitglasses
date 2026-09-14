@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <map>
+#include <memory>
 #include <optional>
 #include <queue>
 #include <set>
@@ -15,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "cache/graph_cache.h"
 #include "core/git2.h"
 #include "core/git2_json.h"
 #include "services/params.h"
@@ -182,17 +185,13 @@ RowLayout layoutRow(LaneState& state, const std::string& sha,
 
 // --- refs snapshot ----------------------------------------------------------
 
-struct StashInfo {
-  std::size_t index = 0;
-  std::string sha;
-  std::string message;
-};
+using cache::GraphStash;
 
 struct GraphSnapshot {
   std::string headSha;  // empty when HEAD is unborn
   std::vector<std::string> tips;  // deduplicated walk roots
   std::map<std::string, rpc::Json> refsBySha;  // decoration arrays, pre-ordered
-  std::vector<StashInfo> stashes;  // newest first (stash@{0} first)
+  std::vector<GraphStash> stashes;  // newest first (stash@{0} first)
   std::uint64_t generation = 0;
 };
 
@@ -312,7 +311,7 @@ Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
   {
     auto callback = [](size_t index, const char* message, const git_oid* stashId,
                        void* payload) -> int {
-      auto& out = *static_cast<std::vector<StashInfo>*>(payload);
+      auto& out = *static_cast<std::vector<GraphStash>*>(payload);
       out.push_back({index, core::oidToHex(*stashId), message ? message : ""});
       return 0;
     };
@@ -339,30 +338,49 @@ Result<GraphSnapshot> buildSnapshot(const core::Repo& repo) {
 
 // --- commit DAG collection --------------------------------------------------
 
+// git_oid is a 20-byte POD, so it keys the walk directly: collection needs no
+// hex at all, and lookups hash 8 bytes instead of 40. Hex appears once per
+// commit and once per parent edge, when the ordered plan is materialized.
+struct OidHash {
+  std::size_t operator()(const git_oid& oid) const noexcept {
+    std::size_t hash = 0;
+    std::memcpy(&hash, oid.id, sizeof(hash));
+    return hash;
+  }
+};
+
+struct OidEq {
+  bool operator()(const git_oid& a, const git_oid& b) const noexcept {
+    return git_oid_equal(&a, &b) != 0;
+  }
+};
+
 struct Node {
-  std::vector<std::string> parents;
+  std::vector<git_oid> parents;
   std::int64_t time = 0;  // committer time (topological tie-break)
   int pendingChildren = 0;
 };
 
-using NodeMap = std::unordered_map<std::string, Node>;
+using NodeMap = std::unordered_map<git_oid, Node, OidHash, OidEq>;
 
 Result<NodeMap> collectNodes(const core::Repo& repo, const std::vector<std::string>& tips,
                              const CancelToken& token) {
   NodeMap nodes;
-  std::vector<std::string> stack = tips;
+  std::vector<git_oid> stack;
+  stack.reserve(tips.size());
+  for (const auto& tip : tips) {
+    git_oid oid;
+    if (git_oid_fromstr(&oid, tip.c_str()) != 0) return core::gitError("parse oid " + tip);
+    stack.push_back(oid);
+  }
   while (!stack.empty()) {
     token.throwIfCancelled();
-    const std::string sha = std::move(stack.back());
+    const git_oid oid = stack.back();
     stack.pop_back();
-    if (nodes.find(sha) != nodes.end()) continue;
-    git_oid oid;
-    if (git_oid_fromstr(&oid, sha.c_str()) != 0) {
-      return core::gitError("parse oid " + sha);
-    }
+    if (nodes.find(oid) != nodes.end()) continue;
     git_commit* rawCommit = nullptr;
     if (git_commit_lookup(&rawCommit, repo.raw(), &oid) != 0) {
-      return core::gitError("lookup commit " + sha);
+      return core::gitError("lookup commit " + core::oidToHex(oid));
     }
     core::CommitPtr commit(rawCommit);
     Node node;
@@ -370,34 +388,86 @@ Result<NodeMap> collectNodes(const core::Repo& repo, const std::vector<std::stri
     const unsigned int parentCount = git_commit_parentcount(commit.get());
     node.parents.reserve(parentCount);
     for (unsigned int i = 0; i < parentCount; ++i) {
-      node.parents.push_back(core::oidToHex(*git_commit_parent_id(commit.get(), i)));
+      node.parents.push_back(*git_commit_parent_id(commit.get(), i));
     }
     for (const auto& parent : node.parents) stack.push_back(parent);
-    nodes.emplace(sha, std::move(node));
+    nodes.emplace(oid, std::move(node));
   }
   for (auto& entry : nodes) {
     for (const auto& parent : entry.second.parents) {
-      auto it = nodes.find(parent);
+      const auto it = nodes.find(parent);
       if (it != nodes.end()) ++it->second.pendingChildren;
     }
   }
   return nodes;
 }
 
+// Walks the DAG once and materializes the row order a page slices from.
+// Topological: children before parents, ties by committer time (newest first)
+// then sha (lexicographic) — fully deterministic.
+std::vector<cache::GraphPlanRow> buildOrder(NodeMap& nodes, const CancelToken& token) {
+  // A ready commit carries its own oid, so popping it needs no hex lookup;
+  // sha is kept only for the tie-break and is moved into the emitted row.
+  struct Ready {
+    std::int64_t time;
+    std::string sha;
+    git_oid oid;
+  };
+  struct ReadyOrder {
+    bool operator()(const Ready& a, const Ready& b) const {
+      if (a.time != b.time) return a.time < b.time;
+      return a.sha > b.sha;
+    }
+  };
+  std::priority_queue<Ready, std::vector<Ready>, ReadyOrder> ready;
+  for (const auto& [oid, node] : nodes) {
+    if (node.pendingChildren == 0) ready.push({node.time, core::oidToHex(oid), oid});
+  }
+
+  std::vector<cache::GraphPlanRow> order;
+  order.reserve(nodes.size());
+  while (!ready.empty()) {
+    token.throwIfCancelled();
+    const Ready top = ready.top();
+    ready.pop();
+    Node& node = nodes.at(top.oid);
+
+    cache::GraphPlanRow row;
+    row.sha = top.sha;
+    row.parents.reserve(node.parents.size());
+    for (const auto& parent : node.parents) row.parents.push_back(core::oidToHex(parent));
+    // Parents that just lost their last child become ready, reusing the hex
+    // already produced for the edge above.
+    for (std::size_t i = 0; i < node.parents.size(); ++i) {
+      const auto it = nodes.find(node.parents[i]);
+      if (it != nodes.end() && --it->second.pendingChildren == 0) {
+        ready.push({it->second.time, row.parents[i], node.parents[i]});
+      }
+    }
+    order.push_back(std::move(row));
+  }
+  return order;
+}
+
 // Any staged, unstaged, or untracked change makes the workdir "dirty" for the
-// synthetic WIP row.
+// synthetic WIP row. Stops at the first entry: one changed path settles the
+// question, and untracked directories are not descended into for the same
+// reason.
 Result<bool> workdirDirty(const core::Repo& repo) {
   if (repo.workdir().empty()) return false;
   git_status_options opts;
   git_status_options_init(&opts, GIT_STATUS_OPTIONS_VERSION);
   opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
-  opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED | GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS;
-  git_status_list* rawList = nullptr;
-  if (git_status_list_new(&rawList, repo.raw(), &opts) != 0) {
-    return core::gitError("workdir status");
-  }
-  core::StatusListPtr list(rawList);
-  return git_status_list_entrycount(list.get()) > 0;
+  opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED;
+  bool dirty = false;
+  const auto callback = [](const char*, unsigned int, void* payload) -> int {
+    *static_cast<bool*>(payload) = true;
+    return 1;  // nonzero stops the iteration
+  };
+  const int rc = git_status_foreach_ext(repo.raw(), &opts, callback, &dirty);
+  // The early stop is reported as the callback's return value, not an error.
+  if (rc != 0 && rc != 1) return core::gitError("workdir status");
+  return dirty;
 }
 
 struct Cursor {
@@ -463,32 +533,45 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           return {{"rows", std::move(rows)}, {"generation", snap.generation}};  // unborn HEAD
         }
 
-        auto nodes = collectNodes(repo.value(), snap.tips, token);
-        if (!nodes) throw rpc::HandlerError{{nodes.error()}};
+        // The whole walk depends only on the refs, which `generation`
+        // fingerprints, so page 0 builds it and later pages slice it.
+        const std::string cacheKey =
+            cache::GraphCache::makeKey(params.value("repoId", ""), snap.generation);
+        std::shared_ptr<const cache::GraphPlan> plan = context.graphCache.get(cacheKey);
+        if (!plan) {
+          auto nodes = collectNodes(repo.value(), snap.tips, token);
+          if (!nodes) throw rpc::HandlerError{{nodes.error()}};
 
-        // Stash rows precede the commit they were stashed on (the stash
-        // commit's first parent). Stashes whose base is not reachable from any
-        // walked tip produce no row.
-        std::map<std::string, std::vector<StashInfo>> stashesByBase;
-        if (includeStashes) {
-          for (const auto& stash : snap.stashes) {
+          auto built = std::make_shared<cache::GraphPlan>();
+          built->commits = buildOrder(nodes.value(), token);
+          built->stashes = snap.stashes;
+
+          // Stash rows precede the commit they were stashed on (the stash
+          // commit's first parent). Stashes whose base is not reachable from
+          // any walked tip produce no row.
+          for (std::size_t i = 0; i < built->stashes.size(); ++i) {
+            const std::string& stashSha = built->stashes[i].sha;
             git_oid oid;
             git_commit* rawCommit = nullptr;
-            if (git_oid_fromstr(&oid, stash.sha.c_str()) != 0 ||
+            if (git_oid_fromstr(&oid, stashSha.c_str()) != 0 ||
                 git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
-              throw rpc::HandlerError{{core::gitError("lookup stash " + stash.sha)}};
+              throw rpc::HandlerError{{core::gitError("lookup stash " + stashSha)}};
             }
             core::CommitPtr commit(rawCommit);
             if (git_commit_parentcount(commit.get()) == 0) continue;
-            const std::string base = core::oidToHex(*git_commit_parent_id(commit.get(), 0));
-            if (nodes.value().find(base) != nodes.value().end()) {
-              stashesByBase[base].push_back(stash);  // foreach order: index asc
+            const git_oid* base = git_commit_parent_id(commit.get(), 0);
+            if (nodes.value().find(*base) != nodes.value().end()) {
+              built->stashesByBase[core::oidToHex(*base)].push_back(i);  // index asc
             }
           }
+          plan = built;
+          context.graphCache.put(cacheKey, plan);
         }
 
+        // Only page 0 can carry the WIP row, so only page 0 pays for the
+        // status scan; later pages would compute it and discard it.
         bool wantWip = false;
-        if (includeWip && !snap.headSha.empty()) {
+        if (includeWip && cursor.pos == 0 && !snap.headSha.empty()) {
           auto dirty = workdirDirty(repo.value());
           if (!dirty) throw rpc::HandlerError{{dirty.error()}};
           wantWip = dirty.value();
@@ -513,7 +596,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         // are skipped without touching lane state (the cursor carries it);
         // returns false once the page is full, capturing the next cursor.
         auto emitRow = [&](const std::string& sha, const std::vector<std::string>& parents,
-                           const char* kind, const StashInfo* stash) -> bool {
+                           const char* kind, const GraphStash* stash) -> bool {
           if (pos < startPos) {
             ++pos;
             return true;
@@ -553,41 +636,26 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           return true;
         };
 
-        // Topological walk: children before parents, ties by committer time
-        // (newest first) then sha (lexicographic) — fully deterministic.
-        struct ReadyOrder {
-          bool operator()(const std::pair<std::int64_t, std::string>& a,
-                          const std::pair<std::int64_t, std::string>& b) const {
-            if (a.first != b.first) return a.first < b.first;
-            return a.second > b.second;
-          }
-        };
-        std::priority_queue<std::pair<std::int64_t, std::string>,
-                            std::vector<std::pair<std::int64_t, std::string>>, ReadyOrder>
-            ready;
-        for (const auto& [sha, node] : nodes.value()) {
-          if (node.pendingChildren == 0) ready.emplace(node.time, sha);
-        }
-
+        // Emission follows the cached order; rows before the cursor cost only
+        // the counter, so a later page never touches the object database for
+        // them.
         bool more = true;
         if (wantWip) more = emitRow(kWipSha, {snap.headSha}, "wip", nullptr);
-        while (more && !ready.empty()) {
+        for (const auto& row : plan->commits) {
+          if (!more) break;
           token.throwIfCancelled();
-          const std::string sha = ready.top().second;
-          ready.pop();
-          if (auto it = stashesByBase.find(sha); it != stashesByBase.end()) {
-            for (const auto& stash : it->second) {
-              more = emitRow(stash.sha, {sha}, "stash", &stash);
+          if (includeStashes) {
+            const auto it = plan->stashesByBase.find(row.sha);
+            if (it != plan->stashesByBase.end()) {
+              for (const std::size_t index : it->second) {
+                const GraphStash& stash = plan->stashes[index];
+                more = emitRow(stash.sha, {row.sha}, "stash", &stash);
+                if (!more) break;
+              }
               if (!more) break;
             }
           }
-          if (!more) break;
-          more = emitRow(sha, nodes.value().at(sha).parents, "commit", nullptr);
-          if (!more) break;
-          for (const auto& parent : nodes.value().at(sha).parents) {
-            Node& parentNode = nodes.value().at(parent);
-            if (--parentNode.pendingChildren == 0) ready.emplace(parentNode.time, parent);
-          }
+          more = emitRow(row.sha, row.parents, "commit", nullptr);
         }
 
         rpc::Json result = {{"rows", std::move(rows)}, {"generation", snap.generation}};

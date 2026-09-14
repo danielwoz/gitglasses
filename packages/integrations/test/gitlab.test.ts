@@ -167,6 +167,61 @@ describe('GitLabProvider.getMyPullRequests', () => {
   });
 });
 
+describe('GitLabProvider fan-out', () => {
+  /** Stub whose /approvals handler reports how many calls overlap. */
+  function approvalsStub(count: number) {
+    const authored = Array.from({ length: count }, (_, i) => mr({ id: i + 1, iid: i + 1 }));
+    let inFlight = 0;
+    let peakInFlight = 0;
+    let approvalCalls = 0;
+    const fetchFn = async (url: string) => {
+      if (url.endsWith('/api/v4/user')) return jsonResponse(user);
+      if (url.includes('reviewer_username=')) return jsonResponse([]);
+      if (url.includes('author_username=')) return jsonResponse(authored);
+      approvalCalls += 1;
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      return jsonResponse({ approved: true, approved_by: [{ user }] });
+    };
+    return { fetchFn, stats: () => ({ approvalCalls, peakInFlight }) };
+  }
+
+  it('asks for approvals on only the first page of results', async () => {
+    const { fetchFn, stats } = approvalsStub(50);
+    const prs = await new GitLabProvider({ fetchFn }).getMyPullRequests(auth, { limit: 50 });
+    expect(prs).toHaveLength(50);
+    expect(stats().approvalCalls).toBe(10);
+    // Enriched results carry a decision; the rest report none rather than
+    // asserting one that was never read.
+    expect(prs[0].reviewDecision).toBe('approved');
+    expect(prs[9].reviewDecision).toBe('approved');
+    expect(prs[10].reviewDecision).toBeUndefined();
+  });
+
+  it('keeps the enrichment fan-out to a bounded number of open requests', async () => {
+    const { fetchFn, stats } = approvalsStub(50);
+    await new GitLabProvider({ fetchFn }).getMyPullRequests(auth, { limit: 50 });
+    expect(stats().peakInFlight).toBeLessThanOrEqual(8);
+    expect(stats().peakInFlight).toBeGreaterThan(1);
+  });
+
+  it('still enriches a single merge request looked up by branch', async () => {
+    const { fetchFn } = stubFetch((url) => {
+      if (url.endsWith('/api/v4/user')) return jsonResponse(user);
+      if (url.includes('source_branch=')) return jsonResponse([mr()]);
+      return jsonResponse({ approved: true, approved_by: [{ user }] });
+    });
+    const pr = await new GitLabProvider({ fetchFn }).getPullRequestForBranch(
+      auth,
+      repo,
+      'feat/widgets'
+    );
+    expect(pr?.reviewDecision).toBe('approved');
+  });
+});
+
 describe('GitLabProvider.getPullRequestForBranch', () => {
   it('queries the project by source branch and maps the first result', async () => {
     const { fetchFn, requests } = stubFetch((url) => {

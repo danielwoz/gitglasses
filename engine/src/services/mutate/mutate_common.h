@@ -1,10 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "core/repo.h"
+#include "exec/git_process.h"
 #include "rpc/dispatcher.h"
 #include "services/context.h"
 
@@ -43,9 +45,11 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
                                 const CancelToken& token);
 
 // Runs `git <args>` and throws HandlerError(GitError) with git's stderr
-// unless it exited 0.
+// unless it exited 0. Remote-facing callers raise `timeout` to the network
+// ceiling.
 GitOutput runGitOrThrow(const core::Repo& repo, std::vector<std::string> args,
-                        const CancelToken& token, const std::string& what);
+                        const CancelToken& token, const std::string& what,
+                        std::chrono::milliseconds timeout = exec::kDefaultGitTimeout);
 
 // Runs a merge-like command whose failure may mean "stopped on conflicts":
 // exit 0 -> {conflicts:false}; nonzero with conflict state -> {conflicts:true};

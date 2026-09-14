@@ -47,6 +47,22 @@
               },
               "threads": {
                 "type": "boolean"
+              },
+              "watchBackend": {
+                "anyOf": [
+                  {
+                    "const": "inotify",
+                    "type": "string"
+                  },
+                  {
+                    "const": "polling",
+                    "type": "string"
+                  },
+                  {
+                    "const": "none",
+                    "type": "string"
+                  }
+                ]
               }
             }
           }
@@ -97,6 +113,25 @@
             "type": "boolean"
           }
         }
+      }
+    },
+    "repo/close": {
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
       }
     },
     "repo/list": {

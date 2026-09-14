@@ -44,19 +44,28 @@ export function relativeWithinRoot(
 // touch of a file inside them.
 export class RepositoryService {
   private rootsById = new Map<string, string>();
+  /** (repoId, rootPath) ordered by path length, longest first, so nested repos
+   *  match before their parents. Rebuilt on mutation, not per lookup. */
+  private sortedRoots: [string, string][] = [];
   private discovering = new Map<string, Promise<string | undefined>>();
 
   constructor(private readonly engine: EngineClient) {}
+
+  private setRoot(repoId: string, rootPath: string): void {
+    this.rootsById.set(repoId, rootPath);
+    this.sortedRoots = [...this.rootsById.entries()].sort((a, b) => b[1].length - a[1].length);
+  }
+
+  private clearRoots(): void {
+    this.rootsById.clear();
+    this.sortedRoots = [];
+  }
 
   /** Synchronous lookup against already-discovered repos. */
   locate(uri: vscode.Uri): LocatedFile | undefined {
     if (uri.scheme !== 'file') return undefined;
     const fsPath = uri.fsPath;
-    // Sort by path length (longest first) so nested repos match before parents.
-    const sorted = [...this.rootsById.entries()].sort(
-      (a, b) => b[1].length - a[1].length,
-    );
-    for (const [repoId, rootPath] of sorted) {
+    for (const [repoId, rootPath] of this.sortedRoots) {
       const relative = relativeWithinRoot(rootPath, fsPath);
       if (relative === undefined) continue;
       return { repoId, rootPath, relativePath: relative };
@@ -77,7 +86,7 @@ export class RepositoryService {
         .request('repo/discover', { path: dir })
         .then((info) => {
           // Engine reports the root with a trailing slash; normalize.
-          this.rootsById.set(info.repoId, info.rootPath.replace(/\/$/, ''));
+          this.setRoot(info.repoId, info.rootPath.replace(/\/$/, ''));
           return info.repoId;
         })
         .catch(() => undefined)
@@ -91,11 +100,11 @@ export class RepositoryService {
   /** Re-register all known repos (after an engine respawn: ids are stale). */
   async rediscoverAll(): Promise<void> {
     const roots = [...this.rootsById.values()];
-    this.rootsById.clear();
+    this.clearRoots();
     for (const root of roots) {
       try {
         const info = await this.engine.request('repo/discover', { path: root });
-        this.rootsById.set(info.repoId, info.rootPath.replace(/\/$/, ''));
+        this.setRoot(info.repoId, info.rootPath.replace(/\/$/, ''));
       } catch {
         // Repo may have vanished; drop it.
       }

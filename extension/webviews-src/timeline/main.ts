@@ -8,6 +8,7 @@ import {
   TimeDomain,
   assignAuthorLanes,
   hitTestBubbles,
+  minValue,
   panDomain,
   timeDomain,
   xToTime,
@@ -39,18 +40,25 @@ let entries: FileHistoryEntry[] = [];
 let nextCursor: string | undefined;
 let filePath = '';
 let assignment = assignAuthorLanes(entries);
+/** Author times in ms, in entry order; rebuilt only when `entries` changes so
+ *  that render() — which runs on every mousemove while dragging — does not
+ *  remap the whole history per frame. */
+let timesMs: number[] = [];
 /** Visible window; recomputed from the data until the user zooms or pans. */
 let domain: TimeDomain = timeDomain([], Date.now());
 let userAdjustedDomain = false;
 let loadPending = false;
 let hoverIndex: number | undefined;
 
-function entryTimesMs(): number[] {
-  return entries.map((entry) => entry.author.time * 1000);
+/** Replaces the entry list and the derived lane assignment and times array. */
+function setEntries(next: FileHistoryEntry[]): void {
+  entries = next;
+  assignment = assignAuthorLanes(entries);
+  timesMs = entries.map((entry) => entry.author.time * 1000);
 }
 
 function render(): void {
-  if (!userAdjustedDomain) domain = timeDomain(entryTimesMs(), Date.now());
+  if (!userAdjustedDomain) domain = timeDomain(timesMs, Date.now());
   empty.style.display = entries.length === 0 ? 'block' : 'none';
   if (entries.length === 0 && filePath !== '') {
     empty.textContent = loadPending ? 'Loading history…' : `No history for ${filePath}`;
@@ -72,7 +80,7 @@ function render(): void {
 function updateLoadMore(): void {
   let show = false;
   if (nextCursor !== undefined && !loadPending && entries.length > 0) {
-    const oldestMs = Math.min(...entryTimesMs());
+    const oldestMs = minValue(timesMs);
     show = domain.start <= oldestMs;
   }
   loadMoreButton.style.display = show ? 'block' : 'none';
@@ -208,10 +216,9 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
   const message = event.data;
   switch (message.type) {
     case 'reset':
-      entries = [];
+      setEntries([]);
       nextCursor = undefined;
       filePath = message.path;
-      assignment = assignAuthorLanes(entries);
       userAdjustedDomain = false;
       loadPending = true;
       hoverIndex = undefined;
@@ -219,9 +226,8 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       render();
       break;
     case 'entries':
-      entries = [...entries, ...message.entries];
+      setEntries([...entries, ...message.entries]);
       nextCursor = message.nextCursor;
-      assignment = assignAuthorLanes(entries);
       loadPending = false;
       render();
       break;

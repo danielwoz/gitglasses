@@ -38,10 +38,23 @@ const renderer = new GraphRenderer(canvas);
 let theme = readThemeColors(getComputedStyle(document.body));
 let contextSha: string | undefined;
 
+let frameHandle: number | undefined;
+
+/** Coalesces render requests onto the next animation frame; scroll, resize and
+ *  key repeat all fire faster than the display paints. */
 function render(): void {
+  if (frameHandle !== undefined) return;
+  frameHandle = requestAnimationFrame(() => {
+    frameHandle = undefined;
+    paint();
+  });
+}
+
+function paint(): void {
   spacer.style.height = `${store.rows.length * ROW_HEIGHT}px`;
   renderer.render({
     rows: store.rows,
+    maxLane: store.maxLane,
     selection: store.selection,
     scrollTop: scroller.scrollTop,
     viewportW: scroller.clientWidth,

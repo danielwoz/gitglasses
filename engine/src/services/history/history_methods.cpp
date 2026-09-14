@@ -6,6 +6,7 @@
 #include <cctype>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/git2.h"
@@ -103,17 +104,26 @@ Result<void> runGitLog(const core::Repo& repo, std::vector<std::string> args,
   return {};
 }
 
+char lowerByte(char c) {
+  return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+}
+
 std::string toLower(std::string_view text) {
   std::string lowered(text);
-  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), lowerByte);
   return lowered;
 }
 
 // Case-insensitive substring test; `loweredNeedle` must already be lowercase.
-bool containsCi(const char* haystack, const std::string& loweredNeedle) {
+// Searches in place: every commit message walked would otherwise be copied
+// and lowercased in full just to be discarded.
+bool containsCi(const char* haystack, std::string_view loweredNeedle) {
   if (!haystack) return false;
-  return toLower(haystack).find(loweredNeedle) != std::string::npos;
+  const std::string_view text(haystack);
+  const auto hit = std::search(text.begin(), text.end(), loweredNeedle.begin(),
+                               loweredNeedle.end(),
+                               [](char a, char b) { return lowerByte(a) == b; });
+  return hit != text.end();
 }
 
 }  // namespace

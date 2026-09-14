@@ -37,6 +37,11 @@ export const EngineCapabilities = Type.Object(
     watch: Type.Boolean(),
     /** Concurrent request execution (false in single-threaded wasm builds). */
     threads: Type.Boolean(),
+    /** Mechanism behind `watch`. Polling still delivers repo/didChange, at a
+     * coarser interval and a higher idle cost. */
+    watchBackend: Type.Optional(
+      Type.Union([Type.Literal('inotify'), Type.Literal('polling'), Type.Literal('none')]),
+    ),
   },
   { additionalProperties: true },
 );
@@ -57,6 +62,10 @@ export const RequestSchemas = {
   'repo/discover': {
     params: Type.Object({ path: Type.String() }, strict),
     result: RepoInfo,
+  },
+  'repo/close': {
+    params: Type.Object({ repoId: Type.String() }, strict),
+    result: EmptyObject,
   },
   'repo/list': {
     params: EmptyObject,

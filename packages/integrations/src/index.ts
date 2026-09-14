@@ -6,6 +6,7 @@ export * from './snippets.js';
 export * from './remoteMatcher.js';
 export * from './cache.js';
 export * from './rateLimiter.js';
+export * from './rateLimitHeaders.js';
 export * from './launchpadClassifier.js';
 export * from './providers/github.js';
 export * from './providers/gitlab.js';

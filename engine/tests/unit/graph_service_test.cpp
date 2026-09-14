@@ -356,6 +356,45 @@ TEST(GraphService, WipRowSynthesizedWhenDirty) {
   EXPECT_EQ(without["rows"][0]["kind"], "commit");
 }
 
+// Dirtiness stops at the first changed entry and does not descend into
+// untracked directories, so an untracked directory must still count.
+TEST(GraphService, UntrackedDirectoryAloneMakesTheTreeDirty) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json clean = graphRows(session, 10, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  EXPECT_EQ(clean["rows"][0]["kind"], "commit");
+
+  std::filesystem::create_directories(fixture.root() / "untracked" / "nested");
+  fixture.writeFile("untracked/nested/file.txt", "content\n");
+
+  Json dirty = graphRows(session, 11, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  EXPECT_EQ(dirty["rows"][0]["kind"], "wip");
+}
+
+// The cached plan is keyed on the ref fingerprint, so a new commit must be
+// visible on the next request rather than served from the previous walk.
+TEST(GraphService, CachedPlanIsInvalidatedWhenRefsMove) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json before = graphRows(session, 10, repoId);
+  const size_t rowsBefore = before["rows"].size();
+  // A repeated request for the unchanged repo is served from the cache and
+  // must be byte-identical.
+  EXPECT_EQ(graphRows(session, 11, repoId).dump(), before.dump());
+
+  commitTick(fixture, "c2", 2);
+  Json after = graphRows(session, 12, repoId);
+  EXPECT_NE(after["generation"], before["generation"]);
+  ASSERT_EQ(after["rows"].size(), rowsBefore + 1);
+  EXPECT_EQ(after["rows"][0]["sha"], rev(fixture, "HEAD"));
+}
+
 TEST(GraphService, StashRowPrecedesItsBaseCommit) {
   FixtureRepo fixture;
   fixture.writeFile("work.txt", "stable\n");

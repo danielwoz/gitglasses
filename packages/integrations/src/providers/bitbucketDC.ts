@@ -16,7 +16,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { mergeByRole, p, ProviderClient } from './client.js';
+import { ISSUE_TTL_MS, mergeByRole, p, ProviderClient } from './client.js';
 
 export interface BitbucketDCProviderOptions {
   /** Instance base URL, e.g. "https://git.corp.example". Required. */
@@ -189,9 +189,10 @@ export class BitbucketDCProvider implements HostingProvider {
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const pr = await this.client.getJson<DCPullRequest>(
+    const pr = await this.client.getJsonCached<DCPullRequest>(
       auth,
-      p`/projects/${repo.owner}/repos/${repo.name}/pull-requests/${number}`
+      p`/projects/${repo.owner}/repos/${repo.name}/pull-requests/${number}`,
+      ISSUE_TTL_MS
     );
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }

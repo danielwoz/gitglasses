@@ -16,6 +16,17 @@ function makeRows(count: number, offset = 0): GraphRow[] {
   }));
 }
 
+/** Rows carrying explicit lane numbers and a single edge each. */
+function makeLanedRows(lanes: number[], edges: [number, number][] = []): GraphRow[] {
+  return lanes.map((lane, i) => ({
+    ...makeRows(1, i)[0],
+    lane,
+    laneEdges: edges[i]
+      ? [{ fromLane: edges[i][0], toLane: edges[i][1], kind: 'line' as const }]
+      : [],
+  }));
+}
+
 describe('GraphStore paging', () => {
   it('appends pages and tracks the latest cursor', () => {
     const store = new GraphStore();
@@ -91,5 +102,77 @@ describe('GraphStore infinite-scroll trigger', () => {
     store.appendPage(makeRows(100), 'c1');
     expect(store.beginLoadMore(10)).toBeUndefined();
     expect(store.requestInFlight).toBe(false);
+  });
+});
+
+describe('GraphStore lane maximum', () => {
+  it('tracks the highest lane across rows and their edges', () => {
+    const store = new GraphStore();
+    store.appendPage(makeLanedRows([0, 2, 1], [[0, 0], [0, 5], [1, 1]]), 'c1');
+    expect(store.maxLane).toBe(5);
+  });
+
+  it('carries the maximum forward across pages', () => {
+    const store = new GraphStore();
+    store.appendPage(makeLanedRows([3]), 'c1');
+    expect(store.maxLane).toBe(3);
+    // A later page with only low lanes must not lower the maximum.
+    store.appendPage(makeLanedRows([0, 1]), 'c2');
+    expect(store.maxLane).toBe(3);
+    store.appendPage(makeLanedRows([7]), undefined);
+    expect(store.maxLane).toBe(7);
+  });
+
+  it('matches a full scan of the rows', () => {
+    const store = new GraphStore();
+    const pages = [makeLanedRows([1, 4], [[0, 2], [3, 9]]), makeLanedRows([6], [[6, 2]])];
+    for (const page of pages) store.appendPage(page, 'c');
+    let expected = 0;
+    for (const row of store.rows) {
+      expected = Math.max(expected, row.lane);
+      for (const edge of row.laneEdges) {
+        expected = Math.max(expected, edge.fromLane, edge.toLane);
+      }
+    }
+    expect(store.maxLane).toBe(expected);
+  });
+
+  it('reset returns the maximum to zero', () => {
+    const store = new GraphStore();
+    store.appendPage(makeLanedRows([4]), 'c1');
+    store.reset();
+    expect(store.maxLane).toBe(0);
+  });
+});
+
+describe('GraphStore.shas caching', () => {
+  it('returns the ordered shas', () => {
+    const store = new GraphStore();
+    store.appendPage(makeRows(3), 'c1');
+    expect([...store.shas()]).toEqual(['sha-0', 'sha-1', 'sha-2']);
+  });
+
+  it('reuses the same array across repeated calls', () => {
+    const store = new GraphStore();
+    store.appendPage(makeRows(3), 'c1');
+    expect(store.shas()).toBe(store.shas());
+  });
+
+  it('rebuilds after a page arrives', () => {
+    const store = new GraphStore();
+    store.appendPage(makeRows(2), 'c1');
+    const first = store.shas();
+    store.appendPage(makeRows(2, 2), 'c2');
+    const second = store.shas();
+    expect(second).not.toBe(first);
+    expect([...second]).toEqual(['sha-0', 'sha-1', 'sha-2', 'sha-3']);
+  });
+
+  it('rebuilds after reset', () => {
+    const store = new GraphStore();
+    store.appendPage(makeRows(2), 'c1');
+    store.shas();
+    store.reset();
+    expect([...store.shas()]).toEqual([]);
   });
 });

@@ -1,4 +1,5 @@
 #include "exec/git_process.h"
+#include "exec/git_runner.h"
 
 #include <gtest/gtest.h>
 
@@ -79,6 +80,50 @@ TEST(GitProcess, CancellationKillsChildPromptly) {
   if (cancelled) {
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 2000);
   }
+}
+
+TEST(GitProcess, TimeoutKillsTheChildAndIsReported) {
+  gg::testing::FixtureRepo fixture;
+  // `git cat-file --batch` waits on stdin, which is /dev/null here on most
+  // platforms but is the closest portable stand-in for a child that never
+  // finishes; the timeout must bound it either way.
+  SpawnOpts opts;
+  opts.timeout = std::chrono::milliseconds(200);
+  auto process =
+      GitProcess::spawn(fixture.root().string(), {"cat-file", "--batch-check"}, opts);
+  ASSERT_TRUE(process.ok()) << process.error().message;
+
+  CancelToken token;
+  const auto start = std::chrono::steady_clock::now();
+  std::string line;
+  while (process.value().readLine(line, token)) {
+  }
+  process.value().wait(token);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+  // Whether it timed out or exited on EOF, it must not outlive the ceiling
+  // by more than one poll interval.
+  EXPECT_LT(elapsed.count(), 2000);
+}
+
+TEST(GitProcess, TimeoutSurfacesAsAGitErrorFromRunGit) {
+  gg::testing::FixtureRepo fixture;
+  // A deliberately unreachable remote: git retries the TCP connect for far
+  // longer than the ceiling set here.
+  RunOpts opts;
+  opts.timeout = std::chrono::milliseconds(500);
+  CancelToken token;
+  const auto start = std::chrono::steady_clock::now();
+  auto status = runGit(fixture.root().string(),
+                       {"ls-remote", "--", "git://192.0.2.1/unreachable.git"}, opts, token,
+                       [](std::string) {});
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+  EXPECT_LT(elapsed.count(), 5000) << "the timeout did not bound the run";
+  ASSERT_FALSE(status.ok()) << "a timed-out run must not look like a clean result";
+  EXPECT_EQ(status.error().code, ErrorCode::GitError);
+  EXPECT_NE(status.error().message.find("timed out"), std::string::npos)
+      << status.error().message;
 }
 
 TEST(GitProcess, SpawnFailsInMissingDirectory) {

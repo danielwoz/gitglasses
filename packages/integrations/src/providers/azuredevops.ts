@@ -17,7 +17,15 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { CachedIdentity, mergeByRole, p, Path, ProviderClient, segments } from './client.js';
+import {
+  CachedIdentity,
+  ISSUE_TTL_MS,
+  mergeByRole,
+  p,
+  Path,
+  ProviderClient,
+  segments,
+} from './client.js';
 import { assertPlainHost, base64Encode } from './shared.js';
 
 const API_VERSION = '7.1';
@@ -227,9 +235,13 @@ export class AzureDevOpsProvider implements HostingProvider {
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const json = await this.client.getJson<{ id?: number; fields?: Record<string, unknown> }>(
+    const json = await this.client.getJsonCached<{
+      id?: number;
+      fields?: Record<string, unknown>;
+    }>(
       auth,
-      p`/${this.organization}/_apis/wit/workitems/${number}?api-version=${API_VERSION}`
+      p`/${this.organization}/_apis/wit/workitems/${number}?api-version=${API_VERSION}`,
+      ISSUE_TTL_MS
     );
     if (json === undefined) {
       return undefined;

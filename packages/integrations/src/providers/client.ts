@@ -57,6 +57,58 @@ export function segments(value: string): Path {
   return new Path(value.split('/').map(encodeURIComponent).join('/'));
 }
 
+/**
+ * Per-result enrichment (approvals, check statuses) costs one request each, so
+ * providers that fan out enrich only this many results and leave the rest of
+ * the page unenriched. A launchpad page shows far fewer than a full limit of
+ * 50 above the fold.
+ */
+export const PR_ENRICHMENT_CAP = 10;
+
+/** In-flight requests a provider keeps open while fanning out over results. */
+export const FANOUT_CONCURRENCY = 6;
+
+/** How long an avatar lookup is reused; a blame gutter asks once per author. */
+export const AVATAR_TTL_MS = 30 * 60_000;
+
+/** How long a resolved issue or pull request reference is reused. */
+export const ISSUE_TTL_MS = 60_000;
+
+/** Responses one client holds at once, bounding an open-ended key space. */
+const RESPONSE_CACHE_MAX_ENTRIES = 512;
+
+/**
+ * Runs `fn` over `items` with at most `limit` calls in flight, preserving
+ * result order. Unlike Promise.all the fan-out is bounded, so a page of
+ * results cannot open a request per item at once.
+ */
+export async function mapPooled<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let failed = false;
+  const worker = async (): Promise<void> => {
+    while (!failed) {
+      const index = next++;
+      if (index >= items.length) {
+        return;
+      }
+      try {
+        results[index] = await fn(items[index], index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  const workers = Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 export interface ProviderClientOptions {
   /** Provider name used in error messages, e.g. "GitLab". */
   name: string;
@@ -73,6 +125,8 @@ export interface ProviderClientOptions {
   /** Headers sent on every request, e.g. accept. */
   headers?: Record<string, string>;
   fetchFn: FetchLike;
+  /** Clock behind the response cache's ttls. Tests inject one. */
+  clock?: Clock;
 }
 
 interface GraphQlEnvelope<T> {
@@ -96,6 +150,7 @@ export class ProviderClient {
   private readonly authorize: (auth: AuthContext) => string;
   private readonly headers: Record<string, string>;
   private readonly fetchFn: FetchLike;
+  private readonly responses: TtlCache<unknown>;
 
   constructor(options: ProviderClientOptions) {
     this.name = options.name;
@@ -110,11 +165,30 @@ export class ProviderClient {
     this.authorize = options.authorize;
     this.headers = options.headers ?? {};
     this.fetchFn = options.fetchFn;
+    this.responses = new TtlCache<unknown>(options.clock, RESPONSE_CACHE_MAX_ENTRIES);
   }
 
   /** GET returning the decoded body, or undefined on 404. */
   async getJson<T>(auth: AuthContext, path: Path): Promise<T | undefined> {
-    const response = await this.send(auth, 'GET', this.url(path));
+    return this.requestJson<T>(auth, this.url(path));
+  }
+
+  /**
+   * GET whose decoded body is reused for `ttlMs`, keyed by the URL and a
+   * fingerprint of the token, so two accounts never read each other's
+   * responses. Concurrent calls for one key share a single request.
+   */
+  async getJsonCached<T>(auth: AuthContext, path: Path, ttlMs: number): Promise<T | undefined> {
+    const url = this.url(path);
+    const key = `GET ${url}\n${tokenFingerprint(auth.token)}`;
+    const { value } = await this.responses.getOrFetch(key, ttlMs, 0, () =>
+      this.requestJson<T>(auth, url)
+    );
+    return value as T | undefined;
+  }
+
+  private async requestJson<T>(auth: AuthContext, url: string): Promise<T | undefined> {
+    const response = await this.send(auth, 'GET', url);
     if (response.status === 404) {
       return undefined;
     }

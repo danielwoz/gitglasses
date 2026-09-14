@@ -1,5 +1,7 @@
 #include "watch/watch_manager.h"
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -7,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <thread>
+#include <utility>
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -71,30 +74,236 @@ std::string joinRel(const std::string& dir, const std::string& name) {
 
 }  // namespace
 
-// A single repository watch: one thread running either the inotify loop or
-// the polling sweep. All members are confined to that thread after
-// construction, except the stop flag (mutex-guarded) and the wake pipe.
-class RepoWatch {
- public:
-  RepoWatch(std::string repoId, std::string gitdir, WatchManager::Callback callback,
-            WatchManager::Backend backend)
-      : repoId_(std::move(repoId)), gitdir_(std::move(gitdir)), callback_(std::move(callback)) {
 #ifdef __linux__
-    if (backend != WatchManager::Backend::kPolling) {
-      inotifyFd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-      if (inotifyFd_ >= 0 && pipe2(wakePipe_, O_CLOEXEC) != 0) {
-        close(inotifyFd_);
-        inotifyFd_ = -1;
-        wakePipe_[0] = wakePipe_[1] = -1;
+
+// The process's single inotify instance and the thread draining it. Every
+// watched repository contributes watch descriptors to this one instance;
+// events are routed back to a repository through the descriptor map.
+class InotifyHub {
+ public:
+  // Returns nullptr when no inotify instance is available (the per-uid
+  // instance cap is shared with the rest of the session).
+  static std::unique_ptr<InotifyHub> create(WatchManager::Callback callback) {
+    const int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (fd < 0) return nullptr;
+    int wake[2] = {-1, -1};
+    if (pipe2(wake, O_CLOEXEC) != 0) {
+      close(fd);
+      return nullptr;
+    }
+    return std::unique_ptr<InotifyHub>(new InotifyHub(fd, wake, std::move(callback)));
+  }
+
+  ~InotifyHub() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    const char byte = 0;
+    const ssize_t written = write(wakeWrite_, &byte, 1);
+    (void)written;
+    if (thread_.joinable()) thread_.join();
+    close(inotifyFd_);
+    close(wakeRead_);
+    close(wakeWrite_);
+  }
+
+  InotifyHub(const InotifyHub&) = delete;
+  InotifyHub& operator=(const InotifyHub&) = delete;
+
+  // Registers the repo's gitdir tree. Returns false when the kernel refuses
+  // every descriptor, leaving the repo unwatched for the caller to fall back.
+  bool add(const std::string& repoId, const std::string& gitdir) {
+    std::lock_guard lock(mutex_);
+    if (repos_.find(repoId) != repos_.end()) return true;
+    RepoState& state = repos_[repoId];
+    state.gitdir = gitdir;
+    addDirWatchLocked(repoId, state, "");
+    addDirTreeLocked(repoId, state, "refs");
+    // A rebase or cherry-pick may already be in flight when the watch starts.
+    addDirTreeLocked(repoId, state, "rebase-merge");
+    addDirTreeLocked(repoId, state, "rebase-apply");
+    if (state.wds.empty()) {
+      repos_.erase(repoId);
+      return false;
+    }
+    return true;
+  }
+
+  void remove(const std::string& repoId) {
+    std::lock_guard lock(mutex_);
+    const auto it = repos_.find(repoId);
+    if (it == repos_.end()) return;
+    for (const int wd : it->second.wds) {
+      inotify_rm_watch(inotifyFd_, wd);
+      watchDirs_.erase(wd);
+    }
+    repos_.erase(it);
+  }
+
+  bool has(const std::string& repoId) const {
+    std::lock_guard lock(mutex_);
+    return repos_.find(repoId) != repos_.end();
+  }
+
+ private:
+  struct WatchDir {
+    std::string repoId;
+    std::string rel;  // directory path relative to the gitdir
+  };
+
+  struct RepoState {
+    std::string gitdir;
+    std::set<int> wds;
+    std::uint64_t generation = 0;
+    std::set<std::string> pending;
+    std::optional<Clock::time_point> deadline;
+  };
+
+  InotifyHub(int inotifyFd, const int wake[2], WatchManager::Callback callback)
+      : inotifyFd_(inotifyFd),
+        wakeRead_(wake[0]),
+        wakeWrite_(wake[1]),
+        callback_(std::move(callback)) {
+    thread_ = std::thread([this] { run(); });
+  }
+
+  void addDirWatchLocked(const std::string& repoId, RepoState& state, const std::string& rel) {
+    const fs::path dir = rel.empty() ? fs::path(state.gitdir) : fs::path(state.gitdir) / rel;
+    const int wd = inotify_add_watch(
+        inotifyFd_, dir.c_str(),
+        IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE |
+            IN_ONLYDIR);
+    if (wd < 0) return;
+    watchDirs_[wd] = {repoId, rel};
+    state.wds.insert(wd);
+  }
+
+  // Watches `rel` and every directory below it. New nested directories that
+  // appear later get their own watches from the IN_CREATE events.
+  void addDirTreeLocked(const std::string& repoId, RepoState& state, const std::string& rel) {
+    const fs::path root = fs::path(state.gitdir) / rel;
+    std::error_code ec;
+    if (!fs::is_directory(root, ec)) return;
+    addDirWatchLocked(repoId, state, rel);
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
+    const fs::recursive_directory_iterator end;
+    for (; !ec && it != end; it.increment(ec)) {
+      if (it->is_directory(ec)) {
+        addDirWatchLocked(repoId, state,
+                          fs::relative(it->path(), state.gitdir, ec).generic_string());
       }
     }
-    if (inotifyFd_ >= 0) {
-      thread_ = std::thread([this] { runInotify(); });
-      return;
+  }
+
+  // Applies every queued event to the per-repo pending sets. Runs under the
+  // mutex so descriptors cannot be removed mid-drain.
+  void drainLocked() {
+    for (;;) {
+      alignas(inotify_event) char buffer[8192];
+      const ssize_t length = read(inotifyFd_, buffer, sizeof(buffer));
+      if (length <= 0) return;  // EAGAIN: queue drained
+      for (const char* cursor = buffer; cursor < buffer + length;) {
+        const auto* event = reinterpret_cast<const inotify_event*>(cursor);
+        cursor += sizeof(inotify_event) + event->len;
+        if (event->mask & IN_IGNORED) {
+          if (const auto it = watchDirs_.find(event->wd); it != watchDirs_.end()) {
+            if (const auto repo = repos_.find(it->second.repoId); repo != repos_.end()) {
+              repo->second.wds.erase(event->wd);
+            }
+            watchDirs_.erase(it);
+          }
+          continue;
+        }
+        const auto dirIt = watchDirs_.find(event->wd);
+        if (dirIt == watchDirs_.end()) continue;
+        const std::string repoId = dirIt->second.repoId;
+        const auto repoIt = repos_.find(repoId);
+        if (repoIt == repos_.end()) continue;
+        const std::string name = event->len > 0 ? std::string(event->name) : std::string();
+        const std::string rel = joinRel(dirIt->second.rel, name);
+        if ((event->mask & IN_ISDIR) && (event->mask & (IN_CREATE | IN_MOVED_TO)) &&
+            isRecursiveRoot(rel)) {
+          addDirTreeLocked(repoId, repoIt->second, rel);
+        }
+        const std::string category = classify(rel);
+        if (category.empty()) continue;
+        repoIt->second.pending.insert(category);
+        if (!repoIt->second.deadline) repoIt->second.deadline = Clock::now() + kDebounce;
+      }
     }
+  }
+
+  void run() {
+    for (;;) {
+      std::vector<std::pair<std::string, std::pair<std::uint64_t, std::vector<std::string>>>> due;
+      int timeoutMs = -1;
+      {
+        std::lock_guard lock(mutex_);
+        if (stop_) return;
+        const auto now = Clock::now();
+        for (auto& [repoId, state] : repos_) {
+          if (!state.deadline) continue;
+          if (now >= *state.deadline) {
+            due.emplace_back(repoId,
+                             std::make_pair(++state.generation,
+                                            std::vector<std::string>(state.pending.begin(),
+                                                                     state.pending.end())));
+            state.pending.clear();
+            state.deadline.reset();
+            continue;
+          }
+          const auto remaining =
+              std::chrono::duration_cast<std::chrono::milliseconds>(*state.deadline - now);
+          const int ms = std::max(0, static_cast<int>(remaining.count()));
+          timeoutMs = timeoutMs < 0 ? ms : std::min(timeoutMs, ms);
+        }
+      }
+      // Callbacks reach the frame writer and must not run under the mutex.
+      for (const auto& [repoId, batch] : due) callback_(repoId, batch.first, batch.second);
+      if (!due.empty()) continue;
+
+      pollfd fds[2] = {{inotifyFd_, POLLIN, 0}, {wakeRead_, POLLIN, 0}};
+      const int ready = poll(fds, 2, timeoutMs);
+      if (fds[1].revents & POLLIN) return;  // stop requested
+      if (ready > 0 && (fds[0].revents & POLLIN)) {
+        std::lock_guard lock(mutex_);
+        drainLocked();
+      }
+    }
+  }
+
+  mutable std::mutex mutex_;
+  const int inotifyFd_;
+  const int wakeRead_;
+  const int wakeWrite_;
+  const WatchManager::Callback callback_;
+  std::map<int, WatchDir> watchDirs_;   // inotify wd -> owning repo + dir
+  std::map<std::string, RepoState> repos_;
+  bool stop_ = false;
+  std::thread thread_;
+};
+
 #else
-    (void)backend;
+
+// Platforms without inotify have no hub; every repo polls.
+class InotifyHub {
+ public:
+  static std::unique_ptr<InotifyHub> create(WatchManager::Callback) { return nullptr; }
+  bool add(const std::string&, const std::string&) { return false; }
+  void remove(const std::string&) {}
+  bool has(const std::string&) const { return false; }
+};
+
 #endif
+
+// A single repository's polling fallback: one thread running a periodic stat
+// sweep of the gitdir. Members are confined to that thread after
+// construction, except the stop flag.
+class RepoWatch {
+ public:
+  RepoWatch(std::string repoId, std::string gitdir, WatchManager::Callback callback)
+      : repoId_(std::move(repoId)), gitdir_(std::move(gitdir)), callback_(std::move(callback)) {
     thread_ = std::thread([this] { runPoll(); });
   }
 
@@ -104,19 +313,7 @@ class RepoWatch {
       stop_ = true;
     }
     stopCv_.notify_all();
-#ifdef __linux__
-    if (wakePipe_[1] >= 0) {
-      const char byte = 0;
-      const ssize_t written = write(wakePipe_[1], &byte, 1);
-      (void)written;
-    }
-#endif
     if (thread_.joinable()) thread_.join();
-#ifdef __linux__
-    if (inotifyFd_ >= 0) close(inotifyFd_);
-    if (wakePipe_[0] >= 0) close(wakePipe_[0]);
-    if (wakePipe_[1] >= 0) close(wakePipe_[1]);
-#endif
   }
 
   RepoWatch(const RepoWatch&) = delete;
@@ -128,90 +325,6 @@ class RepoWatch {
     const std::vector<std::string> changed(pending.begin(), pending.end());
     callback_(repoId_, ++generation_, changed);
   }
-
-#ifdef __linux__
-  void addDirWatch(const std::string& rel) {
-    const fs::path dir = rel.empty() ? fs::path(gitdir_) : fs::path(gitdir_) / rel;
-    const int wd = inotify_add_watch(
-        inotifyFd_, dir.c_str(),
-        IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE |
-            IN_ONLYDIR);
-    if (wd >= 0) watchDirs_[wd] = rel;
-  }
-
-  // Watches `rel` and every directory below it. New nested directories that
-  // appear later get their own watches from the IN_CREATE events.
-  void addDirTree(const std::string& rel) {
-    const fs::path root = fs::path(gitdir_) / rel;
-    std::error_code ec;
-    if (!fs::is_directory(root, ec)) return;
-    addDirWatch(rel);
-    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
-    const fs::recursive_directory_iterator end;
-    for (; !ec && it != end; it.increment(ec)) {
-      if (it->is_directory(ec)) {
-        addDirWatch(fs::relative(it->path(), gitdir_, ec).generic_string());
-      }
-    }
-  }
-
-  void drainInotify(std::set<std::string>& pending) {
-    for (;;) {
-      alignas(inotify_event) char buffer[4096];
-      const ssize_t length = read(inotifyFd_, buffer, sizeof(buffer));
-      if (length <= 0) return;  // EAGAIN: queue drained
-      for (const char* cursor = buffer; cursor < buffer + length;) {
-        const auto* event = reinterpret_cast<const inotify_event*>(cursor);
-        cursor += sizeof(inotify_event) + event->len;
-        if (event->mask & IN_IGNORED) {
-          watchDirs_.erase(event->wd);
-          continue;
-        }
-        const auto dirIt = watchDirs_.find(event->wd);
-        if (dirIt == watchDirs_.end()) continue;
-        const std::string name = event->len > 0 ? std::string(event->name) : std::string();
-        const std::string rel = joinRel(dirIt->second, name);
-        if ((event->mask & IN_ISDIR) && (event->mask & (IN_CREATE | IN_MOVED_TO)) &&
-            isRecursiveRoot(rel)) {
-          addDirTree(rel);
-        }
-        const std::string category = classify(rel);
-        if (!category.empty()) pending.insert(category);
-      }
-    }
-  }
-
-  void runInotify() {
-    addDirWatch("");
-    addDirTree("refs");
-    // A rebase or cherry-pick may already be in flight when the watch starts.
-    addDirTree("rebase-merge");
-    addDirTree("rebase-apply");
-
-    std::set<std::string> pending;
-    std::optional<Clock::time_point> deadline;
-    for (;;) {
-      int timeoutMs = -1;
-      if (deadline) {
-        const auto remaining =
-            std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - Clock::now());
-        timeoutMs = std::max(0, static_cast<int>(remaining.count()));
-      }
-      pollfd fds[2] = {{inotifyFd_, POLLIN, 0}, {wakePipe_[0], POLLIN, 0}};
-      const int ready = poll(fds, 2, timeoutMs);
-      if (fds[1].revents & POLLIN) return;  // stop requested
-      if (ready > 0 && (fds[0].revents & POLLIN)) {
-        drainInotify(pending);
-        if (!pending.empty() && !deadline) deadline = Clock::now() + kDebounce;
-      }
-      if (deadline && Clock::now() >= *deadline) {
-        emit(pending);
-        pending.clear();
-        deadline.reset();
-      }
-    }
-  }
-#endif
 
   // Snapshot of everything under the gitdir the protocol reports on:
   // path -> (mtime, size). Directories record size 0 so their appearance
@@ -277,14 +390,7 @@ class RepoWatch {
   const std::string gitdir_;
   const WatchManager::Callback callback_;
 
-  // Touched only by the watch thread.
-  std::uint64_t generation_ = 0;
-#ifdef __linux__
-  std::map<int, std::string> watchDirs_;  // inotify wd -> dir path relative to gitdir
-
-  int inotifyFd_ = -1;
-  int wakePipe_[2] = {-1, -1};
-#endif
+  std::uint64_t generation_ = 0;  // touched only by the watch thread
   std::mutex stopMutex_;
   std::condition_variable stopCv_;
   bool stop_ = false;
@@ -292,22 +398,53 @@ class RepoWatch {
 };
 
 WatchManager::WatchManager(Callback callback, Backend backend)
-    : callback_(std::move(callback)), backend_(backend) {}
+    : callback_(std::move(callback)), backend_(backend) {
+  if (backend_ == Backend::kPolling) return;
+  hub_ = InotifyHub::create(callback_);
+  if (!hub_) {
+    spdlog::warn(
+        "no inotify instance available (fs.inotify.max_user_instances reached); watching "
+        "falls back to a periodic stat sweep, which costs CPU and reports changes late");
+  }
+}
 
 WatchManager::~WatchManager() {
   std::lock_guard lock(mutex_);
-  watches_.clear();
+  polls_.clear();
+  hub_.reset();
 }
 
 void WatchManager::watch(const std::string& repoId, const std::string& gitdir) {
   std::lock_guard lock(mutex_);
-  if (watches_.find(repoId) != watches_.end()) return;
-  watches_[repoId] = std::make_unique<RepoWatch>(repoId, gitdir, callback_, backend_);
+  if (polls_.find(repoId) != polls_.end()) return;
+  if (hub_ && hub_->add(repoId, gitdir)) return;
+  if (hub_) {
+    spdlog::warn("inotify refused every watch for '{}'; falling back to a stat sweep", gitdir);
+  }
+  polls_[repoId] = std::make_unique<RepoWatch>(repoId, gitdir, callback_);
+}
+
+void WatchManager::unwatch(const std::string& repoId) {
+  std::unique_ptr<RepoWatch> stopping;  // joined outside the lock
+  {
+    std::lock_guard lock(mutex_);
+    if (hub_) hub_->remove(repoId);
+    if (const auto it = polls_.find(repoId); it != polls_.end()) {
+      stopping = std::move(it->second);
+      polls_.erase(it);
+    }
+  }
 }
 
 bool WatchManager::isWatching(const std::string& repoId) const {
   std::lock_guard lock(mutex_);
-  return watches_.find(repoId) != watches_.end();
+  if (polls_.find(repoId) != polls_.end()) return true;
+  return hub_ && hub_->has(repoId);
+}
+
+bool WatchManager::nativeBackendActive() const {
+  std::lock_guard lock(mutex_);
+  return hub_ != nullptr;
 }
 
 }  // namespace gg::watch

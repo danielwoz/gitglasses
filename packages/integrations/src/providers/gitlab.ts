@@ -28,7 +28,17 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { CachedIdentity, mergeByRole, p, ProviderClient } from './client.js';
+import {
+  AVATAR_TTL_MS,
+  CachedIdentity,
+  FANOUT_CONCURRENCY,
+  ISSUE_TTL_MS,
+  mapPooled,
+  mergeByRole,
+  p,
+  PR_ENRICHMENT_CAP,
+  ProviderClient,
+} from './client.js';
 
 export interface GitLabProviderOptions {
   /** Provider id used in RepoDescriptors. Default "gitlab". */
@@ -198,8 +208,11 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     ]);
     const reviewerIds = new Set(reviewing.map((mr) => mr.id));
     const mrs = mergeByRole(authored, reviewing, (mr) => mr.id, limit);
-    return Promise.all(
-      mrs.map((mr) => this.enrichAndMap(auth, mr, me, reviewerIds.has(mr.id)))
+    // Approvals cost one request per merge request, so only the first
+    // PR_ENRICHMENT_CAP results ask for them and no more than
+    // FANOUT_CONCURRENCY of those are in flight at once.
+    return mapPooled(mrs, FANOUT_CONCURRENCY, (mr, index) =>
+      this.enrichAndMap(auth, mr, me, reviewerIds.has(mr.id), index < PR_ENRICHMENT_CAP)
     );
   }
 
@@ -231,7 +244,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
       return undefined;
     }
     const me = await this.username(auth);
-    return this.enrichAndMap(auth, mr, me, false);
+    return this.enrichAndMap(auth, mr, me, false, true);
   }
 
   async getIssueOrPr(
@@ -243,9 +256,10 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const json = await this.client.getJson<Record<string, unknown>>(
+    const json = await this.client.getJsonCached<Record<string, unknown>>(
       auth,
-      p`/projects/${projectPath(repo)}/issues/${number}`
+      p`/projects/${projectPath(repo)}/issues/${number}`,
+      ISSUE_TTL_MS
     );
     if (json === undefined) {
       return undefined;
@@ -263,10 +277,12 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     };
   }
 
+  /** Avatar for a commit author email, reused for AVATAR_TTL_MS per email. */
   async getAvatarUrl(auth: AuthContext, email: string): Promise<string | undefined> {
-    const json = await this.client.getJson<{ avatar_url?: string }>(
+    const json = await this.client.getJsonCached<{ avatar_url?: string }>(
       auth,
-      p`/avatar?email=${email}`
+      p`/avatar?email=${email}`,
+      AVATAR_TTL_MS
     );
     return json?.avatar_url ?? undefined;
   }
@@ -375,16 +391,24 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     return { url: json.id !== undefined ? `${mrUrl}#note_${String(json.id)}` : mrUrl };
   }
 
+  /**
+   * Maps a merge request, asking for its approvals when `withApprovals` is
+   * set. Without them reviewDecision stays undefined rather than asserting a
+   * review state nothing was read for.
+   */
   private async enrichAndMap(
     auth: AuthContext,
     mr: GitLabMergeRequest,
     me: string,
-    fromReviewerQuery: boolean
+    fromReviewerQuery: boolean,
+    withApprovals: boolean
   ): Promise<PullRequest> {
-    const approvals = await this.client.getJson<GitLabApprovals>(
-      auth,
-      p`/projects/${mr.project_id}/merge_requests/${mr.iid}/approvals`
-    );
+    const approvals = withApprovals
+      ? await this.client.getJson<GitLabApprovals>(
+          auth,
+          p`/projects/${mr.project_id}/merge_requests/${mr.iid}/approvals`
+        )
+      : undefined;
     const approved =
       approvals !== undefined &&
       (approvals.approved === true || (approvals.approved_by?.length ?? 0) > 0);
@@ -414,7 +438,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
       repo: this.repoFromMr(mr),
       createdAt: mr.created_at,
       updatedAt: mr.updated_at,
-      reviewDecision: approved ? 'approved' : 'review_required',
+      reviewDecision: withApprovals ? (approved ? 'approved' : 'review_required') : undefined,
       checksStatus: mapChecksStatus(mr.head_pipeline?.status),
       mergeable: mapMergeable(mr),
       viewerRole,

@@ -9,6 +9,7 @@
 
 #include "cache/blame_cache.h"
 #include "cache/doc_overlay.h"
+#include "cache/graph_cache.h"
 #include "exec/cli_detect.h"
 #include "repo/registry.h"
 #include "rpc/dispatcher.h"
@@ -25,6 +26,7 @@ namespace gg::services {
 struct ServiceContext {
   repo::Registry registry;
   cache::BlameCache blameCache;
+  cache::GraphCache graphCache;
   cache::DocOverlay docOverlay;
   // Whether this process has a usable git CLI. Probed once per context (not
   // statically) so capability reporting, method guards and the blame backend
@@ -42,7 +44,9 @@ struct ServiceContext {
   // capability is reported as watch:false and watch requests are ignored.
   struct NullWatchManager {
     void watch(const std::string&, const std::string&) {}
+    void unwatch(const std::string&) {}
     bool isWatching(const std::string&) const { return false; }
+    bool nativeBackendActive() const { return false; }
   };
   NullWatchManager watchManager;
 #else

@@ -39,31 +39,52 @@ constexpr bool kWatchCapability = true;
 constexpr bool kThreadsCapability = true;
 #endif
 
+// Which mechanism actually backs repo/didChange: "none" when the build has no
+// watcher, "inotify" for the kernel watcher, "polling" for the degraded
+// periodic stat sweep. Notifications are delivered either way; polling costs
+// CPU per watched repo and reports changes up to one sweep interval late.
+const char* watchBackendName(const services::ServiceContext& context) {
+#ifdef GG_SINGLE_THREADED
+  (void)context;
+  return "none";
+#else
+  return context.watchManager.nativeBackendActive() ? "inotify" : "polling";
+#endif
+}
+
 }  // namespace
 
 void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& context,
                          std::atomic<bool>& shutdownRequested) {
-  dispatcher.method("initialize", [&context](const rpc::Json& params, const CancelToken&,
-                                             const rpc::NotifyFn&) -> rpc::Json {
-    const std::string clientProtocol = params.value("protocolVersion", "");
-    if (clientProtocol != kProtocolVersion) {
-      throw rpc::HandlerError{{ErrorCode::InvalidRequest,
-                               std::string("protocol version mismatch: engine speaks ") +
-                                   kProtocolVersion + ", client sent '" + clientProtocol + "'"}};
-    }
-    return {{"engineVersion", kEngineVersion},
-            {"protocolVersion", kProtocolVersion},
-            {"capabilities",
-             {{"gitCli", context.cliAvailable},
-              {"watch", kWatchCapability},
-              {"threads", kThreadsCapability}}}};
-  });
+  dispatcher.method(
+      "initialize",
+      [&context](const rpc::Json& params, const CancelToken&,
+                 const rpc::NotifyFn&) -> rpc::Json {
+        const std::string clientProtocol = params.value("protocolVersion", "");
+        if (clientProtocol != kProtocolVersion) {
+          throw rpc::HandlerError{
+              {ErrorCode::InvalidRequest,
+               std::string("protocol version mismatch: engine speaks ") + kProtocolVersion +
+                   ", client sent '" + clientProtocol + "'"}};
+        }
+        return {{"engineVersion", kEngineVersion},
+                {"protocolVersion", kProtocolVersion},
+                {"capabilities",
+                 {{"gitCli", context.cliAvailable},
+                  {"watch", kWatchCapability},
+                  {"watchBackend", watchBackendName(context)},
+                  {"threads", kThreadsCapability}}}};
+      },
+      rpc::Mode::Serial);
 
-  dispatcher.method("shutdown", [&shutdownRequested](const rpc::Json&, const CancelToken&,
-                                                     const rpc::NotifyFn&) -> rpc::Json {
-    shutdownRequested = true;
-    return rpc::Json::object();
-  });
+  dispatcher.method(
+      "shutdown",
+      [&shutdownRequested](const rpc::Json&, const CancelToken&,
+                           const rpc::NotifyFn&) -> rpc::Json {
+        shutdownRequested = true;
+        return rpc::Json::object();
+      },
+      rpc::Mode::Serial);
 
   services::registerRepoMethods(dispatcher, context);
   services::registerBlameMethods(dispatcher, context);
@@ -103,7 +124,14 @@ int runServer(std::istream& in, std::ostream& out) {
 
   while (!shutdownRequested) {
     auto payload = reader.read();
-    if (!payload) break;  // stdin closed: exit cleanly, never orphan
+    if (!payload) {
+      if (reader.failed()) {
+        spdlog::error("malformed frame; the stream cannot be resynchronized");
+        pool.shutdown();
+        return 1;
+      }
+      break;  // stdin closed: exit cleanly, never orphan
+    }
     dispatcher.dispatch(*payload);
   }
 

@@ -24,6 +24,7 @@ if(EMSCRIPTEN)
     src/exec/parsers/history_log.cpp
     src/exec/parsers/incremental_blame.cpp
     src/cache/blame_cache.cpp
+    src/cache/graph_cache.cpp
     src/rpc/framing.cpp
     src/rpc/dispatcher.cpp
     src/services/blame/blame_service.cpp
@@ -136,6 +137,7 @@ target_link_libraries(gg_exec
 
 add_library(gg_cache STATIC
   src/cache/blame_cache.cpp
+  src/cache/graph_cache.cpp
 )
 target_link_libraries(gg_cache PUBLIC gg_exec PRIVATE gg_warnings)
 

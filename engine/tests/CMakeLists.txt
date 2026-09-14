@@ -9,6 +9,7 @@ add_executable(engine_tests
   unit/incremental_blame_test.cpp
   unit/git_process_test.cpp
   unit/blame_service_test.cpp
+  unit/doc_overlay_test.cpp
   unit/blame_backend_parity_test.cpp
   unit/no_cli_session_test.cpp
   unit/history_log_parser_test.cpp

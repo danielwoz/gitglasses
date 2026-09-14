@@ -28,7 +28,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { p, ProviderClient } from './client.js';
+import { ISSUE_TTL_MS, p, ProviderClient } from './client.js';
 import { assertPlainHost, isGistRawOrigin, isSameOriginAs } from './shared.js';
 
 export interface GitHubProviderOptions {
@@ -265,17 +265,19 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const issue = await this.client.getJson<Record<string, unknown>>(
+    const issue = await this.client.getJsonCached<Record<string, unknown>>(
       auth,
-      p`/repos/${repo.owner}/${repo.name}/issues/${number}`
+      p`/repos/${repo.owner}/${repo.name}/issues/${number}`,
+      ISSUE_TTL_MS
     );
     if (issue === undefined) {
       return undefined;
     }
     if (issue.pull_request) {
-      const pull = await this.client.getJson<Record<string, unknown>>(
+      const pull = await this.client.getJsonCached<Record<string, unknown>>(
         auth,
-        p`/repos/${repo.owner}/${repo.name}/pulls/${number}`
+        p`/repos/${repo.owner}/${repo.name}/pulls/${number}`,
+        ISSUE_TTL_MS
       );
       return pull === undefined ? undefined : this.mapRestPullRequest(pull, repo);
     }

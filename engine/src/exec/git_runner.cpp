@@ -11,6 +11,7 @@ Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args,
   SpawnOpts spawnOpts;
   spawnOpts.extraEnv = opts.extraEnv;
   spawnOpts.rawOutput = opts.rawOutput;
+  spawnOpts.timeout = opts.timeout;
   auto process = GitProcess::spawn(cwd, std::move(args), spawnOpts);
   if (!process) return process.error();
 
@@ -24,6 +25,12 @@ Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args,
   RunStatus status;
   status.exitCode = process.value().wait(token);
   status.stderrText = process.value().stderrOutput();
+  // Output produced before the kill is truncated at an arbitrary point, so a
+  // timed-out run is an error rather than a short result.
+  if (process.value().timedOut()) {
+    return Error{ErrorCode::GitError,
+                 "git timed out after " + std::to_string(opts.timeout.count()) + "ms"};
+  }
   return status;
 }
 

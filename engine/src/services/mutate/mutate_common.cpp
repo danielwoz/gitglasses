@@ -62,8 +62,11 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
 }
 
 GitOutput runGitOrThrow(const core::Repo& repo, std::vector<std::string> args,
-                        const CancelToken& token, const std::string& what) {
-  auto output = runGit(repo, std::move(args), token);
+                        const CancelToken& token, const std::string& what,
+                        std::chrono::milliseconds timeout) {
+  exec::RunOpts opts;
+  opts.timeout = timeout;
+  auto output = collectLines(repoCwd(repo), std::move(args), opts, token);
   if (!output) throw rpc::HandlerError{{output.error()}};
   if (output.value().exitCode != 0) {
     throw rpc::HandlerError{{ErrorCode::GitError,

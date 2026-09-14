@@ -22,8 +22,14 @@ class FrameReader {
   // Returns the next payload, or nullopt on EOF / malformed stream.
   std::optional<std::string> read();
 
+  /** True when read() stopped on a protocol violation rather than end of input.
+   * The body of a refused frame is never consumed, so the stream is desynced
+   * and no further frame can be trusted. */
+  bool failed() const { return failed_; }
+
  private:
   std::istream& in_;
+  bool failed_ = false;
 };
 
 // Writes framed messages. Thread-safe: a single mutex serializes writers so

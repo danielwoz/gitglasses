@@ -62,6 +62,9 @@ export class FileAnnotationsController implements vscode.Disposable {
   private modes = new Map<string, AnnotationMode>();
   /** Controller-level switch (mode switching); per-document modes are kept. */
   private enabled = true;
+  /** Mode whose decorations are currently painted in each editor. An editor
+   *  absent from the map is of unknown state and gets a full clear. */
+  private appliedModes = new WeakMap<vscode.TextEditor, AnnotationMode>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
   private renderCounter = 0;
   private latestRender = new Map<string, number>();
@@ -189,16 +192,40 @@ export class FileAnnotationsController implements vscode.Disposable {
     // types are gone by then.
     if (this.disposed) return;
 
+    this.applyMode(editor, mode, fileBlame);
+  }
+
+  /** Clears only the decoration types the previous mode painted, then paints
+   *  the current one. Re-rendering the same mode overwrites its types in
+   *  place, so the steady state costs no clearing calls at all. */
+  private applyMode(
+    editor: vscode.TextEditor,
+    mode: AnnotationMode,
+    fileBlame: FileBlame,
+  ): void {
+    const previous = this.appliedModes.get(editor);
+    if (previous === undefined) this.clearDecorations(editor);
+    else if (previous !== mode) this.clearMode(editor, previous);
+    this.appliedModes.set(editor, mode);
+
     if (mode === 'blame') this.applyGutterBlame(editor, fileBlame);
     else if (mode === 'changes') this.applyChanges(editor, fileBlame);
     else this.applyHeatmap(editor, fileBlame);
   }
 
-  private applyChanges(editor: vscode.TextEditor, fileBlame: FileBlame): void {
-    editor.setDecorations(this.gutterHead, []);
-    editor.setDecorations(this.gutterTail, []);
-    for (const type of this.heatTypes) editor.setDecorations(type, []);
+  /** Empties the decoration types belonging to one mode. */
+  private clearMode(editor: vscode.TextEditor, mode: AnnotationMode): void {
+    if (mode === 'blame') {
+      editor.setDecorations(this.gutterHead, []);
+      editor.setDecorations(this.gutterTail, []);
+    } else if (mode === 'changes') {
+      editor.setDecorations(this.changedType, []);
+    } else if (mode === 'heatmap') {
+      for (const type of this.heatTypes) editor.setDecorations(type, []);
+    }
+  }
 
+  private applyChanges(editor: vscode.TextEditor, fileBlame: FileBlame): void {
     const lineCount = editor.document.lineCount;
     const ranges: vscode.Range[] = [];
     for (const { startLine, lineCount: runLines } of computeChangedRanges(fileBlame)) {
@@ -211,9 +238,6 @@ export class FileAnnotationsController implements vscode.Disposable {
   }
 
   private applyGutterBlame(editor: vscode.TextEditor, fileBlame: FileBlame): void {
-    for (const type of this.heatTypes) editor.setDecorations(type, []);
-    editor.setDecorations(this.changedType, []);
-
     const lineCount = editor.document.lineCount;
     const heads: vscode.DecorationOptions[] = [];
     const tails: vscode.DecorationOptions[] = [];
@@ -241,10 +265,6 @@ export class FileAnnotationsController implements vscode.Disposable {
   }
 
   private applyHeatmap(editor: vscode.TextEditor, fileBlame: FileBlame): void {
-    editor.setDecorations(this.gutterHead, []);
-    editor.setDecorations(this.gutterTail, []);
-    editor.setDecorations(this.changedType, []);
-
     const lineCount = editor.document.lineCount;
     const byBucket: vscode.Range[][] = this.heatTypes.map(() => []);
     for (const { startLine, lineCount: hunkLines, bucket } of computeHeatmapRanges(fileBlame)) {
@@ -261,6 +281,7 @@ export class FileAnnotationsController implements vscode.Disposable {
     editor.setDecorations(this.gutterTail, []);
     editor.setDecorations(this.changedType, []);
     for (const type of this.heatTypes) editor.setDecorations(type, []);
+    this.appliedModes.set(editor, 'off');
   }
 
   dispose(): void {

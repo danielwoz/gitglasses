@@ -2,6 +2,7 @@
 
 import { AuthError, ProviderError, RateLimitError } from '../errors.js';
 import type { HttpResponseLike } from '../http.js';
+import { readRateLimitSignals } from '../rateLimitHeaders.js';
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
@@ -38,38 +39,11 @@ export function base64Encode(input: string): string {
   return out;
 }
 
-function epochDate(value: string): Date | undefined {
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return undefined;
-  }
-  // Values above ~5000 AD in seconds are treated as millisecond timestamps.
-  return new Date(n > 1e11 ? n : n * 1000);
-}
-
 /** Rate-limit reset time from the common header spellings, when present. */
 export function rateLimitResetTime(response: HttpResponseLike): Date | undefined {
-  for (const header of ['x-ratelimit-reset', 'ratelimit-reset', 'x-ratelimit-requests-reset']) {
-    const value = response.headers.get(header);
-    if (value !== null) {
-      const date = epochDate(value);
-      if (date) {
-        return date;
-      }
-    }
-  }
-  const retryAfter = response.headers.get('retry-after');
-  if (retryAfter !== null) {
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds)) {
-      return new Date(Date.now() + seconds * 1000);
-    }
-    const dateMs = Date.parse(retryAfter);
-    if (!Number.isNaN(dateMs)) {
-      return new Date(dateMs);
-    }
-  }
-  return undefined;
+  const { resetAt, retryAfterUntil } = readRateLimitSignals(response.headers, Date.now());
+  const at = resetAt ?? retryAfterUntil;
+  return at === undefined ? undefined : new Date(at);
 }
 
 /**

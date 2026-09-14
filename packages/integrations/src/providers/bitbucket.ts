@@ -16,7 +16,16 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { CachedIdentity, mergeByRole, p, ProviderClient } from './client.js';
+import {
+  CachedIdentity,
+  FANOUT_CONCURRENCY,
+  ISSUE_TTL_MS,
+  mapPooled,
+  mergeByRole,
+  p,
+  PR_ENRICHMENT_CAP,
+  ProviderClient,
+} from './client.js';
 import { base64Encode, escapeBbqlString } from './shared.js';
 
 export interface BitbucketProviderOptions {
@@ -100,9 +109,6 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
   };
 }
 
-/** getMyPullRequests fetches per-PR statuses for at most this many results. */
-const CHECKS_STATUS_PR_CAP = 10;
-
 /**
  * Bitbucket Cloud hosting provider (api.bitbucket.org/2.0).
  *
@@ -115,8 +121,8 @@ const CHECKS_STATUS_PR_CAP = 10;
  * Without a repo context all results carry viewerRole "author".
  *
  * checksStatus comes from the per-PR `/statuses` endpoint at one extra
- * request per PR; to bound the fan-out only the first CHECKS_STATUS_PR_CAP
- * (10) results are enriched (first page of statuses only) and the rest stay
+ * request per PR; to bound the fan-out only the first PR_ENRICHMENT_CAP
+ * results are enriched (first page of statuses only) and the rest stay
  * "none". The Cloud API exposes no mergeability signal at all (hence no
  * "mergeability" capability flag).
  */
@@ -210,9 +216,10 @@ export class BitbucketProvider implements HostingProvider {
       return undefined;
     }
     const repoPath = p`/repositories/${repo.owner}/${repo.name}`;
-    const issue = await this.client.getJson<Record<string, unknown>>(
+    const issue = await this.client.getJsonCached<Record<string, unknown>>(
       auth,
-      p`${repoPath}/issues/${number}`
+      p`${repoPath}/issues/${number}`,
+      ISSUE_TTL_MS
     );
     if (issue !== undefined) {
       const assignee = issue.assignee as BitbucketAccount | null | undefined;
@@ -228,9 +235,10 @@ export class BitbucketProvider implements HostingProvider {
       };
     }
     // The issue tracker may be disabled for the repo; fall back to PRs.
-    const pr = await this.client.getJson<BitbucketPullRequest>(
+    const pr = await this.client.getJsonCached<BitbucketPullRequest>(
       auth,
-      p`${repoPath}/pullrequests/${number}`
+      p`${repoPath}/pullrequests/${number}`,
+      ISSUE_TTL_MS
     );
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
@@ -254,22 +262,20 @@ export class BitbucketProvider implements HostingProvider {
 
   /**
    * Fills checksStatus from the per-PR statuses endpoint (first page only)
-   * for at most the first CHECKS_STATUS_PR_CAP PRs; later PRs keep "none" to
-   * bound the request fan-out.
+   * for at most the first PR_ENRICHMENT_CAP PRs; later PRs keep "none" to
+   * bound the request fan-out, and at most FANOUT_CONCURRENCY are in flight.
    */
   private async withChecksStatus(auth: AuthContext, prs: PullRequest[]): Promise<PullRequest[]> {
-    return Promise.all(
-      prs.map(async (pr, index) => {
-        if (index >= CHECKS_STATUS_PR_CAP) {
-          return pr;
-        }
-        const json = await this.client.getJson<{ values?: BitbucketCommitStatus[] }>(
-          auth,
-          p`/repositories/${pr.repo.owner}/${pr.repo.name}/pullrequests/${pr.number}/statuses`
-        );
-        return { ...pr, checksStatus: deriveChecksStatus(json?.values ?? []) };
-      })
-    );
+    return mapPooled(prs, FANOUT_CONCURRENCY, async (pr, index) => {
+      if (index >= PR_ENRICHMENT_CAP) {
+        return pr;
+      }
+      const json = await this.client.getJson<{ values?: BitbucketCommitStatus[] }>(
+        auth,
+        p`/repositories/${pr.repo.owner}/${pr.repo.name}/pullrequests/${pr.number}/statuses`
+      );
+      return { ...pr, checksStatus: deriveChecksStatus(json?.values ?? []) };
+    });
   }
 
   private mapPullRequest(pr: BitbucketPullRequest, viewerRole: ViewerRole): PullRequest {

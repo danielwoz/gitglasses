@@ -23,6 +23,7 @@ namespace {
 using Json = nlohmann::json;
 using gg::testing::FixtureRepo;
 using gg::testing::initRequest;
+using gg::testing::InteractiveSession;
 using gg::testing::responseFor;
 using gg::testing::runSession;
 
@@ -124,20 +125,22 @@ TEST(Hardening, LooksLikeGitOptionIdentifiesLeadingDash) {
 
 TEST(Hardening, OptionLookingRemoteIsRejectedByFetch) {
   FixtureRepo fixture;
-  auto messages = runSession({
-      initRequest(),
-      {{"jsonrpc", "2.0"},
-       {"id", 2},
-       {"method", "repo/discover"},
-       {"params", {{"path", fixture.root().string()}}}},
-      {{"jsonrpc", "2.0"},
-       {"id", 3},
-       {"method", "mutate/fetch"},
-       {"params",
-        {{"repoId", "r1"}, {"remote", "--upload-pack=touch /tmp/gg_should_not_exist"}}}},
-  });
+  // mutate/fetch runs on the network lane, so it is sent only after the
+  // repo id it addresses exists.
+  InteractiveSession session;
+  session.request(initRequest());
+  session.request({{"jsonrpc", "2.0"},
+                   {"id", 2},
+                   {"method", "repo/discover"},
+                   {"params", {{"path", fixture.root().string()}}}});
 
-  const Json response = responseFor(messages, 3);
+  const Json response =
+      session.request({{"jsonrpc", "2.0"},
+                       {"id", 3},
+                       {"method", "mutate/fetch"},
+                       {"params",
+                        {{"repoId", "r1"},
+                         {"remote", "--upload-pack=touch /tmp/gg_should_not_exist"}}}});
   ASSERT_TRUE(response.contains("error")) << response.dump();
   EXPECT_EQ(response["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
 }

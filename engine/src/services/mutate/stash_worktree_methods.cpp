@@ -128,7 +128,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
             runGitOrThrow(repo, {"worktree", "list", "--porcelain"}, token, "git worktree list");
         return {{"worktrees", parseWorktreePorcelain(output.lines)}};
       },
-      rpc::Mode::Serial);
+      rpc::Mode::Concurrent);
 
   dispatcher.method(
       "worktree/add",

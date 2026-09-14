@@ -3,7 +3,7 @@
 // executes the context-menu mutation actions.
 
 import * as vscode from 'vscode';
-import { GraphRow } from '@gitglasses/protocol';
+import { CommitSummaryInfo, GraphRow } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
@@ -73,7 +73,9 @@ type WebviewToHostMessage =
 export class GraphWebviewHost implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private panelDisposables: vscode.Disposable[] = [];
-  private rowsBySha = new Map<string, GraphRow>();
+  /** Fields the openCommit action needs, keyed by sha. The webview keeps the
+   *  full rows, so lanes, edges, refs and dates are not retained here. */
+  private commitsBySha = new Map<string, CommitSummaryInfo>();
   private repoId: string | undefined;
   private refetchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -130,7 +132,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     for (const disposable of this.panelDisposables) disposable.dispose();
     this.panelDisposables = [];
     this.panel = undefined;
-    this.rowsBySha.clear();
+    this.commitsBySha.clear();
   }
 
   dispose(): void {
@@ -151,16 +153,8 @@ export class GraphWebviewHost implements vscode.Disposable {
         await this.fetchAndPost(message.cursor);
         break;
       case 'openCommit': {
-        const row = this.rowsBySha.get(message.sha);
-        if (row) {
-          await openCommitDoc({
-            sha: row.sha,
-            parents: row.parents,
-            author: row.author,
-            committer: row.author,
-            summary: row.summary,
-          });
-        }
+        const commit = this.commitsBySha.get(message.sha);
+        if (commit) await openCommitDoc(commit);
         break;
       }
       case 'copySha':
@@ -297,7 +291,15 @@ export class GraphWebviewHost implements vscode.Disposable {
         limit: PAGE_LIMIT,
         include: { stashes: true, wip: true },
       });
-      for (const row of result.rows) this.rowsBySha.set(row.sha, row);
+      for (const row of result.rows) {
+        this.commitsBySha.set(row.sha, {
+          sha: row.sha,
+          parents: row.parents,
+          author: row.author,
+          committer: row.author,
+          summary: row.summary,
+        });
+      }
       await this.post({ type: 'rows', rows: result.rows, nextCursor: result.nextCursor });
     } catch {
       // Engine unavailable or restarting; the next repo change refetches.
@@ -308,7 +310,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     if (this.refetchTimer !== undefined) clearTimeout(this.refetchTimer);
     this.refetchTimer = setTimeout(() => {
       this.refetchTimer = undefined;
-      this.rowsBySha.clear();
+      this.commitsBySha.clear();
       void this.post({ type: 'reset' }).then(() => this.fetchAndPost());
     }, REFRESH_DEBOUNCE_MS);
   }
