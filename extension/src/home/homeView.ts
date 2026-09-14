@@ -3,11 +3,11 @@ import type { PullRequest } from '@gitglasses/integrations';
 import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { RepositoryService } from '../model/repositoryService';
-import { ActiveRepo, ViewBase, ViewNode, firstWorkspaceRepo, messageNode } from '../views/viewBase';
+import { ActiveRepo, ViewBase, ViewNode, messageNode, withRepo } from '../views/viewBase';
 import { commitNode } from '../views/nodes';
 import type { LaunchpadService } from '../integrations/launchpadService';
 import { BUCKET_LABELS } from '../integrations/launchpadLogic';
-import { errorMessage, setStatus } from '../commands/ui';
+import { setStatus } from '../commands/ui';
 import { relativeTime } from '../system/dates';
 import { branchCardDescription, glimpsePrs, showGetStarted } from './homeLogic';
 
@@ -168,45 +168,33 @@ export function registerHomeCommands(
   view: HomeViewProvider,
   globalState: vscode.Memento,
 ): vscode.Disposable[] {
-  const withRepo = async (
-    action: (repo: ActiveRepo) => Promise<void>,
+  // The shared repo action, plus the card refresh every home action ends with.
+  const onRepo = (
     label: string,
-  ): Promise<void> => {
-    let repo: ActiveRepo | undefined;
-    try {
-      repo = await firstWorkspaceRepo(repos);
-    } catch {
-      repo = undefined;
-    }
-    if (!repo) {
-      void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
-      return;
-    }
-    try {
+    action: (repo: ActiveRepo) => Promise<void>,
+  ): Promise<void> =>
+    withRepo(repos, label, async (repo) => {
       await action(repo);
       view.refresh();
-    } catch (error) {
-      void vscode.window.showErrorMessage(`GitGlasses: ${label} failed: ${errorMessage(error)}`);
-    }
-  };
+    });
 
   return [
     vscode.commands.registerCommand('gitglasses.home.push', () =>
-      withRepo(async (repo) => {
+      onRepo('push', async (repo) => {
         const status = await engine.request('status/summary', { repoId: repo.repoId });
         const setUpstream = !status.upstream;
         await engine.request('mutate/push', { repoId: repo.repoId, setUpstream });
         setStatus(`Pushed '${status.branch}'${setUpstream ? ' (set upstream)' : ''}`);
-      }, 'push'),
+      }),
     ),
     vscode.commands.registerCommand('gitglasses.home.pull', () =>
-      withRepo(async (repo) => {
+      onRepo('pull', async (repo) => {
         await engine.request('mutate/pull', { repoId: repo.repoId, autoStash: true });
         setStatus('Pulled (auto-stash)');
-      }, 'pull'),
+      }),
     ),
     vscode.commands.registerCommand('gitglasses.home.switchBranch', () =>
-      withRepo(async (repo) => {
+      onRepo('switch branch', async (repo) => {
         const { branches } = await engine.request('refs/list', { repoId: repo.repoId });
         const candidates = branches.filter((branch) => !branch.current);
         if (candidates.length === 0) {
@@ -223,10 +211,10 @@ export function registerHomeCommands(
         if (!picked) return;
         await engine.request('mutate/switch', { repoId: repo.repoId, ref: picked.label });
         setStatus(`Switched to '${picked.label}'`);
-      }, 'switch branch'),
+      }),
     ),
     vscode.commands.registerCommand('gitglasses.home.createBranch', () =>
-      withRepo(async (repo) => {
+      onRepo('create branch', async (repo) => {
         const name = await vscode.window.showInputBox({
           prompt: 'Branch name',
           validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
@@ -238,7 +226,7 @@ export function registerHomeCommands(
           checkout: true,
         });
         setStatus(`Created branch '${name.trim()}'`);
-      }, 'create branch'),
+      }),
     ),
     vscode.commands.registerCommand('gitglasses.home.dismissGetStarted', async () => {
       await globalState.update(GET_STARTED_DISMISSED_KEY, true);

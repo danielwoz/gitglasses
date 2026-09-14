@@ -1,43 +1,19 @@
+// Native (node) activation entry. Owns the process transport and engine-path
+// resolution, the node document sync, the watch fallback, and the features that
+// need node APIs or a real filesystem: hunk staging, open-on-remote and
+// patches. Everything else is registered by createCore, which the web entry
+// shares — see src/core.ts.
+
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { EngineClient } from '@gitglasses/rpc';
-import { shortSha } from '@gitglasses/protocol/sha';
 import { createProcessTransportFactory, findEngineBinary } from '@gitglasses/rpc/node';
+import { createCore, createMethodNotSupportedNotifier, HISTORY_VIEWS } from './core';
+import { errorMessage } from './commands/ui';
 import { HeadChangeTracker } from './engine/capabilityGate';
 import { DocumentSync } from './engine/documentSync';
-import { BlameModel } from './model/blameModel';
 import { RepositoryService } from './model/repositoryService';
-import { LineBlameController } from './annotations/lineBlame';
-import { FileAnnotationsController } from './annotations/fileAnnotations';
-import { BlameHoverProvider } from './annotations/hoverProvider';
-import { BlameCodeLensProvider } from './codelens/blameCodeLens';
-import {
-  RevisionContentProvider,
-  encodeRevisionUri,
-} from './scm/revisionContentProvider';
-import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
-import { ViewBase, ViewNode, firstWorkspaceRepo } from './views/viewBase';
-import { CommitsViewProvider } from './views/commitsView';
-import {
-  BranchesViewProvider,
-  RemotesViewProvider,
-  StashesViewProvider,
-  TagsViewProvider,
-} from './views/refsViews';
-import { FileHistoryViewProvider } from './views/fileHistoryView';
-import { ContributorsViewProvider } from './views/contributorsView';
-import { SearchViewProvider } from './views/searchView';
-import { openCommitDiff } from './views/nodes';
-import { commitDescription } from './views/viewLogic';
-import { ShaTerminalLinkProvider } from './terminal/linkProvider';
-import { RepoGroupsManager } from './groups/repoGroups';
-import { registerGraphWebview } from './webviews/graphHost';
-import { registerRebaseWebview } from './webviews/rebaseHost';
-import { registerTimelineWebview } from './webviews/timelineHost';
-import { registerGitPalette } from './commands/gitPalette';
-import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
-import { AuthManager } from './integrations/auth';
-import { IntegrationService } from './integrations/integrationService';
+import { ViewNode, firstWorkspaceRepo, requireRepo } from './views/viewBase';
 import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
 import {
   describeHunk,
@@ -46,15 +22,7 @@ import {
   selectionLineRange,
   toHunkRange,
 } from './scm/hunkStaging';
-import { LaunchpadService } from './integrations/launchpadService';
-import { PrChipProvider } from './integrations/prChips';
-import { registerStartWork } from './integrations/startWork';
-import { registerLaunchpad } from './views/launchpadView';
-import { registerAiFeatures } from './ai/features';
-import { HomeViewProvider, registerHomeCommands } from './home/homeView';
-import { ModeController } from './modes/modeController';
 import { registerPatchCommands } from './patches/patchCommands';
-import { registerSuggestChange } from './reviews/suggestCommands';
 
 function resolveEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -77,10 +45,11 @@ function resolveEngineBinary(context: vscode.ExtensionContext): string | undefin
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('GitGlasses');
   context.subscriptions.push(output);
+  const log = (line: string): void => output.appendLine(line);
 
   const enginePath = resolveEngineBinary(context);
   if (!enginePath) {
-    output.appendLine('gitglasses-engine binary not found; GitGlasses is disabled');
+    log('gitglasses-engine binary not found; GitGlasses is disabled');
     void vscode.window.showWarningMessage(
       'GitGlasses: engine binary not found. Set "gitglasses.engine.path" or reinstall.',
     );
@@ -91,93 +60,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     .getConfiguration('gitglasses')
     .get<string>('engine.logLevel', 'warn');
 
-  // Same-message throttle: -32003 surfaces once even when a call site also
-  // reports the rejection through its own error path.
-  let lastUnsupported = { message: '', at: 0 };
-  const showMethodNotSupported = (message: string): void => {
-    const now = Date.now();
-    if (message === lastUnsupported.message && now - lastUnsupported.at < 3000) return;
-    lastUnsupported = { message, at: now };
-    void vscode.window.showWarningMessage(`GitGlasses: ${message}`);
-  };
+  const showMethodNotSupported = createMethodNotSupportedNotifier();
 
   const engine = new EngineClient(
-    createProcessTransportFactory({
-      enginePath,
-      logLevel,
-      onLog: (line) => output.appendLine(line),
-    }),
+    createProcessTransportFactory({ enginePath, logLevel, onLog: log }),
     {
-      onLog: (line) => output.appendLine(line),
-      onCrash: (error) => output.appendLine(`engine crashed: ${error.message}`),
+      onLog: log,
+      onCrash: (error) => log(`engine crashed: ${error.message}`),
       onMethodNotSupported: (_method, message) => showMethodNotSupported(message),
-      onRestarted: () => {
-        void repos.rediscoverAll().then(() => {
-          blame.invalidate();
-          docSync.resync();
-          lineBlame.refresh();
-          fileAnnotations.refresh();
-          codeLens.fire();
-          for (const view of Object.values(views)) view.refresh();
-        }).catch((error) => {
-          output.appendLine(`rediscoverAll failed: ${error}`);
-        });
-      },
+      onRestarted: () => core.handleEngineRestarted(),
     },
   );
   context.subscriptions.push({ dispose: () => engine.dispose() });
 
   const repos = new RepositoryService(engine);
-  const blame = new BlameModel(engine);
   const docSync = new DocumentSync(engine, repos);
-  const lineBlame = new LineBlameController(blame, repos);
-  const fileAnnotations = new FileAnnotationsController(blame, repos);
-  const codeLens = new BlameCodeLensProvider(blame, repos);
-  const revisionContent = new RevisionContentProvider(engine);
-  context.subscriptions.push(docSync, lineBlame, fileAnnotations, codeLens);
+  context.subscriptions.push(docSync);
 
-  const scm = vscode.scm.createSourceControl('gitglasses', 'GitGlasses');
-  scm.quickDiffProvider = new GitGlassesQuickDiffProvider(repos);
-  context.subscriptions.push(scm);
-
-  // Integrations: auth, hosting/issue providers, launchpad, PR enrichment.
-  const auth = new AuthManager(context.secrets);
-  const integrations = new IntegrationService(auth);
-  const launchpad = new LaunchpadService(integrations, context.globalState);
-  const prChips = new PrChipProvider(integrations);
-  context.subscriptions.push(auth, integrations);
-
-  // Sidebar views (activity bar container "gitglasses").
-  const searchView = new SearchViewProvider(engine, repos);
-  const worktreesView = new WorktreesViewProvider(engine, repos);
-  const branchesView = new BranchesViewProvider(engine, repos);
-  branchesView.setPrChipProvider(prChips);
-  const homeView = new HomeViewProvider(engine, repos, launchpad, context.globalState);
-  const views: Record<string, ViewBase> = {
-    'gitglasses.views.home': homeView,
-    'gitglasses.views.worktrees': worktreesView,
-    'gitglasses.views.commits': new CommitsViewProvider(engine, repos),
-    'gitglasses.views.branches': branchesView,
-    'gitglasses.views.remotes': new RemotesViewProvider(engine, repos),
-    'gitglasses.views.stashes': new StashesViewProvider(engine, repos),
-    'gitglasses.views.tags': new TagsViewProvider(engine, repos),
-    'gitglasses.views.fileHistory': new FileHistoryViewProvider(engine, repos),
-    'gitglasses.views.searchCompare': searchView,
-    'gitglasses.views.contributors': new ContributorsViewProvider(engine, repos),
-  };
-  for (const [viewId, provider] of Object.entries(views)) {
-    context.subscriptions.push(
-      provider,
-      vscode.window.registerTreeDataProvider(viewId, provider),
-    );
-  }
-  const refreshViews = (ids?: string[]): void => {
-    for (const [viewId, provider] of Object.entries(views)) {
-      if (!ids || ids.includes(viewId)) provider.refresh();
-    }
+  // The editor GitGlasses acts on: file-scheme documents only, since the node
+  // engine reads the working tree off disk.
+  const activeEditor = (): vscode.TextEditor | undefined => {
+    const editor = vscode.window.activeTextEditor;
+    return editor && editor.document.uri.scheme === 'file' ? editor : undefined;
   };
 
-  const repoGroups = new RepoGroupsManager(context, engine, repos);
+  const core = createCore(context, {
+    engine,
+    repos,
+    docSync,
+    log,
+    documentSelector: { scheme: 'file' },
+    activeEditor,
+  });
+  context.subscriptions.push(...core.disposables);
+  const { blame, fileAnnotations, integrations } = core;
 
   // Whether the file differs between the working tree and the index. Staged
   // hunk line numbers are only comparable to editor line numbers while this is
@@ -203,8 +119,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // the unstaged diff and unstaging reads the staged one, so each direction
   // offers the hunks that can actually move that way.
   const stageSelectedHunks = async (action: 'stage' | 'unstage'): Promise<void> => {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.uri.scheme !== 'file') {
+    const editor = activeEditor();
+    if (!editor) {
       void vscode.window.showInformationMessage('GitGlasses: open a file first.');
       return;
     }
@@ -279,10 +195,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       blame.invalidate();
       fileAnnotations.refresh();
-      refreshViews();
+      core.refreshViews();
     } catch (error) {
       void vscode.window.showWarningMessage(
-        `GitGlasses: could not ${action} hunks — ${error instanceof Error ? error.message : String(error)}`,
+        `GitGlasses: could not ${action} hunks — ${errorMessage(error)}`,
       );
     }
   };
@@ -332,8 +248,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // a line range. A detached or unborn HEAD has no branch the forge can serve,
   // so the commit sha is used instead.
   const openOnRemote = async (action: 'open' | 'copy'): Promise<void> => {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.uri.scheme !== 'file') {
+    const editor = activeEditor();
+    if (!editor) {
       void vscode.window.showInformationMessage('GitGlasses: open a file first.');
       return;
     }
@@ -371,35 +287,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   };
 
-  // The refresh work a HEAD move triggers, shared by the engine's
-  // repo/didChange push and the watch-fallback poller below.
-  const onHeadChanged = (repoId: string): void => {
-    refreshViews([
-      'gitglasses.views.commits',
-      'gitglasses.views.branches',
-      'gitglasses.views.remotes',
-      'gitglasses.views.tags',
-      'gitglasses.views.fileHistory',
-      'gitglasses.views.contributors',
-    ]);
-    blame.invalidate(repoId);
-    lineBlame.refresh();
-    fileAnnotations.refresh();
-    codeLens.fire();
-  };
-
-  // Capability gating: expose gitCli as a when-clause context so mutation
-  // commands grey out on engine builds without the git CLI. Unknown (before
-  // initialize) means "allow"; the engine's -32003 answer is the backstop.
-  const updateCapabilityContext = (): void => {
-    void vscode.commands.executeCommand(
-      'setContext',
-      'gitglasses.engineFullCapabilities',
-      engine.capabilities()?.gitCli !== false,
-    );
-  };
-  updateCapabilityContext();
-
   // Watch fallback: engines without filesystem watching never push
   // repo/didChange, so poll the active repo's HEAD while the window is
   // focused and synthesize the same invalidation on a change.
@@ -408,15 +295,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   const pollActiveRepoHead = async (): Promise<void> => {
     if (!vscode.window.state.focused) return;
-    const editor = vscode.window.activeTextEditor;
-    const located =
-      editor && editor.document.uri.scheme === 'file'
-        ? repos.locate(editor.document.uri)
-        : undefined;
+    const editor = activeEditor();
+    const located = editor && repos.locate(editor.document.uri);
     const repoId = located?.repoId ?? (await firstWorkspaceRepo(repos))?.repoId;
     if (!repoId) return;
     const { head } = await engine.request('repo/state', { repoId });
-    if (headTracker.update(repoId, head.oid)) onHeadChanged(repoId);
+    if (headTracker.update(repoId, head.oid)) core.onHeadChanged(repoId);
   };
   const updateWatchFallback = (): void => {
     const needsPolling = engine.capabilities()?.watch === false;
@@ -429,97 +313,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
   context.subscriptions.push(
-    engine.onDidChangeCapabilities(() => {
-      updateCapabilityContext();
-      updateWatchFallback();
-    }),
+    engine.onDidChangeCapabilities(() => updateWatchFallback()),
     { dispose: () => { if (pollTimer !== undefined) clearInterval(pollTimer); } },
   );
 
-  context.subscriptions.push(
-    vscode.window.registerTerminalLinkProvider(new ShaTerminalLinkProvider(engine, repos)),
-  );
-
-  // Ref/HEAD/stash changes invalidate the histories the views show.
+  // Engine-pushed repo state changes. A HEAD move invalidates both the
+  // histories the views show and the blame attribution, so it runs the shared
+  // HEAD refresh; a ref or index change needs only one of the two. The engine
+  // may not emit this notification yet; nothing here depends on it.
   context.subscriptions.push(
     engine.onNotification('repo/didChange', (params) => {
       if (!Array.isArray(params?.changed)) return;
-      if (params.changed.includes('HEAD') || params.changed.includes('refs')) {
-        refreshViews([
-          'gitglasses.views.commits',
-          'gitglasses.views.branches',
-          'gitglasses.views.remotes',
-          'gitglasses.views.tags',
-          'gitglasses.views.fileHistory',
-          'gitglasses.views.contributors',
-        ]);
+      if (params.changed.includes('HEAD')) {
+        core.onHeadChanged(params.repoId);
+      } else {
+        if (params.changed.includes('refs')) core.refreshViews(HISTORY_VIEWS);
+        if (params.changed.includes('index')) core.refreshAnnotations(params.repoId);
       }
-      if (params.changed.includes('stash')) refreshViews(['gitglasses.views.stashes']);
-    }),
-  );
-
-  // Blame caches keyed on version -1 (disk state) go stale on save/commit;
-  // saving is a cheap conservative invalidation point that complements the
-  // engine's repo/didChange pushes (harmless if both fire).
-  context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument((doc) => {
-      const located = repos.locate(doc.uri);
-      if (located) blame.invalidate(located.repoId);
-      lineBlame.refresh();
-      fileAnnotations.refresh();
-      codeLens.fire();
-    }),
-  );
-
-  // Engine-pushed repo state changes: HEAD moves and index changes rewrite
-  // blame attribution, so drop that repo's cache and re-render everything.
-  // The engine may not emit this notification yet; nothing here depends on it.
-  context.subscriptions.push(
-    engine.onNotification('repo/didChange', (params) => {
-      if (!Array.isArray(params?.changed)) return;
-      if (!params.changed.includes('HEAD') && !params.changed.includes('index')) return;
-      blame.invalidate(params.repoId);
-      lineBlame.refresh();
-      fileAnnotations.refresh();
-      codeLens.fire();
+      if (params.changed.includes('stash')) core.refreshViews(['gitglasses.views.stashes']);
     }),
   );
 
   context.subscriptions.push(
-    vscode.languages.registerHoverProvider(
-      { scheme: 'file' },
-      new BlameHoverProvider(blame, repos, (text, repoRoot) =>
-        integrations.autolinkText(text, repoRoot),
-      ),
-    ),
-    vscode.languages.registerCodeLensProvider({ scheme: 'file' }, codeLens),
-    vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
-    vscode.commands.registerCommand('gitglasses.diffWithHead', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.document.uri.scheme !== 'file') return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
-      if (!located) return;
-      const original = encodeRevisionUri(located.repoId, located.relativePath, 'HEAD');
-      await vscode.commands.executeCommand(
-        'vscode.diff',
-        original,
-        editor.document.uri,
-        `${located.relativePath} (HEAD ↔ Working Tree)`,
-      );
-    }),
-    vscode.commands.registerCommand('gitglasses.openFileAtRevision', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.document.uri.scheme !== 'file') return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
-      if (!located) return;
-      const rev = await vscode.window.showInputBox({
-        prompt: 'Revision (sha, branch, tag, HEAD~n…)',
-        value: 'HEAD',
-      });
-      if (!rev) return;
-      const uri = encodeRevisionUri(located.repoId, located.relativePath, rev);
-      await vscode.window.showTextDocument(uri, { preview: true });
-    }),
     vscode.commands.registerCommand('gitglasses.stageSelectedHunks', () =>
       stageSelectedHunks('stage'),
     ),
@@ -535,133 +350,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // the editor here would build the URL from a different repository's
       // remote in a multi-root workspace, and fail outright with no editor
       // open at all.
-      const repo = await firstWorkspaceRepo(repos);
-      if (!repo) {
-        void vscode.window.showInformationMessage('GitGlasses: no repository in this workspace.');
-        return;
-      }
+      const repo = await requireRepo(repos);
+      if (!repo) return;
       await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
     }),
-    vscode.commands.registerCommand('gitglasses.toggleLineBlame', () => lineBlame.toggle()),
-    vscode.commands.registerCommand('gitglasses.toggleFileBlame', () =>
-      fileAnnotations.toggle('blame'),
-    ),
-    vscode.commands.registerCommand('gitglasses.toggleChanges', () =>
-      fileAnnotations.toggle('changes'),
-    ),
-    vscode.commands.registerCommand('gitglasses.toggleHeatmap', () =>
-      fileAnnotations.toggle('heatmap'),
-    ),
-    vscode.commands.registerCommand('gitglasses.clearAnnotations', () => fileAnnotations.clear()),
-    vscode.commands.registerCommand('gitglasses.restartEngine', async () => {
-      await engine.restart();
-      await repos.rediscoverAll();
-      blame.invalidate();
-      docSync.resync();
-      lineBlame.refresh();
-      fileAnnotations.refresh();
-      codeLens.fire();
-      refreshViews();
-    }),
-    vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
-    vscode.commands.registerCommand('gitglasses.openWalkthrough', () =>
-      vscode.commands.executeCommand(
-        'workbench.action.openWalkthrough',
-        'gitglasses.gitglasses#gitglasses.getStarted',
-        false,
-      ),
-    ),
-    vscode.commands.registerCommand('gitglasses.loadMore', (loadMore: unknown) => {
-      if (typeof loadMore === 'function') (loadMore as () => void)();
-    }),
-    vscode.commands.registerCommand('gitglasses.copySha', async (node?: ViewNode) => {
-      if (typeof node?.sha !== 'string') return;
-      await vscode.env.clipboard.writeText(node.sha);
-      vscode.window.setStatusBarMessage(`Copied ${shortSha(node.sha)}`, 3000);
-    }),
-    vscode.commands.registerCommand('gitglasses.openCommitDiff', (node?: ViewNode) =>
-      openCommitDiff(node),
-    ),
-    vscode.commands.registerCommand('gitglasses.searchCommits', () => searchView.searchCommits()),
-    vscode.commands.registerCommand('gitglasses.showLineHistory', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.document.uri.scheme !== 'file') return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
-      if (!located) {
-        void vscode.window.showWarningMessage('GitGlasses: file is not in a git repository.');
-        return;
-      }
-      const selection = editor.selection;
-      let entries;
-      try {
-        ({ entries } = await engine.request('history/line', {
-          repoId: located.repoId,
-          path: located.relativePath,
-          startLine: selection.start.line + 1,
-          endLine: selection.end.line + 1,
-        }));
-      } catch {
-        void vscode.window.showWarningMessage('GitGlasses: line history failed; see output.');
-        return;
-      }
-      if (entries.length === 0) {
-        void vscode.window.showInformationMessage('GitGlasses: no history for the selected lines.');
-        return;
-      }
-      const picked = await vscode.window.showQuickPick(
-        entries.map((entry) => ({
-          label: entry.summary,
-          description: commitDescription(entry),
-          detail: `${entry.path}  +${entry.additions} −${entry.deletions}`,
-          entry,
-        })),
-        { placeHolder: `History of lines ${selection.start.line + 1}-${selection.end.line + 1}` },
-      );
-      if (!picked) return;
-      const uri = encodeRevisionUri(located.repoId, picked.entry.path, picked.entry.sha);
-      await vscode.window.showTextDocument(uri, { preview: true });
-    }),
-    vscode.commands.registerCommand('gitglasses.groups.create', () => repoGroups.create()),
-    vscode.commands.registerCommand('gitglasses.groups.open', () => repoGroups.open()),
-    vscode.commands.registerCommand('gitglasses.groups.delete', () => repoGroups.delete()),
-    vscode.commands.registerCommand('gitglasses.groups.export', () => repoGroups.export()),
-    vscode.commands.registerCommand('gitglasses.groups.import', () => repoGroups.import()),
-    vscode.commands.registerCommand('gitglasses.addIntegration', () =>
-      integrations.addIntegration(),
-    ),
-    vscode.commands.registerCommand('gitglasses.removeIntegration', () =>
-      integrations.removeIntegration(),
-    ),
-    vscode.commands.registerCommand('gitglasses.connectIntegration', () =>
-      integrations.connectIntegration(),
-    ),
-    vscode.commands.registerCommand('gitglasses.disconnectIntegration', () =>
-      integrations.disconnectIntegration(),
-    ),
-    ...registerHomeCommands(engine, repos, homeView, context.globalState),
-    new ModeController(lineBlame, fileAnnotations, codeLens),
-    registerStartWork(integrations, engine, repos),
-    ...registerLaunchpad(launchpad, integrations),
-    ...registerAiFeatures(context, engine, repos, searchView),
     ...registerPatchCommands(engine, repos, integrations),
-    registerSuggestChange(engine, repos, integrations),
-  );
-
-  const rebase = registerRebaseWebview(context, engine, repos);
-  context.subscriptions.push(
-    ...rebase.disposables,
-    ...registerGraphWebview(context, engine, repos, (upstream) => rebase.host.open(upstream)),
-    ...registerTimelineWebview(context, engine, repos),
-    registerGitPalette(engine, repos, (upstream) => rebase.host.open(upstream)),
-    ...registerWorktreeCommands(engine, repos, worktreesView),
   );
 
   try {
     await engine.start();
-    output.appendLine(`engine started: ${enginePath}`);
-    lineBlame.refresh();
+    log(`engine started: ${enginePath}`);
+    core.lineBlame.refresh();
   } catch (error) {
-    output.appendLine(`engine failed to start: ${String(error)}`);
+    log(`engine failed to start: ${String(error)}`);
     void vscode.window.showErrorMessage('GitGlasses: engine failed to start; see output.');
   }
 }

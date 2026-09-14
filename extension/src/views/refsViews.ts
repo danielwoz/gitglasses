@@ -8,23 +8,10 @@ import type { PrChipProvider } from '../integrations/prChips';
 const PR_CHIP_LIMIT = 50;
 
 export class BranchesViewProvider extends ViewBase {
-  // Own emitter (shadowing the base's private one) so PR-chip updates can
-  // refresh a single branch node instead of re-rendering the whole tree.
-  private readonly branchEmitter = new vscode.EventEmitter<ViewNode | undefined>();
-  override readonly onDidChangeTreeData = this.branchEmitter.event;
   private prChips: PrChipProvider | undefined;
 
   setPrChipProvider(prChips: PrChipProvider): void {
     this.prChips = prChips;
-  }
-
-  override refresh(): void {
-    this.branchEmitter.fire(undefined);
-  }
-
-  override dispose(): void {
-    this.branchEmitter.dispose();
-    super.dispose();
   }
 
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
@@ -60,7 +47,7 @@ export class BranchesViewProvider extends ViewBase {
         if (!suffix) return;
         const base = typeof node.item.description === 'string' ? node.item.description : '';
         node.item.description = base ? `${base} · ${suffix}` : suffix;
-        this.branchEmitter.fire(node);
+        this.fireNode(node);
       }),
     );
   }

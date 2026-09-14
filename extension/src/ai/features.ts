@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { CommitSummaryInfo, DiffHunk } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
-import { ActiveRepo, firstWorkspaceRepo, ViewNode } from '../views/viewBase';
+import { requireRepo, ViewNode } from '../views/viewBase';
+import { errorMessage, setStatus } from '../commands/ui';
 import { openCommitDoc } from '../views/nodes';
 import { shortSha } from '@gitglasses/protocol/sha';
 import {
@@ -32,10 +33,6 @@ const MAX_CONTEXT_FILES = 30;
 /** Cap per-file content pulled for commit explanation before budgeting. */
 const MAX_FILE_CONTENT_CHARS = 20_000;
 const NL_SEARCH_LIMIT = 100;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function isCancellation(error: unknown): boolean {
   const message = errorMessage(error).toLowerCase();
@@ -152,19 +149,6 @@ class AiService {
 }
 
 // --- Features ---------------------------------------------------------------
-
-async function requireRepo(repos: RepositoryService): Promise<ActiveRepo | undefined> {
-  let repo: ActiveRepo | undefined;
-  try {
-    repo = await firstWorkspaceRepo(repos);
-  } catch {
-    repo = undefined;
-  }
-  if (!repo) {
-    void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
-  }
-  return repo;
-}
 
 async function resolveCommit(
   engine: EngineClient,
@@ -409,7 +393,7 @@ async function generateCommitMessage(
         repoId: repo.repoId,
         message: edited,
       });
-      vscode.window.setStatusBarMessage(`GitGlasses: committed ${shortSha(sha)}`, 5000);
+      setStatus(`committed ${shortSha(sha)}`);
     } catch (error) {
       void vscode.window.showErrorMessage(`GitGlasses: commit failed: ${errorMessage(error)}`);
     }

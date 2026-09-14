@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { CommitSummaryInfo } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
+import { errorMessage } from '../commands/ui';
 import { DiffSpec } from './viewLogic';
 
 export interface ActiveRepo {
@@ -23,6 +24,38 @@ export async function firstWorkspaceRepo(
     if (located) return { repoId: located.repoId, rootPath: located.rootPath };
   }
   return undefined;
+}
+
+/** Resolves the workspace repo, reporting when there is none. */
+export async function requireRepo(
+  repos: RepositoryService,
+): Promise<ActiveRepo | undefined> {
+  let repo: ActiveRepo | undefined;
+  try {
+    repo = await firstWorkspaceRepo(repos);
+  } catch {
+    repo = undefined;
+  }
+  if (!repo) {
+    void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
+  }
+  return repo;
+}
+
+/** Runs `action` against the workspace repo, reporting a missing repo and
+ *  surfacing a failure as "<label> failed". */
+export async function withRepo(
+  repos: RepositoryService,
+  label: string,
+  action: (repo: ActiveRepo) => Promise<void>,
+): Promise<void> {
+  const repo = await requireRepo(repos);
+  if (!repo) return;
+  try {
+    await action(repo);
+  } catch (error) {
+    void vscode.window.showErrorMessage(`GitGlasses: ${label} failed: ${errorMessage(error)}`);
+  }
 }
 
 /** Tree element: a prebuilt item plus payload the command handlers read. */
@@ -70,6 +103,11 @@ export abstract class ViewBase implements vscode.TreeDataProvider<ViewNode>, vsc
   /** Re-render only (cached state kept) — used after appending a page. */
   protected fireChange(): void {
     this.emitter.fire(undefined);
+  }
+
+  /** Re-render a single node, leaving the rest of the tree in place. */
+  protected fireNode(node: ViewNode): void {
+    this.emitter.fire(node);
   }
 
   /** Overridden by views that cache fetched state. */

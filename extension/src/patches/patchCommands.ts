@@ -10,7 +10,7 @@ import { defaultFetch, supportsSnippets, type AuthContext } from '@gitglasses/in
 import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
 import type { IntegrationService } from '../integrations/integrationService';
-import { firstWorkspaceRepo, type ActiveRepo, type ViewNode } from '../views/viewBase';
+import { requireRepo, type ActiveRepo, type ViewNode } from '../views/viewBase';
 import { errorMessage, showConflictGuidance } from '../commands/ui';
 import {
   classifySnippetUrl,
@@ -230,11 +230,8 @@ async function createPatch(
   integrations: IntegrationService,
   node?: ViewNode,
 ): Promise<void> {
-  const repo = await firstWorkspaceRepo(repos);
-  if (!repo) {
-    void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
-    return;
-  }
+  const repo = await requireRepo(repos);
+  if (!repo) return;
 
   let picked: SourcePick | undefined;
   try {
@@ -328,11 +325,8 @@ async function applyPatch(
   repos: RepositoryService,
   integrations: IntegrationService,
 ): Promise<void> {
-  const repo = await firstWorkspaceRepo(repos);
-  if (!repo) {
-    void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
-    return;
-  }
+  const repo = await requireRepo(repos);
+  if (!repo) return;
 
   let text: string | undefined;
   try {
