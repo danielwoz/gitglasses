@@ -6,9 +6,11 @@ import {
   type BlameCommit,
   type BlameHunk,
   type CommitSummaryInfo,
+  type DiffHunk,
   type FileChange,
   type FileHistoryEntry,
   type GraphRow,
+  type HeadState,
   type PatchEnvelope,
   type RequestResult,
 } from '@gitglasses/protocol';
@@ -33,22 +35,54 @@ export function isoDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
-function changeLine(change: FileChange): string {
+interface ChangeLineOptions {
+  /** Render "(binary)" in place of counts git reports as +0 -0 for binaries. */
+  binary?: boolean;
+  /** Drop "(+0 -0)" where the source does not compute counts at all. */
+  omitZeroCounts?: boolean;
+}
+
+/**
+ * One changed file: status, path (with the pre-rename path when there is one)
+ * and line counts.
+ */
+function changeLine(change: FileChange, options: ChangeLineOptions = {}): string {
   const rename = change.origPath ? `${change.origPath} -> ` : '';
-  return `${change.status}  ${rename}${change.path} (+${change.additions} -${change.deletions})`;
+  const path = `${change.status}  ${rename}${change.path}`;
+  if (options.binary) return `${path} (binary)`;
+  if (options.omitZeroCounts && change.additions === 0 && change.deletions === 0) return path;
+  return `${path} (+${change.additions} -${change.deletions})`;
+}
+
+/** True when `contents` holds a NUL byte, the marker git treats as binary. */
+export function looksBinary(contents: string): boolean {
+  return contents.includes('\0');
+}
+
+/** Paths a unified diff reports as binary rather than as text hunks. */
+export function binaryPathsInPatch(patch: string): Set<string> {
+  const paths = new Set<string>();
+  for (const match of patch.matchAll(/^Binary files (?:a\/(.+?)|\/dev\/null) and (?:b\/(.+?)|\/dev\/null) differ$/gm)) {
+    const path = match[2] ?? match[1];
+    if (path) paths.add(path);
+  }
+  return paths;
 }
 
 // --- blame -------------------------------------------------------------------
 
 /**
  * One line per blame hunk: line range, sha, author, date, summary. With `line`
- * set, only the hunk covering that line is rendered.
+ * set, only the hunk covering that line is rendered. A binary file is labelled
+ * on the header line: git attributes the whole file to one "line", which reads
+ * as ordinary line authorship otherwise.
  */
 export function formatBlame(
   file: string,
   hunks: readonly BlameHunk[],
   commits: Record<string, BlameCommit>,
   line?: number,
+  binary = false,
 ): string {
   const selected =
     line === undefined
@@ -72,13 +106,17 @@ export function formatBlame(
     const summary = commit ? commit.summary : '';
     return `${range} ${shortSha(hunk.sha)} ${author} ${date} ${summary}`.trimEnd();
   });
-  return [`blame ${file}${line === undefined ? '' : `:${line}`}`, ...lines].join('\n');
+  const marker = binary ? ' (binary; the whole file is one hunk, not line authorship)' : '';
+  return [`blame ${file}${line === undefined ? '' : `:${line}`}${marker}`, ...lines].join('\n');
 }
 
 // --- commits / history -------------------------------------------------------
 
-export function formatCommits(commits: readonly CommitSummaryInfo[]): string {
-  if (commits.length === 0) return 'No matching commits';
+export function formatCommits(
+  commits: readonly CommitSummaryInfo[],
+  emptyMessage = 'No matching commits',
+): string {
+  if (commits.length === 0) return emptyMessage;
   return commits
     .map((c) => `${shortSha(c.sha)} ${c.author.name} ${isoDate(c.author.time)} ${c.summary}`)
     .join('\n');
@@ -94,10 +132,19 @@ export function formatHistory(file: string, entries: readonly FileHistoryEntry[]
   return [`history ${file}`, ...lines].join('\n');
 }
 
+export interface CommitShowOptions {
+  /** Paths whose change is binary, so +/- counts would read as "unchanged". */
+  binaryPaths?: ReadonlySet<string>;
+  /** Unified diff text appended below the file list. */
+  diff?: string;
+}
+
 export function formatCommitShow(
   commit: CommitSummaryInfo,
   files: readonly FileChange[],
+  options: CommitShowOptions = {},
 ): string {
+  const binaryPaths = options.binaryPaths ?? new Set<string>();
   const lines = [
     `commit ${commit.sha}`,
     `author: ${commit.author.name} <${commit.author.email}> ${isoDate(commit.author.time)}`,
@@ -105,9 +152,105 @@ export function formatCommitShow(
     `summary: ${commit.summary}`,
     '',
     `files (${files.length}):`,
-    ...files.map((f) => `  ${changeLine(f)}`),
+    ...files.map((f) => `  ${changeLine(f, { binary: binaryPaths.has(f.path) })}`),
   ];
+  if (options.diff !== undefined) {
+    lines.push('', 'diff:', options.diff.replace(/\n$/, ''));
+  }
   return lines.join('\n');
+}
+
+// --- working-tree diff -------------------------------------------------------
+
+export interface DiffFileEntry {
+  path: string;
+  /** FileChange status, or "?" for an untracked file. */
+  status: string;
+  origPath?: string;
+  hunks: readonly DiffHunk[];
+  /** Set when the file holds binary content, which produces no text hunks. */
+  binary?: boolean;
+}
+
+/** Added and removed line counts of a hunk list. */
+function hunkCounts(hunks: readonly DiffHunk[]): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) additions += 1;
+      else if (line.startsWith('-')) deletions += 1;
+    }
+  }
+  return { additions, deletions };
+}
+
+/**
+ * Uncommitted changes: a file header line per file followed by its unified
+ * hunks. Header lines start with a status letter and body lines with ' ', '+'
+ * or '-', so the two never collide.
+ *
+ * A file with no hunks is binary or a mode-only change; it is labelled rather
+ * than rendered as an empty diff.
+ */
+export function formatDiff(
+  scope: 'staged' | 'unstaged',
+  entries: readonly DiffFileEntry[],
+  file?: string,
+  totalChanged = entries.length,
+): string {
+  if (entries.length === 0) {
+    return file === undefined
+      ? `No ${scope} changes`
+      : `No ${scope} changes in ${file}`;
+  }
+  // The count of files left out belongs on the first line: a footer is the
+  // first thing a character limit drops.
+  const header =
+    entries.length < totalChanged
+      ? `diff ${scope} (showing ${entries.length} of ${totalChanged} changed files; pass "file" to diff one of them):`
+      : `diff ${scope} (${entries.length} file${entries.length === 1 ? '' : 's'}):`;
+  const lines = [header];
+  for (const entry of entries) {
+    const rename = entry.origPath ? `${entry.origPath} -> ` : '';
+    const counts = entry.binary
+      ? 'binary'
+      : entry.hunks.length === 0
+        ? 'no text diff; binary or mode change'
+        : (({ additions, deletions }) => `+${additions} -${deletions}`)(hunkCounts(entry.hunks));
+    lines.push(`${entry.status}  ${rename}${entry.path} (${counts})`);
+    for (const hunk of entry.hunks) {
+      lines.push(hunk.header, ...hunk.lines);
+    }
+  }
+  return lines.join('\n');
+}
+
+// --- refs --------------------------------------------------------------------
+
+/** Branches, remote-tracking branches and tags, one ref per line. */
+export function formatRefs(refs: RequestResult<'refs/list'>): string {
+  const lines: string[] = [];
+  if (refs.branches.length > 0) {
+    lines.push(`branches (${refs.branches.length}):`);
+    for (const branch of refs.branches) {
+      const current = branch.current ? ' (current)' : '';
+      const upstream = branch.upstream ? ` -> ${branch.upstream}` : '';
+      lines.push(`  ${branch.name} ${shortSha(branch.sha)}${current}${upstream}`);
+    }
+  }
+  for (const remote of refs.remotes) {
+    if (remote.branches.length === 0) continue;
+    lines.push(`remote ${remote.name} (${remote.branches.length}):`);
+    for (const branch of remote.branches) {
+      lines.push(`  ${remote.name}/${branch.name} ${shortSha(branch.sha)}`);
+    }
+  }
+  if (refs.tags.length > 0) {
+    lines.push(`tags (${refs.tags.length}):`);
+    for (const tag of refs.tags) lines.push(`  ${tag.name} ${shortSha(tag.sha)}`);
+  }
+  return lines.length === 0 ? 'No branches, remote branches or tags' : lines.join('\n');
 }
 
 // --- graph -------------------------------------------------------------------
@@ -138,13 +281,30 @@ export function formatGraph(rows: readonly GraphRow[]): string {
 
 // --- status ------------------------------------------------------------------
 
-export function formatStatus(status: RequestResult<'status/summary'>): string {
-  const lines: string[] = [];
+/**
+ * The branch field of `status/summary` is empty both on an unborn HEAD and on
+ * a detached one, which renders identically to a healthy repository. `head`
+ * names which of the two it is.
+ */
+export function formatBranchLine(
+  status: RequestResult<'status/summary'>,
+  head?: HeadState,
+): string {
+  if (head?.unborn) return 'branch: (no commits yet)';
+  if (head?.detached) return `branch: (detached at ${shortSha(head.oid)})`;
   const tracking =
     status.upstream === undefined
       ? ''
       : ` -> ${status.upstream} (ahead ${status.ahead}, behind ${status.behind})`;
-  lines.push(`branch: ${status.branch}${tracking}`);
+  return `branch: ${status.branch || head?.branch || '(unknown)'}${tracking}`;
+}
+
+export function formatStatus(
+  status: RequestResult<'status/summary'>,
+  head?: HeadState,
+): string {
+  const lines: string[] = [];
+  lines.push(formatBranchLine(status, head));
   if (
     status.staged.length === 0 &&
     status.unstaged.length === 0 &&
@@ -156,11 +316,11 @@ export function formatStatus(status: RequestResult<'status/summary'>): string {
   }
   if (status.staged.length > 0) {
     lines.push(`staged (${status.staged.length}):`);
-    lines.push(...status.staged.map((f) => `  ${changeLine(f)}`));
+    lines.push(...status.staged.map((f) => `  ${changeLine(f, { omitZeroCounts: true })}`));
   }
   if (status.unstaged.length > 0) {
     lines.push(`unstaged (${status.unstaged.length}):`);
-    lines.push(...status.unstaged.map((f) => `  ${changeLine(f)}`));
+    lines.push(...status.unstaged.map((f) => `  ${changeLine(f, { omitZeroCounts: true })}`));
   }
   if (status.untracked.length > 0) {
     lines.push(`untracked (${status.untracked.length}):`);
@@ -171,6 +331,84 @@ export function formatStatus(status: RequestResult<'status/summary'>): string {
     lines.push(...status.conflicted.map((p) => `  ${p}`));
   }
   return lines.join('\n');
+}
+
+// --- errors ------------------------------------------------------------------
+
+/** Trailing lines of git CLI usage text, which name no recoverable action. */
+const GIT_USAGE_NOISE = /^(Use '|'git <|usage: |\s*or: )/;
+
+/** The engine's shell-out framing: command name, exit code, "fatal:" prefix. */
+const GIT_PLUMBING_PREFIX = /^git [\w. -]+ failed \(\d+\): (fatal: |error: )?/;
+
+export interface EngineErrorContext {
+  /** repoPath as the caller spelled it, substituted for resolved paths. */
+  repoPath?: string;
+  /** Paths the caller never supplied and should not be told about. */
+  resolvedPaths?: readonly string[];
+}
+
+/** Engine message with usage noise, plumbing framing and unsupplied paths removed. */
+function cleanEngineMessage(message: string, context: EngineErrorContext): string {
+  let text = message
+    .split('\n')
+    .filter((line) => line.trim() !== '' && !GIT_USAGE_NOISE.test(line))
+    .join('\n')
+    .replace(GIT_PLUMBING_PREFIX, '');
+  if (context.repoPath) {
+    for (const resolved of context.resolvedPaths ?? []) {
+      if (resolved && resolved !== context.repoPath) {
+        text = text.split(resolved.replace(/\/+$/, '')).join(context.repoPath);
+      }
+    }
+  }
+  return text;
+}
+
+/** Message patterns an agent can act on, and the action each one implies. */
+const ENGINE_ERROR_CASES: { match: RegExp; explain: (m: RegExpExecArray, repoPath: string) => string }[] = [
+  {
+    match: /could not find repository at|failed to resolve path/,
+    explain: (_m, repoPath) =>
+      `no git repository at or above ${repoPath}; pass repoPath as a path inside a git working tree`,
+  },
+  {
+    match: /no such path '(.+?)' in (\S+)/,
+    explain: (m) =>
+      `${m[1]} is not tracked at ${m[2]}; call git_status for the working tree or git_commit_show for a commit's files`,
+  },
+  {
+    match: /the path '(.+?)' does not exist in the given tree/,
+    explain: (m) => `${m[1]} does not exist at that revision; call git_commit_show to list its files`,
+  },
+  {
+    match: /no such ref: HEAD|ambiguous argument 'HEAD'|revspec 'HEAD' not found|unborn/,
+    explain: (_m, repoPath) => emptyRepositoryMessage(repoPath),
+  },
+  {
+    match: /revspec '(.+?)' not found/,
+    explain: (m) =>
+      `no such revision "${m[1]}"; call git_refs for branches and tags or git_log_search for shas`,
+  },
+];
+
+/** What a caller is told when the repository has no commits. */
+export function emptyRepositoryMessage(repoPath: string): string {
+  return `${repoPath} is a git repository with no commits yet; blame, diff, log and patch need at least one commit`;
+}
+
+/**
+ * An engine failure restated as something the agent can act on. Unrecognised
+ * messages fall through cleaned but otherwise intact, so real detail survives.
+ */
+export function explainEngineError(message: string, context: EngineErrorContext = {}): string {
+  const cleaned = cleanEngineMessage(message, context);
+  const repoPath = context.repoPath ?? 'the repository';
+  for (const { match, explain } of ENGINE_ERROR_CASES) {
+    const found = match.exec(cleaned);
+    if (found) return explain(found, repoPath);
+  }
+  return cleaned;
 }
 
 // --- patches -----------------------------------------------------------------
