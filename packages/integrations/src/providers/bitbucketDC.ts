@@ -97,8 +97,8 @@ function mapAccount(user: DCUser | undefined): Account {
  * Bitbucket Data Center / Server hosting provider (REST API 1.0 style at
  * `{baseUrl}/rest/api/1.0`). Uses the dashboard endpoint to gather PRs the
  * user authors or reviews. The 1.0 API exposes no mergeability signal on PR
- * listings, so mergeable is always "unknown"; build status lives on a
- * separate API and is not fetched (checksStatus is left unset).
+ * listings, so mergeable is always "unknown"; build status lives on a separate
+ * API, so checksStatus stays unset.
  */
 export class BitbucketDCProvider implements HostingProvider {
   readonly id: string;

@@ -13,8 +13,9 @@ export type SleepFn = (ms: number) => Promise<void>;
 const defaultSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Burst size per host. Sized to absorb one launchpad refresh's fan-out — a
- * list call per role plus the capped per-result enrichment — without queueing.
+ * Burst size per host: requests admitted back-to-back before the refill rate
+ * takes over. Covers a launchpad refresh's list calls and the opening of its
+ * per-result enrichment.
  */
 export const DEFAULT_CAPACITY = 20;
 
@@ -27,9 +28,8 @@ export const DEFAULT_CAPACITY = 20;
 export const DEFAULT_REFILL_PER_SECOND = 10;
 
 /**
- * Longest wait acquire() admits before failing fast. A caller blocked past
- * this is blocked longer than any request it could have issued, and a VS Code
- * command waiting on it shows nothing while it waits.
+ * Longest wait acquire() admits before failing fast: twice the ceiling on the
+ * request it is waiting to issue.
  */
 export const MAX_ACQUIRE_WAIT_MS = 2 * DEFAULT_HTTP_TIMEOUT_MS;
 
@@ -69,15 +69,15 @@ function abortReason(signal: AbortSignal): Error {
   return error;
 }
 
+/** Backoff applied when a forge reports zero remaining but no reset time. */
+export const DEFAULT_EXHAUSTED_BACKOFF_MS = 60_000;
+
 /**
  * Per-host token bucket that also honors provider rate-limit response headers
  * (X-RateLimit-Remaining/Reset and Retry-After). When the reported remaining
  * quota drops below `lowRemainingRatio`, requests are spaced out so the quota
  * lasts until the reset time.
  */
-/** Backoff applied when a forge reports zero remaining but no reset time. */
-export const DEFAULT_EXHAUSTED_BACKOFF_MS = 60_000;
-
 export class RateLimiter {
   private readonly capacity: number;
   private readonly refillPerSecond: number;
@@ -168,8 +168,8 @@ export class RateLimiter {
     }
 
     if (remaining <= 0) {
-      // No reset header is the common case on forges that only send
-      // "remaining"; sailing through would spend the next window instantly.
+      // Forges that report only "remaining" leave the reset time out, so an
+      // exhausted window falls back to a fixed backoff.
       state.blockedUntil = Math.max(
         state.blockedUntil,
         resetAt ?? now + DEFAULT_EXHAUSTED_BACKOFF_MS

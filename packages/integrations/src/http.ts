@@ -29,20 +29,16 @@ export type FetchLike = (url: string, init?: HttpRequestInit) => Promise<HttpRes
 export const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 
 /**
- * Largest response body read before giving up.
- *
- * json()/text() buffer the whole body, so a hostile or malfunctioning forge
- * could otherwise exhaust memory. Provider payloads are pages of PRs and
+ * Largest response body accepted. Provider payloads are pages of PRs and
  * issues; 16 MiB is far above any legitimate one.
  */
 export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 /**
  * The runtime's global fetch, with a total timeout and a response size bound.
- *
- * Redirects keep the runtime default ('follow'), which strips Authorization on
- * a cross-origin hop — verified behaviour, and the reason a redirect is not an
- * exfiltration path here.
+ * A declared content-length over the bound fails the request before the body
+ * is read. Redirects keep the runtime default ('follow'), which strips
+ * Authorization on a cross-origin hop.
  */
 export const defaultFetch: FetchLike = async (url, init) => {
   const rawFetch = (globalThis as unknown as { fetch: typeof globalThis.fetch }).fetch;
@@ -75,7 +71,9 @@ export const defaultFetch: FetchLike = async (url, init) => {
 
 /**
  * Wraps a response so json()/text() refuse an oversized body even when no
- * content-length was declared (chunked responses omit it).
+ * content-length was declared (chunked responses omit it). The runtime has
+ * buffered the whole body by the time its length is known, so the bound
+ * governs what reaches the caller and what gets parsed as JSON.
  */
 function boundedResponse(response: HttpResponseLike): HttpResponseLike {
   let cached: string | undefined;

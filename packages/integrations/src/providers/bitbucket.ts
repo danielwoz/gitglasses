@@ -99,6 +99,8 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
   if (!account) {
     return { id: 'unknown', username: 'unknown' };
   }
+  // `nickname` is the Cloud API's current handle field and `username` its
+  // predecessor; an account carrying neither has only `display_name`.
   const username = account.nickname ?? account.username ?? account.display_name ?? 'unknown';
   return {
     id: account.uuid ?? account.account_id ?? username,
@@ -119,11 +121,10 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
  * reviewers.uuid = <own uuid> is then merged in with viewerRole "reviewer".
  * Without a repo context all results carry viewerRole "author".
  *
- * checksStatus comes from the per-PR `/statuses` endpoint at one extra
- * request per PR; the fan-out is bounded by FANOUT_CONCURRENCY
- * results are enriched (first page of statuses only) and the rest stay
- * "none". The Cloud API exposes no mergeability signal at all (hence no
- * "mergeability" capability flag).
+ * checksStatus comes from the per-PR `/statuses` endpoint (first page only):
+ * one extra request per result, at most FANOUT_CONCURRENCY in flight. The
+ * Cloud API exposes no mergeability signal at all (hence no "mergeability"
+ * capability flag).
  */
 export class BitbucketProvider implements HostingProvider {
   readonly id: string;
@@ -170,8 +171,6 @@ export class BitbucketProvider implements HostingProvider {
       auth,
       p`/pullrequests/${me}?state=OPEN&pagelen=${limit}`
     );
-    // The reviewer query is repo-scoped, so review requests are only visible
-    // when the caller supplies a repo context.
     const reviewing = opts?.repo ? await this.reviewRequestedPullRequests(auth, opts.repo) : [];
     const prs = mergeByRole(
       (json?.values ?? []).map((pr) => this.mapPullRequest(pr, 'author')),
@@ -187,8 +186,8 @@ export class BitbucketProvider implements HostingProvider {
     repo: RepoDescriptor,
     branch: string
   ): Promise<PullRequest | undefined> {
-    // Branch names come from the repository, so a name containing a quote
-    // would close the BBQL literal and rewrite the query's meaning.
+    // Branch names come from the repository, so a quote in one is escaped
+    // rather than closing the BBQL literal it sits in.
     const q = `source.branch.name = "${escapeBbqlString(branch)}" AND state = "OPEN"`;
     const json = await this.client.getJson<{ values?: BitbucketPullRequest[] }>(
       auth,

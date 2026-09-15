@@ -95,10 +95,14 @@ function mapMergeable(mergeStatus: string | undefined): Mergeability {
 }
 
 /**
- * Review decision from reviewer votes: any rejection or wait-for-author vote
- * wins as changes_requested; approved when every required reviewer (or every
- * reviewer, when none is marked required) has voted +5 or better; otherwise
- * review is still required. Group (container) reviewers are ignored.
+ * Review decision from reviewer votes. Azure DevOps scores each vote on a
+ * fixed scale: 10 approved, 5 approved with suggestions, 0 no vote yet,
+ * -5 waiting for the author, -10 rejected.
+ *
+ * Any negative vote wins as changes_requested; approved when every required
+ * reviewer (or every reviewer, when none is marked required) has voted 5 or
+ * better; otherwise review is still required. Group (container) reviewers are
+ * ignored.
  */
 function mapReviewDecision(reviewers: AdoReviewer[]): ReviewDecision | undefined {
   const people = reviewers.filter((r) => r.isContainer !== true);

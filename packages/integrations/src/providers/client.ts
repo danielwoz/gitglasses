@@ -9,9 +9,9 @@ import { assertSecureBaseUrl, hostOfUrl, throwForStatus, tokenFingerprint } from
 const USER_AGENT = 'gitglasses';
 
 /**
- * A request path whose interpolated values are percent-encoded. Only `p`
- * produces one, so a value cannot reach a URL without passing through the
- * encoder.
+ * A request path that has been through an encoder. ProviderClient's methods
+ * take one of these rather than a string, so the encoding step is part of
+ * building a path instead of something a call site can forget.
  */
 export class Path {
   constructor(readonly value: string) {}
@@ -72,8 +72,7 @@ const RESPONSE_CACHE_MAX_ENTRIES = 512;
 
 /**
  * Runs `fn` over `items` with at most `limit` calls in flight, preserving
- * result order. Unlike Promise.all the fan-out is bounded, so a page of
- * results cannot open a request per item at once.
+ * result order. The first rejection stops further work and is rethrown.
  */
 export async function mapPooled<T, R>(
   items: readonly T[],

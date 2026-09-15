@@ -116,9 +116,9 @@ export function isSameOriginAs(candidate: string, reference: string): boolean {
 }
 
 /**
- * The origin github.com serves raw gist content from. Gist file bodies name it
- * in raw_url, and it is a different host from the API, so same-origin alone
- * would reject a legitimate response.
+ * True for the origin github.com serves raw gist content from. A gist file's
+ * raw_url names this host rather than the API's, so callers vetting a raw_url
+ * accept it alongside their own origin.
  */
 export function isGistRawOrigin(candidate: string): boolean {
   try {
@@ -136,9 +136,9 @@ export function escapeBbqlString(value: string): string {
 
 /**
  * A bare hostname (no scheme, userinfo, path or whitespace), optionally with a
- * port. Config values reaching a base URL go through this: a value like
- * "api.example.com@attacker.example" reads as the real host but resolves
- * elsewhere, and would carry credentials there.
+ * port. Config values that end up in a credentialed base URL go through this:
+ * a value like "api.example.com@attacker.example" reads as the real host but
+ * resolves elsewhere.
  */
 export function assertPlainHost(value: string, what: string): string {
   if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(value)) {
@@ -163,15 +163,12 @@ export function assertSecureBaseUrl(baseUrl: string, what: string): string {
 }
 
 /**
- * A short non-reversible fingerprint of a token, for use as a cache key.
- *
- * Keying a cache on the raw token keeps the secret resident in a long-lived
- * instance field and puts it in any heap dump. Only equality matters here, so
- * a digest does the same job.
+ * A short non-reversible fingerprint of a token, so a long-lived cache keys
+ * its entries per account without holding the secret itself.
  */
 export function tokenFingerprint(token: string): string {
-  // FNV-1a, 32-bit: not cryptographic, and it does not need to be — it never
-  // leaves the process and only ever answers "is this the same token".
+  // FNV-1a, 32-bit: non-cryptographic, and only ever asked "is this the same
+  // token"; the digest never leaves the process.
   let hash = 0x811c9dc5;
   for (let i = 0; i < token.length; i++) {
     hash ^= token.charCodeAt(i);

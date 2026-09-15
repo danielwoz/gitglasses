@@ -92,6 +92,8 @@ export class ProcessTransport implements EngineTransport {
   kill(): void {
     const child = this.process;
     child?.stdin?.end(); // engine exits when stdin closes
+    // Backstop for an engine that does not; unref'd so the wait never holds
+    // the host process open.
     setTimeout(() => child?.kill('SIGKILL'), 2000).unref?.();
   }
 }

@@ -58,11 +58,8 @@ export function isPlainHostname(value: string): boolean {
 
 /**
  * The GitHub host this server talks to, from operator configuration only.
- *
- * A token and the host it is valid for are inseparable, and the token comes
- * from the environment — so the host must too. It was previously a tool
- * argument, which let a prompt-injected agent name any host and have the
- * user's PAT sent there in a single request.
+ * The host pairs with the token, so both come from the environment and
+ * neither is something a caller can name.
  */
 export function configuredGitHubHost(
   env: Record<string, string | undefined>,
@@ -79,14 +76,9 @@ export function configuredGitHubHost(
 
 /**
  * Directories this server may read, from GITGLASSES_ALLOWED_ROOTS
- * (path-separator delimited). An empty list means unrestricted.
- *
- * Tools take an absolute repoPath and repo/discover walks *upwards*, so
- * without a bound any path on the machine grants the repository containing
- * it — a prompt-injected agent could read commit messages and diffs out of
- * unrelated private repositories. Unrestricted stays the default so existing
- * setups keep working, but it is now a stated choice rather than an
- * unexamined one.
+ * (path-separator delimited). An empty list means unrestricted, which is the
+ * default: tools take an absolute repoPath and repo/discover walks *upwards*,
+ * so any path on the machine then grants the repository containing it.
  */
 export function parseAllowedRoots(raw: string | undefined): string[] {
   if (!raw?.trim()) return [];
@@ -101,9 +93,6 @@ export function parseAllowedRoots(raw: string | undefined): string[] {
  * `target` as an absolute path with every symlink resolved. When the path does
  * not exist, the deepest existing ancestor is resolved and the remaining
  * segments appended, so a symlinked parent directory is still followed.
- *
- * Containment compares canonical paths on both sides: a lexical comparison
- * accepts a symlink inside a root that points outside it.
  */
 export function canonicalPath(target: string): string {
   const resolved = path.resolve(target);
@@ -122,10 +111,9 @@ export function canonicalPath(target: string): string {
 }
 
 /**
- * True when `target` is one of `roots` or sits inside one.
- *
- * Both sides are canonicalised here: a symlink under an allowed root resolves
- * outside it, and a lexical comparison would admit it.
+ * True when `target` is one of `roots` or sits inside one. Both sides are
+ * canonicalised first, so a symlink that sits under a root but resolves
+ * outside it falls outside.
  */
 export function isWithinAllowedRoots(target: string, roots: readonly string[]): boolean {
   if (roots.length === 0) return true;
@@ -197,8 +185,8 @@ export interface ToolContext {
 export function createToolHandlers(context: ToolContext) {
   const { client } = context;
   const env = context.env ?? process.env;
-  // Bounded: keyed by resolved path, so an agent walking many paths would
-  // otherwise grow it without limit. Oldest entry is dropped on overflow.
+  // Discovered repositories, keyed by resolved path and capped at
+  // MAX_REPO_IDS entries; the oldest is dropped on overflow.
   const repos = new Map<string, Promise<RepoInfo>>();
   const MAX_REPO_IDS = 64;
 
@@ -352,9 +340,7 @@ export function createToolHandlers(context: ToolContext) {
     }): Promise<string> {
       const repo = await repoFor(args.repoPath);
       const streamId = randomUUID();
-      // Every other tool caps its result. Without a cap a large file streamed
-      // megabytes of text straight into the agent's context: a 200k-line file
-      // produced ~6.7MB and over 100MB of heap.
+      // Caps the hunks held in memory and returned to the caller.
       const limit = Math.min(args.limit ?? DEFAULT_BLAME_HUNKS, MAX_BLAME_HUNKS);
       const startLine = args.startLine ?? 1;
       // The engine streams hunks in blame order, not line order, so the lowest
@@ -366,8 +352,7 @@ export function createToolHandlers(context: ToolContext) {
         if (params.streamId !== streamId) return;
         for (const hunk of params.hunks) {
           const lastLine = hunk.resultLine + hunk.lineCount - 1;
-          // A single-line or paged request only needs the hunks it covers, so
-          // the filter runs here instead of after collecting the whole stream.
+          // A single-line or paged request only needs the hunks it covers.
           if (lastLine < startLine) continue;
           if (
             args.line !== undefined &&
@@ -586,8 +571,8 @@ export function createToolHandlers(context: ToolContext) {
           ? changed.slice(0, MAX_DIFF_FILES)
           : changed.filter((f) => f.path === args.file);
       const limit = resultChars(args.maxChars);
-      // Files are fetched in batches until the character budget is spent, so a
-      // repository with many large diffs is not read in full to render 20k of it.
+      // Files are fetched in batches until the character budget is spent, so
+      // only as many diffs as the result can hold are read.
       const entries: DiffFileEntry[] = [];
       let budget = limit;
       for (let start = 0; start < selected.length && budget > 0; start += DIFF_FETCH_BATCH) {
@@ -680,10 +665,8 @@ export function createToolHandlers(context: ToolContext) {
           throw new ToolError(`envelopeJson is not create_patch output: ${message}`);
         }
       }
-      // The envelope is agent-supplied and was forwarded to the engine after a
-      // single format check. The engine rejects a malformed one, but a local
-      // schema check names the offending field instead of surfacing a round
-      // trip's -32602.
+      // The engine rejects a malformed envelope too; checking it here names
+      // the offending field instead of surfacing a round trip's -32602.
       const envelopeError = patchEnvelopeError(envelope);
       if (envelopeError) {
         throw new ToolError(`envelopeJson is not a valid patch envelope: ${envelopeError}`);
@@ -697,8 +680,8 @@ export function createToolHandlers(context: ToolContext) {
       ].join('\n');
     },
 
-    // Takes no arguments: the provider is GitHub and the host comes from the
-    // environment, so there is nothing for a caller to choose.
+    // Takes no arguments: the provider is GitHub, and the token and host both
+    // come from the environment (see configuredGitHubHost).
     async list_my_prs(_args?: Record<string, never>): Promise<string> {
       const token = env.GITHUB_TOKEN ?? env.GITGLASSES_GITHUB_TOKEN;
       if (!token) {
@@ -706,7 +689,6 @@ export function createToolHandlers(context: ToolContext) {
           'No GitHub token; set GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN in the server environment',
         );
       }
-      // Deliberately not from args: see configuredGitHubHost.
       const host = configuredGitHubHost(env);
       const provider: HostingProvider = host
         ? createGitHubEnterpriseProvider(host, context.fetchFn)

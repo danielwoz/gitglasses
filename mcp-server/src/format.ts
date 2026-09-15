@@ -74,8 +74,7 @@ export function binaryPathsInPatch(patch: string): Set<string> {
 /**
  * One line per blame hunk: line range, sha, author, date, summary. With `line`
  * set, only the hunk covering that line is rendered. A binary file is labelled
- * on the header line: git attributes the whole file to one "line", which reads
- * as ordinary line authorship otherwise.
+ * on the header line, where git attributes the whole file to a single "line".
  */
 export function formatBlame(
   file: string,

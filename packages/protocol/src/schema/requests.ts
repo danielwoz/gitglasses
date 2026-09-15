@@ -20,12 +20,13 @@ import {
   strict,
 } from './models.js';
 
-/** `Record<string, never>` on the TS side: an object with no members. */
+/** An object with no members. `Static<>` of it is `{}`, so ../index.ts
+ *  publishes these payloads as its own `Record<string, never>`. */
 export const EmptyObject = Type.Object({}, strict);
 
 const StageAction = Type.Union([Type.Literal('stage'), Type.Literal('unstage')]);
 
-/** Page size shared by the paged reads; absent means DEFAULT_LIMIT. */
+/** Page size the engine serves when a paged read omits `limit`. */
 export const DEFAULT_LIMIT = 100;
 
 /** Largest page the engine will serve; larger requests are rejected. */
@@ -47,7 +48,9 @@ const Limit = Type.Optional(
   }),
 );
 
-/** Opaque continuation token from the previous page's `nextCursor`. */
+/** Continuation token, copied verbatim from the previous page's `nextCursor`.
+ *  The encoding is the engine's and differs per method, so clients neither
+ *  parse it nor construct one. */
 const Cursor = Type.Optional(Type.String({ minLength: 1 }));
 
 // Values the engine hands to git as positional arguments. git parses anything
@@ -203,6 +206,7 @@ export const RequestSchemas = {
     result: Type.Object(
       {
         entries: Type.Array(FileHistoryEntry),
+        /** Present only while more entries remain. */
         nextCursor: Type.Optional(Type.String()),
       },
       strict,
@@ -392,6 +396,7 @@ export const RequestSchemas = {
     result: Type.Object(
       {
         rows: Type.Array(GraphRow),
+        /** Present only while more rows remain. */
         nextCursor: Type.Optional(Type.String()),
         refsFingerprint: Type.Integer({
           minimum: 0,

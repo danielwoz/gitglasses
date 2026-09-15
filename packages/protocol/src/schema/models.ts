@@ -22,7 +22,9 @@ const Line = Type.Integer({ minimum: 1 });
 /** Lane column in the graph layout, counted from 0 at the left. */
 const Lane = Type.Integer({ minimum: 0 });
 
-/** Seconds since the Unix epoch. */
+/** Seconds since the Unix epoch, in UTC. Git's signatures also carry the
+ *  author's local zone offset; the protocol drops it, so a date rendered from
+ *  this is the UTC one, not the one the author saw. */
 const UnixTime = Type.Integer();
 
 export const RepoInfo = Type.Object(
@@ -102,6 +104,8 @@ export const BlameHunk = Type.Object(
     sha: Sha,
     /** 1-based first line in the blamed file version. */
     resultLine: Line,
+    /** 1-based first line of the same hunk in `path` as it stands in commit
+     *  `sha`, which is where these lines were written. */
     originalLine: Line,
     lineCount: Type.Integer({ minimum: 1 }),
     /** Path in the blamed commit (differs across renames). */

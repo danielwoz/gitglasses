@@ -21,8 +21,8 @@ export interface EnginePathOptions {
 }
 
 /**
- * Executable name for this platform. Windows needs the .exe suffix or none of
- * the candidate paths match and the server reports no engine at all.
+ * Executable name for this platform: the candidate paths below are probed
+ * with it, and on Windows it carries the .exe suffix.
  */
 export function engineBinaryName(platform: string = process.platform): string {
   return platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';

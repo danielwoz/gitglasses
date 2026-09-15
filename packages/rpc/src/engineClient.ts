@@ -49,8 +49,8 @@ export interface EngineClientOptions {
   /** Called after a respawned engine finished its initialize handshake. */
   onRestarted?: () => void;
   /** Called when the engine answers a request with MethodNotSupported
-   *  (-32003); receives the engine's message verbatim so the UI can surface
-   *  it even where call sites would otherwise swallow the rejection. */
+   *  (-32003); receives the engine's message verbatim, so the UI can surface
+   *  it even where the call site swallows the rejection. */
   onMethodNotSupported?: (method: string, message: string) => void;
   /** Per-request ceiling; defaults to DEFAULT_REQUEST_TIMEOUT_MS. */
   requestTimeoutMs?: number;
@@ -147,8 +147,8 @@ export class EngineClient {
         );
       }
     } catch (error) {
-      // A failed handshake must not leave the process running with nothing
-      // driving it, nor cache the rejected promise so every later call fails.
+      // A failed handshake tears the process down and clears the cached
+      // promise, so a later start() spawns a fresh engine and tries again.
       this.transportAlive = false;
       try {
         this.transport?.kill();
@@ -207,7 +207,7 @@ export class EngineClient {
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
     // The token outlives the request (an editor's token can back many calls),
-    // so the listener must go or it accumulates for the token's lifetime.
+    // so its listener is disposed with the request it belonged to.
     pending.cancelSub?.dispose();
     if (message.error) {
       if (message.error.code === ErrorCodes.MethodNotSupported) {
@@ -241,9 +241,8 @@ export class EngineClient {
     const generation = this.generation;
 
     return new Promise<RequestResult<M>>((resolve, reject) => {
-      // An engine that wedges without exiting would otherwise leave the call
-      // pending forever and grow this.pending without bound: the other
-      // rejection paths are transport exit, cancellation and dispose().
+      // The rejection path for an engine that wedges without ever exiting;
+      // the others are transport exit, cancellation and dispose().
       const timer = setTimeout(() => {
         const entry = this.pending.get(id);
         if (!entry) return;
@@ -253,6 +252,8 @@ export class EngineClient {
           new Error(`engine request '${method}' timed out after ${this.requestTimeoutMs}ms`),
         );
       }, this.requestTimeoutMs);
+      // Unref'd so a pending deadline never holds the host process alive; the
+      // optional call covers runtimes whose setTimeout returns a plain number.
       (timer as { unref?: () => void }).unref?.();
 
       this.pending.set(id, {

@@ -1,7 +1,9 @@
 // Wire protocol between the VS Code extension and gitglasses-engine.
 // Schema-first: the TypeBox schemas in src/schema are the source of truth;
-// the types below derive from them via Static<>, and protocol.schema.json
-// (validated against the real engine by engine/tests) is emitted from them.
+// the types below derive from them via Static<>, and protocol.schema.json is
+// emitted from them. engine/tests drives a live engine through the read
+// methods against that artifact, checking both its responses and its
+// rejection of params the schemas forbid.
 
 import type { Static } from '@sinclair/typebox';
 
@@ -14,8 +16,7 @@ import { RequestSchemas } from './schema/requests.js';
 
 export { PROTOCOL_VERSION } from './version.js';
 
-// The TypeBox schemas themselves, so consumers can validate at runtime rather
-// than only borrow the static types.
+// The TypeBox schemas themselves, so consumers can validate at runtime.
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
 
@@ -23,8 +24,7 @@ export { patchEnvelopeError, schemaError } from './validate.js';
 export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
 
 // --- JSON-RPC envelope ------------------------------------------------------
-// Hand-written: the envelope is JSON-RPC boilerplate with open `unknown`
-// payloads, which per-method schemas would only obscure.
+// Hand-written: JSON-RPC boilerplate carrying open `unknown` payloads.
 
 export interface RpcRequest {
   jsonrpc: '2.0';
@@ -87,9 +87,8 @@ export type SequencerState = Static<typeof models.SequencerState>;
 type Method = keyof typeof RequestSchemas;
 type P<M extends Method> = Static<(typeof RequestSchemas)[M]['params']>;
 type R<M extends Method> = Static<(typeof RequestSchemas)[M]['result']>;
-// Hand-written where TypeBox's Static<> is weaker than the published type:
-// empty payloads stay `Record<string, never>` (Static of an empty Type.Object
-// is `{}`, which would silently accept any object).
+// Hand-written: `Static<>` of an empty `Type.Object` is `{}`, which accepts
+// any object, so empty payloads carry this type instead.
 type Empty = Record<string, never>;
 
 /** Typed engine capability flags (open bag: engines may add more). */
@@ -101,7 +100,7 @@ export interface EngineCapabilities {
 }
 
 // Per-method prose lives with the schemas in src/schema/requests.ts, so it
-// reaches protocol.schema.json instead of being stripped at the type boundary.
+// reaches protocol.schema.json.
 export interface Requests {
   initialize: {
     params: P<'initialize'>;

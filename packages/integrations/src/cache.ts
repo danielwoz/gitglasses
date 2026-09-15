@@ -50,8 +50,7 @@ export class TtlCache<T> {
 
   /**
    * Drops `key`, including any fetch in flight for it, so the next read starts
-   * a new one. A forced refresh that left the in-flight entry in place would
-   * hand the caller back the very value it is refreshing away from.
+   * a new one and a forced refresh sees fresh data.
    */
   delete(key: string): void {
     this.entries.delete(key);

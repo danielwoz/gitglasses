@@ -67,9 +67,9 @@ export class JiraProvider implements IssueProvider {
 
   constructor(options: JiraProviderOptions = {}) {
     this.id = options.id ?? 'jira';
-    // `site` is documented as a bare site name and is interpolated into the
-    // base URL, so a value like "evil.example/x" would redirect credentialed
-    // requests. baseUrl stays free-form for self-hosted instances.
+    // `site` is interpolated into the base URL that carries the credential, so
+    // it is held to a bare site name. baseUrl stays free-form for self-hosted
+    // instances.
     const site = options.site ? assertPlainHost(options.site, 'Jira site') : undefined;
     const baseUrl = options.baseUrl ?? (site ? `https://${site}.atlassian.net` : undefined);
     if (!baseUrl) {

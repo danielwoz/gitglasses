@@ -391,8 +391,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
 
   /**
    * Maps a merge request, asking for its approvals when `withApprovals` is
-   * set. Without them reviewDecision stays undefined rather than asserting a
-   * review state nothing was read for.
+   * set. Without them reviewDecision stays undefined.
    */
   private async enrichAndMap(
     auth: AuthContext,

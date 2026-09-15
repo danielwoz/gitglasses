@@ -200,8 +200,7 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
   constructor(options: GitHubProviderOptions = {}) {
     this.id = options.id ?? 'github';
     // The host reaches a base URL that carries the token, so it must be a bare
-    // hostname. parseRemoteUrl lowercases the host it returns, so a configured
-    // host with any capitalization would match no remote at all, silently.
+    // hostname. It is lowercased to match the hosts parseRemoteUrl returns.
     this.host = (
       options.host === undefined ? 'github.com' : assertPlainHost(options.host, 'GitHub host')
     ).toLowerCase();
@@ -316,11 +315,8 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
       throw new ProviderError(`Gist ${id} has no files`);
     }
     if (file.truncated && file.raw_url) {
-      // raw_url comes from the response body, so it is not ours to trust. The
-      // runtime strips Authorization across a redirect, but this is a fresh
-      // request and would carry the token wherever the body pointed. Gist raw
-      // content is public, so it is fetched without credentials, and only from
-      // an origin we already talk to.
+      // Gist raw content is public: fetched uncredentialed, and only from the
+      // API origin or gist.githubusercontent.com.
       if (!isSameOriginAs(file.raw_url, this.client.baseUrl) && !isGistRawOrigin(file.raw_url)) {
         throw new ProviderError(`Gist ${id} points its content at an unexpected host`);
       }
@@ -332,9 +328,8 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
   /**
    * Posts a diff-anchored review comment with a ```suggestion block via
    * REST POST /repos/{o}/{r}/pulls/{n}/comments (line/start_line, side RIGHT).
-   * REST is chosen over the GraphQL addPullRequestReviewThread flow because a
-   * single call yields an immediately visible comment — no pending review to
-   * create and submit. A 422 means the lines are not part of the PR head diff.
+   * One call, and the comment is visible immediately: there is no pending
+   * review to submit. A 422 means the lines are not part of the PR head diff.
    */
   async createReviewSuggestion(
     auth: AuthContext,
