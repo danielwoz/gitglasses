@@ -36,6 +36,8 @@ describe.skipIf(!enginePath)('engine integration', () => {
     git(repoDir, 'init', '-b', 'main');
     git(repoDir, 'config', 'user.name', 'Test Author');
     git(repoDir, 'config', 'user.email', 'test@example.com');
+    // Windows checks out CRLF by default, which these tests do not test for.
+    git(repoDir, 'config', 'core.autocrlf', 'false');
     await writeFile(path.join(repoDir, 'hello.txt'), 'one\ntwo\nthree\n');
     git(repoDir, 'add', '.');
     git(repoDir, 'commit', '-m', 'Initial commit');
@@ -262,6 +264,7 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
   beforeAll(async () => {
     repoDir = await mkdtemp(path.join(os.tmpdir(), 'gitglasses-mcp-empty-'));
     git(repoDir, 'init', '-b', 'main');
+    git(repoDir, 'config', 'core.autocrlf', 'false');
     client = createEngineClient({ enginePath });
     handlers = createToolHandlers({ client, env: {} });
   }, 30000);
