@@ -190,7 +190,6 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
     'checks',
     'reviews',
     'mergeability',
-    'createPR',
     'gists',
     'suggestions',
   ]);

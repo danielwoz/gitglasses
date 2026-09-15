@@ -111,6 +111,7 @@ export interface Requests {
   'repo/discover': { params: P<'repo/discover'>; result: R<'repo/discover'> };
   'repo/list': { params: Empty; result: R<'repo/list'> };
   'repo/state': { params: P<'repo/state'>; result: R<'repo/state'> };
+  'repo/close': { params: P<'repo/close'>; result: Empty };
   'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };

@@ -70,6 +70,15 @@ export const defaultFetch: FetchLike = async (url, init) => {
 };
 
 /**
+ * UTF-8 bytes in `value`, the unit content-length reports. A string's
+ * `.length` counts UTF-16 code units, which undercounts non-ASCII text by up
+ * to a factor of three.
+ */
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+/**
  * Wraps a response so json()/text() refuse an oversized body even when no
  * content-length was declared (chunked responses omit it). The runtime has
  * buffered the whole body by the time its length is known, so the bound
@@ -80,8 +89,9 @@ function boundedResponse(response: HttpResponseLike): HttpResponseLike {
   const readText = async (): Promise<string> => {
     if (cached !== undefined) return cached;
     const body = await response.text();
-    if (body.length > MAX_RESPONSE_BYTES) {
-      throw new Error(`response too large: ${body.length} bytes`);
+    const bytes = utf8ByteLength(body);
+    if (bytes > MAX_RESPONSE_BYTES) {
+      throw new Error(`response too large: ${bytes} bytes`);
     }
     cached = body;
     return body;
