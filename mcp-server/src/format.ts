@@ -54,11 +54,6 @@ function changeLine(change: FileChange, options: ChangeLineOptions = {}): string
   return `${path} (+${change.additions} -${change.deletions})`;
 }
 
-/** True when `contents` holds a NUL byte, the marker git treats as binary. */
-export function looksBinary(contents: string): boolean {
-  return contents.includes('\0');
-}
-
 /** Paths a unified diff reports as binary rather than as text hunks. */
 export function binaryPathsInPatch(patch: string): Set<string> {
   const paths = new Set<string>();

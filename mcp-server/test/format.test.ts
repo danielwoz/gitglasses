@@ -14,7 +14,6 @@ import {
   formatPatchEnvelope,
   formatRefs,
   formatStatus,
-  looksBinary,
   parsePatchEnvelopeText,
   parsePatchSource,
   truncateText,
@@ -166,11 +165,6 @@ describe('formatRefs', () => {
 });
 
 describe('binary detection helpers', () => {
-  it('treats a NUL byte as the binary marker', () => {
-    expect(looksBinary('a\0b')).toBe(true);
-    expect(looksBinary('plain text\n')).toBe(false);
-  });
-
   it('reads binary paths off a unified diff', () => {
     const patch =
       'diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-one\n+two\n' +

@@ -36,7 +36,6 @@ import {
   formatPatchEnvelope,
   formatRefs,
   formatStatus,
-  looksBinary,
   parsePatchEnvelopeText,
   parsePatchSource,
   truncateText,
@@ -316,12 +315,12 @@ export function createToolHandlers(context: ToolContext) {
         // A deleted file exists only in the parent commit.
         const rev = file.status === 'D' ? `${sha}^` : sha;
         try {
-          const { contents } = await client.request('rev/fileAtRev', {
+          const { binary } = await client.request('rev/fileAtRev', {
             repoId,
             path: file.path,
             rev,
           });
-          return looksBinary(contents) ? file.path : undefined;
+          return binary ? file.path : undefined;
         } catch {
           return undefined;
         }
@@ -382,7 +381,9 @@ export function createToolHandlers(context: ToolContext) {
         });
         const binary = await isBinaryInWorkingTree(repo.rootPath, args.file);
         const rendered = formatBlame(args.file, hunks, result.commits, args.line, binary);
-        if (!truncated) return rendered;
+        if (!truncated) {
+          return orEmptyRepository(repo.repoId, args.repoPath, rendered, hunks.length === 0);
+        }
         const last = hunks[hunks.length - 1];
         const nextLine = last.resultLine + last.lineCount;
         return (

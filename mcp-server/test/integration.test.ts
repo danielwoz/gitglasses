@@ -282,6 +282,7 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
     ['git_graph_summary', (h: ToolHandlers, p: string) => h.git_graph_summary({ repoPath: p, limit: 30 })],
     ['git_refs', (h: ToolHandlers, p: string) => h.git_refs({ repoPath: p })],
     ['git_file_history', (h: ToolHandlers, p: string) => h.git_file_history({ repoPath: p, file: 'x', limit: 20 })],
+    ['git_blame', (h: ToolHandlers, p: string) => h.git_blame({ repoPath: p, file: 'x' })],
   ] as const) {
     it(`${name} reports the empty repository rather than "nothing found"`, async () => {
       expect(await call(handlers, repoDir)).toContain('no commits yet');
@@ -289,7 +290,6 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
   }
 
   for (const [name, call] of [
-    ['git_blame', (h: ToolHandlers, p: string) => h.git_blame({ repoPath: p, file: 'x' })],
     ['create_patch', (h: ToolHandlers, p: string) => h.create_patch({ repoPath: p, source: 'wip' })],
     ['git_commit_show', (h: ToolHandlers, p: string) => h.git_commit_show({ repoPath: p, sha: 'HEAD' })],
   ] as const) {
