@@ -1,9 +1,10 @@
 import { governedFetch } from '../rateLimiter.js';
 import { ProviderError } from '../errors.js';
-import { defaultFetch, type FetchLike } from '../http.js';
+import type { FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
 import type { Issue } from '../models.js';
-import { slugify, throwForStatus } from './shared.js';
+import { ProviderClient } from './client.js';
+import { slugify } from './shared.js';
 
 export interface LinearProviderOptions {
   /** GraphQL endpoint. Default "https://api.linear.app/graphql". */
@@ -25,12 +26,9 @@ interface LinearIssueNode {
   assignee?: { id: string; name?: string; displayName?: string } | null;
 }
 
-interface LinearGraphQlResponse {
-  data?: {
-    viewer?: { assignedIssues?: { nodes?: LinearIssueNode[] } };
-    issue?: LinearIssueNode | null;
-  };
-  errors?: Array<{ message: string }>;
+interface LinearGraphQlData {
+  viewer?: { assignedIssues?: { nodes?: LinearIssueNode[] } };
+  issue?: LinearIssueNode | null;
 }
 
 const ISSUE_FIELDS = `
@@ -92,25 +90,31 @@ function mapIssue(node: LinearIssueNode): Issue {
 export class LinearProvider implements IssueProvider {
   readonly id: string;
 
-  private readonly apiUrl: string;
-  private readonly fetchFn: FetchLike;
+  private readonly client: ProviderClient;
 
   constructor(options: LinearProviderOptions = {}) {
     this.id = options.id ?? 'linear';
-    this.apiUrl = options.apiUrl ?? 'https://api.linear.app/graphql';
-    this.fetchFn = options.fetchFn ?? governedFetch;
+    this.client = new ProviderClient({
+      name: 'Linear',
+      baseUrl: options.apiUrl ?? 'https://api.linear.app/graphql',
+      baseUrlLabel: 'Linear apiUrl',
+      authorize: (auth) => auth.token,
+      fetchFn: options.fetchFn ?? governedFetch,
+    });
   }
 
   async getMyIssues(auth: AuthContext, opts?: IssueQueryOptions): Promise<Issue[]> {
-    const data = await this.graphql(auth, MY_ISSUES_QUERY, { first: opts?.limit ?? 50 });
+    const data = await this.client.graphql<LinearGraphQlData>(auth, MY_ISSUES_QUERY, {
+      first: opts?.limit ?? 50,
+    });
     const nodes = data.viewer?.assignedIssues?.nodes ?? [];
     return nodes.map(mapIssue);
   }
 
   async getIssue(auth: AuthContext, key: string): Promise<Issue | undefined> {
-    let data: NonNullable<LinearGraphQlResponse['data']>;
+    let data: LinearGraphQlData;
     try {
-      data = await this.graphql(auth, ISSUE_QUERY, { id: key });
+      data = await this.client.graphql<LinearGraphQlData>(auth, ISSUE_QUERY, { id: key });
     } catch (error) {
       if (error instanceof ProviderError && /not found/i.test(error.message)) {
         return undefined;
@@ -146,30 +150,5 @@ export class LinearProvider implements IssueProvider {
     _branch: { name: string; url?: string }
   ): Promise<void> {
     // Intentionally empty.
-  }
-
-  private async graphql(
-    auth: AuthContext,
-    query: string,
-    variables: Record<string, unknown>
-  ): Promise<NonNullable<LinearGraphQlResponse['data']>> {
-    const response = await this.fetchFn(this.apiUrl, {
-      method: 'POST',
-      headers: {
-        authorization: auth.token,
-        'content-type': 'application/json',
-        'user-agent': 'gitglasses',
-      },
-      body: JSON.stringify({ query, variables }),
-    });
-    throwForStatus('Linear', response);
-    const json = (await response.json()) as LinearGraphQlResponse;
-    if (json.errors && json.errors.length > 0) {
-      throw new ProviderError(`Linear GraphQL error: ${json.errors[0].message}`);
-    }
-    if (!json.data) {
-      throw new ProviderError('Linear GraphQL response had no data');
-    }
-    return json.data;
   }
 }

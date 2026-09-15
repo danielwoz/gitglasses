@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WEB_FEATURES, webFeaturesByStatus } from '../src/web/webFeatures';
 
-// The manifest is the conscious record of what runs on the web. If a change
-// moves a feature across the line, this test forces the move to be explicit.
 describe('web feature manifest', () => {
   it('includes the read pipeline outright', () => {
     expect(webFeaturesByStatus('included')).toEqual([
@@ -45,9 +43,8 @@ describe('web feature manifest', () => {
     expect(WEB_FEATURES.processEngine.status).toBe('excluded'); // no spawn on web
   });
 
-  // These are contributed unconditionally in package.json — the editor context
-  // menu and the walkthrough both reference them — so they must resolve to a
-  // stub on the web rather than fail with "command not found".
+  // package.json contributes these unconditionally — the editor context menu
+  // and the walkthrough both reference them — so the web host stubs them.
   it('excludes remote and staging commands but still contributes them', () => {
     expect(WEB_FEATURES.openOnRemote.status).toBe('excluded');
     expect(WEB_FEATURES.hunkStaging.status).toBe('excluded');

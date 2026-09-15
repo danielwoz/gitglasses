@@ -1,7 +1,9 @@
 // Wire protocol between the VS Code extension and gitglasses-engine.
 // Schema-first: the TypeBox schemas in src/schema are the source of truth;
-// the types below derive from them via Static<>, and protocol.schema.json
-// (validated against the real engine by engine/tests) is emitted from them.
+// the types below derive from them via Static<>, and protocol.schema.json is
+// emitted from them. engine/tests drives a live engine through the read
+// methods against that artifact, checking both its responses and its
+// rejection of params the schemas forbid.
 
 import type { Static } from '@sinclair/typebox';
 
@@ -14,17 +16,15 @@ import { RequestSchemas } from './schema/requests.js';
 
 export { PROTOCOL_VERSION } from './version.js';
 
-// The TypeBox schemas themselves, so consumers can validate at runtime rather
-// than only borrow the static types.
+// The TypeBox schemas themselves, so consumers can validate at runtime.
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
 
-/** SHA git uses for uncommitted (working tree / dirty buffer) lines. */
-export const UNCOMMITTED_SHA = '0'.repeat(40);
+// Sha helpers also have their own lean entry point: @gitglasses/protocol/sha.
+export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
 
 // --- JSON-RPC envelope ------------------------------------------------------
-// Hand-written: the envelope is JSON-RPC boilerplate with open `unknown`
-// payloads, which per-method schemas would only obscure.
+// Hand-written: JSON-RPC boilerplate carrying open `unknown` payloads.
 
 export interface RpcRequest {
   jsonrpc: '2.0';
@@ -80,15 +80,15 @@ export type GraphRow = Static<typeof models.GraphRow>;
 export type DiffHunk = Static<typeof models.DiffHunk>;
 export type RebaseEntry = Static<typeof models.RebaseEntry>;
 export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
+export type SequencerState = Static<typeof models.SequencerState>;
 
 // --- Method map (derived from src/schema/requests.ts) -----------------------
 
 type Method = keyof typeof RequestSchemas;
 type P<M extends Method> = Static<(typeof RequestSchemas)[M]['params']>;
 type R<M extends Method> = Static<(typeof RequestSchemas)[M]['result']>;
-// Hand-written where TypeBox's Static<> is weaker than the published type:
-// empty payloads stay `Record<string, never>` (Static of an empty Type.Object
-// is `{}`, which would silently accept any object).
+// Hand-written: `Static<>` of an empty `Type.Object` is `{}`, which accepts
+// any object, so empty payloads carry this type instead.
 type Empty = Record<string, never>;
 
 /** Typed engine capability flags (open bag: engines may add more). */
@@ -99,6 +99,8 @@ export interface EngineCapabilities {
   [key: string]: unknown;
 }
 
+// Per-method prose lives with the schemas in src/schema/requests.ts, so it
+// reaches protocol.schema.json.
 export interface Requests {
   initialize: {
     params: P<'initialize'>;
@@ -109,30 +111,22 @@ export interface Requests {
   'repo/discover': { params: P<'repo/discover'>; result: R<'repo/discover'> };
   'repo/list': { params: Empty; result: R<'repo/list'> };
   'repo/state': { params: P<'repo/state'>; result: R<'repo/state'> };
+  'repo/close': { params: P<'repo/close'>; result: Empty };
   'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
-  /** Topo-ordered commit page from a ref (default HEAD). */
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
-  /** File history following renames, newest first. */
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
-  /** History of a line range (1-based, inclusive). */
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };
-  /** Commit search; matches stream via search/matches notifications. */
   'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };
-  /** Full contents of a file at a revision (virtual docs, quick diff). */
   'rev/fileAtRev': { params: P<'rev/fileAtRev'>; result: R<'rev/fileAtRev'> };
-  /** Refs listing for views: branches, remotes, tags. */
   'refs/list': { params: P<'refs/list'>; result: R<'refs/list'> };
-  /** Stash entries. */
   'stash/list': { params: P<'stash/list'>; result: R<'stash/list'> };
 
   // --- P2: status / graph / diff / staging / mutations / rebase ------------
 
   'status/summary': { params: P<'status/summary'>; result: R<'status/summary'> };
-  /** Graph rows with engine-computed lane layout, topo order, paged. */
   'graph/rows': { params: P<'graph/rows'>; result: R<'graph/rows'> };
   'diff/commit': { params: P<'diff/commit'>; result: R<'diff/commit'> };
   'diff/refs': { params: P<'diff/refs'>; result: R<'diff/refs'> };
-  /** Hunks of a file's working-tree (or staged) diff, for hunk staging. */
   'diff/fileHunks': { params: P<'diff/fileHunks'>; result: R<'diff/fileHunks'> };
   'stage/files': { params: P<'stage/files'>; result: Empty };
   'stage/hunks': { params: P<'stage/hunks'>; result: Empty };
@@ -153,10 +147,7 @@ export interface Requests {
   'worktree/list': { params: P<'worktree/list'>; result: R<'worktree/list'> };
   'worktree/add': { params: P<'worktree/add'>; result: Empty };
   'worktree/remove': { params: P<'worktree/remove'>; result: Empty };
-  /** Commits upstream..HEAD, oldest first — the editable rebase plan. */
   'rebase/preview': { params: P<'rebase/preview'>; result: R<'rebase/preview'> };
-  /** Executes an interactive rebase with the given plan via sequence-editor
-   * interception. Conflicts pause the rebase (sequencer state watchable). */
   'rebase/start': { params: P<'rebase/start'>; result: R<'rebase/start'> };
   'rebase/continue': { params: P<'rebase/continue'>; result: R<'rebase/continue'> };
   'rebase/abort': { params: P<'rebase/abort'>; result: Empty };
@@ -164,9 +155,7 @@ export interface Requests {
   // --- P4: remotes / open patches ------------------------------------------
 
   'remote/list': { params: P<'remote/list'>; result: R<'remote/list'> };
-  /** Creates a shareable patch envelope from WIP, a stash, a commit, or a range. */
   'patch/create': { params: P<'patch/create'>; result: R<'patch/create'> };
-  /** Applies a patch envelope; 3-way when the base is missing. */
   'patch/apply': { params: P<'patch/apply'>; result: R<'patch/apply'> };
 }
 
@@ -195,7 +184,6 @@ export interface EngineNotifications {
   'search/matches': {
     params: Static<(typeof EngineNotificationSchemas)['search/matches']['params']>;
   };
-  /** Pushed when the repo's git state changes (refs, HEAD, index, stash). */
   'repo/didChange': {
     params: Static<(typeof EngineNotificationSchemas)['repo/didChange']['params']>;
   };

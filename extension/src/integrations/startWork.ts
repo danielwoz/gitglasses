@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { AuthError, type Issue, type IssueProvider } from '@gitglasses/integrations';
-import type { EngineClient } from '../engine/engineClient';
+import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
-import { firstWorkspaceRepo } from '../views/viewBase';
+import { activeWorkspaceRepo } from '../views/viewBase';
 import type { IntegrationService, IssueProviderEntry } from './integrationService';
 import { fallbackBranchName, sanitizeBranchName } from './startWorkLogic';
 
@@ -110,7 +110,7 @@ export function registerStartWork(
     });
     if (!branchName) return;
 
-    const repo = await firstWorkspaceRepo(repos);
+    const repo = await activeWorkspaceRepo(repos);
     if (!repo) {
       void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
       return;

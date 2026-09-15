@@ -23,22 +23,37 @@ function toJson(schema: TSchema): unknown {
 export interface SchemaArtifact {
   $comment: string;
   protocolVersion: string;
-  methods: Record<string, { params: unknown; result: unknown }>;
-  notifications: Record<string, { direction: 'client' | 'engine'; params: unknown }>;
+  methods: Record<string, { description: string; params: unknown; result: unknown }>;
+  notifications: Record<
+    string,
+    { direction: 'client' | 'engine'; description: string; params: unknown }
+  >;
 }
 
 /** Builds the exact contents of protocol.schema.json. */
 export function buildSchemaArtifact(): SchemaArtifact {
   const methods: SchemaArtifact['methods'] = {};
   for (const [method, schemas] of Object.entries(RequestSchemas)) {
-    methods[method] = { params: toJson(schemas.params), result: toJson(schemas.result) };
+    methods[method] = {
+      description: schemas.description,
+      params: toJson(schemas.params),
+      result: toJson(schemas.result),
+    };
   }
   const notifications: SchemaArtifact['notifications'] = {};
   for (const [method, schemas] of Object.entries(ClientNotificationSchemas)) {
-    notifications[method] = { direction: 'client', params: toJson(schemas.params) };
+    notifications[method] = {
+      direction: 'client',
+      description: schemas.description,
+      params: toJson(schemas.params),
+    };
   }
   for (const [method, schemas] of Object.entries(EngineNotificationSchemas)) {
-    notifications[method] = { direction: 'engine', params: toJson(schemas.params) };
+    notifications[method] = {
+      direction: 'engine',
+      description: schemas.description,
+      params: toJson(schemas.params),
+    };
   }
   return {
     $comment:

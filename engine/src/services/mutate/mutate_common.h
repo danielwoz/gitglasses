@@ -1,17 +1,21 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "core/repo.h"
+#include "exec/git_process.h"
 #include "rpc/dispatcher.h"
 #include "services/context.h"
 
 namespace gg::services::mutate_detail {
 
-// Captured result of a finished `git` invocation. Only spawn failures are
-// Errors; nonzero exits come back in exitCode for the caller to interpret
+// Captured result of a finished `git` invocation. Spawn failures and timeouts
+// are Errors; nonzero exits come back in exitCode for the caller to interpret
 // (conflict-aware methods treat some of them as results, not errors).
 struct GitOutput {
   int exitCode = -1;
@@ -19,18 +23,9 @@ struct GitOutput {
   std::string stderrText;
 };
 
-// Rejects a value that git's option parser would read as a flag.
-//
-// Refnames, remotes, paths and stash messages reach argv as positionals. Git
-// parses anything starting with '-' as an option wherever it appears, so a
-// value like "--upload-pack=..." or "--output=..." turns a data field into an
-// arbitrary-command or file-write primitive. These values are not always
-// client-supplied: refnames come out of the repository itself, so a hostile
-// repo is enough. Callers pass every user- or repo-derived positional through
-// this, and add a "--" separator wherever the subcommand supports one.
-//
-// Throws HandlerError(InvalidParams) when the value would be parsed as an
-// option. `what` names the field for the error message.
+// Rejects a value that git's option parser would read as a flag (see
+// exec::looksLikeGitOption for why this matters), throwing
+// HandlerError(InvalidParams). `what` names the field for the error message.
 const std::string& requirePositional(const std::string& value, const char* what);
 
 // Same, applied to each element of a list (e.g. cherry-pick shas).
@@ -52,9 +47,11 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
                                 const CancelToken& token);
 
 // Runs `git <args>` and throws HandlerError(GitError) with git's stderr
-// unless it exited 0.
+// unless it exited 0. Remote-facing callers raise `timeout` to the network
+// ceiling.
 GitOutput runGitOrThrow(const core::Repo& repo, std::vector<std::string> args,
-                        const CancelToken& token, const std::string& what);
+                        const CancelToken& token, const std::string& what,
+                        std::chrono::milliseconds timeout = exec::kDefaultGitTimeout);
 
 // Runs a merge-like command whose failure may mean "stopped on conflicts":
 // exit 0 -> {conflicts:false}; nonzero with conflict state -> {conflicts:true};
@@ -65,6 +62,23 @@ rpc::Json runConflictAware(const core::Repo& repo, std::vector<std::string> args
 // True when an interactive or am-style rebase is in progress.
 bool rebaseInProgress(const core::Repo& repo);
 
+// Multi-step operation the repository is stopped in the middle of, read from
+// the sequencer state in the gitdir.
+struct SequencerState {
+  // "none", "rebase", "merge", "cherry-pick" or "revert".
+  std::string operation = "none";
+  // Index holds unmerged entries.
+  bool conflicted = false;
+  // Position and length of a running rebase; absent for the other operations
+  // and for rebases whose counters git has not written.
+  std::optional<std::int64_t> step;
+  std::optional<std::int64_t> total;
+};
+
+// Reads the repository's sequencer state. An idle repository reports
+// operation "none" with no conflicts.
+SequencerState sequencerState(const core::Repo& repo);
+
 // True when the repository is mid-conflict: sequencer heads present
 // (MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase dirs) or conflict
 // entries in the index.
@@ -74,12 +88,5 @@ bool inConflictState(const core::Repo& repo);
 core::Repo openRepo(ServiceContext& context, const rpc::Json& params);
 
 std::string headSha(const core::Repo& repo, const CancelToken& token);
-
-// Fetches a required non-empty string param or throws InvalidParams.
-std::string requireString(const rpc::Json& params, const char* key);
-
-// Fetches a required non-empty array of non-empty strings or throws
-// InvalidParams.
-std::vector<std::string> requireStringArray(const rpc::Json& params, const char* key);
 
 }  // namespace gg::services::mutate_detail

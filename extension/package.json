@@ -29,6 +29,23 @@
   "extensionKind": [
     "workspace"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Blame, history and the commit graph work in Restricted Mode. Settings that choose an executable, a network endpoint or a link target are taken from user settings only.",
+      "restrictedConfigurations": [
+        "gitglasses.engine.path",
+        "gitglasses.web.maxRepoBytes",
+        "gitglasses.integrations.hosts",
+        "gitglasses.integrations.issues",
+        "gitglasses.ai.provider",
+        "gitglasses.ai.model",
+        "gitglasses.ai.openai.baseUrl",
+        "gitglasses.ai.ollama.host",
+        "gitglasses.autolinks"
+      ]
+    }
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -278,6 +295,11 @@
       {
         "command": "gitglasses.removeIntegration",
         "title": "GitGlasses: Remove Integration…"
+      },
+      {
+        "command": "gitglasses.selectRepository",
+        "title": "GitGlasses: Select Repository…",
+        "icon": "$(repo)"
       }
     ],
     "viewsContainers": {
@@ -309,7 +331,8 @@
         },
         {
           "id": "gitglasses.views.remotes",
-          "name": "Remotes"
+          "name": "Remotes",
+          "visibility": "collapsed"
         },
         {
           "id": "gitglasses.views.stashes",
@@ -317,7 +340,8 @@
         },
         {
           "id": "gitglasses.views.tags",
-          "name": "Tags"
+          "name": "Tags",
+          "visibility": "collapsed"
         },
         {
           "id": "gitglasses.views.fileHistory",
@@ -325,42 +349,186 @@
         },
         {
           "id": "gitglasses.views.searchCompare",
-          "name": "Search & Compare"
+          "name": "Search & Compare",
+          "visibility": "collapsed"
         },
         {
           "id": "gitglasses.views.contributors",
-          "name": "Contributors"
+          "name": "Contributors",
+          "visibility": "collapsed"
         },
         {
           "id": "gitglasses.views.worktrees",
-          "name": "Worktrees"
+          "name": "Worktrees",
+          "visibility": "collapsed"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "gitglasses.views.searchCompare",
-        "contents": "Search commits by message text or SHA.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)"
+        "contents": "Search commits by message text or SHA.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
         "view": "gitglasses.views.home",
-        "contents": "The Commit Graph is the fastest way to see how this repository fits together.\n[Show Commit Graph](command:gitglasses.showGraph)\n\nNew to GitGlasses? Take the tour.\n[Get Started](command:gitglasses.openWalkthrough)"
+        "contents": "The Commit Graph is the fastest way to see how this repository fits together.\n[Show Commit Graph](command:gitglasses.showGraph)\n\nNew to GitGlasses? Take the tour.\n[Get Started](command:gitglasses.openWalkthrough)",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
         "view": "gitglasses.views.worktrees",
-        "contents": "Worktrees let you check out several branches at once, without stashing.\n[Add Worktree…](command:gitglasses.worktrees.add)"
+        "contents": "Worktrees let you check out several branches at once, without stashing.\n[Add Worktree…](command:gitglasses.worktrees.add)",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
         "view": "gitglasses.views.stashes",
-        "contents": "No stashes yet. Stashes you create will appear here."
+        "contents": "No stashes yet. Stashes you create will appear here.",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
         "view": "gitglasses.views.launchpad",
-        "contents": "Launchpad collects your pull requests and issues in one place.\n[Add Integration…](command:gitglasses.addIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required."
+        "contents": "Launchpad collects your pull requests and issues in one place.\n[Add Integration…](command:gitglasses.addIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required.",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
         "view": "gitglasses.views.fileHistory",
-        "contents": "Open a file to see its history here.\n[Show Visual File History](command:gitglasses.showFileHistory)"
+        "contents": "Open a file to see its history here.\n[Show Visual File History](command:gitglasses.showFileHistory)",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.commits",
+        "contents": "This repository has no commits yet.",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.branches",
+        "contents": "No branches yet.\n[Create Branch…](command:gitglasses.home.createBranch)",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.remotes",
+        "contents": "No remotes are configured for this repository.",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.tags",
+        "contents": "No tags yet. Tags you create appear here.",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.contributors",
+        "contents": "Contributors appear once this repository has commits.",
+        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.home",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.home",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.launchpad",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.launchpad",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.commits",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.commits",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.branches",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.branches",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.remotes",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.remotes",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.stashes",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.stashes",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.tags",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.tags",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.fileHistory",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.fileHistory",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.searchCompare",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.searchCompare",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.contributors",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.contributors",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
+      },
+      {
+        "view": "gitglasses.views.worktrees",
+        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
+        "when": "gitglasses.noRepository"
+      },
+      {
+        "view": "gitglasses.views.worktrees",
+        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
+        "when": "gitglasses.engineUnavailable"
       }
     ],
     "walkthroughs": [
@@ -488,6 +656,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "gitglasses.selectRepository",
+          "when": "view =~ /^gitglasses\\.views\\./ && gitglasses.multiRepoWorkspace",
+          "group": "navigation@1"
+        },
         {
           "command": "gitglasses.showGraph",
           "when": "view =~ /^gitglasses\\.views\\./",
@@ -673,6 +846,7 @@
       "properties": {
         "gitglasses.mode": {
           "type": "string",
+          "scope": "window",
           "enum": [
             "normal",
             "zen",
@@ -688,31 +862,47 @@
         },
         "gitglasses.currentLine.enabled": {
           "type": "boolean",
+          "scope": "window",
           "default": true,
           "description": "Show blame annotation for the current line"
         },
-        "gitglasses.fileAnnotations.dateFormat": {
-          "type": "string",
-          "default": "relative",
-          "description": "Date format for file annotations (only 'relative' is supported for now)"
+        "gitglasses.views.pageSize": {
+          "type": "number",
+          "scope": "window",
+          "default": 50,
+          "minimum": 10,
+          "maximum": 1000,
+          "description": "Commits loaded per page in the Commits and File History views"
+        },
+        "gitglasses.graph.pageSize": {
+          "type": "number",
+          "scope": "window",
+          "default": 200,
+          "minimum": 50,
+          "maximum": 5000,
+          "description": "Rows loaded per page in the Commit Graph and Visual File History"
         },
         "gitglasses.codeLens.enabled": {
           "type": "boolean",
+          "scope": "window",
           "default": true,
           "description": "Show git blame CodeLens above files and top-level symbols"
         },
         "gitglasses.engine.path": {
           "type": "string",
+          "scope": "machine-overridable",
           "default": "",
           "description": "Path to gitglasses-engine (defaults to the bundled binary)"
         },
         "gitglasses.web.maxRepoBytes": {
           "type": "number",
+          "scope": "machine-overridable",
           "default": 209715200,
           "description": "Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB)"
         },
         "gitglasses.engine.logLevel": {
           "type": "string",
+          "scope": "window",
           "enum": [
             "trace",
             "debug",
@@ -725,6 +915,7 @@
         },
         "gitglasses.integrations.hosts": {
           "type": "array",
+          "scope": "machine-overridable",
           "default": [],
           "description": "Self-hosted git hosting instances, e.g. [{ \"domain\": \"github.example.com\", \"provider\": \"github-enterprise\" }]",
           "items": {
@@ -747,6 +938,7 @@
         },
         "gitglasses.integrations.issues": {
           "type": "array",
+          "scope": "machine-overridable",
           "default": [],
           "description": "Issue tracker integrations, e.g. [{ \"provider\": \"jira\", \"host\": \"mycompany.atlassian.net\" }]",
           "items": {
@@ -768,6 +960,7 @@
         },
         "gitglasses.ai.provider": {
           "type": "string",
+          "scope": "machine-overridable",
           "enum": [
             "vscode-lm",
             "anthropic",
@@ -787,21 +980,25 @@
         },
         "gitglasses.ai.model": {
           "type": "string",
+          "scope": "machine-overridable",
           "default": "",
           "description": "Model id for the selected AI provider (empty = provider default)"
         },
         "gitglasses.ai.openai.baseUrl": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Base URL for OpenAI-compatible endpoints (empty = https://api.openai.com/v1)"
         },
         "gitglasses.ai.ollama.host": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Ollama server URL (empty = http://localhost:11434)"
         },
         "gitglasses.autolinks": {
           "type": "array",
+          "scope": "machine-overridable",
           "default": [],
           "description": "Custom autolink patterns applied to commit messages, e.g. [{ \"regex\": \"TICKET-(\\\\d+)\", \"urlTemplate\": \"https://tracker.example.com/browse/TICKET-$1\" }]",
           "items": {
@@ -835,7 +1032,8 @@
   },
   "dependencies": {
     "@gitglasses/integrations": "workspace:*",
-    "@gitglasses/protocol": "workspace:*"
+    "@gitglasses/protocol": "workspace:*",
+    "@gitglasses/rpc": "workspace:*"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

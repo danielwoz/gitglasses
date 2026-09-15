@@ -6,14 +6,13 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EngineClient, EngineError } from '../src/engine/engineClient';
-import { createProcessTransportFactory } from '../src/engine/processTransport';
+import { EngineClient, EngineError } from '@gitglasses/rpc';
+import { createProcessTransportFactory } from '@gitglasses/rpc/node';
 import { BlameModel } from '../src/model/blameModel';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-// Windows needs the .exe suffix, as the e2e runner and the extension's own
-// lookup both apply; without it nothing matches and the file fails to collect.
+// Windows needs the .exe suffix here too.
 const engineExe = process.platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';
 const enginePath = ['release', 'debug']
   .map((p) => path.join(repoRoot, 'build', p, 'engine', engineExe))
@@ -30,13 +29,12 @@ function makeFixtureRepo(): string {
     GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z',
     GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z',
   };
-  // argv array, not a shell string: cmd.exe does not strip the single quotes
-  // that sh does, so a quoted commit message arrived with the quotes embedded.
+  // An argv array, not a shell string: cmd.exe leaves the single quotes sh
+  // strips, and they end up inside the commit message.
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, env });
   git('init', '-q', '-b', 'main');
   // Hermetic against the host: Git for Windows sets core.autocrlf=true
-  // system-wide, which would rewrite the checked-out bytes the blame
-  // assertions depend on.
+  // system-wide, and the blame assertions depend on the checked-out bytes.
   git('config', 'core.autocrlf', 'false');
   git('config', 'commit.gpgsign', 'false');
   git('config', 'user.name', 'Fixture');

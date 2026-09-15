@@ -5,11 +5,12 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import type { PatchEnvelope, RequestParams } from '@gitglasses/protocol';
+import { shortSha } from '@gitglasses/protocol/sha';
 import { defaultFetch, supportsSnippets, type AuthContext } from '@gitglasses/integrations';
-import type { EngineClient } from '../engine/engineClient';
+import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
 import type { IntegrationService } from '../integrations/integrationService';
-import { firstWorkspaceRepo, type ActiveRepo, type ViewNode } from '../views/viewBase';
+import { requireRepo, type ActiveRepo, type ViewNode } from '../views/viewBase';
 import { errorMessage, showConflictGuidance } from '../commands/ui';
 import {
   classifySnippetUrl,
@@ -38,7 +39,7 @@ async function pickSource(
   if (node?.sha && node.item.contextValue === 'gitglassesCommit') {
     return {
       source: { kind: 'commit', sha: node.sha },
-      defaultSummary: node.commit?.summary ?? node.sha.slice(0, 7),
+      defaultSummary: node.commit?.summary ?? shortSha(node.sha),
     };
   }
   if (node?.sha && node.item.contextValue === 'gitglassesStash') {
@@ -88,7 +89,7 @@ async function pickSource(
       const picked = await vscode.window.showQuickPick(
         commits.map((commit) => ({
           label: commit.summary,
-          description: commit.sha.slice(0, 7),
+          description: shortSha(commit.sha),
           commit,
         })),
         { placeHolder: 'Create a patch from which commit?', matchOnDescription: true },
@@ -229,11 +230,8 @@ async function createPatch(
   integrations: IntegrationService,
   node?: ViewNode,
 ): Promise<void> {
-  const repo = await firstWorkspaceRepo(repos);
-  if (!repo) {
-    void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
-    return;
-  }
+  const repo = await requireRepo(repos);
+  if (!repo) return;
 
   let picked: SourcePick | undefined;
   try {
@@ -327,11 +325,8 @@ async function applyPatch(
   repos: RepositoryService,
   integrations: IntegrationService,
 ): Promise<void> {
-  const repo = await firstWorkspaceRepo(repos);
-  if (!repo) {
-    void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
-    return;
-  }
+  const repo = await requireRepo(repos);
+  if (!repo) return;
 
   let text: string | undefined;
   try {
@@ -389,7 +384,7 @@ async function applyPatch(
     const result = await engine.request('patch/apply', { repoId: repo.repoId, envelope });
     if (!result.applied && !result.baseFound) {
       void vscode.window.showErrorMessage(
-        `GitGlasses: the patch base commit ${envelope.baseSha.slice(0, 7)} is not in this ` +
+        `GitGlasses: the patch base commit ${shortSha(envelope.baseSha)} is not in this ` +
           'repository, so a 3-way apply was not possible. Fetch from the remote the patch ' +
           'was created against, then try again.',
       );

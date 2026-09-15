@@ -1,9 +1,5 @@
-// Runtime validation against the TypeBox schemas.
-//
-// The schemas were previously used only as compile-time types, so payloads
-// crossing a trust boundary — an agent-supplied patch envelope, an engine
-// response — were cast rather than checked. A cast turns a malformed value
-// into a lying type that surfaces as a crash far from the cause.
+// Runtime validation against the TypeBox schemas, for payloads that cross a
+// trust boundary: an agent-supplied patch envelope, an engine response.
 
 import { Value } from '@sinclair/typebox/value';
 import type { TSchema } from '@sinclair/typebox';

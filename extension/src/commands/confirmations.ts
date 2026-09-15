@@ -3,13 +3,11 @@
 // user always sees what will run before proceeding. Pure (no vscode imports)
 // so tests can assert the exact strings.
 
+import { shortSha } from '@gitglasses/protocol/sha';
+
 export interface Confirmation {
   message: string;
   detail: string;
-}
-
-export function sha7(sha: string): string {
-  return sha.slice(0, 7);
 }
 
 export function confirmResetHard(branch: string, ref: string): Confirmation {
@@ -34,7 +32,7 @@ export function confirmRebase(branch: string, upstream: string): Confirmation {
 }
 
 export function confirmCherryPick(shas: readonly string[]): Confirmation {
-  const short = shas.map(sha7);
+  const short = shas.map(shortSha);
   const plural = shas.length !== 1;
   return {
     message: plural ? `Cherry-pick ${shas.length} commits?` : `Cherry-pick commit ${short[0]}?`,
@@ -45,7 +43,7 @@ export function confirmCherryPick(shas: readonly string[]): Confirmation {
 }
 
 export function confirmRevert(shas: readonly string[]): Confirmation {
-  const short = shas.map(sha7);
+  const short = shas.map(shortSha);
   const plural = shas.length !== 1;
   return {
     message: plural ? `Revert ${shas.length} commits?` : `Revert commit ${short[0]}?`,

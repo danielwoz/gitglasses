@@ -137,6 +137,9 @@ export class LineBlameController implements vscode.Disposable {
     this.statusBar.show();
   }
 
+  /** Clears the active editor, which is not necessarily the editor the caller
+   *  is annotating: a stale pass reaching here has already lost its editor to
+   *  an active-editor change. */
   private clear(): void {
     vscode.window.activeTextEditor?.setDecorations(this.decoration, []);
     this.statusBar.hide();

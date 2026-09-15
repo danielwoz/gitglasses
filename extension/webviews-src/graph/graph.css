@@ -60,3 +60,16 @@ body {
   background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
   color: var(--vscode-menu-selectionForeground, inherit);
 }
+
+#error {
+  position: fixed;
+  display: none;
+  inset: 0;
+  z-index: 20;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}

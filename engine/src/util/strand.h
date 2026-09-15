@@ -40,9 +40,8 @@ class Strand {
         task = std::move(queue_.front());
         queue_.pop_front();
       }
-      // A task that throws must not escape: unwinding out of drain() leaves
-      // draining_ true forever, wedging every later post on this strand, and
-      // reaches the pool's thread entry where it would terminate the process.
+      // draining_ stays true if an exception unwinds out of drain(), wedging
+      // the strand, so every task runs inside the catch.
       try {
         task();
       } catch (const std::exception& e) {

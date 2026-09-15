@@ -144,7 +144,14 @@ let repoId2;
 check('initialize reports wasm capabilities', () => {
   const init = result('initialize', { protocolVersion: '0.1.0' });
   assert.equal(init.protocolVersion, '0.1.0');
-  assert.deepEqual(init.capabilities, { gitCli: false, watch: false, threads: false });
+  // watchBackend names the mechanism behind repo/didChange; the wasm build
+  // has no watcher at all.
+  assert.deepEqual(init.capabilities, {
+    gitCli: false,
+    watch: false,
+    watchBackend: 'none',
+    threads: false,
+  });
 });
 
 check('repo/discover finds /repo', () => {

@@ -140,7 +140,7 @@ TEST(GraphService, LinearLayoutGolden) {
                                 {rev(fixture, "HEAD~1"), 0, Json::array()},
                                 {rev(fixture, "HEAD~2"), 0, Json::array()}});
   EXPECT_FALSE(result.contains("nextCursor"));
-  EXPECT_GT(result["generation"].get<std::int64_t>(), 0);
+  EXPECT_GT(result["refsFingerprint"].get<std::int64_t>(), 0);
 
   // Refs decorate the tip: HEAD flag first, then the branch.
   const Json& refs = result["rows"][0]["refs"];
@@ -310,7 +310,7 @@ TEST(GraphService, DeterministicAndPagingStable) {
   EXPECT_EQ(first.dump(), second.dump());
 
   // Paging with limit 2 concatenates to exactly the unpaged row list, with a
-  // stable generation across pages.
+  // stable refs fingerprint across pages.
   Json paged = Json::array();
   Json params = {{"limit", 2}};
   std::int64_t id = 20;
@@ -318,7 +318,7 @@ TEST(GraphService, DeterministicAndPagingStable) {
   for (;;) {
     Json page = graphRows(session, ++id, repoId, params);
     ++pages;
-    EXPECT_EQ(page["generation"], first["generation"]);
+    EXPECT_EQ(page["refsFingerprint"], first["refsFingerprint"]);
     for (const auto& row : page["rows"]) paged.push_back(row);
     if (!page.contains("nextCursor")) break;
     params["cursor"] = page["nextCursor"];
@@ -354,6 +354,45 @@ TEST(GraphService, WipRowSynthesizedWhenDirty) {
   // Not requested: no WIP row despite the dirty tree.
   Json without = graphRows(session, 12, repoId);
   EXPECT_EQ(without["rows"][0]["kind"], "commit");
+}
+
+// Dirtiness stops at the first changed entry and does not descend into
+// untracked directories, so an untracked directory must still count.
+TEST(GraphService, UntrackedDirectoryAloneMakesTheTreeDirty) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json clean = graphRows(session, 10, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  EXPECT_EQ(clean["rows"][0]["kind"], "commit");
+
+  std::filesystem::create_directories(fixture.root() / "untracked" / "nested");
+  fixture.writeFile("untracked/nested/file.txt", "content\n");
+
+  Json dirty = graphRows(session, 11, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  EXPECT_EQ(dirty["rows"][0]["kind"], "wip");
+}
+
+// The cached plan is keyed on the ref fingerprint, so a new commit must be
+// visible on the next request rather than served from the previous walk.
+TEST(GraphService, CachedPlanIsInvalidatedWhenRefsMove) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json before = graphRows(session, 10, repoId);
+  const size_t rowsBefore = before["rows"].size();
+  // A repeated request for the unchanged repo is served from the cache and
+  // must be byte-identical.
+  EXPECT_EQ(graphRows(session, 11, repoId).dump(), before.dump());
+
+  commitTick(fixture, "c2", 2);
+  Json after = graphRows(session, 12, repoId);
+  EXPECT_NE(after["refsFingerprint"], before["refsFingerprint"]);
+  ASSERT_EQ(after["rows"].size(), rowsBefore + 1);
+  EXPECT_EQ(after["rows"][0]["sha"], rev(fixture, "HEAD"));
 }
 
 TEST(GraphService, StashRowPrecedesItsBaseCommit) {
@@ -462,10 +501,11 @@ TEST(GraphService, UnbornHeadAndBadParams) {
   Json result = graphRows(session, 10, repoId);
   EXPECT_TRUE(result["rows"].empty());
   EXPECT_FALSE(result.contains("nextCursor"));
-  EXPECT_TRUE(result.contains("generation"));
+  EXPECT_TRUE(result.contains("refsFingerprint"));
 
+  // An omitted limit falls back to the default page size.
   Json noLimit = session.request(req(11, "graph/rows", {{"repoId", repoId}}));
-  EXPECT_EQ(noLimit["error"]["code"], -32602);
+  EXPECT_TRUE(noLimit["result"]["rows"].empty());
   Json badCursor = session.request(
       req(12, "graph/rows", {{"repoId", repoId}, {"limit", 10}, {"cursor", "!!!not-base64!!!"}}));
   EXPECT_EQ(badCursor["error"]["code"], -32602);

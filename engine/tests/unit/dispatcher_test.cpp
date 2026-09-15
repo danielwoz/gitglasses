@@ -157,21 +157,255 @@ TEST_F(DispatcherTest, SerialMethodsRunInSubmissionOrder) {
   std::mutex orderMutex;
   std::vector<int> order;
 
-  dispatcher.method("record", [&](const Json& params, const CancelToken&, const NotifyFn&) {
-    // Stagger early tasks so misordered execution would surface reliably.
-    std::this_thread::sleep_for(std::chrono::milliseconds(20 - params["n"].get<int>()));
-    std::lock_guard lock(orderMutex);
-    order.push_back(params["n"].get<int>());
-    return Json::object();
-  });
+  dispatcher.method(
+      "record",
+      [&](const Json& params, const CancelToken&, const NotifyFn&) {
+        // Stagger early tasks so misordered execution would surface reliably.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20 - params["n"].get<int>()));
+        std::lock_guard lock(orderMutex);
+        order.push_back(params["n"].get<int>());
+        return Json::object();
+      },
+      Mode::Serial);
 
+  // Same repoId: one strand, so submission order is the execution order.
   for (int n = 0; n < 10; ++n) {
-    send({{"jsonrpc", "2.0"}, {"id", 100 + n}, {"method", "record"}, {"params", {{"n", n}}}});
+    send({{"jsonrpc", "2.0"},
+          {"id", 100 + n},
+          {"method", "record"},
+          {"params", {{"n", n}, {"repoId", "r1"}}}});
   }
   sink.waitForId(109);
 
   std::lock_guard lock(orderMutex);
   EXPECT_EQ(order, (std::vector<int>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}));
+}
+
+// A method registered without a mode must not inherit serialization: ordering
+// is opted into, so forgetting the argument cannot cost availability.
+TEST_F(DispatcherTest, DefaultModeIsConcurrent) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: concurrent handlers cannot overlap";
+#else
+  std::mutex m;
+  std::condition_variable cv;
+  int running = 0;
+  int peak = 0;
+
+  dispatcher.method("implicit", [&](const Json&, const CancelToken&, const NotifyFn&) {
+    {
+      std::lock_guard lock(m);
+      peak = std::max(peak, ++running);
+    }
+    cv.notify_all();
+    {
+      std::unique_lock lock(m);
+      cv.wait_for(lock, 2s, [&] { return peak >= 2; });
+      --running;
+    }
+    return Json::object();
+  });
+
+  send({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "implicit"}});
+  send({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "implicit"}});
+  sink.waitForId(1);
+  sink.waitForId(2);
+
+  std::lock_guard lock(m);
+  EXPECT_EQ(peak, 2) << "handlers registered without a mode were serialized";
+#endif
+}
+
+// Serial ordering is per repository: a slow mutation on one repo must not
+// delay a mutation on another.
+TEST_F(DispatcherTest, SerialStrandsAreKeyedByRepo) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: posts run to completion on the caller";
+#else
+  std::mutex m;
+  std::condition_variable cv;
+  bool slowStarted = false;
+  bool fastDone = false;
+
+  dispatcher.method(
+      "slow",
+      [&](const Json&, const CancelToken&, const NotifyFn&) {
+        {
+          std::lock_guard lock(m);
+          slowStarted = true;
+        }
+        cv.notify_all();
+        std::unique_lock lock(m);
+        cv.wait_for(lock, 5s, [&] { return fastDone; });
+        return Json::object();
+      },
+      Mode::Serial);
+
+  dispatcher.method(
+      "fast",
+      [&](const Json&, const CancelToken&, const NotifyFn&) {
+        {
+          std::lock_guard lock(m);
+          fastDone = true;
+        }
+        cv.notify_all();
+        return Json::object();
+      },
+      Mode::Serial);
+
+  send({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "slow"}, {"params", {{"repoId", "r1"}}}});
+  {
+    std::unique_lock lock(m);
+    ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return slowStarted; }));
+  }
+  send({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "fast"}, {"params", {{"repoId", "r2"}}}});
+
+  // r2 answers while r1 is still held; r1 only completes once it has.
+  EXPECT_TRUE(sink.waitForId(2).contains("result"));
+  EXPECT_TRUE(sink.waitForId(1).contains("result"));
+#endif
+}
+
+// Network-lane methods take a second per-repo strand, so a long fetch does
+// not delay index mutations on the same repository.
+TEST_F(DispatcherTest, NetworkLaneIsIndependentOfIndexLane) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: posts run to completion on the caller";
+#else
+  std::mutex m;
+  std::condition_variable cv;
+  bool fetchStarted = false;
+  bool stageDone = false;
+
+  dispatcher.method(
+      "fetchish",
+      [&](const Json&, const CancelToken&, const NotifyFn&) {
+        {
+          std::lock_guard lock(m);
+          fetchStarted = true;
+        }
+        cv.notify_all();
+        std::unique_lock lock(m);
+        cv.wait_for(lock, 5s, [&] { return stageDone; });
+        return Json::object();
+      },
+      Mode::SerialNetwork);
+
+  dispatcher.method(
+      "stageish",
+      [&](const Json&, const CancelToken&, const NotifyFn&) {
+        {
+          std::lock_guard lock(m);
+          stageDone = true;
+        }
+        cv.notify_all();
+        return Json::object();
+      },
+      Mode::Serial);
+
+  send({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "fetchish"}, {"params", {{"repoId", "r1"}}}});
+  {
+    std::unique_lock lock(m);
+    ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return fetchStarted; }));
+  }
+  send({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "stageish"}, {"params", {{"repoId", "r1"}}}});
+
+  EXPECT_TRUE(sink.waitForId(2).contains("result"));
+  EXPECT_TRUE(sink.waitForId(1).contains("result"));
+#endif
+}
+
+// Queued notifications leave the read loop free but keep their order.
+TEST_F(DispatcherTest, QueuedNotificationsRunOffTheReadLoopInOrder) {
+  std::mutex m;
+  std::condition_variable cv;
+  std::vector<int> seen;
+
+  dispatcher.notification(
+      "note",
+      [&](Json params) {
+        std::lock_guard lock(m);
+        seen.push_back(params["n"].get<int>());
+        cv.notify_all();
+      },
+      NotificationMode::Queued);
+
+  for (int n = 0; n < 5; ++n) {
+    send({{"jsonrpc", "2.0"}, {"method", "note"}, {"params", {{"n", n}}}});
+  }
+
+  std::unique_lock lock(m);
+  ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return seen.size() == 5; }));
+  EXPECT_EQ(seen, (std::vector<int>{0, 1, 2, 3, 4}));
+}
+
+// A payload over the inline-parse limit is parsed on a worker, so the small
+// message behind it is answered without waiting for it.
+TEST_F(DispatcherTest, LargePayloadDoesNotDelayTheNextMessage) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: everything runs on the caller";
+#else
+  std::mutex m;
+  std::condition_variable cv;
+  bool release = false;
+
+  dispatcher.notification(
+      "bulk",
+      [&](Json) {
+        std::unique_lock lock(m);
+        cv.wait_for(lock, 5s, [&] { return release; });
+      },
+      NotificationMode::Queued);
+  dispatcher.method("ping", [](const Json&, const CancelToken&, const NotifyFn&) {
+    return Json::object();
+  });
+
+  send({{"jsonrpc", "2.0"},
+        {"method", "bulk"},
+        {"params", {{"blob", std::string(kInlineParseLimit + 1024, 'x')}}}});
+  send({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "ping"}});
+
+  // The bulk handler is still blocked; ping must answer anyway.
+  EXPECT_TRUE(sink.waitForId(1).contains("result"));
+  {
+    std::lock_guard lock(m);
+    release = true;
+  }
+  cv.notify_all();
+  // The released handler still has to reacquire `m` on its way out, so the
+  // pool is drained here rather than in the fixture destructor: `m`, `cv` and
+  // `release` are locals of this frame and must outlive the last use of them.
+  pool.shutdown();
+#endif
+}
+
+// A cancel that overtakes a deferred request still applies to it.
+TEST_F(DispatcherTest, CancelBeforeDeferredRequestIsParsedStillApplies) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: the request finishes before the cancel is sent";
+#else
+  dispatcher.method(
+      "slowread",
+      [](const Json&, const CancelToken& token, const NotifyFn&) {
+        for (int i = 0; i < 500; ++i) {
+          token.throwIfCancelled();
+          std::this_thread::sleep_for(1ms);
+        }
+        return Json::object();
+      },
+      Mode::Concurrent);
+
+  Json big = {{"jsonrpc", "2.0"},
+              {"id", 1},
+              {"method", "slowread"},
+              {"params", {{"blob", std::string(kInlineParseLimit + 1024, 'x')}}}};
+  send(big);
+  send({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 1}}}});
+
+  Json response = sink.waitForId(1);
+  ASSERT_TRUE(response.contains("error")) << response.dump();
+  EXPECT_EQ(response["error"]["code"], static_cast<int>(ErrorCode::Cancelled));
+#endif
 }
 
 TEST_F(DispatcherTest, ConcurrentMethodsOverlap) {

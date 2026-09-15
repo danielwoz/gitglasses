@@ -1,8 +1,40 @@
-// Pure blame-annotation logic shared by the gutter/heatmap controllers and
-// the CodeLens provider. No vscode imports so it stays unit-testable.
+// Pure blame-annotation logic shared by the file-annotations controller
+// (gutter blame, heatmap, changes) and the CodeLens provider. No vscode
+// imports so it stays unit-testable.
 import { BlameCommit, BlameHunk, UNCOMMITTED_SHA } from '@gitglasses/protocol';
 import { FileBlame } from '../model/blameModel';
 import { relativeTime } from '../system/dates';
+
+/** Documents whose mode is remembered across reloads; the oldest entries past
+ *  this are dropped. */
+const MAX_PERSISTED_MODES = 50;
+
+export const ANNOTATION_MODES_KEY = 'gitglasses.fileAnnotations.modes';
+
+export type AnnotationMode = 'off' | 'blame' | 'heatmap' | 'changes';
+
+const ANNOTATION_MODE_VALUES: readonly AnnotationMode[] = ['blame', 'heatmap', 'changes'];
+
+/** Reads back a persisted mode map, ignoring anything unrecognised. */
+export function parseStoredModes(stored: unknown): Map<string, AnnotationMode> {
+  const modes = new Map<string, AnnotationMode>();
+  if (typeof stored !== 'object' || stored === null) return modes;
+  for (const [key, value] of Object.entries(stored as Record<string, unknown>)) {
+    if (ANNOTATION_MODE_VALUES.includes(value as AnnotationMode)) {
+      modes.set(key, value as AnnotationMode);
+    }
+  }
+  return modes;
+}
+
+/** The map as it is stored: newest entries win when the cap is exceeded. */
+export function serializeModes(
+  modes: ReadonlyMap<string, AnnotationMode>,
+  limit: number = MAX_PERSISTED_MODES,
+): Record<string, AnnotationMode> {
+  const entries = [...modes.entries()].slice(-limit);
+  return Object.fromEntries(entries);
+}
 
 // --- Gutter blame labels ----------------------------------------------------
 
@@ -80,9 +112,8 @@ export function computeHeatmapRanges(blame: FileBlame): HeatmapRange[] {
     const time = blame.commits[hunk.sha]?.author.time;
     if (time !== undefined) times.push(time);
   }
-  // Reduce rather than spread: Math.min(...times) throws RangeError once the
-  // argument count passes the engine's stack limit (~125k), and a file can
-  // have that many blame hunks.
+  // Math.min(...times) throws RangeError past ~125k arguments, and a file can
+  // have that many hunks.
   let oldest = Number.POSITIVE_INFINITY;
   let newest = Number.NEGATIVE_INFINITY;
   for (const time of times) {

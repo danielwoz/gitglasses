@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "test_fixtures.h"
@@ -104,6 +106,28 @@ TEST_P(WatchManagerTest, ReportsIndexAndCommitChangesWithIncreasingGenerations) 
     EXPECT_GT(event.generation, previous);
     previous = event.generation;
   }
+#endif
+}
+
+// Linked worktrees live under $GIT_DIR/worktrees, so adding one is a change
+// the protocol's 'worktrees' category names.
+TEST_P(WatchManagerTest, ReportsWorktreeChanges) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+  Collector collector;
+  WatchManager manager(collector.callback(), GetParam());
+  manager.watch("r1", (fixture.root() / ".git").string());
+
+  const std::filesystem::path linked = fixture.root().parent_path() /
+                                       (fixture.root().filename().string() + "-wt");
+  fixture.run("git worktree add -q -b wt \"" + linked.string() + "\"");
+  auto event = collector.waitFor({"worktrees"}, 0);
+  std::error_code ec;
+  std::filesystem::remove_all(linked, ec);
+  ASSERT_TRUE(event.has_value()) << "no worktrees change reported after git worktree add";
+  EXPECT_EQ(event->repoId, "r1");
 #endif
 }
 

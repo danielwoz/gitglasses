@@ -2,6 +2,7 @@
 
 #include <git2.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -11,7 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include "exec/git_process.h"
+#include "core/git2.h"
+#include "exec/git_runner.h"
+#include "services/params.h"
 #include "services/status/diff_common.h"
 #include "util/temp_file.h"
 
@@ -19,19 +22,36 @@ namespace gg::services {
 
 namespace {
 
-using status_detail::DiffPtr;
-using status_detail::PatchPtr;
-using status_detail::statusGitError;
+// Ceiling on hunk offsets: past it the value cannot address a real diff, and
+// the cast to long stays well defined on every supported platform.
+constexpr std::int64_t kMaxLine = 1LL << 40;
 
-struct IndexDeleter {
-  void operator()(git_index* index) const { git_index_free(index); }
+// One requested hunk, addressed by the ranges diff/fileHunks reported.
+struct HunkRange {
+  long oldStart = 0;
+  long oldLines = 0;
+  long newStart = 0;
+  long newLines = 0;
 };
-using IndexPtr = std::unique_ptr<git_index, IndexDeleter>;
 
-struct ObjectDeleter {
-  void operator()(git_object* object) const { git_object_free(object); }
-};
-using ObjectPtr = std::unique_ptr<git_object, ObjectDeleter>;
+// Reads the 'hunks' param. The ranges must select hunks of a diff the engine
+// re-derives, so they are validated up front: a fractional, negative or
+// missing offset can never match and is a client bug, not a stale diff.
+std::vector<HunkRange> requireHunkRanges(const rpc::Json& params) {
+  const rpc::Json requested = params.value("hunks", rpc::Json::array());
+  if (!requested.is_array() || requested.empty()) {
+    throw rpc::HandlerError{{ErrorCode::InvalidParams, "'hunks' must be a non-empty array"}};
+  }
+  std::vector<HunkRange> ranges;
+  ranges.reserve(requested.size());
+  for (const auto& want : requested) {
+    ranges.push_back({static_cast<long>(requireInteger(want, "oldStart", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "oldLines", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "newStart", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "newLines", 0, kMaxLine))});
+  }
+  return ranges;
+}
 
 std::string requireAction(const rpc::Json& params) {
   const std::string action = params.value("action", "");
@@ -123,6 +143,8 @@ void splitPatch(const std::string& text, std::string& header, std::vector<HunkBl
 std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBlock>& blocks,
                              const std::vector<bool>& selected, bool renumber) {
   std::string out = header;
+  // Line count each side of the file has gained from the hunks seen so far:
+  // over all of them, and over the kept ones alone.
   long cumulativeAll = 0;
   long cumulativeKept = 0;
   for (size_t i = 0; i < blocks.size(); ++i) {
@@ -130,6 +152,8 @@ std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBl
     const long delta = block.newLines - block.oldLines;
     if (selected[i]) {
       if (renumber) {
+        // newStart counts from a file carrying every earlier hunk; the subset
+        // carries only the kept ones, so swap one shift for the other.
         const long newStart = block.newStart - cumulativeAll + cumulativeKept;
         out += "@@ -" + std::to_string(block.oldStart) + "," + std::to_string(block.oldLines) +
                " +" + std::to_string(newStart) + "," + std::to_string(block.newLines) + " @@" +
@@ -166,9 +190,9 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (action == "stage") {
           git_index* rawIndex = nullptr;
           if (git_repository_index(&rawIndex, raw) != 0) {
-            throw rpc::HandlerError{{statusGitError("open index")}};
+            throw rpc::HandlerError{{core::gitError("open index")}};
           }
-          IndexPtr index(rawIndex);
+          core::IndexPtr index(rawIndex);
           for (const auto& entry : paths) {
             const std::string path = entry.get<std::string>();
             // A path deleted from the working tree stages as a removal.
@@ -178,21 +202,21 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
                                     .type() != std::filesystem::file_type::not_found;
             const int rc = exists ? git_index_add_bypath(index.get(), path.c_str())
                                   : git_index_remove_bypath(index.get(), path.c_str());
-            if (rc != 0) throw rpc::HandlerError{{statusGitError("stage '" + path + "'")}};
+            if (rc != 0) throw rpc::HandlerError{{core::gitError("stage '" + path + "'")}};
           }
           if (git_index_write(index.get()) != 0) {
-            throw rpc::HandlerError{{statusGitError("write index")}};
+            throw rpc::HandlerError{{core::gitError("write index")}};
           }
         } else {
           // git_reset_default restores index entries from HEAD's tree (or
           // removes them when HEAD is unborn or lacks the path).
-          ObjectPtr head;
+          core::ObjectPtr head;
           auto headState = repo.value().head();
           if (!headState) throw rpc::HandlerError{{headState.error()}};
           if (!headState.value().unborn) {
             git_object* rawHead = nullptr;
             if (git_revparse_single(&rawHead, raw, "HEAD") != 0) {
-              throw rpc::HandlerError{{statusGitError("resolve HEAD")}};
+              throw rpc::HandlerError{{core::gitError("resolve HEAD")}};
             }
             head.reset(rawHead);
           }
@@ -203,7 +227,7 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           for (auto& path : owned) pointers.push_back(path.data());
           git_strarray pathspec{pointers.data(), pointers.size()};
           if (git_reset_default(raw, head.get(), &pathspec) != 0) {
-            throw rpc::HandlerError{{statusGitError("unstage paths")}};
+            throw rpc::HandlerError{{core::gitError("unstage paths")}};
           }
         }
         return rpc::Json::object();
@@ -213,27 +237,18 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
   // Hunk-level staging. A fresh single-file diff is taken and the requested
   // hunks are matched by their recorded ranges; a stale request (the file
   // changed since the client's diff/fileHunks call) fails instead of applying
-  // the wrong lines. Stage applies the subset patch to the index via
-  // libgit2's git_apply; unstage reverse-applies it through `git apply
-  // --cached --reverse` (libgit2 has no reverse apply, and the CLI keeps
-  // "no newline" marker semantics correct in reverse).
+  // the wrong lines. Stage applies the subset patch to the index via libgit2's
+  // git_apply; unstage reverse-applies it through `git apply --cached
+  // --reverse`, which libgit2 has no equivalent for, so unstage requires the
+  // git CLI.
   dispatcher.method(
       "stage/hunks",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         const std::string action = requireAction(params);
-        // Unstaging hunks reverse-applies through the git CLI (libgit2 has no
-        // reverse apply); staging stays libgit2-only and needs no CLI.
         if (action == "unstage") requireGitCli(context);
-        const std::string path = params.value("path", "");
-        const rpc::Json requested = params.value("hunks", rpc::Json::array());
-        if (path.empty()) {
-          throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
-        }
-        if (!requested.is_array() || requested.empty()) {
-          throw rpc::HandlerError{
-              {ErrorCode::InvalidParams, "'hunks' must be a non-empty array"}};
-        }
+        const std::string path = requireString(params, "path");
+        const std::vector<HunkRange> requested = requireHunkRanges(params);
         auto repo = openWorktreeRepo(context, params);
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
@@ -247,12 +262,12 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         }
         git_patch* rawPatch = nullptr;
         if (git_patch_from_diff(&rawPatch, diff.value().get(), 0) != 0) {
-          throw rpc::HandlerError{{statusGitError("build patch for '" + path + "'")}};
+          throw rpc::HandlerError{{core::gitError("build patch for '" + path + "'")}};
         }
-        PatchPtr patch(rawPatch);
+        core::PatchPtr patch(rawPatch);
         git_buf buf = GIT_BUF_INIT;
         if (git_patch_to_buf(&buf, patch.get()) != 0) {
-          throw rpc::HandlerError{{statusGitError("format patch for '" + path + "'")}};
+          throw rpc::HandlerError{{core::gitError("format patch for '" + path + "'")}};
         }
         std::string patchText(buf.ptr, buf.size);
         git_buf_dispose(&buf);
@@ -265,15 +280,11 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         size_t matched = 0;
         for (const auto& want : requested) {
           token.throwIfCancelled();
-          const long oldStart = want.value("oldStart", -1L);
-          const long oldLines = want.value("oldLines", -1L);
-          const long newStart = want.value("newStart", -1L);
-          const long newLines = want.value("newLines", -1L);
           bool found = false;
           for (size_t i = 0; i < blocks.size(); ++i) {
-            if (!selected[i] && blocks[i].oldStart == oldStart &&
-                blocks[i].oldLines == oldLines && blocks[i].newStart == newStart &&
-                blocks[i].newLines == newLines) {
+            if (!selected[i] && blocks[i].oldStart == want.oldStart &&
+                blocks[i].oldLines == want.oldLines && blocks[i].newStart == want.newStart &&
+                blocks[i].newLines == want.newLines) {
               selected[i] = true;
               ++matched;
               found = true;
@@ -296,32 +307,27 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (action == "stage") {
           git_diff* rawSubset = nullptr;
           if (git_diff_from_buffer(&rawSubset, subset.data(), subset.size()) != 0) {
-            throw rpc::HandlerError{{statusGitError("parse subset patch")}};
+            throw rpc::HandlerError{{core::gitError("parse subset patch")}};
           }
-          DiffPtr subsetDiff(rawSubset);
+          core::DiffPtr subsetDiff(rawSubset);
           if (git_apply(repo.value().raw(), subsetDiff.get(), GIT_APPLY_LOCATION_INDEX,
                         nullptr) != 0) {
-            throw rpc::HandlerError{{statusGitError("apply hunks to index")}};
+            throw rpc::HandlerError{{core::gitError("apply hunks to index")}};
           }
         } else {
-          // TempFile, not a bare path: readLine()/wait() throw CancelledError,
-          // which skipped the hand-rolled remove() and left the user's diff in
-          // the shared temp directory.
+          // git apply takes a file argument; TempFile removes it on every exit
+          // path, including the CancelledError runGit() can throw.
           auto file = util::TempFile::create(subset, "gg-hunk-", ".patch");
           if (!file) throw rpc::HandlerError{{file.error()}};
-          auto process = exec::GitProcess::spawn(
-              repo.value().workdir(),
-              {"apply", "--cached", "--reverse", file.value().path()});
-          if (!process) throw rpc::HandlerError{{process.error()}};
-          std::string line;
-          while (process.value().readLine(line, token)) {
-          }
-          const int exitCode = process.value().wait(token);
-          if (exitCode != 0) {
+          auto status = exec::runGit(repo.value().workdir(),
+                                     {"apply", "--cached", "--reverse", file.value().path()},
+                                     {}, token, [](std::string) {});
+          if (!status) throw rpc::HandlerError{{status.error()}};
+          if (status.value().exitCode != 0) {
             throw rpc::HandlerError{
                 {ErrorCode::GitError, "git apply --cached --reverse failed (" +
-                                          std::to_string(exitCode) +
-                                          "): " + process.value().stderrOutput()}};
+                                          std::to_string(status.value().exitCode) +
+                                          "): " + status.value().stderrText}};
           }
         }
         return rpc::Json::object();

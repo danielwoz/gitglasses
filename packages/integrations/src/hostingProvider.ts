@@ -10,8 +10,7 @@ export type HostingCapability =
   | 'suggestions'
   | 'gists'
   | 'avatars'
-  | 'autolinks'
-  | 'createPR';
+  | 'autolinks';
 
 /** Credentials for a provider call. Tokens come from the host app's secret storage. */
 export interface AuthContext {

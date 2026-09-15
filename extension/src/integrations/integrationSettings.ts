@@ -1,8 +1,6 @@
-// Pure editing of the integration settings arrays (no vscode imports).
-//
-// gitglasses.integrations.hosts and .issues were previously only editable by
-// hand in settings.json. These helpers let a quick-pick flow build the same
-// entries, keeping validation and de-duplication testable.
+// Pure editing of the integration settings arrays (no vscode imports): the
+// quick-pick flows build gitglasses.integrations.hosts and .issues entries
+// through these, which keeps validation and de-duplication testable.
 
 import type { HostSetting, IssueSetting } from './integrationService';
 
@@ -35,9 +33,8 @@ export const ISSUE_PROVIDER_CHOICES: readonly ProviderChoice[] = [
 ];
 
 /**
- * Reduce user input to a bare hostname: people paste full URLs, and a scheme,
- * port-less path or trailing slash would not match the host recorded against a
- * remote.
+ * Reduce user input to a bare hostname. People paste full URLs, and only the
+ * host matches what is recorded against a remote.
  */
 export function normalizeDomain(input: string): string {
   let value = input.trim();
@@ -45,10 +42,8 @@ export function normalizeDomain(input: string): string {
   value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
   value = value.replace(/\/.*$/, '');
   value = value.replace(/^[^@]*@/, '');
-  // The remote matcher parses a port separately and drops it, so a domain
-  // stored with one could never match a remote — the integration would look
-  // configured and silently do nothing. Stripping it here keeps what is stored
-  // aligned with what can actually resolve.
+  // The remote matcher parses the port off separately and discards it, so a
+  // stored domain only matches without one.
   value = value.replace(/:\d+$/, '');
   return value.toLowerCase();
 }

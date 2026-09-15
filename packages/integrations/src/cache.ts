@@ -19,13 +19,18 @@ export interface CachedResult<T> {
 
 /**
  * A TTL cache with per-entry ttl, a stale-while-revalidate helper, and
- * coalescing of concurrent fetches for the same key.
+ * coalescing of concurrent fetches for the same key. Pass `maxEntries` to
+ * bound a cache whose key space is open-ended; the least recently written
+ * entries are dropped first.
  */
 export class TtlCache<T> {
   private readonly entries = new Map<string, Entry<T>>();
   private readonly inflight = new Map<string, Promise<T>>();
 
-  constructor(private readonly clock: Clock = systemClock) {}
+  constructor(
+    private readonly clock: Clock = systemClock,
+    private readonly maxEntries?: number
+  ) {}
 
   /** Fresh value for `key`, or undefined when absent or past its ttl. */
   get(key: string): T | undefined {
@@ -40,15 +45,21 @@ export class TtlCache<T> {
   }
 
   set(key: string, value: T, ttlMs: number): void {
-    this.entries.set(key, { value, storedAt: this.clock.now(), ttlMs });
+    this.store(key, value, ttlMs);
   }
 
+  /**
+   * Drops `key`, including any fetch in flight for it, so the next read starts
+   * a new one and a forced refresh sees fresh data.
+   */
   delete(key: string): void {
     this.entries.delete(key);
+    this.inflight.delete(key);
   }
 
   clear(): void {
     this.entries.clear();
+    this.inflight.clear();
   }
 
   /**
@@ -85,16 +96,40 @@ export class TtlCache<T> {
     if (existing) {
       return existing;
     }
+    // A fetch superseded by delete()/clear() still resolves its own callers but
+    // no longer owns the key, so it neither writes its result back nor evicts
+    // the fetch that replaced it.
+    const owns = (): boolean => this.inflight.get(key) === pending;
     const pending = (async () => {
       try {
         const value = await fetcher();
-        this.entries.set(key, { value, storedAt: this.clock.now(), ttlMs });
+        if (owns()) {
+          this.store(key, value, ttlMs);
+        }
         return value;
       } finally {
-        this.inflight.delete(key);
+        if (owns()) {
+          this.inflight.delete(key);
+        }
       }
     })();
     this.inflight.set(key, pending);
     return pending;
+  }
+
+  /** Writes an entry as the most recent, evicting the oldest past maxEntries. */
+  private store(key: string, value: T, ttlMs: number): void {
+    this.entries.delete(key);
+    this.entries.set(key, { value, storedAt: this.clock.now(), ttlMs });
+    if (this.maxEntries === undefined) {
+      return;
+    }
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next();
+      if (oldest.done === true) {
+        return;
+      }
+      this.entries.delete(oldest.value);
+    }
   }
 }

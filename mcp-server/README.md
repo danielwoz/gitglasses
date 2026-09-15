@@ -17,9 +17,15 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `git_commit_show` | Commit metadata + changed files with +/- counts |
 | `git_graph_summary` | Lane-indented text rendering of the commit graph |
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
-| `create_patch` | Patch envelope JSON from `wip`, `stash:<n>` or `commit:<sha>` |
-| `apply_patch` | Apply a patch envelope JSON string |
+| `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
+| `apply_patch` | Apply a patch to the working tree (**writes**) |
 | `list_my_prs` | Open PRs involving you, grouped into launchpad buckets |
+
+Every tool but `apply_patch` is read-only, and each declares that through MCP
+tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
+
+Tools that render a whole commit, status or patch take a `maxChars` argument
+and truncate with a footer naming the limit; `git_blame` takes `limit` hunks.
 
 ## Registration
 
@@ -55,7 +61,7 @@ claude mcp add gitglasses -- npx gitglasses-mcp
 | `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
 | `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
-| `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server may read. Unset means **any repository the process can read**. |
+| `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server may read and, via `apply_patch`, write. Unset means **any repository the process can reach**. |
 
 ## Security model
 
@@ -65,8 +71,13 @@ path on the machine and read the history, diffs, status and blame of whatever
 repository contains it — not just the project under discussion. `repo/discover`
 walks *upwards*, so a path inside a repository grants that repository.
 
-Set `GITGLASSES_ALLOWED_ROOTS` to bound this. Paths outside it are rejected
-before reaching the engine, including via `..` traversal.
+`apply_patch` writes: it applies a patch to the working tree of whatever
+repository `repoPath` names. The other eight tools only read.
+
+`GITGLASSES_ALLOWED_ROOTS` is what bounds where either can happen. Set it to
+the directories this server may touch; paths outside are rejected before
+reaching the engine, including via `..` traversal and via a symlink that
+leaves a root — both sides of the comparison are canonicalised.
 
 The GitHub host is deliberately **not** a tool argument. A token and the host
 it authenticates to are inseparable, so both come from the environment; if the

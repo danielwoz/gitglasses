@@ -1,7 +1,6 @@
 // Explicit manifest of what GitGlasses activates on the web (wasm engine)
 // versus the native host. extensionWeb.ts is written against this map, and a
-// vitest suite asserts it against expectations, so moving a feature across
-// the line is always a conscious, reviewed decision.
+// vitest suite asserts it entry by entry.
 
 export type WebFeatureStatus =
   /** Wired on the web with full behavior. */
@@ -45,7 +44,7 @@ export const WEB_FEATURES: Readonly<Record<string, WebFeature>> = {
   treeViews: {
     status: 'degraded',
     reason:
-      'firstWorkspaceRepo requires a file-scheme workspace folder; on virtual schemes the views show "no repository"',
+      'activeWorkspaceRepo requires a file-scheme workspace folder; on virtual schemes the views show "no repository"',
   },
   searchView: { status: 'included' },
   homeView: {

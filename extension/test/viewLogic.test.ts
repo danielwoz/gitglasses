@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateContributors,
   appendPage,
+  clampPageSize,
   commitDescription,
   emptyPageState,
   findShaMatches,
@@ -49,7 +50,7 @@ describe('history entry diff spec', () => {
     const spec = historyEntryDiffSpec('repo-1', { sha, path: 'src/app.ts' });
     expect(spec.left).toEqual({ repoId: 'repo-1', path: 'src/app.ts', rev: `${sha}~1` });
     expect(spec.right).toEqual({ repoId: 'repo-1', path: 'src/app.ts', rev: sha });
-    expect(spec.title).toBe('src/app.ts (aabbccdd~1 ↔ aabbccdd)');
+    expect(spec.title).toBe('src/app.ts (aabbccd~1 ↔ aabbccd)');
   });
 
   it('uses the entry path at that commit (rename-aware), not the current path', () => {
@@ -143,7 +144,7 @@ describe('commit rendering', () => {
 
   it('describes a commit as shortSha author relative-date', () => {
     const now = 1_700_000_000 + 3 * 24 * 60 * 60;
-    expect(commitDescription(commit, now)).toBe('aabbccdd Ada 3 days ago');
+    expect(commitDescription(commit, now)).toBe('aabbccd Ada 3 days ago');
   });
 
   it('renders a plain-text commit doc with sha, author, date, and summary', () => {
@@ -153,5 +154,23 @@ describe('commit rendering', () => {
     expect(doc).toContain('author  Ada <ada@example.com>');
     expect(doc).toContain('date    ');
     expect(doc).toContain('Fix the flux capacitor');
+  });
+});
+
+describe('clampPageSize', () => {
+  it('accepts a configured value inside the bounds', () => {
+    expect(clampPageSize(120, 50, { min: 10, max: 1000 })).toBe(120);
+  });
+
+  it('rounds a fractional value', () => {
+    expect(clampPageSize(75.4, 50, { min: 10, max: 1000 })).toBe(75);
+  });
+
+  it('falls back for out-of-range, missing, and non-numeric values', () => {
+    expect(clampPageSize(0, 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize(5000, 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize(undefined, 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize('80', 50, { min: 10, max: 1000 })).toBe(50);
+    expect(clampPageSize(Number.NaN, 50, { min: 10, max: 1000 })).toBe(50);
   });
 });

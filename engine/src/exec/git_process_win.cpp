@@ -8,6 +8,7 @@
 #include "exec/win_unicode.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
 #include <string_view>
 #include <utility>
@@ -152,8 +153,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
       !CreatePipe(&stderrRead.handle, &stderrWrite.handle, &inheritable, 0)) {
     return Error{ErrorCode::Internal, "CreatePipe() failed"};
   }
-  // Only the child-side ends may be inherited; an inherited read end would
-  // keep the pipe open after the child exits and EOF would never arrive.
+  // Only the child-side ends may be inherited; an inherited read end keeps the
+  // pipe open after the child exits, so EOF never arrives.
   SetHandleInformation(stdoutRead.handle, HANDLE_FLAG_INHERIT, 0);
   SetHandleInformation(stderrRead.handle, HANDLE_FLAG_INHERIT, 0);
   stdinNul.handle = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -199,6 +200,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   process.job_ = job.release();
   process.stdoutHandle_ = stdoutRead.release();
   process.stderrHandle_ = stderrRead.release();
+  process.timeout_ = opts.timeout;
+  process.deadline_ = std::chrono::steady_clock::now() + opts.timeout;
   return process;
 }
 
@@ -212,7 +215,10 @@ GitProcess::GitProcess(GitProcess&& other) noexcept
       eof_(other.eof_),
       stderr_(std::move(other.stderr_)),
       reaped_(other.reaped_),
-      exitCode_(other.exitCode_) {
+      exitCode_(other.exitCode_),
+      timeout_(other.timeout_),
+      deadline_(other.deadline_),
+      timedOut_(other.timedOut_) {
   other.process_ = nullptr;
   other.job_ = nullptr;
   other.stdoutHandle_ = nullptr;
@@ -273,6 +279,10 @@ bool GitProcess::fillBuffer(const CancelToken& token) {
       killGroup();
       throw CancelledError();
     }
+    if (expired()) {
+      eof_ = true;
+      return false;
+    }
     const size_t before = buffer_.size();
     const bool open = readAvailable(stdoutHandle_, buffer_);
     if (buffer_.size() > before) return true;
@@ -325,6 +335,17 @@ int GitProcess::wait(const CancelToken& token) {
       WaitForSingleObject(process_, INFINITE);
       reaped_ = true;
       throw CancelledError();
+    }
+    // expired() has already terminated the job, so this wait returns at once
+    // and the timeout is reported through timedOut().
+    if (expired()) {
+      WaitForSingleObject(process_, INFINITE);
+      readAvailable(stderrHandle_, stderr_);
+      DWORD code = 0;
+      GetExitCodeProcess(process_, &code);
+      exitCode_ = static_cast<int>(code);
+      reaped_ = true;
+      return exitCode_;
     }
     drainStderr(/*blocking=*/false);
     if (WaitForSingleObject(process_, kPollIntervalMs) == WAIT_OBJECT_0) {

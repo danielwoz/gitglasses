@@ -4,7 +4,10 @@
 #include <utility>
 #include <vector>
 
+#include "exec/git_process.h"
+
 #include "services/mutate/mutate_common.h"
+#include "services/params.h"
 
 namespace gg::services {
 
@@ -12,8 +15,6 @@ namespace {
 
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
-using mutate_detail::requireString;
-using mutate_detail::requireStringArray;
 using mutate_detail::runConflictAware;
 using mutate_detail::runGit;
 using mutate_detail::requirePositional;
@@ -45,7 +46,7 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         requireGitCli(context);
         const std::string name = requirePositional(requireString(params, "name"), "name");
         const std::string startPoint =
-            requirePositional(params.value("startPoint", ""), "startPoint");
+            requirePositional(optionalString(params, "startPoint"), "startPoint");
         auto repo = openRepo(context, params);
         std::vector<std::string> args;
         if (params.value("checkout", false)) {
@@ -165,15 +166,15 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"fetch"};
         if (params.value("prune", false)) args.push_back("--prune");
-        const std::string remote = requirePositional(params.value("remote", ""), "remote");
+        const std::string remote = requirePositional(optionalString(params, "remote"), "remote");
         if (!remote.empty()) {
           args.push_back("--");
           args.push_back(remote);
         }
-        runGitOrThrow(repo, std::move(args), token, "git fetch");
+        runGitOrThrow(repo, std::move(args), token, "git fetch", exec::kNetworkGitTimeout);
         return rpc::Json::object();
       },
-      rpc::Mode::Serial);
+      rpc::Mode::SerialNetwork);
 
   dispatcher.method(
       "mutate/pull",
@@ -183,10 +184,10 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"pull"};
         if (params.value("autoStash", false)) args.push_back("--autostash");
-        runGitOrThrow(repo, std::move(args), token, "git pull");
+        runGitOrThrow(repo, std::move(args), token, "git pull", exec::kNetworkGitTimeout);
         return rpc::Json::object();
       },
-      rpc::Mode::Serial);
+      rpc::Mode::SerialNetwork);
 
   dispatcher.method(
       "mutate/push",
@@ -206,10 +207,10 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           args.push_back("HEAD");
         }
         if (force == "with-lease") args.push_back("--force-with-lease");
-        runGitOrThrow(repo, std::move(args), token, "git push");
+        runGitOrThrow(repo, std::move(args), token, "git push", exec::kNetworkGitTimeout);
         return rpc::Json::object();
       },
-      rpc::Mode::Serial);
+      rpc::Mode::SerialNetwork);
 }
 
 }  // namespace gg::services

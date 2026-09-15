@@ -2,51 +2,16 @@
 
 #include <git2.h>
 
-#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "core/git2.h"
+
 namespace gg::services {
 
 namespace {
-
-struct ReferenceDeleter {
-  void operator()(git_reference* ref) const { git_reference_free(ref); }
-};
-using ReferencePtr = std::unique_ptr<git_reference, ReferenceDeleter>;
-
-struct BranchIteratorDeleter {
-  void operator()(git_branch_iterator* iter) const { git_branch_iterator_free(iter); }
-};
-using BranchIteratorPtr = std::unique_ptr<git_branch_iterator, BranchIteratorDeleter>;
-
-struct ReferenceIteratorDeleter {
-  void operator()(git_reference_iterator* iter) const { git_reference_iterator_free(iter); }
-};
-using ReferenceIteratorPtr = std::unique_ptr<git_reference_iterator, ReferenceIteratorDeleter>;
-
-Error refsGitError(const std::string& context) {
-  const git_error* err = git_error_last();
-  const std::string detail = err && err->message ? err->message : "unknown libgit2 error";
-  return {ErrorCode::GitError, context + ": " + detail};
-}
-
-std::string oidToHex(const git_oid& oid) {
-  char hex[GIT_OID_HEXSZ + 1] = {};
-  git_oid_fmt(hex, &oid);
-  return hex;
-}
-
-// Sha of the commit a ref ultimately points at (peels annotated tags and
-// symbolic refs). Empty when the ref does not resolve to a commit.
-std::string commitShaOf(git_reference* ref) {
-  git_object* obj = nullptr;
-  if (git_reference_peel(&obj, ref, GIT_OBJECT_COMMIT) != 0) return {};
-  std::unique_ptr<git_object, decltype(&git_object_free)> guard(obj, git_object_free);
-  return oidToHex(*git_object_id(obj));
-}
 
 // "WIP on main: abc123 subject" / "On main: message" -> "main". Detached-head
 // stashes ("(no branch)") report no branch.
@@ -80,21 +45,21 @@ void registerRefsMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
     {
       git_branch_iterator* rawIter = nullptr;
       if (git_branch_iterator_new(&rawIter, raw, GIT_BRANCH_LOCAL) != 0) {
-        throw rpc::HandlerError{{refsGitError("list local branches")}};
+        throw rpc::HandlerError{{core::gitError("list local branches")}};
       }
-      BranchIteratorPtr iter(rawIter);
+      core::BranchIteratorPtr iter(rawIter);
       git_reference* rawRef = nullptr;
       git_branch_t type;
       while (git_branch_next(&rawRef, &type, iter.get()) == 0) {
-        ReferencePtr ref(rawRef);
+        core::ReferencePtr ref(rawRef);
         const char* name = nullptr;
         if (git_branch_name(&name, ref.get()) != 0) continue;
         rpc::Json branch = {{"name", name},
-                            {"sha", commitShaOf(ref.get())},
+                            {"sha", core::commitShaOf(ref.get())},
                             {"current", git_branch_is_head(ref.get()) == 1}};
         git_reference* rawUpstream = nullptr;
         if (git_branch_upstream(&rawUpstream, ref.get()) == 0) {
-          ReferencePtr upstream(rawUpstream);
+          core::ReferencePtr upstream(rawUpstream);
           const char* upstreamName = nullptr;
           if (git_branch_name(&upstreamName, upstream.get()) == 0) {
             branch["upstream"] = upstreamName;
@@ -119,13 +84,13 @@ void registerRefsMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
       }
       git_branch_iterator* rawIter = nullptr;
       if (git_branch_iterator_new(&rawIter, raw, GIT_BRANCH_REMOTE) != 0) {
-        throw rpc::HandlerError{{refsGitError("list remote branches")}};
+        throw rpc::HandlerError{{core::gitError("list remote branches")}};
       }
-      BranchIteratorPtr iter(rawIter);
+      core::BranchIteratorPtr iter(rawIter);
       git_reference* rawRef = nullptr;
       git_branch_t type;
       while (git_branch_next(&rawRef, &type, iter.get()) == 0) {
-        ReferencePtr ref(rawRef);
+        core::ReferencePtr ref(rawRef);
         // Skip symbolic refs like refs/remotes/origin/HEAD.
         if (git_reference_type(ref.get()) == GIT_REFERENCE_SYMBOLIC) continue;
         const char* shorthand = nullptr;
@@ -148,7 +113,7 @@ void registerRefsMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
           group = &remoteGroups.back().second;
           prefixLen = slash + 1;
         }
-        group->push_back({{"name", full.substr(prefixLen)}, {"sha", commitShaOf(ref.get())}});
+        group->push_back({{"name", full.substr(prefixLen)}, {"sha", core::commitShaOf(ref.get())}});
       }
     }
     rpc::Json remotes = rpc::Json::array();
@@ -161,13 +126,13 @@ void registerRefsMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
     {
       git_reference_iterator* rawIter = nullptr;
       if (git_reference_iterator_glob_new(&rawIter, raw, "refs/tags/*") != 0) {
-        throw rpc::HandlerError{{refsGitError("list tags")}};
+        throw rpc::HandlerError{{core::gitError("list tags")}};
       }
-      ReferenceIteratorPtr iter(rawIter);
+      core::ReferenceIteratorPtr iter(rawIter);
       git_reference* rawRef = nullptr;
       while (git_reference_next(&rawRef, iter.get()) == 0) {
-        ReferencePtr ref(rawRef);
-        const std::string sha = commitShaOf(ref.get());
+        core::ReferencePtr ref(rawRef);
+        const std::string sha = core::commitShaOf(ref.get());
         if (sha.empty()) continue;  // tag of a tree/blob: not a commit ref
         tags.push_back({{"name", git_reference_shorthand(ref.get())}, {"sha", sha}});
       }
@@ -188,13 +153,13 @@ void registerRefsMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
                        void* payload) -> int {
       auto& out = *static_cast<rpc::Json*>(payload);
       const std::string text = message ? message : "";
-      rpc::Json entry = {{"index", index}, {"sha", oidToHex(*stashId)}, {"message", text}};
+      rpc::Json entry = {{"index", index}, {"sha", core::oidToHex(*stashId)}, {"message", text}};
       if (auto branch = stashBranch(text)) entry["branch"] = *branch;
       out.push_back(std::move(entry));
       return 0;
     };
     if (git_stash_foreach(repo.value().raw(), callback, &entries) != 0) {
-      throw rpc::HandlerError{{refsGitError("list stashes")}};
+      throw rpc::HandlerError{{core::gitError("list stashes")}};
     }
     return {{"entries", std::move(entries)}};
   });

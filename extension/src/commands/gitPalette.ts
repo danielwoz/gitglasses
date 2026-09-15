@@ -2,10 +2,11 @@
 // small multi-step flow (quickFlow) with back navigation to the root picker.
 
 import * as vscode from 'vscode';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
-import { ActiveRepo, firstWorkspaceRepo } from '../views/viewBase';
+import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
+import { allowedDespiteConflicts } from './conflictGuard';
 import { back, cancel, next, runFlow } from './quickFlow';
 import {
   confirmBranchDelete,
@@ -14,8 +15,8 @@ import {
   confirmMerge,
   confirmResetHard,
   confirmStashDrop,
-  sha7,
 } from './confirmations';
+import { shortSha } from '@gitglasses/protocol/sha';
 import {
   confirmDestructive,
   errorMessage,
@@ -53,6 +54,20 @@ const ROOT_ITEMS: RootItem[] = [
   { id: 'reset', label: '$(discard) Reset', description: 'Reset the current branch to a ref' },
   { id: 'cherryPick', label: '$(git-commit) Cherry-pick', description: 'Apply commits here' },
 ];
+
+// Flows git refuses while a merge, rebase or cherry-pick is unresolved, with
+// the wording the confirmation uses. Commit, push and fetch are left out:
+// committing the resolution is how a conflicted merge is finished, and the
+// other two do not touch the working tree.
+const CONFLICT_GUARDED: Partial<Record<CommandId, string>> = {
+  branch: 'branch',
+  merge: 'merge',
+  rebase: 'rebase',
+  stash: 'stash',
+  pull: 'pull',
+  reset: 'reset',
+  cherryPick: 'cherry-pick',
+};
 
 // Representative engine method per flow, for capability gating: every flow
 // here ends in a CLI-dependent mutation, keyed by its first mutating call.
@@ -97,7 +112,7 @@ async function pickBranch(
   const picked = await showPick(
     candidates.map((branch) => ({
       label: branch.name,
-      description: `${sha7(branch.sha)}${branch.current ? ' (current)' : ''}`,
+      description: `${shortSha(branch.sha)}${branch.current ? ' (current)' : ''}`,
     })),
     { title: options.title, placeholder: options.placeholder, back: true },
   );
@@ -143,7 +158,7 @@ async function commitFlow(ctx: PaletteContext): Promise<FlowStatus> {
     repoId: repo.repoId,
     message: flow.state.message,
   });
-  setStatus(`Committed ${sha7(sha)}`);
+  setStatus(`Committed ${shortSha(sha)}`);
   return 'completed';
 }
 
@@ -448,7 +463,7 @@ export function registerGitPalette(
   return vscode.commands.registerCommand('gitglasses.gitCommands', async () => {
     let repo: ActiveRepo | undefined;
     try {
-      repo = await firstWorkspaceRepo(repos);
+      repo = await activeWorkspaceRepo(repos);
     } catch {
       repo = undefined;
     }
@@ -475,6 +490,8 @@ export function registerGitPalette(
         void vscode.window.showInformationMessage(`GitGlasses: ${CLI_UNAVAILABLE_MESSAGE}.`);
         continue;
       }
+      const guarded = CONFLICT_GUARDED[root.id];
+      if (guarded && !(await allowedDespiteConflicts(engine, repo.repoId, guarded))) continue;
       let result: FlowStatus;
       try {
         result = await FLOWS[root.id](ctx);

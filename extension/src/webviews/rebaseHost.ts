@@ -4,10 +4,10 @@
 
 import * as vscode from 'vscode';
 import { RebaseEntry } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
-import { firstWorkspaceRepo } from '../views/viewBase';
+import { activeWorkspaceRepo } from '../views/viewBase';
 import { renderWebviewHtml } from './webviewHtml';
 import { confirmRebase } from '../commands/confirmations';
 import { confirmDestructive, errorMessage, setStatus } from '../commands/ui';
@@ -45,7 +45,7 @@ export class RebaseWebviewHost implements vscode.Disposable {
     }
     let repo;
     try {
-      repo = await firstWorkspaceRepo(this.repos);
+      repo = await activeWorkspaceRepo(this.repos);
     } catch {
       repo = undefined;
     }

@@ -4,20 +4,22 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "core/git2.h"
+#include "core/git2_json.h"
 #include "exec/git_process.h"
+#include "exec/git_runner.h"
 #include "exec/parsers/history_log.h"
+#include "services/params.h"
 
 namespace gg::services {
 
 namespace {
-
-// Sanity ceiling on page sizes so a bad client cannot request an unbounded
-// response frame.
-constexpr std::int64_t kMaxLimit = 100000;
 
 // One-line-per-commit record format shared by the CLI-backed history methods;
 // HistoryLogParser is its counterpart.
@@ -28,63 +30,22 @@ struct RevwalkDeleter {
 };
 using RevwalkPtr = std::unique_ptr<git_revwalk, RevwalkDeleter>;
 
-struct CommitDeleter {
-  void operator()(git_commit* commit) const { git_commit_free(commit); }
-};
-using CommitPtr = std::unique_ptr<git_commit, CommitDeleter>;
-
-// Always reports GitError: an unresolvable ref is GIT_ENOTFOUND to libgit2,
-// but not a missing repository.
-Error historyGitError(const std::string& context) {
-  const git_error* err = git_error_last();
-  const std::string detail = err && err->message ? err->message : "unknown libgit2 error";
-  return {ErrorCode::GitError, context + ": " + detail};
-}
-
-std::string oidToHex(const git_oid& oid) {
-  char hex[GIT_OID_HEXSZ + 1] = {};
-  git_oid_fmt(hex, &oid);
-  return hex;
-}
-
 bool headUnborn(const core::Repo& repo) {
   auto head = repo.head();
   return head.ok() && head.value().unborn;
-}
-
-std::int64_t requireLimit(const rpc::Json& params) {
-  const std::int64_t limit = params.value("limit", std::int64_t{0});
-  if (limit <= 0) {
-    throw rpc::HandlerError{{ErrorCode::InvalidParams, "'limit' must be a positive integer"}};
-  }
-  return std::min(limit, kMaxLimit);
-}
-
-std::string requirePath(const rpc::Json& params) {
-  const std::string path = params.value("path", "");
-  if (path.empty()) {
-    throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
-  }
-  return path;
-}
-
-rpc::Json signatureJson(const git_signature* sig) {
-  return {{"name", sig && sig->name ? sig->name : ""},
-          {"email", sig && sig->email ? sig->email : ""},
-          {"time", sig ? static_cast<std::int64_t>(sig->when.time) : 0}};
 }
 
 rpc::Json commitSummaryJson(git_commit* commit, const std::string& sha) {
   rpc::Json parents = rpc::Json::array();
   const unsigned int parentCount = git_commit_parentcount(commit);
   for (unsigned int i = 0; i < parentCount; ++i) {
-    parents.push_back(oidToHex(*git_commit_parent_id(commit, i)));
+    parents.push_back(core::oidToHex(*git_commit_parent_id(commit, i)));
   }
   const char* summary = git_commit_summary(commit);
   return {{"sha", sha},
           {"parents", std::move(parents)},
-          {"author", signatureJson(git_commit_author(commit))},
-          {"committer", signatureJson(git_commit_committer(commit))},
+          {"author", core::signatureJson(git_commit_author(commit))},
+          {"committer", core::signatureJson(git_commit_committer(commit))},
           {"summary", summary ? summary : ""}};
 }
 
@@ -107,22 +68,22 @@ Result<RevwalkPtr> newWalk(const core::Repo& repo, const std::string& ref, unsig
   git_object* obj = nullptr;
   if (git_revparse_single(&obj, repo.raw(), ref.c_str()) != 0) {
     if (headUnborn(repo)) return RevwalkPtr{};
-    return historyGitError("resolve '" + ref + "'");
+    return core::gitError("resolve '" + ref + "'");
   }
   std::unique_ptr<git_object, decltype(&git_object_free)> objGuard(obj, git_object_free);
 
   git_object* peeled = nullptr;
   if (git_object_peel(&peeled, obj, GIT_OBJECT_COMMIT) != 0) {
-    return historyGitError("'" + ref + "' does not point to a commit");
+    return core::gitError("'" + ref + "' does not point to a commit");
   }
   std::unique_ptr<git_object, decltype(&git_object_free)> peeledGuard(peeled, git_object_free);
 
   git_revwalk* rawWalk = nullptr;
-  if (git_revwalk_new(&rawWalk, repo.raw()) != 0) return historyGitError("revwalk");
+  if (git_revwalk_new(&rawWalk, repo.raw()) != 0) return core::gitError("revwalk");
   RevwalkPtr walk(rawWalk);
   git_revwalk_sorting(walk.get(), sorting);
   if (git_revwalk_push(walk.get(), git_object_id(peeled)) != 0) {
-    return historyGitError("revwalk push '" + ref + "'");
+    return core::gitError("revwalk push '" + ref + "'");
   }
   return walk;
 }
@@ -132,31 +93,38 @@ Result<RevwalkPtr> newWalk(const core::Repo& repo, const std::string& ref, unsig
 Result<void> runGitLog(const core::Repo& repo, std::vector<std::string> args,
                        const CancelToken& token, exec::HistoryLogParser& parser) {
   const std::string cwd = repo.workdir().empty() ? repo.gitdir() : repo.workdir();
-  auto process = exec::GitProcess::spawn(cwd, std::move(args));
-  if (!process) return process.error();
-  std::string line;
-  while (process.value().readLine(line, token)) {
-    parser.feedLine(line);
-  }
+  auto status = exec::runGit(cwd, std::move(args), {}, token,
+                             [&parser](std::string line) { parser.feedLine(line); });
+  if (!status) return status.error();
   parser.finish();
-  if (int exitCode = process.value().wait(token); exitCode != 0) {
-    return Error{ErrorCode::GitError, "git log failed (" + std::to_string(exitCode) +
-                                          "): " + process.value().stderrOutput()};
+  if (status.value().exitCode != 0) {
+    return Error{ErrorCode::GitError, "git log failed (" +
+                                          std::to_string(status.value().exitCode) + "): " +
+                                          status.value().stderrText};
   }
   return {};
 }
 
+char lowerByte(char c) {
+  return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+}
+
 std::string toLower(std::string_view text) {
   std::string lowered(text);
-  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), lowerByte);
   return lowered;
 }
 
 // Case-insensitive substring test; `loweredNeedle` must already be lowercase.
-bool containsCi(const char* haystack, const std::string& loweredNeedle) {
+// Lowercases the haystack one character at a time inside the search, so no
+// commit message is copied.
+bool containsCi(const char* haystack, std::string_view loweredNeedle) {
   if (!haystack) return false;
-  return toLower(haystack).find(loweredNeedle) != std::string::npos;
+  const std::string_view text(haystack);
+  const auto hit = std::search(text.begin(), text.end(), loweredNeedle.begin(),
+                               loweredNeedle.end(),
+                               [](char a, char b) { return lowerByte(a) == b; });
+  return hit != text.end();
 }
 
 }  // namespace
@@ -169,9 +137,10 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       "log/commits",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
-        const std::int64_t limit = requireLimit(params);
-        const std::string ref = params.value("ref", "HEAD");
-        const std::string cursor = params.value("cursor", "");
+        const std::int64_t limit = pageLimit(params);
+        std::string ref = optionalString(params, "ref");
+        if (ref.empty()) ref = "HEAD";
+        const std::string cursor = optionalString(params, "cursor");
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
@@ -185,7 +154,7 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
         git_oid oid;
         while (git_revwalk_next(&oid, walk.value().get()) == 0) {
           token.throwIfCancelled();
-          std::string sha = oidToHex(oid);
+          std::string sha = core::oidToHex(oid);
           if (!started) {
             if (sha != cursor) continue;
             started = true;
@@ -196,9 +165,9 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
           }
           git_commit* rawCommit = nullptr;
           if (git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
-            throw rpc::HandlerError{{historyGitError("lookup commit " + sha)}};
+            throw rpc::HandlerError{{core::gitError("lookup commit " + sha)}};
           }
-          CommitPtr commit(rawCommit);
+          core::CommitPtr commit(rawCommit);
           commits.push_back(commitSummaryJson(commit.get(), sha));
         }
         // A cursor that no longer exists (history rewritten) yields an empty
@@ -219,12 +188,11 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::int64_t limit = requireLimit(params);
-        const std::string path = requirePath(params);
+        const std::int64_t limit = pageLimit(params);
+        const std::string path = requireString(params, "path");
         std::string startRev;
         std::string startPath = path;
-        if (params.contains("cursor") && params["cursor"].is_string()) {
-          const std::string cursor = params["cursor"].get<std::string>();
+        if (const std::string cursor = optionalString(params, "cursor"); !cursor.empty()) {
           if (cursor.size() < GIT_OID_HEXSZ + 2 || cursor[GIT_OID_HEXSZ] != ':') {
             throw rpc::HandlerError{{ErrorCode::InvalidParams, "invalid cursor"}};
           }
@@ -278,12 +246,14 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string path = requirePath(params);
-        const std::int64_t startLine = params.value("startLine", std::int64_t{0});
-        const std::int64_t endLine = params.value("endLine", std::int64_t{0});
-        if (startLine < 1 || endLine < startLine) {
+        const std::string path = requireString(params, "path");
+        const std::int64_t startLine =
+            requireInteger(params, "startLine", 1, std::numeric_limits<std::int64_t>::max());
+        const std::int64_t endLine =
+            requireInteger(params, "endLine", 1, std::numeric_limits<std::int64_t>::max());
+        if (endLine < startLine) {
           throw rpc::HandlerError{
-              {ErrorCode::InvalidParams, "'startLine'/'endLine' must satisfy 1 <= start <= end"}};
+              {ErrorCode::InvalidParams, "'endLine' must not be before 'startLine'"}};
         }
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
@@ -312,12 +282,12 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       "search/commits",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn& notify) -> rpc::Json {
-        const std::int64_t limit = requireLimit(params);
-        const std::string streamId = params.value("streamId", "");
-        const rpc::Json query = params.value("query", rpc::Json::object());
-        const std::string text = toLower(query.value("text", ""));
-        const std::string author = toLower(query.value("author", ""));
-        const std::string shaPrefix = toLower(query.value("sha", ""));
+        const std::int64_t limit = pageLimit(params);
+        const std::string streamId = requireString(params, "streamId");
+        const rpc::Json query = optionalObject(params, "query");
+        const std::string text = toLower(optionalString(query, "text"));
+        const std::string author = toLower(optionalString(query, "author"));
+        const std::string shaPrefix = toLower(optionalString(query, "sha"));
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
@@ -339,12 +309,12 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
         git_oid oid;
         while (walk.value() && git_revwalk_next(&oid, walk.value().get()) == 0) {
           token.throwIfCancelled();
-          const std::string sha = oidToHex(oid);
+          const std::string sha = core::oidToHex(oid);
           git_commit* rawCommit = nullptr;
           if (git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
-            throw rpc::HandlerError{{historyGitError("lookup commit " + sha)}};
+            throw rpc::HandlerError{{core::gitError("lookup commit " + sha)}};
           }
-          CommitPtr commit(rawCommit);
+          core::CommitPtr commit(rawCommit);
 
           // Criteria AND together; an empty query matches every commit.
           bool matches = true;

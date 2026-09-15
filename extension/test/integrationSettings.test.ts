@@ -25,9 +25,6 @@ describe('normalizeDomain', () => {
     expect(normalizeDomain('  git.example.com  ')).toBe('git.example.com');
   });
 
-  // The remote matcher parses the port off separately and discards it, so a
-  // domain stored with one could never match and the integration would look
-  // configured while doing nothing.
   it('drops a port so the stored domain can actually match a remote', () => {
     expect(normalizeDomain('git.corp.example:8443')).toBe('git.corp.example');
     expect(normalizeDomain('https://git.corp.example:8443/o/repo.git')).toBe(

@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
-import { EngineClient } from './engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 
 const DEBOUNCE_MS = 150;
 
 // Pushes unsaved buffer contents to the engine's overlay store so blame
-// reflects what the user sees. Full-content push, debounced; incremental
-// sync can replace it behind the same interface later.
+// reflects what the user sees. Each push carries the full content, debounced.
 export class DocumentSync implements vscode.Disposable {
   private timers = new Map<string, NodeJS.Timeout>();
   private dirtyDocs = new Set<string>();

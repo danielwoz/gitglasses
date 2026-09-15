@@ -1,14 +1,17 @@
 import * as vscode from 'vscode';
 import type { PullRequest } from '@gitglasses/integrations';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
+import { shortSha } from '@gitglasses/protocol/sha';
 import { RepositoryService } from '../model/repositoryService';
-import { ActiveRepo, ViewBase, ViewNode, firstWorkspaceRepo, messageNode } from '../views/viewBase';
+import { ActiveRepo, ViewBase, ViewNode, messageNode, withRepo } from '../views/viewBase';
 import { commitNode } from '../views/nodes';
 import type { LaunchpadService } from '../integrations/launchpadService';
 import { BUCKET_LABELS } from '../integrations/launchpadLogic';
-import { errorMessage, setStatus } from '../commands/ui';
+import { setStatus } from '../commands/ui';
 import { relativeTime } from '../system/dates';
-import { branchCardDescription, glimpsePrs, showGetStarted } from './homeLogic';
+import { BranchStatus, branchCardDescription, glimpsePrs, showGetStarted } from './homeLogic';
+import { conflictLabel } from '../model/conflictLogic';
+import { allowedDespiteConflicts } from '../commands/conflictGuard';
 
 const REFRESH_DEBOUNCE_MS = 300;
 const RECENT_COMMITS = 5;
@@ -54,6 +57,30 @@ function glimpsePrNode(bucket: string, pr: PullRequest): ViewNode {
   return node;
 }
 
+// An operation left unfinished: the conflicted files, each opening in the
+// editor, under a section that says what has to happen next.
+function conflictsSection(repo: ActiveRepo, conflicted: readonly string[]): ViewNode {
+  const children = conflicted.map((file) => {
+    const uri = vscode.Uri.joinPath(vscode.Uri.file(repo.rootPath), file);
+    const item = new vscode.TreeItem(file, vscode.TreeItemCollapsibleState.None);
+    item.resourceUri = uri;
+    item.iconPath = new vscode.ThemeIcon('warning');
+    item.contextValue = 'gitglassesConflictedFile';
+    item.command = { command: 'vscode.open', title: 'Open File', arguments: [uri] };
+    return { item };
+  });
+  const section = sectionNode(
+    'Conflicts',
+    'warning',
+    children,
+    `${conflictLabel(conflicted.length)} — resolve, stage, then continue`,
+  );
+  section.item.tooltip =
+    'A merge, rebase or cherry-pick is unfinished. Resolve these files and stage ' +
+    'them, then continue or abort the operation.';
+  return section;
+}
+
 // Home: at-a-glance branch card with quick actions, a launchpad glimpse,
 // recent commits, and a dismissible get-started section.
 export class HomeViewProvider extends ViewBase {
@@ -79,17 +106,24 @@ export class HomeViewProvider extends ViewBase {
   }
 
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
-    const nodes: ViewNode[] = [await this.branchCard(repo)];
-    nodes.push(await this.launchpadGlimpse());
-    nodes.push(await this.recentActivity(repo));
+    // The three sections read independent sources, so they are fetched
+    // together: the view renders one round trip after the repo resolves.
+    const [status, glimpse, recent] = await Promise.all([
+      this.engine.request('status/summary', { repoId: repo.repoId }),
+      this.launchpadGlimpse(),
+      this.recentActivity(repo),
+    ]);
+    const nodes: ViewNode[] = [this.branchCard(status)];
+    if (status.conflicted.length > 0) nodes.push(conflictsSection(repo, status.conflicted));
+    nodes.push(glimpse);
+    nodes.push(recent);
     if (showGetStarted(this.globalState.get<boolean>(GET_STARTED_DISMISSED_KEY))) {
       nodes.push(this.getStarted());
     }
     return nodes;
   }
 
-  private async branchCard(repo: ActiveRepo): Promise<ViewNode> {
-    const status = await this.engine.request('status/summary', { repoId: repo.repoId });
+  private branchCard(status: BranchStatus): ViewNode {
     const node = sectionNode(
       status.branch || 'HEAD (detached)',
       'git-branch',
@@ -106,7 +140,8 @@ export class HomeViewProvider extends ViewBase {
       `Branch: ${status.branch || '(detached)'}`,
       `Upstream: ${status.upstream ?? 'none'}`,
       `Ahead ${status.ahead} / behind ${status.behind}`,
-      `${status.staged.length} staged, ${status.unstaged.length} unstaged, ${status.untracked.length} untracked`,
+      `${status.conflicted.length} conflicted, ${status.staged.length} staged, ` +
+        `${status.unstaged.length} unstaged, ${status.untracked.length} untracked`,
     ].join('\n');
     return node;
   }
@@ -167,77 +202,85 @@ export function registerHomeCommands(
   view: HomeViewProvider,
   globalState: vscode.Memento,
 ): vscode.Disposable[] {
-  const withRepo = async (
-    action: (repo: ActiveRepo) => Promise<void>,
+  // The shared repo action, plus the card refresh every home action ends with.
+  // Actions git refuses mid-conflict confirm first; push is not one of them.
+  const onRepo = (
     label: string,
-  ): Promise<void> => {
-    let repo: ActiveRepo | undefined;
-    try {
-      repo = await firstWorkspaceRepo(repos);
-    } catch {
-      repo = undefined;
-    }
-    if (!repo) {
-      void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
-      return;
-    }
-    try {
+    action: (repo: ActiveRepo) => Promise<void>,
+    options: { guardConflicts?: boolean } = {},
+  ): Promise<void> =>
+    withRepo(repos, label, async (repo) => {
+      if (
+        options.guardConflicts &&
+        !(await allowedDespiteConflicts(engine, repo.repoId, label))
+      ) {
+        return;
+      }
       await action(repo);
       view.refresh();
-    } catch (error) {
-      void vscode.window.showErrorMessage(`GitGlasses: ${label} failed: ${errorMessage(error)}`);
-    }
-  };
+    });
 
   return [
     vscode.commands.registerCommand('gitglasses.home.push', () =>
-      withRepo(async (repo) => {
+      onRepo('push', async (repo) => {
         const status = await engine.request('status/summary', { repoId: repo.repoId });
         const setUpstream = !status.upstream;
         await engine.request('mutate/push', { repoId: repo.repoId, setUpstream });
         setStatus(`Pushed '${status.branch}'${setUpstream ? ' (set upstream)' : ''}`);
-      }, 'push'),
+      }),
     ),
     vscode.commands.registerCommand('gitglasses.home.pull', () =>
-      withRepo(async (repo) => {
-        await engine.request('mutate/pull', { repoId: repo.repoId, autoStash: true });
-        setStatus('Pulled (auto-stash)');
-      }, 'pull'),
+      onRepo(
+        'pull',
+        async (repo) => {
+          await engine.request('mutate/pull', { repoId: repo.repoId, autoStash: true });
+          setStatus('Pulled (auto-stash)');
+        },
+        { guardConflicts: true },
+      ),
     ),
     vscode.commands.registerCommand('gitglasses.home.switchBranch', () =>
-      withRepo(async (repo) => {
-        const { branches } = await engine.request('refs/list', { repoId: repo.repoId });
-        const candidates = branches.filter((branch) => !branch.current);
-        if (candidates.length === 0) {
-          void vscode.window.showInformationMessage('GitGlasses: no other branches.');
-          return;
-        }
-        const picked = await vscode.window.showQuickPick(
-          candidates.map((branch) => ({
-            label: branch.name,
-            description: branch.sha.slice(0, 7),
-          })),
-          { placeHolder: 'Branch to switch to' },
-        );
-        if (!picked) return;
-        await engine.request('mutate/switch', { repoId: repo.repoId, ref: picked.label });
-        setStatus(`Switched to '${picked.label}'`);
-      }, 'switch branch'),
+      onRepo(
+        'switch branch',
+        async (repo) => {
+          const { branches } = await engine.request('refs/list', { repoId: repo.repoId });
+          const candidates = branches.filter((branch) => !branch.current);
+          if (candidates.length === 0) {
+            void vscode.window.showInformationMessage('GitGlasses: no other branches.');
+            return;
+          }
+          const picked = await vscode.window.showQuickPick(
+            candidates.map((branch) => ({
+              label: branch.name,
+              description: shortSha(branch.sha),
+            })),
+            { placeHolder: 'Branch to switch to' },
+          );
+          if (!picked) return;
+          await engine.request('mutate/switch', { repoId: repo.repoId, ref: picked.label });
+          setStatus(`Switched to '${picked.label}'`);
+        },
+        { guardConflicts: true },
+      ),
     ),
     vscode.commands.registerCommand('gitglasses.home.createBranch', () =>
-      withRepo(async (repo) => {
-        const name = await vscode.window.showInputBox({
-          prompt: 'Branch name',
-          validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
-        });
-        if (!name) return;
-        await engine.request('mutate/branchCreate', {
-          repoId: repo.repoId,
-          name: name.trim(),
-          checkout: true,
-        });
-        setStatus(`Created branch '${name.trim()}'`);
-      }, 'create branch'),
+      onRepo(
+        'create branch',
+        async (repo) => {
+          const name = await vscode.window.showInputBox({
+            prompt: 'Branch name',
+            validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
+          });
+          if (!name) return;
+          await engine.request('mutate/branchCreate', {
+            repoId: repo.repoId,
+            name: name.trim(),
+            checkout: true,
+          });
+          setStatus(`Created branch '${name.trim()}'`);
+        },
+        { guardConflicts: true },
+      ),
     ),
     vscode.commands.registerCommand('gitglasses.home.dismissGetStarted', async () => {
       await globalState.update(GET_STARTED_DISMISSED_KEY, true);

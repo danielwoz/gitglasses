@@ -20,9 +20,11 @@ if(EMSCRIPTEN)
     src/core/repo.cpp
     src/repo/registry.cpp
     src/exec/cli_detect.cpp
+    src/exec/git_runner.cpp
     src/exec/parsers/history_log.cpp
     src/exec/parsers/incremental_blame.cpp
     src/cache/blame_cache.cpp
+    src/cache/graph_cache.cpp
     src/rpc/framing.cpp
     src/rpc/dispatcher.cpp
     src/services/blame/blame_service.cpp
@@ -39,6 +41,7 @@ if(EMSCRIPTEN)
     src/services/status/diff_methods.cpp
     src/services/status/stage_methods.cpp
     src/services/status/status_methods.cpp
+    src/services/params.cpp
     src/services/repo_methods.cpp
     src/services/rev_methods.cpp
   )
@@ -104,7 +107,7 @@ add_library(gg_core STATIC
   src/core/repo.cpp
 )
 target_link_libraries(gg_core
-  PUBLIC gg_util libgit2::libgit2package
+  PUBLIC gg_util libgit2::libgit2package nlohmann_json::nlohmann_json
   PRIVATE gg_warnings)
 
 add_library(gg_repo STATIC
@@ -123,6 +126,7 @@ endif()
 add_library(gg_exec STATIC
   src/exec/cli_detect.cpp
   ${GG_GIT_PROCESS_SOURCE}
+  src/exec/git_runner.cpp
   src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp
   src/exec/sequence_editor.cpp
@@ -133,6 +137,7 @@ target_link_libraries(gg_exec
 
 add_library(gg_cache STATIC
   src/cache/blame_cache.cpp
+  src/cache/graph_cache.cpp
 )
 target_link_libraries(gg_cache PUBLIC gg_exec PRIVATE gg_warnings)
 
@@ -156,6 +161,7 @@ add_library(gg_services STATIC
   src/services/status/diff_methods.cpp
   src/services/status/stage_methods.cpp
   src/services/status/status_methods.cpp
+  src/services/params.cpp
   src/services/repo_methods.cpp
   src/services/rev_methods.cpp
 )

@@ -9,10 +9,12 @@ add_executable(engine_tests
   unit/incremental_blame_test.cpp
   unit/git_process_test.cpp
   unit/blame_service_test.cpp
+  unit/doc_overlay_test.cpp
   unit/blame_backend_parity_test.cpp
   unit/no_cli_session_test.cpp
   unit/history_log_parser_test.cpp
   unit/history_service_test.cpp
+  unit/rev_service_test.cpp
   unit/graph_service_test.cpp
   unit/status_service_test.cpp
   unit/sequence_editor_test.cpp

@@ -3,20 +3,19 @@
 // executes the context-menu mutation actions.
 
 import * as vscode from 'vscode';
-import { GraphRow } from '@gitglasses/protocol';
-import { EngineClient } from '../engine/engineClient';
+import { CommitSummaryInfo, GraphRow } from '@gitglasses/protocol';
+import { EngineClient } from '@gitglasses/rpc';
 import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
-import { firstWorkspaceRepo } from '../views/viewBase';
+import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
 import { openCommitDoc } from '../views/nodes';
-import { shortSha } from '../views/viewLogic';
+import { shortSha } from '@gitglasses/protocol/sha';
 import { renderWebviewHtml } from './webviewHtml';
 import {
   confirmCherryPick,
   confirmMerge,
   confirmResetHard,
   confirmRevert,
-  sha7,
 } from '../commands/confirmations';
 import {
   confirmDestructive,
@@ -24,8 +23,9 @@ import {
   setStatus,
   showConflictGuidance,
 } from '../commands/ui';
+import { allowedDespiteConflicts } from '../commands/conflictGuard';
+import { graphPageSize } from '../system/settings';
 
-const PAGE_LIMIT = 200;
 const REFRESH_DEBOUNCE_MS = 300;
 
 type GraphActionId =
@@ -47,6 +47,17 @@ const ACTION_LABELS: Record<GraphActionId, string> = {
   rebase: 'rebase',
 };
 
+// Actions git refuses while a merge, rebase or cherry-pick is unresolved.
+// Creating a branch is not one of them.
+const CONFLICT_GUARDED: readonly GraphActionId[] = [
+  'switchDetached',
+  'cherryPick',
+  'revert',
+  'reset',
+  'merge',
+  'rebase',
+];
+
 // Engine method each context-menu action leads with, for capability gating.
 const ACTION_METHODS: Record<GraphActionId, string> = {
   createBranch: 'mutate/branchCreate',
@@ -61,7 +72,8 @@ const ACTION_METHODS: Record<GraphActionId, string> = {
 type HostToWebviewMessage =
   | { type: 'reset' }
   | { type: 'rows'; rows: GraphRow[]; nextCursor?: string }
-  | { type: 'theme' };
+  | { type: 'theme' }
+  | { type: 'error'; message: string };
 
 type WebviewToHostMessage =
   | { type: 'ready' }
@@ -74,7 +86,9 @@ type WebviewToHostMessage =
 export class GraphWebviewHost implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private panelDisposables: vscode.Disposable[] = [];
-  private rowsBySha = new Map<string, GraphRow>();
+  /** Fields the openCommit action needs, keyed by sha. The webview keeps the
+   *  full rows, so lanes, edges, refs and dates are not retained here. */
+  private commitsBySha = new Map<string, CommitSummaryInfo>();
   private repoId: string | undefined;
   private refetchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -85,10 +99,30 @@ export class GraphWebviewHost implements vscode.Disposable {
     private readonly openRebase: (upstream: string) => void | Promise<void>,
   ) {}
 
-  show(): void {
+  /** Opens the graph. The repository is resolved first, so a workspace
+   *  without one gets an explanation and no panel. */
+  async show(): Promise<void> {
     if (this.panel) {
       this.panel.reveal();
       return;
+    }
+    if (this.repoId === undefined) {
+      let repo: ActiveRepo | undefined;
+      try {
+        repo = await activeWorkspaceRepo(this.repos);
+      } catch {
+        void vscode.window.showErrorMessage(
+          'GitGlasses: cannot show the commit graph — the engine is unavailable.',
+        );
+        return;
+      }
+      if (!repo) {
+        void vscode.window.showWarningMessage(
+          'GitGlasses: no git repository in this workspace, so there is no commit graph to show.',
+        );
+        return;
+      }
+      this.repoId = repo.repoId;
     }
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webviews');
     const panel = vscode.window.createWebviewPanel(
@@ -131,7 +165,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     for (const disposable of this.panelDisposables) disposable.dispose();
     this.panelDisposables = [];
     this.panel = undefined;
-    this.rowsBySha.clear();
+    this.commitsBySha.clear();
   }
 
   dispose(): void {
@@ -152,16 +186,8 @@ export class GraphWebviewHost implements vscode.Disposable {
         await this.fetchAndPost(message.cursor);
         break;
       case 'openCommit': {
-        const row = this.rowsBySha.get(message.sha);
-        if (row) {
-          await openCommitDoc({
-            sha: row.sha,
-            parents: row.parents,
-            author: row.author,
-            committer: row.author,
-            summary: row.summary,
-          });
-        }
+        const commit = this.commitsBySha.get(message.sha);
+        if (commit) await openCommitDoc(commit);
         break;
       }
       case 'copySha':
@@ -169,7 +195,7 @@ export class GraphWebviewHost implements vscode.Disposable {
         vscode.window.setStatusBarMessage(`Copied ${shortSha(message.sha)}`, 3000);
         break;
       case 'select':
-        break; // Selection currently only drives webview-local rendering.
+        break; // Selection drives webview-local rendering only.
       case 'action':
         await this.handleAction(message.action, message.shas);
         break;
@@ -186,6 +212,12 @@ export class GraphWebviewHost implements vscode.Disposable {
       );
       return;
     }
+    if (
+      CONFLICT_GUARDED.includes(action) &&
+      !(await allowedDespiteConflicts(this.engine, repoId, ACTION_LABELS[action]))
+    ) {
+      return;
+    }
     try {
       switch (action) {
         case 'createBranch':
@@ -193,7 +225,7 @@ export class GraphWebviewHost implements vscode.Disposable {
           break;
         case 'switchDetached':
           await this.engine.request('mutate/switch', { repoId, ref: sha });
-          setStatus(`Checked out ${sha7(sha)} (detached HEAD)`);
+          setStatus(`Checked out ${shortSha(sha)} (detached HEAD)`);
           break;
         case 'cherryPick': {
           // The webview sends selection newest-first; apply oldest-first.
@@ -219,15 +251,15 @@ export class GraphWebviewHost implements vscode.Disposable {
           break;
         case 'merge': {
           const branch = await this.currentBranch(repoId);
-          if (!(await confirmDestructive(confirmMerge(sha7(sha), branch)))) return;
+          if (!(await confirmDestructive(confirmMerge(shortSha(sha), branch)))) return;
           const { conflicts } = await this.engine.request('mutate/merge', { repoId, ref: sha });
           if (conflicts) showConflictGuidance('Merge');
-          else setStatus(`Merged ${sha7(sha)} into '${branch}'`);
+          else setStatus(`Merged ${shortSha(sha)} into '${branch}'`);
           break;
         }
         case 'rebase':
           // Opens the interactive rebase editor with this commit as the
-          // upstream instead of rebasing immediately.
+          // upstream; the rebase runs from there.
           await this.openRebase(sha);
           break;
       }
@@ -245,12 +277,12 @@ export class GraphWebviewHost implements vscode.Disposable {
 
   private async createBranchAt(repoId: string, sha: string): Promise<void> {
     const name = await vscode.window.showInputBox({
-      prompt: `Branch name (created at ${sha7(sha)})`,
+      prompt: `Branch name (created at ${shortSha(sha)})`,
       validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
     });
     if (!name?.trim()) return;
     const mode = await vscode.window.showQuickPick(['Create', 'Create and Switch'], {
-      placeHolder: `Create '${name.trim()}' at ${sha7(sha)}`,
+      placeHolder: `Create '${name.trim()}' at ${shortSha(sha)}`,
     });
     if (!mode) return;
     await this.engine.request('mutate/branchCreate', {
@@ -259,7 +291,7 @@ export class GraphWebviewHost implements vscode.Disposable {
       startPoint: sha,
       checkout: mode === 'Create and Switch',
     });
-    setStatus(`Created branch '${name.trim()}' at ${sha7(sha)}`);
+    setStatus(`Created branch '${name.trim()}' at ${shortSha(sha)}`);
   }
 
   private async resetTo(repoId: string, sha: string): Promise<void> {
@@ -274,34 +306,52 @@ export class GraphWebviewHost implements vscode.Disposable {
           mode: 'hard' as const,
         },
       ],
-      { placeHolder: `Reset '${branch}' to ${sha7(sha)}` },
+      { placeHolder: `Reset '${branch}' to ${shortSha(sha)}` },
     );
     if (!mode) return;
-    if (mode.mode === 'hard' && !(await confirmDestructive(confirmResetHard(branch, sha7(sha))))) {
+    if (mode.mode === 'hard' && !(await confirmDestructive(confirmResetHard(branch, shortSha(sha))))) {
       return;
     }
     await this.engine.request('mutate/reset', { repoId, ref: sha, mode: mode.mode });
-    setStatus(`Reset '${branch}' to ${sha7(sha)} (${mode.mode})`);
+    setStatus(`Reset '${branch}' to ${shortSha(sha)} (${mode.mode})`);
   }
 
   private async fetchAndPost(cursor?: string): Promise<void> {
     if (!this.panel) return;
     try {
       if (!this.repoId) {
-        const repo = await firstWorkspaceRepo(this.repos);
-        if (!repo) return;
+        const repo = await activeWorkspaceRepo(this.repos);
+        if (!repo) {
+          await this.post({
+            type: 'error',
+            message: 'No git repository in this workspace.',
+          });
+          return;
+        }
         this.repoId = repo.repoId;
       }
       const result = await this.engine.request('graph/rows', {
         repoId: this.repoId,
         cursor,
-        limit: PAGE_LIMIT,
+        limit: graphPageSize(),
         include: { stashes: true, wip: true },
       });
-      for (const row of result.rows) this.rowsBySha.set(row.sha, row);
+      for (const row of result.rows) {
+        this.commitsBySha.set(row.sha, {
+          sha: row.sha,
+          parents: row.parents,
+          author: row.author,
+          committer: row.author,
+          summary: row.summary,
+        });
+      }
       await this.post({ type: 'rows', rows: result.rows, nextCursor: result.nextCursor });
-    } catch {
-      // Engine unavailable or restarting; the next repo change refetches.
+    } catch (error) {
+      // The panel shows why it is empty; the next repo change refetches.
+      await this.post({
+        type: 'error',
+        message: `Could not load the commit graph: ${errorMessage(error)}`,
+      });
     }
   }
 
@@ -309,7 +359,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     if (this.refetchTimer !== undefined) clearTimeout(this.refetchTimer);
     this.refetchTimer = setTimeout(() => {
       this.refetchTimer = undefined;
-      this.rowsBySha.clear();
+      this.commitsBySha.clear();
       void this.post({ type: 'reset' }).then(() => this.fetchAndPost());
     }, REFRESH_DEBOUNCE_MS);
   }

@@ -1,5 +1,6 @@
-// Canvas painter for the commit graph. Draws only the visible row window
-// onto a viewport-sized canvas, translated by the scroll offset.
+// Canvas painter for the commit graph. The canvas is viewport-sized rather
+// than content-sized, so the draw loop covers only the rows visibleRange
+// reports and the context is translated by the scroll offset to place them.
 
 import type { GraphRef, GraphRow } from './ipc';
 import {
@@ -94,6 +95,11 @@ export function relativeTime(unixSeconds: number, nowUnixSeconds: number = Date.
 
 export interface RenderState {
   rows: readonly GraphRow[];
+  /** Highest lane index across all loaded rows and their edges, accumulated
+   *  by GraphStore as pages arrive; sizes the graph column. It covers every
+   *  loaded row, not just the drawn window, so the column stays put while
+   *  scrolling. */
+  maxLane: number;
   selection: SelectionState;
   scrollTop: number;
   viewportW: number;
@@ -109,7 +115,7 @@ export class GraphRenderer {
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
   render(state: RenderState): void {
-    const { rows, selection, scrollTop, viewportW, viewportH, theme } = state;
+    const { rows, maxLane, selection, scrollTop, viewportW, viewportH, theme } = state;
     const dpr = window.devicePixelRatio || 1;
     const pixelW = Math.max(1, Math.round(viewportW * dpr));
     const pixelH = Math.max(1, Math.round(viewportH * dpr));
@@ -127,13 +133,6 @@ export class GraphRenderer {
 
     const range = visibleRange(scrollTop, viewportH, ROW_HEIGHT, rows.length, OVERSCAN_ROWS);
 
-    let maxLane = 0;
-    for (const row of rows) {
-      maxLane = Math.max(maxLane, row.lane);
-      for (const edge of row.laneEdges) {
-        maxLane = Math.max(maxLane, edge.fromLane, edge.toLane);
-      }
-    }
     const graphW = graphColumnWidth(maxLane + 1, LANE_PADDING, LANE_WIDTH);
     const dateX = viewportW - DATE_WIDTH;
     const authorX = dateX - COLUMN_GAP - AUTHOR_WIDTH;

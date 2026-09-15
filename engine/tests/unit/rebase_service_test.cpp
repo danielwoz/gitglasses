@@ -270,6 +270,40 @@ TEST(RebaseService, ConflictReportsAndAbortRestoresHead) {
   EXPECT_EQ(slurp(fixture.root() / "f.txt"), "three\n");
 }
 
+// A paused rebase leaves HEAD detached, so HEAD alone cannot tell a client
+// what the repository is doing; repo/state carries the sequencer state.
+TEST(RebaseService, RepoStateReportsThePausedRebase) {
+  FixtureRepo fixture;
+  const Seeded shas = seedConflicting(fixture);
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json idle = session.request(req(10, "repo/state", {{"repoId", repoId}}));
+  EXPECT_EQ(idle["result"]["sequencer"]["operation"], "none");
+  EXPECT_FALSE(idle["result"]["sequencer"]["conflicted"].get<bool>());
+
+  Json start = session.request(req(11, "rebase/start",
+                                   {{"repoId", repoId},
+                                    {"upstream", shas.base},
+                                    {"plan", Json::array({entry("pick", shas.c1, "c1"),
+                                                          entry("pick", shas.c3, "c3")})}}));
+  ASSERT_TRUE(start["result"]["conflicts"].get<bool>()) << start.dump();
+
+  Json state = session.request(req(12, "repo/state", {{"repoId", repoId}}));
+  ASSERT_TRUE(state.contains("result")) << state.dump();
+  const Json& sequencer = state["result"]["sequencer"];
+  EXPECT_TRUE(state["result"]["head"]["detached"].get<bool>());
+  EXPECT_EQ(sequencer["operation"], "rebase");
+  EXPECT_TRUE(sequencer["conflicted"].get<bool>());
+  EXPECT_EQ(sequencer["step"], 2);
+  EXPECT_EQ(sequencer["total"], 2);
+
+  session.request(req(13, "rebase/abort", {{"repoId", repoId}}));
+  Json after = session.request(req(14, "repo/state", {{"repoId", repoId}}));
+  EXPECT_EQ(after["result"]["sequencer"]["operation"], "none");
+  EXPECT_FALSE(after["result"]["sequencer"]["conflicted"].get<bool>());
+}
+
 TEST(RebaseService, ConflictResolveAndContinueCompletes) {
   FixtureRepo fixture;
   const Seeded shas = seedConflicting(fixture);

@@ -1,5 +1,5 @@
 import { governedFetch } from '../rateLimiter.js';
-import { defaultFetch, type FetchLike } from '../http.js';
+import type { FetchLike } from '../http.js';
 import type {
   AuthContext,
   HostingCapability,
@@ -16,7 +16,7 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { hostOfUrl, throwForStatus } from './shared.js';
+import { ISSUE_TTL_MS, mergeByRole, p, ProviderClient } from './client.js';
 
 export interface BitbucketDCProviderOptions {
   /** Instance base URL, e.g. "https://git.corp.example". Required. */
@@ -97,8 +97,8 @@ function mapAccount(user: DCUser | undefined): Account {
  * Bitbucket Data Center / Server hosting provider (REST API 1.0 style at
  * `{baseUrl}/rest/api/1.0`). Uses the dashboard endpoint to gather PRs the
  * user authors or reviews. The 1.0 API exposes no mergeability signal on PR
- * listings, so mergeable is always "unknown"; build status lives on a
- * separate API and is not fetched (checksStatus is left unset).
+ * listings, so mergeable is always "unknown"; build status lives on a separate
+ * API, so checksStatus stays unset.
  */
 export class BitbucketDCProvider implements HostingProvider {
   readonly id: string;
@@ -109,14 +109,20 @@ export class BitbucketDCProvider implements HostingProvider {
     'reviews',
   ]);
 
-  private readonly baseUrl: string;
-  private readonly fetchFn: FetchLike;
+  private readonly client: ProviderClient;
 
   constructor(options: BitbucketDCProviderOptions) {
     this.id = options.id ?? 'bitbucket-dc';
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    this.host = hostOfUrl(this.baseUrl);
-    this.fetchFn = options.fetchFn ?? governedFetch;
+    this.client = new ProviderClient({
+      name: 'Bitbucket Data Center',
+      baseUrl: options.baseUrl,
+      baseUrlLabel: 'Bitbucket Data Center baseUrl',
+      prefix: '/rest/api/1.0',
+      headers: { accept: 'application/json' },
+      authorize: (auth) => `Bearer ${auth.token}`,
+      fetchFn: options.fetchFn ?? governedFetch,
+    });
+    this.host = this.client.host;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -135,19 +141,28 @@ export class BitbucketDCProvider implements HostingProvider {
   ): Promise<PullRequest[]> {
     const limit = opts?.limit ?? 50;
     const [authored, reviewing] = await Promise.all([
-      this.get(auth, `/dashboard/pull-requests?state=OPEN&role=AUTHOR&limit=${limit}`),
-      this.get(auth, `/dashboard/pull-requests?state=OPEN&role=REVIEWER&limit=${limit}`),
+      this.dashboard(auth, 'AUTHOR', limit),
+      this.dashboard(auth, 'REVIEWER', limit),
     ]);
-    const results = new Map<number, PullRequest>();
-    for (const pr of ((authored as { values?: DCPullRequest[] } | undefined)?.values ?? [])) {
-      results.set(pr.id, this.mapPullRequest(pr, 'author'));
-    }
-    for (const pr of ((reviewing as { values?: DCPullRequest[] } | undefined)?.values ?? [])) {
-      if (!results.has(pr.id)) {
-        results.set(pr.id, this.mapPullRequest(pr, 'reviewer'));
-      }
-    }
-    return [...results.values()].slice(0, limit);
+    return mergeByRole(
+      authored.map((pr) => this.mapPullRequest(pr, 'author')),
+      reviewing.map((pr) => this.mapPullRequest(pr, 'reviewer')),
+      (pr) => pr.number,
+      limit
+    );
+  }
+
+  /** Open pull requests the user holds `role` on, from the dashboard endpoint. */
+  private async dashboard(
+    auth: AuthContext,
+    role: 'AUTHOR' | 'REVIEWER',
+    limit: number
+  ): Promise<DCPullRequest[]> {
+    const json = await this.client.getJson<{ values?: DCPullRequest[] }>(
+      auth,
+      p`/dashboard/pull-requests?state=OPEN&role=${role}&limit=${limit}`
+    );
+    return json?.values ?? [];
   }
 
   async getPullRequestForBranch(
@@ -155,13 +170,11 @@ export class BitbucketDCProvider implements HostingProvider {
     repo: RepoDescriptor,
     branch: string
   ): Promise<PullRequest | undefined> {
-    const json = (await this.get(
+    const repoPath = p`/projects/${repo.owner}/repos/${repo.name}`;
+    const json = await this.client.getJson<{ values?: DCPullRequest[] }>(
       auth,
-      `/projects/${encodeURIComponent(repo.owner)}/repos/${encodeURIComponent(repo.name)}` +
-        `/pull-requests?state=OPEN&direction=OUTGOING&at=${encodeURIComponent(
-          `refs/heads/${branch}`
-        )}`
-    )) as { values?: DCPullRequest[] } | undefined;
+      p`${repoPath}/pull-requests?state=OPEN&direction=OUTGOING&at=${`refs/heads/${branch}`}`
+    );
     const pr = json?.values?.[0];
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
@@ -176,11 +189,11 @@ export class BitbucketDCProvider implements HostingProvider {
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const pr = (await this.get(
+    const pr = await this.client.getJsonCached<DCPullRequest>(
       auth,
-      `/projects/${encodeURIComponent(repo.owner)}/repos/${encodeURIComponent(repo.name)}` +
-        `/pull-requests/${number}`
-    )) as DCPullRequest | undefined;
+      p`/projects/${repo.owner}/repos/${repo.name}/pull-requests/${number}`,
+      ISSUE_TTL_MS
+    );
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
 
@@ -189,7 +202,7 @@ export class BitbucketDCProvider implements HostingProvider {
     const repoSlug = pr.fromRef.repository?.slug ?? '';
     const url =
       pr.links?.self?.[0]?.href ??
-      `${this.baseUrl}/projects/${projectKey}/repos/${repoSlug}/pull-requests/${pr.id}`;
+      `${this.client.baseUrl}/projects/${projectKey}/repos/${repoSlug}/pull-requests/${pr.id}`;
     return {
       id: String(pr.id),
       number: pr.id,
@@ -214,22 +227,5 @@ export class BitbucketDCProvider implements HostingProvider {
       viewerRole,
       reviewRequestedFromViewer: viewerRole === 'reviewer',
     };
-  }
-
-  /** REST GET against /rest/api/1.0; returns undefined on 404. */
-  private async get(auth: AuthContext, path: string): Promise<unknown | undefined> {
-    const response = await this.fetchFn(`${this.baseUrl}/rest/api/1.0${path}`, {
-      method: 'GET',
-      headers: {
-        authorization: `Bearer ${auth.token}`,
-        accept: 'application/json',
-        'user-agent': 'gitglasses',
-      },
-    });
-    if (response.status === 404) {
-      return undefined;
-    }
-    throwForStatus('Bitbucket Data Center', response);
-    return response.json();
   }
 }

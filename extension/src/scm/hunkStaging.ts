@@ -13,13 +13,12 @@ export interface HunkRange {
 }
 
 /**
- * A hunk's footprint in the file being edited. Pure deletions have newLines 0
- * and would otherwise cover nothing, so they are treated as occupying the
- * single line they sit against — a cursor there can still stage them.
+ * A hunk's footprint in the file being edited. A pure deletion has newLines 0
+ * and occupies the single line it sits against, so a cursor there selects it.
  *
  * Git reports newStart 0 when the new side is empty (`@@ -1,8 +0,0 @@`, a hunk
- * deleting a file's entire contents). Editor lines are 1-based, so the
- * footprint is clamped to line 1 or no cursor position could ever select it.
+ * deleting a file's entire contents); editor lines are 1-based, so the
+ * footprint is clamped to line 1.
  */
 function footprint(hunk: HunkRange): { first: number; last: number } {
   const start = Math.max(1, hunk.newStart);
@@ -31,8 +30,8 @@ function footprint(hunk: HunkRange): { first: number; last: number } {
  * The 1-based inclusive line range a selection covers.
  *
  * A whole-line selection (Ctrl+L, triple-click, Shift+Down from column 0) ends
- * at the *next* line, column 0, with nothing on that line selected. Counting it
- * would silently include an adjacent hunk the user never selected.
+ * at the *next* line, column 0, with nothing on that line selected, so that
+ * line is excluded.
  */
 export function selectionLineRange(
   startLine: number,
@@ -87,12 +86,8 @@ export interface DiffHunkLike extends HunkRange {
 }
 
 /**
- * Label and preview for picking a hunk out of a list.
- *
- * Unstaging cannot use the cursor: the staged diff's line numbers address the
- * index, while the selection addresses the working tree, and the two differ as
- * soon as the file has unstaged edits. So the staged hunks are offered
- * explicitly instead, described by their content rather than their position.
+ * Label and preview for picking a hunk out of a list, describing it by its
+ * content rather than its position.
  */
 export function describeHunk(hunk: DiffHunkLike): { label: string; detail: string } {
   const added = hunk.lines.filter((line) => line.startsWith('+')).length;

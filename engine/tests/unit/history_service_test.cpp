@@ -186,7 +186,11 @@ TEST(HistoryService, LogCommitsHonorsRefAndOversizedLimit) {
       req(11, "log/commits", {{"repoId", repoId}, {"ref", "no-such-ref"}, {"limit", 10}}));
   EXPECT_EQ(badRef["error"]["code"], -32001);
 
-  Json badLimit = session.request(req(12, "log/commits", {{"repoId", repoId}}));
+  // An omitted limit falls back to the default page size.
+  Json noLimit = session.request(req(12, "log/commits", {{"repoId", repoId}}));
+  EXPECT_FALSE(noLimit["result"]["commits"].empty());
+
+  Json badLimit = session.request(req(13, "log/commits", {{"repoId", repoId}, {"limit", 0}}));
   EXPECT_EQ(badLimit["error"]["code"], -32602);
 }
 

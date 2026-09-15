@@ -41,11 +41,7 @@ Result<HeadState> Repo::head() const {
   }
   ReferencePtr head(rawHead);
 
-  if (const git_oid* oid = git_reference_target(rawHead)) {
-    char hex[GIT_OID_HEXSZ + 1] = {};
-    git_oid_fmt(hex, oid);
-    state.oid = hex;
-  }
+  if (const git_oid* oid = git_reference_target(rawHead)) state.oid = oidToHex(*oid);
   if (!state.detached) {
     const char* shorthand = git_reference_shorthand(rawHead);
     state.branch = shorthand ? shorthand : "";

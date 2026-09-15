@@ -3,13 +3,13 @@
 
 import path from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { EngineClient, resolveEnginePath } from './engine.js';
+import { createEngineClient, resolveEnginePath } from './engine.js';
 import { createServer } from './server.js';
 
 const packageRoot = path.resolve(import.meta.dirname, '..');
 const enginePath = resolveEnginePath({ packageRoot });
 
-const client = new EngineClient({
+const client = createEngineClient({
   enginePath,
   onLog: (line) => console.error(`[gitglasses-engine] ${line}`),
 });

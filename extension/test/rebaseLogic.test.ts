@@ -4,7 +4,6 @@ import {
   planFromPreview,
   setAction,
   setMessage,
-  sha7,
   toRebaseEntries,
   validate,
 } from '../webviews-src/rebase/rebaseLogic';
@@ -141,11 +140,5 @@ describe('toRebaseEntries', () => {
     let p = setAction(plan(), 0, 'reword');
     p = setMessage(p, 0, '   ');
     expect(toRebaseEntries(p)[0].message).toBeUndefined();
-  });
-});
-
-describe('sha7', () => {
-  it('shortens a full sha to seven characters', () => {
-    expect(sha7(A)).toBe('aaaaaaa');
   });
 });

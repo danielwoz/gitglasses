@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 
 // gitglasses:/<repo-relative-path>?repoId=<id>&rev=<rev>
-// Read-only virtual documents showing a file at a specific revision — used by
-// quick diff, "open at revision", and diff-with-HEAD commands.
+// Read-only virtual documents showing a file at a specific revision. Every
+// surface that opens or diffs a past revision addresses it through this
+// scheme, encoding the uri with encodeRevisionUri.
 
 export function encodeRevisionUri(repoId: string, relativePath: string, rev: string): vscode.Uri {
   return vscode.Uri.from({

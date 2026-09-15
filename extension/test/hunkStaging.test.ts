@@ -42,8 +42,8 @@ describe('hunksIntersectingSelection', () => {
     expect(hunksIntersectingSelection(deletion, 5, 5)).toHaveLength(0);
   });
 
-  // Git emits "@@ -1,8 +0,0 @@" when the new side is empty. newStart 0 is
-  // unreachable from a 1-based cursor unless the footprint is clamped.
+  // Git emits "@@ -1,8 +0,0 @@" when the new side is empty; a 1-based cursor
+  // reaches newStart 0 only through the footprint clamp.
   it('lets a whole-file deletion be selected from line 1', () => {
     const wholeFile = [{ oldStart: 1, oldLines: 8, newStart: 0, newLines: 0 }];
     expect(hunksIntersectingSelection(wholeFile, 1, 1)).toHaveLength(1);
@@ -93,7 +93,7 @@ describe('selectionLineRange', () => {
   });
 
   // Ctrl+L / triple-click ends at the next line, column 0, with nothing on it
-  // selected; counting it would pull in an adjacent hunk.
+  // selected.
   it('excludes the trailing line of a whole-line selection', () => {
     expect(selectionLineRange(1, 2, 0)).toEqual({ startLine: 2, endLine: 2 });
     expect(selectionLineRange(1, 3, 0)).toEqual({ startLine: 2, endLine: 3 });

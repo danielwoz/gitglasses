@@ -14,6 +14,7 @@ import {
   generateTicks,
   hitTestBubbles,
   laneForEntry,
+  minValue,
   mixBubbleColor,
   panDomain,
   parseColor,
@@ -271,5 +272,27 @@ describe('panDomain', () => {
   it('shifts both edges by the delta', () => {
     expect(panDomain({ start: 100, end: 200 }, 50)).toEqual({ start: 150, end: 250 });
     expect(panDomain({ start: 100, end: 200 }, -25)).toEqual({ start: 75, end: 175 });
+  });
+});
+
+describe('minValue', () => {
+  it('returns the smallest value', () => {
+    expect(minValue([5, 2, 9, 2, 7])).toBe(2);
+  });
+
+  it('handles a single value and negatives', () => {
+    expect(minValue([42])).toBe(42);
+    expect(minValue([-3, 0, 4])).toBe(-3);
+  });
+
+  it('returns Infinity for an empty list', () => {
+    expect(minValue([])).toBe(Infinity);
+  });
+
+  it('handles lists far larger than the spread-argument limit', () => {
+    const values = Array.from({ length: 200_000 }, (_, i) => 1_000_000 - i);
+    // Math.min(...values) throws RangeError at this size.
+    expect(() => Math.min(...values)).toThrow(RangeError);
+    expect(minValue(values)).toBe(1_000_000 - 199_999);
   });
 });

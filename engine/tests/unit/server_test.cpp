@@ -11,6 +11,7 @@
 
 #include "test_fixtures.h"
 #include "test_session.h"
+#include "util/result.h"
 
 namespace gg {
 namespace {
@@ -44,31 +45,28 @@ TEST(Server, ExitsCleanlyOnStdinClose) {
   EXPECT_FALSE(messages.empty());
 }
 
+// repo/list and repo/state are concurrent reads, so they are sent only once
+// repo/discover has answered — as a client must, since the id it returns is
+// what they address.
 TEST(Server, DiscoverListAndState) {
   gg::testing::FixtureRepo fixture;
 
-  auto messages = runSession({
-      initRequest(1),
-      {{"jsonrpc", "2.0"},
-       {"id", 2},
-       {"method", "repo/discover"},
-       {"params", {{"path", fixture.root().string()}}}},
-      {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/list"}},
-      {{"jsonrpc", "2.0"},
-       {"id", 4},
-       {"method", "repo/state"},
-       {"params", {{"repoId", "r1"}}}},
-      {{"jsonrpc", "2.0"}, {"id", 5}, {"method", "shutdown"}},
-  });
-
-  Json discover = responseFor(messages, 2);
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", fixture.root().string()}}}});
   EXPECT_EQ(discover["result"]["repoId"], "r1");
   EXPECT_EQ(discover["result"]["bare"], false);
 
-  Json list = responseFor(messages, 3);
+  Json list = session.request({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/list"}});
   EXPECT_EQ(list["result"]["repos"].size(), 1u);
 
-  Json state = responseFor(messages, 4);
+  Json state = session.request({{"jsonrpc", "2.0"},
+                                {"id", 4},
+                                {"method", "repo/state"},
+                                {"params", {{"repoId", "r1"}}}});
   EXPECT_EQ(state["result"]["head"]["branch"], "main");
   EXPECT_EQ(state["result"]["head"]["oid"].get<std::string>().size(), 40u);
   EXPECT_EQ(state["result"]["head"]["unborn"], false);
@@ -144,6 +142,49 @@ TEST(Server, BlameFileStreamsHunksAndRespectsOverlay) {
        {"params", {{"repoId", repoId}, {"path", "app.txt"}, {"streamId", "s4"}}}});
   EXPECT_EQ(closed["result"]["totalLines"], 2);
   EXPECT_FALSE(closed["result"]["commits"].contains(uncommitted));
+}
+
+TEST(Server, CloseReleasesTheRepoAndItsWatch) {
+  gg::testing::FixtureRepo fixture;
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", fixture.root().string()}}}});
+  const std::string repoId = discover["result"]["repoId"];
+
+  Json closed = session.request({{"jsonrpc", "2.0"},
+                                 {"id", 3},
+                                 {"method", "repo/close"},
+                                 {"params", {{"repoId", repoId}}}});
+  ASSERT_TRUE(closed.contains("result")) << closed.dump();
+
+  Json list = session.request({{"jsonrpc", "2.0"}, {"id", 4}, {"method", "repo/list"}});
+  EXPECT_EQ(list["result"]["repos"].size(), 0u);
+
+  // The id is gone, so requests addressing it fail rather than resurrect it.
+  Json state = session.request({{"jsonrpc", "2.0"},
+                                {"id", 5},
+                                {"method", "repo/state"},
+                                {"params", {{"repoId", repoId}}}});
+  ASSERT_TRUE(state.contains("error")) << state.dump();
+  EXPECT_EQ(state["error"]["code"], static_cast<int>(ErrorCode::RepoNotFound));
+
+  // Closing twice is an error, not a crash.
+  Json again = session.request({{"jsonrpc", "2.0"},
+                                {"id", 6},
+                                {"method", "repo/close"},
+                                {"params", {{"repoId", repoId}}}});
+  EXPECT_TRUE(again.contains("error")) << again.dump();
+
+  // The path can be registered again afterwards.
+  Json rediscover = session.request({{"jsonrpc", "2.0"},
+                                     {"id", 7},
+                                     {"method", "repo/discover"},
+                                     {"params", {{"path", fixture.root().string()}}}});
+  EXPECT_TRUE(rediscover.contains("result")) << rediscover.dump();
 }
 
 TEST(Server, WatcherPushesRepoDidChange) {

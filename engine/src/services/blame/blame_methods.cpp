@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "services/params.h"
+
 namespace gg::services {
 
 void registerBlameMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
@@ -10,17 +12,24 @@ void registerBlameMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn& notify) -> rpc::Json {
         const std::string repoId = params.value("repoId", "");
-        const std::string streamId = params.value("streamId", "");
+        const std::string streamId = requireString(params, "streamId");
         auto repo = context.registry.open(repoId);
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
         BlameRequest request;
-        request.path = params.value("path", "");
-        if (request.path.empty()) {
-          throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
+        request.path = requireString(params, "path");
+        if (const std::string rev = optionalString(params, "rev"); !rev.empty()) {
+          request.rev = rev;
         }
-        if (params.contains("rev") && params["rev"].is_string()) {
-          request.rev = params["rev"].get<std::string>();
+        // A repository with no commits has nothing to attribute; git would
+        // fail resolving HEAD, and its message is not a protocol error.
+        auto head = repo.value().head();
+        if (!head) throw rpc::HandlerError{{head.error()}};
+        if (head.value().unborn && !request.rev) {
+          return {{"streamId", streamId},
+                  {"totalLines", 0},
+                  {"fromCache", false},
+                  {"commits", rpc::Json::object()}};
         }
         // Working-tree blame respects unsaved editor contents when pushed.
         if (!request.rev) {

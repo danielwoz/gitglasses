@@ -122,6 +122,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   process.pid_ = pid;
   process.stdoutFd_ = outPipe[0];
   process.stderrFd_ = errPipe[0];
+  process.timeout_ = opts.timeout;
+  process.deadline_ = std::chrono::steady_clock::now() + opts.timeout;
   fcntl(process.stdoutFd_, F_SETFL, O_NONBLOCK);
   fcntl(process.stderrFd_, F_SETFL, O_NONBLOCK);
   return process;
@@ -136,7 +138,10 @@ GitProcess::GitProcess(GitProcess&& other) noexcept
       eof_(other.eof_),
       stderr_(std::move(other.stderr_)),
       reaped_(other.reaped_),
-      exitCode_(other.exitCode_) {
+      exitCode_(other.exitCode_),
+      timeout_(other.timeout_),
+      deadline_(other.deadline_),
+      timedOut_(other.timedOut_) {
   other.pid_ = -1;
   other.stdoutFd_ = -1;
   other.stderrFd_ = -1;
@@ -178,6 +183,10 @@ bool GitProcess::fillBuffer(const CancelToken& token) {
     if (token.cancelled()) {
       killGroup();
       throw CancelledError();
+    }
+    if (expired()) {
+      eof_ = true;
+      return false;
     }
     char chunk[65536];
     ssize_t n = read(stdoutFd_, chunk, sizeof(chunk));
@@ -239,6 +248,16 @@ int GitProcess::wait(const CancelToken& token) {
       waitpid(pid_, nullptr, 0);
       reaped_ = true;
       throw CancelledError();
+    }
+    // expired() has already killed the group, so this blocking reap returns
+    // at once and the timeout is reported through timedOut().
+    if (expired()) {
+      int status = 0;
+      waitpid(pid_, &status, 0);
+      drainStderr(/*blocking=*/false);
+      exitCode_ = WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status);
+      reaped_ = true;
+      return exitCode_;
     }
     drainStderr(/*blocking=*/false);
     int status = 0;

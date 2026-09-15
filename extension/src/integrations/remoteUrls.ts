@@ -1,10 +1,9 @@
 // Pure web-URL construction for "open on remote" (no vscode/fs imports).
 //
-// Provider ids here must match the ones that can actually reach this module:
-// DEFAULT_HOSTS in remoteMatcher ("github", "gitlab", "bitbucket",
-// "azuredevops"), the ids Add Integration writes (integrationSettings), and
-// "github-enterprise", which integrationService special-cases. An id present
-// here but emitted by nothing is dead code that reads as coverage.
+// Provider ids here match the ones that can reach this module: DEFAULT_HOSTS
+// in remoteMatcher ("github", "gitlab", "bitbucket", "azuredevops"), the ids
+// Add Integration writes (integrationSettings), and "github-enterprise",
+// which integrationService special-cases.
 
 import type { RepoDescriptor } from '@gitglasses/integrations';
 
@@ -113,9 +112,8 @@ const BITBUCKET_CLOUD: Builder = (repo, target) => {
 };
 
 /**
- * Bitbucket Data Center (formerly Server) uses a different layout entirely:
- * /projects/<KEY>/repos/<slug>/browse/<path>?at=<ref>#<line>. Mapping it onto
- * the Cloud routes would produce URLs that 404.
+ * Bitbucket Data Center has its own layout, unrelated to Cloud's:
+ * /projects/<KEY>/repos/<slug>/browse/<path>?at=<ref>#<line>.
  */
 const BITBUCKET_DC: Builder = (repo, target) => {
   const base = `https://${repo.host}/projects/${encodePath(repo.owner)}/repos/${encodePath(
@@ -191,8 +189,7 @@ export function supportsRemoteUrls(providerId: string): boolean {
 
 /**
  * Build the forge URL for a target, or undefined when the provider's routes
- * are unknown. Callers should tell the user the remote is unsupported rather
- * than opening a guessed URL.
+ * are unknown.
  */
 export function buildRemoteUrl(
   providerId: string,
