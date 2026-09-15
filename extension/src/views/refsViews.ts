@@ -7,7 +7,9 @@ import type { RepositoryService } from '../model/repositoryService';
 import type { RefsModel } from '../model/refsModel';
 
 // Branches, remotes, tags, and stashes: stateless views re-fetched per render.
-// The first three read one shared refs/list through RefsModel.
+// The first three read one shared refs/list through RefsModel. None of them
+// invalidate that cache themselves — core's refreshViews() drops it before
+// refreshing any view, so a refresh always re-fetches.
 
 const PR_CHIP_LIMIT = 50;
 

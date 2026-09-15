@@ -99,9 +99,8 @@ export class GraphWebviewHost implements vscode.Disposable {
     private readonly openRebase: (upstream: string) => void | Promise<void>,
   ) {}
 
-  /** Opens the graph. The repository is resolved first: without one there is
-   *  nothing to draw, so the user gets an explanation instead of an empty
-   *  panel. */
+  /** Opens the graph. The repository is resolved first, so a workspace
+   *  without one gets an explanation and no panel. */
   async show(): Promise<void> {
     if (this.panel) {
       this.panel.reveal();
@@ -196,7 +195,7 @@ export class GraphWebviewHost implements vscode.Disposable {
         vscode.window.setStatusBarMessage(`Copied ${shortSha(message.sha)}`, 3000);
         break;
       case 'select':
-        break; // Selection currently only drives webview-local rendering.
+        break; // Selection drives webview-local rendering only.
       case 'action':
         await this.handleAction(message.action, message.shas);
         break;
@@ -260,7 +259,7 @@ export class GraphWebviewHost implements vscode.Disposable {
         }
         case 'rebase':
           // Opens the interactive rebase editor with this commit as the
-          // upstream instead of rebasing immediately.
+          // upstream; the rebase runs from there.
           await this.openRebase(sha);
           break;
       }

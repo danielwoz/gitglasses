@@ -3,8 +3,7 @@ import { relativeWithinRoot, repoName, sameRoot } from '../src/model/repositoryS
 
 // The engine reports the repo root as libgit2's git_repository_workdir(),
 // which uses forward slashes everywhere; VS Code's uri.fsPath uses backslashes
-// on Windows. Both shapes are exercised here, since CI never runs the
-// extension suite on Windows.
+// on Windows. Both shapes are exercised here, on every platform.
 describe('relativeWithinRoot (posix)', () => {
   const root = '/home/u/repo';
 

@@ -31,8 +31,7 @@ function resolveEngineBinary(context: vscode.ExtensionContext): string | undefin
   const exe = process.platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';
   const bundled = context.asAbsolutePath(path.join('bin', exe));
   // Development fallbacks after the bundled binary: repo-local build outputs.
-  // These need the same .exe suffix as the bundled path, or running from source
-  // on Windows finds nothing and the extension disables itself.
+  // Windows needs the .exe suffix here too.
   const dev = ['release', 'debug'].map((preset) =>
     context.asAbsolutePath(path.join('..', 'build', preset, 'engine', exe)),
   );
@@ -110,7 +109,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
       return hunks.length > 0;
     } catch {
-      // Unknown: prefer the explicit picker over a possibly wrong guess.
+      // Unknown: answer yes, which routes the caller to the explicit picker.
       return true;
     }
   };
@@ -131,8 +130,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       return;
     }
-    // The unstaged diff is computed against the file on disk, so an unsaved
-    // buffer would have us match the selection against stale hunk positions.
+    // Hunk positions are computed against the file on disk, so the buffer has
+    // to be saved before the selection can be matched against them.
     if (editor.document.isDirty) {
       const choice = await vscode.window.showWarningMessage(
         'GitGlasses: this file has unsaved changes. Hunks are read from the file on disk.',
@@ -155,11 +154,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      // Staged hunk positions address the index; the selection addresses the
-      // working tree. They agree only while the file has no unstaged changes,
-      // so when it does, the hunks are offered explicitly rather than guessed
-      // at from the cursor — matching there would silently unstage the wrong
-      // one.
+      // Staged hunk positions address the index, the selection addresses the
+      // working tree. They agree only while the file has no unstaged changes;
+      // otherwise the hunks are picked explicitly.
       let picked: typeof hunks;
       if (action === 'unstage' && (await hasUnstagedChanges(located))) {
         const items = hunks.map((hunk) => ({ ...describeHunk(hunk), hunk }));
@@ -319,8 +316,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Engine-pushed repo state changes. A HEAD move invalidates both the
   // histories the views show and the blame attribution, so it runs the shared
-  // HEAD refresh; a ref or index change needs only one of the two. The engine
-  // may not emit this notification yet; nothing here depends on it.
+  // HEAD refresh; a ref or index change needs only one of the two.
   context.subscriptions.push(
     engine.onNotification('repo/didChange', (params) => {
       if (!Array.isArray(params?.changed)) return;
@@ -345,11 +341,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('gitglasses.copyRemoteUrl', () => openOnRemote('copy')),
     vscode.commands.registerCommand('gitglasses.openCommitOnRemote', async (node?: ViewNode) => {
       if (typeof node?.sha !== 'string') return;
-      // The node carries no repo of its own, and the views resolve against the
-      // first workspace folder rather than the active editor. Resolving from
-      // the editor here would build the URL from a different repository's
-      // remote in a multi-root workspace, and fail outright with no editor
-      // open at all.
+      // The node carries no repo of its own, so the URL is built from the
+      // active repository — the same one the views the node came from render.
       const repo = await requireRepo(repos);
       if (!repo) return;
       await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);

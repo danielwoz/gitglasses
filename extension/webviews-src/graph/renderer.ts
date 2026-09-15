@@ -1,5 +1,6 @@
-// Canvas painter for the commit graph. Draws only the visible row window
-// onto a viewport-sized canvas, translated by the scroll offset.
+// Canvas painter for the commit graph. The canvas is viewport-sized rather
+// than content-sized, so the draw loop covers only the rows visibleRange
+// reports and the context is translated by the scroll offset to place them.
 
 import type { GraphRef, GraphRow } from './ipc';
 import {
@@ -94,7 +95,10 @@ export function relativeTime(unixSeconds: number, nowUnixSeconds: number = Date.
 
 export interface RenderState {
   rows: readonly GraphRow[];
-  /** Highest lane index across all loaded rows and their edges. */
+  /** Highest lane index across all loaded rows and their edges, accumulated
+   *  by GraphStore as pages arrive; sizes the graph column. It covers every
+   *  loaded row, not just the drawn window, so the column stays put while
+   *  scrolling. */
   maxLane: number;
   selection: SelectionState;
   scrollTop: number;

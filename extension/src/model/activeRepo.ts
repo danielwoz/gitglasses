@@ -1,6 +1,6 @@
 // Which repository the repo-scoped surfaces act on. A multi-root workspace
-// holds several, so the choice is explicit, persisted per workspace, and
-// shown in the view titles instead of being silently the first folder.
+// holds several, so the choice is explicit, persisted per workspace, and shown
+// in the view titles; the first folder that is a repository is the default.
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';

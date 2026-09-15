@@ -9,7 +9,7 @@
 // Everything else is registered by createCore, shared with src/extension.ts.
 //
 // Wasm mode is READ-ONLY v1: mutations are engine-rejected (-32003) and the
-// existing capability gating greys their entry points.
+// capability gating greys their entry points.
 
 import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
@@ -114,7 +114,7 @@ export async function activate(
   const log = (line: string): void => {
     output.appendLine(line);
     // The worker console is the only visible sink in headless web tests and
-    // remote-debug sessions; the duplication is deliberate.
+    // remote-debug sessions.
     console.log(`[gitglasses] ${line}`);
   };
 
@@ -242,16 +242,16 @@ export async function activate(
     vscode.commands.registerCommand('gitglasses.createPatch', notOnWeb('creating patches')),
     vscode.commands.registerCommand('gitglasses.applyPatch', notOnWeb('applying patches')),
     // Remote detection reads .git/config through node:fs, which the web shim
-    // rejects, so these can never resolve a forge here. They are contributed
-    // unconditionally (editor context menu, walkthrough), so they must resolve
-    // to something rather than fail with "command not found".
+    // rejects, so these resolve no forge here. package.json contributes them
+    // unconditionally (editor context menu, walkthrough), so they still need
+    // a handler.
     vscode.commands.registerCommand('gitglasses.openOnRemote', notOnWeb('opening files on the remote')),
     vscode.commands.registerCommand('gitglasses.copyRemoteUrl', notOnWeb('copying remote URLs')),
     vscode.commands.registerCommand(
       'gitglasses.openCommitOnRemote',
       notOnWeb('opening commits on the remote'),
     ),
-    // Staging would mutate the MEMFS mirror only, never the real repository.
+    // Staging reaches the MEMFS mirror only, never the real repository.
     vscode.commands.registerCommand('gitglasses.stageSelectedHunks', notOnWeb('staging hunks')),
     vscode.commands.registerCommand(
       'gitglasses.unstageSelectedHunks',

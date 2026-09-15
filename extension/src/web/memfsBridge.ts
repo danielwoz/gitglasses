@@ -3,10 +3,9 @@
 // (.git/** plus the working tree) is mirrored into a mount path, and file
 // change events are copied over incrementally afterwards.
 //
-// Wasm mode is READ-ONLY v1: stage/commit mutations are never wired on the
-// web (they would mutate the MEMFS copy only and silently diverge from the
-// user's real repository), and changes inside .git made outside this window
-// (e.g. an external push) are not watched — reopening the workspace resyncs.
+// The mirror is a copy: it is read from, never written back, and changes made
+// inside .git outside this window (e.g. an external push) are picked up only
+// when the workspace is reopened.
 //
 // Everything here is vscode-free and driven through injected filesystem
 // interfaces so the planning logic is unit-testable.

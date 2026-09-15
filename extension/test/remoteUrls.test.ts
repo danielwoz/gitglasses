@@ -131,7 +131,7 @@ describe('buildRemoteUrl', () => {
   });
 
   // Data Center's layout is /projects/<KEY>/repos/<slug>/browse, not Cloud's
-  // /<owner>/<repo>/src — reusing the Cloud routes would 404.
+  // /<owner>/<repo>/src.
   describe('bitbucket data center', () => {
     const dc: RepoDescriptor = {
       provider: 'bitbucketDC',

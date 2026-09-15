@@ -65,9 +65,8 @@ export interface IssueProviderEntry {
 
 /**
  * Locate the git config file for a repo root, following worktree/gitdir
- * indirection. Interim approach until the engine exposes remote URLs: the
- * engine's refs/list reports remote names only, so remote URLs are read
- * straight from the repository's config file.
+ * indirection. The engine's refs/list reports remote names without URLs, so
+ * the URLs are read from the repository's config file.
  */
 async function findGitConfigPath(repoRoot: string): Promise<string | undefined> {
   const dotGit = path.join(repoRoot, '.git');
@@ -95,9 +94,8 @@ async function findGitConfigPath(repoRoot: string): Promise<string | undefined> 
 
 /**
  * Feature-detect a provider class exported by @gitglasses/integrations by id
- * (e.g. "gitlab" -> GitLabProvider). Providers beyond GitHub land in the
- * package independently; this keeps the extension working with whatever the
- * installed package version ships.
+ * (e.g. "gitlab" -> GitLabProvider), so the extension works with whatever
+ * providers the installed package version ships.
  */
 function findExportedProviderClass(providerId: string): (new (options: { host?: string }) => object) | undefined {
   const wanted = `${providerId.replace(/[^a-z0-9]/gi, '').toLowerCase()}provider`;
@@ -111,18 +109,14 @@ function findExportedProviderClass(providerId: string): (new (options: { host?: 
 }
 
 /**
- * The array to edit and the scope to write it back to.
+ * The array to edit and the scope to write it back to: the narrowest scope
+ * that actually defines the setting, global for one nothing defines yet.
  *
- * `get()` returns the merged effective value, and these arrays do not merge
- * element-wise — the most specific scope wins outright. Reading the effective
- * value and writing it to the workspace would copy globally configured entries
- * into the repository's .vscode/settings.json, which commonly gets committed,
- * publishing internal hostnames. Removal had the mirror-image problem: a
- * workspace array written without a globally configured entry shadows global
- * from then on.
- *
- * So the array is taken from, and written back to, the narrowest scope that
- * actually defines it, defaulting to global for a brand new setting.
+ * These arrays do not merge element-wise — the most specific scope wins
+ * outright — so an edit has to stay within the scope it read from. Writing
+ * `get()`'s merged value to the workspace would copy global entries into a
+ * committed .vscode/settings.json, and a workspace array written where global
+ * defines one shadows global from then on.
  */
 function settingScope<T>(
   section: string,
@@ -250,10 +244,8 @@ export class IntegrationService implements vscode.Disposable {
     if (!cached) {
       cached = this.resolveHosting(repoRoot);
       this.hostingCache.set(repoRoot, cached);
-      // A miss is only true for the .git/config as it stands. Adding a remote
-      // to a repo opened without one would otherwise keep reporting "no
-      // recognised remote" until the window reloaded, so misses are dropped
-      // and re-resolved on the next ask.
+      // A miss is only true for .git/config as it stands, so it is dropped and
+      // re-resolved on the next ask.
       void cached.then((resolved) => {
         if (!resolved && this.hostingCache.get(repoRoot) === cached) {
           this.hostingCache.delete(repoRoot);
@@ -309,7 +301,7 @@ export class IntegrationService implements vscode.Disposable {
     return connected;
   }
 
-  /** True when a Jira integration is configured (drives the Jira autolink pattern). */
+  /** The configured Jira host, which drives the Jira autolink pattern. */
   private jiraHost(): string | undefined {
     return this.issueEntries.find((entry) => entry.providerId === 'jira' && entry.host)?.host;
   }
@@ -329,11 +321,10 @@ export class IntegrationService implements vscode.Disposable {
     return applyAutolinks(text, patterns);
   }
 
-  /** Connect flow: pick an integration, authenticate, validate, greet. */
   /**
    * Adds an integration to settings through prompts, so a self-hosted forge or
-   * issue tracker can be set up without hand-editing settings.json. Writes to
-   * the workspace scope when a workspace is open, otherwise globally.
+   * issue tracker can be set up without hand-editing settings.json. The scope
+   * written to is the one settingScope resolves.
    */
   async addIntegration(): Promise<void> {
     const kind = await vscode.window.showQuickPick(
@@ -461,6 +452,7 @@ export class IntegrationService implements vscode.Disposable {
     void vscode.window.showInformationMessage('GitGlasses: integration removed.');
   }
 
+  /** Connect flow: pick an integration, authenticate, validate, greet. */
   async connectIntegration(): Promise<void> {
     interface Candidate extends vscode.QuickPickItem {
       itemKind: 'hosting' | 'issues';

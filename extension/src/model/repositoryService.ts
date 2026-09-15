@@ -12,12 +12,11 @@ export interface LocatedFile {
  * The repo-relative path of `fsPath` inside `rootPath`, or undefined when it
  * lies outside.
  *
- * The two sides come from different worlds. rootPath is libgit2's
- * git_repository_workdir(), which uses forward slashes on every platform;
- * fsPath is VS Code's, which uses backslashes on Windows. A raw startsWith
- * between them never matches there, which would leave blame, annotations,
- * staging and open-on-remote silently doing nothing on Windows. Drive letters
- * also vary in case between the two, and NTFS is case-insensitive anyway.
+ * The two sides come from different worlds, so both are normalized before
+ * comparison. rootPath is libgit2's git_repository_workdir(), which uses
+ * forward slashes on every platform; fsPath is VS Code's, which uses
+ * backslashes on Windows. Drive letters also vary in case between the two,
+ * and NTFS is case-insensitive.
  */
 export function relativeWithinRoot(
   rootPath: string,

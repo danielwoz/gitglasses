@@ -130,7 +130,6 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const scm = vscode.scm.createSourceControl('gitglasses', 'GitGlasses');
   scm.quickDiffProvider = new GitGlassesQuickDiffProvider(repos);
 
-  // Integrations: auth, hosting/issue providers, launchpad, PR enrichment.
   const auth = new AuthManager(context.secrets);
   const integrations = new IntegrationService(auth);
   const launchpad = new LaunchpadService(integrations, context.globalState);
@@ -174,7 +173,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       if (!ids || ids.includes(viewId)) provider.refresh();
     }
   };
-  // The consumers of the blame cache; each re-reads what it needs.
+  // Everything that renders from the blame cache; each re-reads what it needs.
   const refreshBlameConsumers = (): void => {
     lineBlame.refresh();
     fileAnnotations.refresh();
@@ -264,9 +263,8 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
 
   disposables.push(
     vscode.window.registerTerminalLinkProvider(new ShaTerminalLinkProvider(engine, repos)),
-    // Blame caches keyed on version -1 (disk state) go stale on save/commit;
-    // saving is a cheap conservative invalidation point that complements the
-    // engine's repo/didChange pushes (harmless if both fire).
+    // Blame cached at version -1 describes the file on disk, which a save
+    // changes.
     vscode.workspace.onDidSaveTextDocument((doc) => {
       const located = repos.locate(doc.uri);
       if (located) blame.invalidate(located.repoId);

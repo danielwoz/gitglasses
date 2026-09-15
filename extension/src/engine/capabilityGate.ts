@@ -1,6 +1,5 @@
 // Capability-based feature gating. Pure logic (no vscode imports) so the
-// method matrix and the watch-fallback change detection are unit-testable and
-// reusable by the future web entry.
+// method matrix and the watch-fallback change detection are unit-testable.
 
 import { EngineCapabilities } from '@gitglasses/protocol';
 

@@ -89,9 +89,8 @@ export class FileAnnotationsController implements vscode.Disposable {
       vscode.window.onDidChangeVisibleTextEditors((editors) => {
         for (const editor of editors) void this.render(editor);
       }),
-      // A closed document keeps no annotation state: its mode is forgotten and
-      // its per-document bookkeeping is dropped, so neither map grows with the
-      // window's lifetime.
+      // A closed document keeps no annotation state, so neither the mode map
+      // nor the per-document bookkeeping grows with the window's lifetime.
       vscode.workspace.onDidCloseTextDocument((document) => this.forget(document.uri)),
       vscode.workspace.onDidChangeTextDocument((e) => {
         const key = e.document.uri.toString();

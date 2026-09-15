@@ -402,9 +402,8 @@ async function generateCommitMessage(
 }
 
 // NL search results land in the Search & Compare view via the provider's
-// runExternalSearch hook, labeled with the user's question. The QuickPick
-// path below survives only as a fallback for the (unexpected) case where no
-// view provider was wired in.
+// runExternalSearch hook, labeled with the user's question. The QuickPick path
+// below covers a host that wired in no view provider.
 async function nlSearch(
   engine: EngineClient,
   repos: RepositoryService,

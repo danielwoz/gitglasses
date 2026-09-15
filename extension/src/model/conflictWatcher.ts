@@ -1,8 +1,8 @@
 // Unresolved-conflict indicator. A merge, rebase or cherry-pick started
 // anywhere — the palette, the graph, or a terminal outside the window —
 // leaves conflicted files behind, and nothing else in the UI says so. This
-// polls status/summary when the repository changes and publishes the count to
-// a status bar item and a when-clause context key.
+// re-reads status/summary whenever the repository changes and publishes the
+// count to a status bar item and a when-clause context key.
 
 import * as vscode from 'vscode';
 import type { EngineClient } from '@gitglasses/rpc';

@@ -1,5 +1,6 @@
-// Pure blame-annotation logic shared by the gutter/heatmap controllers and
-// the CodeLens provider. No vscode imports so it stays unit-testable.
+// Pure blame-annotation logic shared by the file-annotations controller
+// (gutter blame, heatmap, changes) and the CodeLens provider. No vscode
+// imports so it stays unit-testable.
 import { BlameCommit, BlameHunk, UNCOMMITTED_SHA } from '@gitglasses/protocol';
 import { FileBlame } from '../model/blameModel';
 import { relativeTime } from '../system/dates';
@@ -111,9 +112,8 @@ export function computeHeatmapRanges(blame: FileBlame): HeatmapRange[] {
     const time = blame.commits[hunk.sha]?.author.time;
     if (time !== undefined) times.push(time);
   }
-  // Reduce rather than spread: Math.min(...times) throws RangeError once the
-  // argument count passes the engine's stack limit (~125k), and a file can
-  // have that many blame hunks.
+  // Math.min(...times) throws RangeError past ~125k arguments, and a file can
+  // have that many hunks.
   let oldest = Number.POSITIVE_INFINITY;
   let newest = Number.NEGATIVE_INFINITY;
   for (const time of times) {
