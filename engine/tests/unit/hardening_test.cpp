@@ -1,6 +1,6 @@
-// Regression tests for four ways a client or a hostile repository could crash
-// or subvert the engine. Each of these was reproducible against the binary
-// before the corresponding guard was added.
+// Tests for the guards that keep a client or a hostile repository from
+// crashing or subverting the engine: outbound encoding, parse limits, frame
+// sizing, git argv construction, param typing and temp-file handling.
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -34,9 +34,9 @@ std::string frame(const std::string& payload) {
 // --- Invalid UTF-8 in an outbound message -----------------------------------
 //
 // nlohmann's default dump() throws type_error.316 on bytes that are not valid
-// UTF-8. That call is reached from inside catch handlers, so the throw escaped
-// and aborted the process. Git hands us such bytes routinely: hook output,
-// refnames and remote URLs written by other tools.
+// UTF-8, and it is called from inside catch handlers, where a throw escapes to
+// the thread entry. Git hands us such bytes routinely: hook output, refnames
+// and remote URLs written by other tools.
 
 TEST(Hardening, DumpForWireReplacesInvalidUtf8InsteadOfThrowing) {
   const std::string invalid = "bad byte: \xe9\xff caf\xe9";
@@ -60,8 +60,8 @@ TEST(Hardening, DumpForWireLeavesValidUtf8Alone) {
 
 // --- Deeply nested JSON -----------------------------------------------------
 //
-// nlohmann's parser recurses once per level; ~20k levels overflowed the stack
-// and segfaulted before any handler ran.
+// nlohmann's parser recurses once per level, so a payload of ~20k levels
+// overflows the stack before any handler runs.
 
 TEST(Hardening, DeeplyNestedPayloadIsRejectedNotParsed) {
   const int depth = rpc::kMaxParseDepth + 100;
@@ -90,8 +90,8 @@ TEST(Hardening, NestingWithinTheLimitStillParses) {
 
 // --- Attacker-controlled Content-Length -------------------------------------
 //
-// The payload buffer was sized from the header before a single body byte was
-// read, so a large value allocated gigabytes.
+// The payload buffer is sized from the header before any body byte is read, so
+// the header value is capped at kMaxFrameBytes first.
 
 TEST(Hardening, OversizedContentLengthIsRefusedBeforeAllocating) {
   std::istringstream in("Content-Length: 999999999999\r\n\r\n");
@@ -99,7 +99,7 @@ TEST(Hardening, OversizedContentLengthIsRefusedBeforeAllocating) {
   EXPECT_FALSE(reader.read().has_value());
 }
 
-TEST(Hardening, FrameAtTheLimitIsStillAccepted) {
+TEST(Hardening, FrameWithinTheLimitIsAccepted) {
   const std::string payload(1024, 'x');
   std::istringstream in(frame(payload));
   rpc::FrameReader reader(in);
@@ -110,10 +110,9 @@ TEST(Hardening, FrameAtTheLimitIsStillAccepted) {
 
 // --- Argument injection into git argv ---------------------------------------
 //
-// Refnames, remotes and paths reach argv as positionals. A value beginning
-// with '-' is parsed as an option wherever it appears, turning a data field
-// into an arbitrary-command primitive (--upload-pack=) or a file write
-// (--output=). Refnames come from the repository, so a hostile repo suffices.
+// Values that reach argv as positionals are rejected when they begin with '-'
+// (see exec::looksLikeGitOption), and the subcommands that accept one get a
+// "--" separator.
 
 TEST(Hardening, LooksLikeGitOptionIdentifiesLeadingDash) {
   EXPECT_TRUE(exec::looksLikeGitOption("--upload-pack=touch /tmp/x"));
@@ -166,9 +165,9 @@ TEST(Hardening, OptionLookingRefIsRejectedBySwitch) {
 
 // --- Param type errors ------------------------------------------------------
 //
-// nlohmann's value()/get<>() throw type_error on a wrong-typed field. That
-// reached the generic handler and was reported as Internal with the library's
-// raw "[json.exception...]" text, which tells a client nothing actionable.
+// nlohmann's value()/get<>() throw type_error on a wrong-typed field. The
+// dispatcher catches it as InvalidParams and strips the library's
+// "[json.exception...]" prefix, which tells a client nothing actionable.
 
 TEST(Hardening, WronglyTypedParamIsInvalidParamsNotInternal) {
   auto messages = runSession({
@@ -190,8 +189,8 @@ TEST(Hardening, WronglyTypedParamIsInvalidParamsNotInternal) {
 // --- Temp files -------------------------------------------------------------
 //
 // Patch and blame-contents files hold the user's source in a world-readable
-// shared directory, and the hand-rolled cleanup they used to rely on was
-// skipped when readLine()/wait() threw CancelledError.
+// shared directory. TempFile narrows their permissions before any content
+// lands and removes them on every exit path, including cancellation.
 
 TEST(Hardening, TempFileIsOwnerOnlyAndRemovedOnScopeExit) {
   std::string path;

@@ -116,8 +116,8 @@ std::string toLower(std::string_view text) {
 }
 
 // Case-insensitive substring test; `loweredNeedle` must already be lowercase.
-// Searches in place: every commit message walked would otherwise be copied
-// and lowercased in full just to be discarded.
+// Lowercases the haystack one character at a time inside the search, so no
+// commit message is copied.
 bool containsCi(const char* haystack, std::string_view loweredNeedle) {
   if (!haystack) return false;
   const std::string_view text(haystack);

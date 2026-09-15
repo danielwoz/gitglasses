@@ -16,16 +16,17 @@ class InotifyHub;
 // Watches registered repositories' gitdirs and reports coalesced change
 // batches. Callbacks are invoked from a watcher thread, so they must be
 // thread-safe. Batches are debounced and classified into the repo/didChange
-// protocol categories ('HEAD', 'refs', 'index', 'stash', 'sequencer'), with a
-// per-repo generation counter that starts at 1 and increases by one per batch.
+// protocol categories ('HEAD', 'refs', 'index', 'stash', 'worktrees',
+// 'sequencer'), with a per-repo generation counter that starts at 1 and
+// increases by one per batch.
 //
 // The kernel watcher is a single inotify instance shared by every repository,
 // with one watch descriptor per watched directory: instances are capped per
 // uid (fs.inotify.max_user_instances, typically 128, shared with the editor
-// process) while descriptors are not (max_user_watches, ~1M). When no inotify
-// instance can be obtained each repository falls back to its own periodic
-// stat sweep thread, which costs CPU and reports changes late;
-// nativeBackendActive() reports which mechanism is live.
+// process) while descriptors are not (max_user_watches, ~1M). A repository
+// falls back to its own periodic stat sweep thread when no inotify instance
+// can be obtained, or when the kernel refuses every descriptor for it; the
+// sweep costs CPU and reports changes late.
 class WatchManager {
  public:
   using Callback = std::function<void(const std::string& repoId, std::uint64_t generation,
@@ -51,8 +52,8 @@ class WatchManager {
 
   bool isWatching(const std::string& repoId) const;
 
-  // True when the shared kernel watcher is in use, false when watching has
-  // degraded to the polling sweep (or the platform has no kernel watcher).
+  // True when the shared kernel watcher exists. Repositories whose watches it
+  // refused still poll, and a platform without a kernel watcher reports false.
   bool nativeBackendActive() const;
 
  private:

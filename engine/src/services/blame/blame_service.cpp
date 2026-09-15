@@ -16,13 +16,13 @@ namespace gg::services {
 
 namespace {
 
-// RAII temp file used to hand dirty buffer contents to `git blame
-// --contents` without stdin-pipe deadlock concerns.
+// `git blame --contents` takes a file argument for the dirty buffer; TempFile
+// removes it on every exit path, including cancellation.
 using util::TempFile;
 
 // Resolves (commit OID, blob OID) for a cacheable request. Returns nullopt
-// when the working tree file differs from the blamed blob in a way we can't
-// key on (e.g. unreadable file).
+// when either id is unavailable (unresolvable rev, path absent from the
+// commit, unreadable working-tree file), which makes the request uncacheable.
 std::optional<std::pair<std::string, std::string>> resolveOids(const core::Repo& repo,
                                                                const BlameRequest& request) {
   git_object* commitObj = nullptr;

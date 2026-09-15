@@ -33,8 +33,8 @@ class DocOverlay {
               std::int64_t version) {
     const std::string k = key(repoId, path);
     std::lock_guard lock(mutex_);
-    // An oversized buffer also invalidates whatever is stored for the path:
-    // serving an older version would be worse than falling back to disk.
+    // An oversized buffer also drops whatever is stored for the path, so
+    // lookups fall back to the on-disk file instead of an older version.
     if (contents.size() > maxDocBytes_) {
       spdlog::warn("doc overlay: dropping '{}' ({} bytes exceeds the {}-byte per-document cap)",
                    path, contents.size(), maxDocBytes_);

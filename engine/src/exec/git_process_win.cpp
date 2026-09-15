@@ -153,8 +153,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
       !CreatePipe(&stderrRead.handle, &stderrWrite.handle, &inheritable, 0)) {
     return Error{ErrorCode::Internal, "CreatePipe() failed"};
   }
-  // Only the child-side ends may be inherited; an inherited read end would
-  // keep the pipe open after the child exits and EOF would never arrive.
+  // Only the child-side ends may be inherited; an inherited read end keeps the
+  // pipe open after the child exits, so EOF never arrives.
   SetHandleInformation(stdoutRead.handle, HANDLE_FLAG_INHERIT, 0);
   SetHandleInformation(stderrRead.handle, HANDLE_FLAG_INHERIT, 0);
   stdinNul.handle = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,

@@ -28,9 +28,9 @@ struct ServiceContext {
   cache::BlameCache blameCache;
   cache::GraphCache graphCache;
   cache::DocOverlay docOverlay;
-  // Whether this process has a usable git CLI. Probed once per context (not
-  // statically) so capability reporting, method guards and the blame backend
-  // choice always agree for one server instance.
+  // Whether this process has a usable git CLI, read once at construction so
+  // capability reporting, method guards and the blame backend choice always
+  // agree for the life of the context.
   bool cliAvailable = exec::gitCliAvailable();
   BlameService blameService{blameCache, cliAvailable};
 

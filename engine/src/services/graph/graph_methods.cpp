@@ -82,11 +82,14 @@ std::optional<std::string> base64Decode(const std::string& in) {
     int pad = 0;
     for (size_t j = 0; j < 4; ++j) {
       const char c = in[i + j];
+      // '=' is padding only in the last quad's third or fourth position.
       if (c == '=' && i + 4 == in.size() && j >= 2) {
         vals[j] = 0;
         ++pad;
         continue;
       }
+      // pad > 0 here means an alphabet character follows a pad character,
+      // which no encoder produces.
       vals[j] = kBase64Table[static_cast<unsigned char>(c)];
       if (vals[j] < 0 || pad > 0) return std::nullopt;
     }
@@ -413,6 +416,9 @@ std::vector<cache::GraphPlanRow> buildOrder(NodeMap& nodes, const CancelToken& t
     std::string sha;
     git_oid oid;
   };
+  // priority_queue pops its greatest element, so this "less than" is inverted
+  // against the emission order: greatest time wins, and on equal times the
+  // smallest sha does.
   struct ReadyOrder {
     bool operator()(const Ready& a, const Ready& b) const {
       if (a.time != b.time) return a.time < b.time;
@@ -570,7 +576,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         }
 
         // Only page 0 can carry the WIP row, so only page 0 pays for the
-        // status scan; later pages would compute it and discard it.
+        // status scan.
         bool wantWip = false;
         if (includeWip && cursor.pos == 0 && !snap.headSha.empty()) {
           auto dirty = workdirDirty(repo.value());
@@ -637,9 +643,8 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           return true;
         };
 
-        // Emission follows the cached order; rows before the cursor cost only
-        // the counter, so a later page never touches the object database for
-        // them.
+        // Emission follows the cached order, with stash rows inserted ahead of
+        // the commit they were stashed on.
         bool more = true;
         if (wantWip) more = emitRow(kWipSha, {snap.headSha}, "wip", nullptr);
         for (const auto& row : plan->commits) {

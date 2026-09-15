@@ -7,10 +7,9 @@
 
 namespace gg::rpc {
 
-// Largest frame we will accept. Content-Length is attacker-controlled and is
-// used to size the payload buffer before a single body byte is read, so an
-// unbounded value is a trivial memory-exhaustion lever. 64 MiB is far above
-// any real message (the largest are streamed blame/graph batches).
+// Largest frame accepted. Content-Length sizes the payload buffer before any
+// body byte is read, so it is capped here. 64 MiB is far above any real
+// message (the largest are streamed blame/graph batches).
 inline constexpr size_t kMaxFrameBytes = 64u * 1024u * 1024u;
 
 // Reads LSP-style framed messages: "Content-Length: N\r\n" headers, a blank

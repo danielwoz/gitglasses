@@ -25,8 +25,8 @@ std::size_t utf8Boundary(const std::string& text, std::size_t limit) {
 void registerRevMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
   // Contents of one file at one revision. The bytes are run through the
   // repository's checkout filters, so what comes back is what a checkout
-  // would write and compares byte-for-byte against an editor buffer; raw blob
-  // bytes would show every line as changed under core.autocrlf.
+  // writes and compares byte-for-byte against an editor buffer even under
+  // core.autocrlf.
   dispatcher.method(
       "rev/fileAtRev",
       [&context](const rpc::Json& params, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
@@ -51,7 +51,7 @@ void registerRevMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         const auto size = static_cast<std::int64_t>(git_blob_rawsize(blob));
 
         // Binary content is reported, not shipped: it has no text form, and
-        // JSON encoding would turn every invalid sequence into U+FFFD.
+        // JSON encoding replaces every invalid sequence with U+FFFD.
         if (git_blob_is_binary(blob) != 0) {
           return {{"contents", ""}, {"size", size}, {"truncated", false}, {"binary", true}};
         }

@@ -112,10 +112,9 @@ std::optional<std::string> originFingerprint(git_repository* raw) {
   return util::sha256Hex(url).substr(0, 16);
 }
 
-// Diff of HEAD against the working tree. Untracked files are appended as
-// new-file diffs via `git diff --no-index /dev/null <path>` (git normalizes
-// the null side to a/b-prefixed new-file headers); `git add -N` would get the
-// same effect but mutates the index, which a create call must never do.
+// Diff of HEAD against the working tree, leaving the index untouched.
+// Untracked files are appended as new-file diffs via `git diff --no-index
+// /dev/null <path>`, which git normalizes to a/b-prefixed new-file headers.
 std::string wipPatchText(const core::Repo& repo, bool includeUntracked,
                          const CancelToken& token) {
   std::string patch =
@@ -153,11 +152,10 @@ struct EnvelopeSource {
   std::optional<std::string> branch;
 };
 
-// Commit and range sources emit plain `git diff` output rather than
-// format-patch: mail-style patches would need `git am` (which commits) on the
-// receiving side, while a bare unified diff keeps patch/apply a single
-// `git apply --3way` into the working tree. The commit message survives in
-// the envelope summary instead.
+// Builds the envelope's base, patch text and summary for one source kind.
+// Every kind emits a bare unified diff, which patch/apply feeds to a single
+// `git apply --3way` into the working tree; a commit's message travels in the
+// envelope summary.
 EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
                            const CancelToken& token) {
   const std::string kind = source.value("kind", "");

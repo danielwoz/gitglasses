@@ -11,8 +11,9 @@ std::string dumpForWire(const Json& message) {
 
 namespace {
 
-// Rejects payloads nested deeper than kMaxParseDepth before handing them to
-// the parser, which recurses per level and would otherwise overflow the stack.
+// True when the payload nests deeper than kMaxParseDepth. Counts brackets
+// outside strings, which is enough to answer before the parser (one recursion
+// per level) sees the text.
 bool exceedsDepthLimit(const std::string& payload) {
   int depth = 0;
   bool inString = false;
@@ -117,8 +118,8 @@ void Dispatcher::route(const std::string& payload) {
     return;
   }
   const std::string methodName = methodIt->get<std::string>();
-  // Moved out rather than copied: a doc/didChange payload can be tens of
-  // megabytes, and the copy would land on the read loop.
+  // A doc/didChange payload runs to tens of megabytes, so params is moved out
+  // of the message instead of copied.
   const auto paramsIt = message.find("params");
   Json params = paramsIt != message.end() ? std::move(*paramsIt) : Json::object();
 
@@ -175,7 +176,10 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
     {
       std::lock_guard lock(inflightMutex_);
       auto entry = inflight_.find(numericId);
-      if (entry == inflight_.end()) return;  // cancelled before we started
+      // The entry is registered before this task is posted, so a missing one
+      // means a second request reused an id whose first request already
+      // finished and erased it.
+      if (entry == inflight_.end()) return;
       token = entry->second.token();
     }
 
@@ -192,9 +196,8 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
     } catch (const HandlerError& e) {
       sendError(id, e.error);
     } catch (const Json::type_error& e) {
-      // A param of the wrong JSON type is the caller's mistake, not ours:
-      // nlohmann's value()/get<>() throw here and would otherwise be reported
-      // as Internal.
+      // nlohmann's value()/get<>() throw this on a param of the wrong JSON
+      // type, which is the caller's mistake, so it maps to InvalidParams.
       sendError(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});
     } catch (const Json::out_of_range& e) {
       sendError(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});

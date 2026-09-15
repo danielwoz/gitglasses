@@ -20,11 +20,10 @@ namespace gg::rpc {
 
 using Json = nlohmann::json;
 
-// Serializes a message for the wire. Values reaching us from git can carry
-// bytes that are not valid UTF-8 (hook output, remote URLs, refnames written
-// by other tools). nlohmann's default dump() throws type_error.316 on those,
-// and because it is reached from inside catch handlers the throw escapes and
-// terminates the process, so invalid sequences are replaced instead.
+// Serializes a message for the wire, replacing invalid UTF-8 with U+FFFD.
+// Values reaching us from git carry bytes that are not valid UTF-8 (hook
+// output, remote URLs, refnames written by other tools), and nlohmann's
+// default dump() throws type_error.316 on those.
 std::string dumpForWire(const Json& message);
 
 // Maximum nesting depth accepted from the client. Deeply nested JSON blows the
@@ -32,17 +31,17 @@ std::string dumpForWire(const Json& message);
 inline constexpr int kMaxParseDepth = 256;
 
 // Payloads up to this size are parsed inline on the read loop; larger ones are
-// parsed on a worker. Parsing costs time proportional to the payload, so one
-// multi-megabyte frame (an editor buffer pushed through doc/didChange) would
-// otherwise hold up every message queued behind it. Well above any control or
-// interactive message, so those keep their inline latency.
+// parsed on a worker, so the read loop keeps taking messages while a
+// multi-megabyte frame (an editor buffer pushed through doc/didChange) parses.
+// The limit sits well above any control or interactive message, so those keep
+// their inline latency.
 inline constexpr size_t kInlineParseLimit = 256u * 1024u;
 
 // Ceiling on the payload bytes waiting to be parsed off the read loop. Past
-// it, deferral stops and payloads are parsed inline again: reading no faster
-// than parsing is what keeps a burst of large frames from queueing without
-// bound. Matches the largest accepted frame, so any single legal frame can
-// always be deferred however big it is.
+// it, deferral stops and payloads are parsed inline again, which holds the
+// read loop to the speed of parsing and bounds the backlog. Matches the
+// largest accepted frame, so any single legal frame can be deferred however
+// big it is.
 inline constexpr size_t kMaxDeferredParseBytes = kMaxFrameBytes;
 
 // Sends a server->client notification (used by streaming handlers).
@@ -62,13 +61,15 @@ struct HandlerError {
 
 // Where a handler runs.
 //
-// Concurrent is the default: a read-only method that overlaps other work
-// cannot make the engine unresponsive, so ordering is opted into rather than
-// out of. Serial handlers run in request-submission order on a FIFO strand
-// chosen per repository (params["repoId"]), so a slow mutation on one
-// repository never delays another. SerialNetwork is a second per-repository
-// lane for remote-facing methods (fetch/pull/push), which need no ordering
-// against index mutations and can run for minutes.
+// Concurrent is the default: handlers run on the task pool with no ordering
+// guarantee, so ordering is opted into. Serial handlers share one FIFO strand
+// per (lane, repository) pair — the repository comes from params["repoId"] —
+// and run in request-submission order, so two Serial requests for the same
+// repository never overlap while a slow mutation on one repository never
+// delays another. SerialNetwork is a second per-repository lane for
+// remote-facing methods (fetch/pull/push), which run for minutes and need no
+// ordering against index mutations. Requests carrying no repoId share their
+// lane's unkeyed strand.
 enum class Mode { Concurrent, Serial, SerialNetwork };
 
 // Where a notification handler runs.
@@ -101,7 +102,9 @@ class Dispatcher {
 
   // Entry point for every inbound payload. Never throws; protocol-level
   // failures produce JSON-RPC error responses. Payloads over
-  // kInlineParseLimit are parsed and routed on a worker, in arrival order.
+  // kInlineParseLimit are parsed and routed on a worker, keeping arrival
+  // order among themselves; smaller payloads behind them are routed inline
+  // and so can overtake them.
   void dispatch(std::string payload);
 
   // Number of requests currently registered as in flight (for tests).
@@ -118,7 +121,6 @@ class Dispatcher {
   void sendError(const Json& id, const Error& error);
 
   // The strand for one (lane, repository) pair, created on first use.
-  // Requests without a repoId share the lane's unkeyed strand.
   Strand& strandFor(Mode mode, const Json& params);
 
   struct MethodEntry {

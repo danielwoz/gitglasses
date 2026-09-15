@@ -87,8 +87,8 @@ void TaskPool::workerLoop() {
       task = std::move(queue.front());
       queue.pop_front();
     }
-    // Worker threads are the outermost frame: an exception here would reach
-    // the thread entry point and terminate the process.
+    // Worker threads are the outermost frame: an exception escaping here
+    // reaches the thread entry point and terminates the process.
     try {
       task();
     } catch (const std::exception& e) {

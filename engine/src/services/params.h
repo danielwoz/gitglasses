@@ -25,8 +25,8 @@ inline constexpr std::int64_t kMaxFileBytes = 16 * 1024 * 1024;
 std::string requireString(const rpc::Json& params, const char* key);
 
 // Fetches an optional string param: absent yields "", present yields a
-// non-empty string. An empty value is rejected rather than read as "absent",
-// so the two ways of saying "no value" cannot disagree.
+// non-empty string. A present empty value is rejected, so "" always means
+// "absent".
 std::string optionalString(const rpc::Json& params, const char* key);
 
 // Fetches a required non-empty array of non-empty strings or throws

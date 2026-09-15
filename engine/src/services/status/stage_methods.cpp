@@ -143,6 +143,8 @@ void splitPatch(const std::string& text, std::string& header, std::vector<HunkBl
 std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBlock>& blocks,
                              const std::vector<bool>& selected, bool renumber) {
   std::string out = header;
+  // Line count each side of the file has gained from the hunks seen so far:
+  // over all of them, and over the kept ones alone.
   long cumulativeAll = 0;
   long cumulativeKept = 0;
   for (size_t i = 0; i < blocks.size(); ++i) {
@@ -150,6 +152,8 @@ std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBl
     const long delta = block.newLines - block.oldLines;
     if (selected[i]) {
       if (renumber) {
+        // newStart counts from a file carrying every earlier hunk; the subset
+        // carries only the kept ones, so swap one shift for the other.
         const long newStart = block.newStart - cumulativeAll + cumulativeKept;
         out += "@@ -" + std::to_string(block.oldStart) + "," + std::to_string(block.oldLines) +
                " +" + std::to_string(newStart) + "," + std::to_string(block.newLines) + " @@" +
@@ -233,17 +237,15 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
   // Hunk-level staging. A fresh single-file diff is taken and the requested
   // hunks are matched by their recorded ranges; a stale request (the file
   // changed since the client's diff/fileHunks call) fails instead of applying
-  // the wrong lines. Stage applies the subset patch to the index via
-  // libgit2's git_apply; unstage reverse-applies it through `git apply
-  // --cached --reverse` (libgit2 has no reverse apply, and the CLI keeps
-  // "no newline" marker semantics correct in reverse).
+  // the wrong lines. Stage applies the subset patch to the index via libgit2's
+  // git_apply; unstage reverse-applies it through `git apply --cached
+  // --reverse`, which libgit2 has no equivalent for, so unstage requires the
+  // git CLI.
   dispatcher.method(
       "stage/hunks",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         const std::string action = requireAction(params);
-        // Unstaging hunks reverse-applies through the git CLI (libgit2 has no
-        // reverse apply); staging stays libgit2-only and needs no CLI.
         if (action == "unstage") requireGitCli(context);
         const std::string path = requireString(params, "path");
         const std::vector<HunkRange> requested = requireHunkRanges(params);
@@ -313,9 +315,8 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
             throw rpc::HandlerError{{core::gitError("apply hunks to index")}};
           }
         } else {
-          // TempFile, not a bare path: readLine()/wait() throw CancelledError,
-          // which skipped the hand-rolled remove() and left the user's diff in
-          // the shared temp directory.
+          // git apply takes a file argument; TempFile removes it on every exit
+          // path, including the CancelledError runGit() can throw.
           auto file = util::TempFile::create(subset, "gg-hunk-", ".patch");
           if (!file) throw rpc::HandlerError{{file.error()}};
           auto status = exec::runGit(repo.value().workdir(),

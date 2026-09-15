@@ -14,8 +14,8 @@
 
 namespace gg::services::mutate_detail {
 
-// Captured result of a finished `git` invocation. Only spawn failures are
-// Errors; nonzero exits come back in exitCode for the caller to interpret
+// Captured result of a finished `git` invocation. Spawn failures and timeouts
+// are Errors; nonzero exits come back in exitCode for the caller to interpret
 // (conflict-aware methods treat some of them as results, not errors).
 struct GitOutput {
   int exitCode = -1;

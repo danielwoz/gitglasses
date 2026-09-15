@@ -18,10 +18,9 @@ namespace gg::exec {
 inline constexpr std::chrono::milliseconds kDefaultGitTimeout{120'000};
 
 // Ceiling for invocations that talk to a remote (fetch/pull/push). A first
-// fetch of a large repository over a slow link legitimately runs for minutes,
-// so this is far longer than the local ceiling; it exists only to stop an
-// unreachable remote from holding a child process forever. git's own TCP
-// connect retry to a blackholed address runs past two minutes on its own.
+// fetch of a large repository over a slow link runs for minutes, and git's own
+// TCP connect retry to a blackholed address runs past two minutes, so this
+// ceiling only catches a remote that never answers at all.
 inline constexpr std::chrono::milliseconds kNetworkGitTimeout{300'000};
 
 // True when git's option parser would read this value as a flag.
@@ -100,7 +99,7 @@ class GitProcess {
   void killGroup();
 
   // Kills the process group once the deadline has passed, latching timedOut_.
-  // Called from every loop that would otherwise wait indefinitely.
+  // Called from every loop that waits on the child.
   bool expired() {
     if (timedOut_) return true;
     if (std::chrono::steady_clock::now() < deadline_) return false;
