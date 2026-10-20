@@ -386,6 +386,37 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   EXPECT_FALSE(hunks.value("hunks", Json::array()).empty());
   checkedRequest(session, 14, "stash/list", {{"repoId", repoId}});
   checkedRequest(session, 15, "worktree/list", {{"repoId", repoId}});
+  {
+    // Two linked worktrees whose commits conflict, so every part of
+    // worktree/status is filled in, conflicts included.
+    const std::string prefix = fixture.root().string() + "-contract-";
+    struct Cleanup {
+      std::string prefix;
+      ~Cleanup() {
+        std::error_code ec;
+        std::filesystem::remove_all(prefix + "wt", ec);
+        std::filesystem::remove_all(prefix + "base", ec);
+      }
+    } cleanup{prefix};
+    for (const std::string name : {"wt", "base"}) {
+      const std::filesystem::path dir = prefix + name;
+      fixture.run("git worktree add -q -b contract-" + name + " \"" + dir.string() + "\" HEAD");
+      {
+        std::ofstream out(dir / "src" / "main.txt", std::ios::binary);
+        out << "one\n" << name << "\n";
+      }
+      gg::testing::runGit(dir, "git commit -q -am " + name);
+    }
+    Json worktrees = checkedRequest(session, 15, "worktree/list", {{"repoId", repoId}});
+    EXPECT_EQ(worktrees.value("worktrees", Json::array()).size(), 3u);
+    Json status =
+        checkedRequest(session, 15, "worktree/status",
+                       {{"repoId", repoId}, {"path", prefix + "wt"}, {"base", "contract-base"}});
+    EXPECT_EQ(status["base"].value("conflicts", Json::array()), Json::array({"src/main.txt"}))
+        << status.dump();
+    checkedRequest(session, 15, "worktree/status",
+                   {{"repoId", repoId}, {"path", fixture.root().string()}});
+  }
   checkedRequest(session, 16, "remote/list", {{"repoId", repoId}});
   checkedRequest(session, 17, "repo/list", Json::object());
   checkedRequest(session, 18, "rebase/preview", {{"repoId", repoId}, {"upstream", "feature"}});

@@ -177,6 +177,8 @@ TEST(RestrictedMode, ReadsRunNothingTheRepositoryConfigures) {
       {"rev/fileAtRev", {{"repoId", repoId}, {"path", "a.txt"}, {"rev", "HEAD"}}},
       {"refs/list", {{"repoId", repoId}}},
       {"repo/state", {{"repoId", repoId}}},
+      {"worktree/list", {{"repoId", repoId}}},
+      {"worktree/status", {{"repoId", repoId}, {"path", planted.root().string()}}},
   };
   std::int64_t id = 10;
   for (const auto& [method, params] : reads) {
@@ -208,7 +210,6 @@ TEST(RestrictedMode, RefusesWhatWouldRunGitOrChangeTheRepository) {
       {"stage/hunks",
        {{"repoId", repoId}, {"path", "a.txt"}, {"action", "stage"}, {"hunks", Json::array()}}},
       {"stash/push", {{"repoId", repoId}}},
-      {"worktree/list", {{"repoId", repoId}}},
       {"worktree/add", {{"repoId", repoId}, {"path", "elsewhere"}, {"ref", "other"}}},
       {"rebase/preview", {{"repoId", repoId}, {"upstream", "other"}}},
       {"rebase/start", {{"repoId", repoId}, {"upstream", "other"}}},

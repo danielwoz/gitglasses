@@ -122,4 +122,20 @@ describe('Restricted Mode', () => {
     await settle(1000);
     assert.deepStrictEqual(ran(), [], 'a planted program ran');
   });
+
+  // Worktrees list and report their status through libgit2 alone.
+  it('lists the worktrees with their status, without running anything the repository names', async () => {
+    type Row = { label: string; description: string; tooltip: string };
+    const rows = await poll(async () => {
+      const listed = await vscode.commands.executeCommand<Row[]>('_gitglasses.worktreeRows');
+      const side = listed?.find((row) => row.label === 'side');
+      return side?.description.includes('merges cleanly') ? listed : undefined;
+    }, 'the worktree rows never showed their status');
+    assert.strictEqual(rows.length, 2, JSON.stringify(rows));
+    const side = rows.find((row) => row.label === 'side')!;
+    assert.strictEqual(side.description, '↑1 ↓0 · merges cleanly');
+    assert.match(side.tooltip, /No uncommitted changes/);
+    await settle(1000);
+    assert.deepStrictEqual(ran(), [], 'a planted program ran');
+  });
 });

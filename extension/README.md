@@ -131,6 +131,20 @@ and pull from the Home view and **GitGlasses: Git Commands…** too, keep
 several branches checked out at once with worktrees, and stage or unstage
 single hunks from the editor.
 
+The Worktrees view shows each worktree's state at a glance, which helps when
+several coding agents work in parallel worktrees: uncommitted changes,
+commits ahead of and behind a base branch, whether it would merge cleanly
+into the base (checked with `git merge-tree`, git 2.38 or later, without
+touching any checkout), its last activity, and the agent it appears to belong
+to (Claude Code, Cursor, Codex, Copilot and VS Code agent sessions, going by
+where the worktree lives, its branch name or the trailers on its commits).
+**Compare with Base** opens everything a worktree changed since it left the
+base, uncommitted work included, and **Remove Worktree and Branch…** deletes
+both after one confirmation that lists what goes. The base is the branch
+checked out in the main worktree unless you pick another with **Choose Base
+for Worktrees…**. Statuses are read again on git activity in any worktree,
+every minute while the view is open and when you come back to the window.
+
 *Limits:* everything that changes the repository needs git and a trusted
 workspace, and none of it is available on the web.
 
@@ -295,9 +309,10 @@ In Restricted Mode no git runs at all, so nothing a repository configures
 | vscode.dev | WebAssembly engine, read-only |
 
 The editor picks the right package. Outside the browser, features that run
-git need `git` on `PATH`; 2.34 or newer is recommended (the version is not
-checked). Without git, blame, the graph, commit details and message search
-still work.
+git need `git` on `PATH`; 2.34 or newer is recommended. The Worktrees view's
+merge check needs 2.38 or newer (2.45 in a partial clone), which GitGlasses
+checks and otherwise skips. Without git, blame, the graph, commit details and
+message search still work.
 
 ## Troubleshooting
 
@@ -398,6 +413,7 @@ in Restricted Mode.
 | GitGlasses: Git Commands… | `gitglasses.gitCommands` | trusted workspace |
 | GitGlasses: Interactive Rebase… | `gitglasses.interactiveRebase` | trusted workspace |
 | GitGlasses: Add Worktree… | `gitglasses.worktrees.add` | trusted workspace |
+| GitGlasses: Choose Base for Worktrees… | `gitglasses.worktrees.chooseBase` |  |
 | GitGlasses: Stage Selected Hunk(s) | `gitglasses.stageSelectedHunks` | trusted workspace |
 | GitGlasses: Unstage Selected Hunk(s) | `gitglasses.unstageSelectedHunks` | trusted workspace |
 | GitGlasses: Create Tag… | `gitglasses.tag.create` | trusted workspace |

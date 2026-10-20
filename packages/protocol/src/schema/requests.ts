@@ -21,6 +21,8 @@ import {
   SequencerOperation,
   SequencerState,
   Sha,
+  WorktreeEntry,
+  WorktreeStatus,
   strict,
 } from './models.js';
 
@@ -944,26 +946,25 @@ export const RequestSchemas = {
     result: EmptyObject,
   },
   'worktree/list': {
-    description: 'Worktrees attached to the repository.',
+    description:
+      "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory. The web (wasm) engine, whose files hold only the mirrored workspace, refuses it with -32003.",
     params: Type.Object({ repoId: Type.String() }, strict),
-    result: Type.Object(
+    result: Type.Object({ worktrees: Type.Array(WorktreeEntry) }, strict),
+  },
+  'worktree/status': {
+    description:
+      "Status of one worktree, for a view or an agent to see at a glance: uncommitted paths, last activity, ahead/behind its upstream and a base revision, whether it would merge cleanly into the base, and the coding agent it appears to belong to. Reads through libgit2; the merge check alone runs git (2.38 or later), and is null where git may not run. Call it per worktree, lazily: it costs a working-tree scan.",
+    params: Type.Object(
       {
-        worktrees: Type.Array(
-          Type.Object(
-            {
-              path: Type.String(),
-              branch: Type.Optional(Type.String()),
-              /** Empty for a bare worktree, which has no checked-out commit. */
-              sha: Type.String(),
-              bare: Type.Boolean(),
-              locked: Type.Boolean(),
-            },
-            strict,
-          ),
+        repoId: Type.String(),
+        path: Path('A worktree directory worktree/list reported.'),
+        base: optionalPositional(
+          'Revision to compare against. Omitted means the branch checked out in the main worktree (or the HEAD branch of a bare repository); with that HEAD detached, no base is compared.',
         ),
       },
       strict,
     ),
+    result: WorktreeStatus,
   },
   'worktree/add': {
     description: 'Adds a worktree checked out at a revision.',
@@ -1292,4 +1293,6 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'diff/fileHunks',
   'remote/list',
   'commit/details',
+  'worktree/list',
+  'worktree/status',
 ];

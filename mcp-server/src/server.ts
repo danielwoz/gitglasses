@@ -51,6 +51,7 @@ import {
   formatHostResults,
 } from './tools/myPrs.js';
 import { SERVER_VERSION } from './version.js';
+import { collectWorktrees, formatWorktrees } from './tools/worktrees.js';
 
 export { configuredGitHubHost, isPlainHostname } from './tools/myPrs.js';
 
@@ -924,6 +925,24 @@ export function createToolHandlers(context: ToolContext) {
       return lines.join('\n');
     },
 
+    async git_worktrees(args: {
+      repoPath: string;
+      base?: string;
+      maxChars?: number;
+    }): Promise<string> {
+      const repo = await repoFor(args.repoPath);
+      // Linked worktrees can live anywhere; each is read only where the
+      // repository itself may be.
+      const access = await accessFor(repo.rootPath);
+      const mayRead = async (worktreePath: string) => (await accessFor(worktreePath)) === access;
+      const limit = resultChars(args.maxChars);
+      return truncateText(
+        formatWorktrees(await collectWorktrees(repo, args.base, mayRead)),
+        limit,
+        charLimitHint(limit, 'the repository has this many worktrees'),
+      );
+    },
+
     // Takes no arguments: the hosts and their tokens all come from the
     // environment (see configuredHosts).
     async list_my_prs(_args?: Record<string, never>): Promise<string> {
@@ -1276,6 +1295,32 @@ export function createServer(context: ToolContext): McpServer {
       annotations: readOnly,
     },
     asToolResult(handlers.git_status),
+  );
+
+  server.registerTool(
+    'git_worktrees',
+    {
+      description:
+        'Every worktree of the repository with its status: branch, uncommitted path count, ' +
+        'commits ahead/behind a base branch and its upstream, whether it would merge cleanly ' +
+        'into the base (git merge-tree, nothing checked out or changed), last activity, and ' +
+        'the coding agent it appears to belong to. Use it to check on agents working in ' +
+        'parallel worktrees. The merge check needs git, so outside the directories the server ' +
+        'was started with (--allow) it is reported as not checked.',
+      inputSchema: {
+        repoPath,
+        base: z
+          .string()
+          .regex(/^[^-]/, 'base may not begin with "-"')
+          .optional()
+          .describe(
+            'Branch or revision to compare with (default: the branch checked out in the main worktree)',
+          ),
+        maxChars,
+      },
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_worktrees),
   );
 
   server.registerTool(

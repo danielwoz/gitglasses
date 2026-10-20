@@ -184,9 +184,11 @@ export function compareEntries(files: readonly ChangedFile[]): CompareEntry[] {
 }
 
 /** The files that differ between a revision and the working tree: what
- *  differs between the revision and HEAD, plus whatever the working tree and
- *  index change on top of HEAD. A path deleted from the working tree has no
- *  right side. */
+ *  differs between the revision and HEAD, plus whatever the index and working
+ *  tree change on top of HEAD. A side is left out where the file does not
+ *  exist: a path new since HEAD (added to the index, or untracked) has no
+ *  left side unless the revision already had it, and a path deleted from the
+ *  working tree has no right side. */
 export function workingTreeCompareEntries(
   refToHead: readonly ChangedFile[],
   status: {
@@ -197,19 +199,51 @@ export function workingTreeCompareEntries(
 ): CompareEntry[] {
   const entries = new Map<string, CompareEntry>();
   for (const entry of compareEntries(refToHead)) entries.set(entry.path, entry);
-  const deletedNow = new Set(
-    [...status.staged, ...status.unstaged].filter((f) => f.status === 'D').map((f) => f.path),
+  const untracked = new Set(status.untracked);
+  const stagedDeleted = new Set(status.staged.filter((f) => f.status === 'D').map((f) => f.path));
+  // A staged rename takes its old path out of the index.
+  const renamedAway = status.staged.flatMap((f) =>
+    f.status === 'R' && f.origPath !== undefined ? [f.origPath] : [],
   );
+  // Gone from the working tree, unless an untracked file of the same name
+  // is back on disk.
+  const deletedNow = new Set(
+    [
+      ...[...status.staged, ...status.unstaged].filter((f) => f.status === 'D').map((f) => f.path),
+      ...renamedAway,
+    ].filter((path) => !untracked.has(path)),
+  );
+  // Paths HEAD lacks: new in the index, or untracked (an untracked path HEAD
+  // has is one the index dropped).
+  const notInHead = new Set([
+    ...status.staged.filter((f) => ['A', 'R', 'C'].includes(f.status)).map((f) => f.path),
+    ...status.untracked.filter((path) => !stagedDeleted.has(path)),
+  ]);
   const touched = [
     ...status.staged.map((f) => f.path),
+    ...renamedAway,
     ...status.unstaged.map((f) => f.path),
     ...status.untracked,
   ];
   for (const path of touched) {
-    if (!entries.has(path)) entries.set(path, { path, left: path, right: path });
+    const committed = entries.get(path);
+    if (committed) {
+      // Deleted since the revision, but in the working tree again.
+      if (committed.right === undefined) entries.set(path, { ...committed, right: path });
+      continue;
+    }
+    // Unchanged from the revision to HEAD: the revision has the file exactly
+    // when HEAD does.
+    entries.set(
+      path,
+      notInHead.has(path) ? { path, right: path } : { path, left: path, right: path },
+    );
   }
   for (const [path, entry] of entries) {
-    entries.set(path, deletedNow.has(path) ? { path, left: entry.left } : entry);
+    if (!deletedNow.has(path)) continue;
+    // Absent on both sides: nothing to compare.
+    if (entry.left === undefined) entries.delete(path);
+    else entries.set(path, { path, left: entry.left });
   }
   return [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
 }

@@ -3057,7 +3057,7 @@
       }
     },
     "worktree/list": {
-      "description": "Worktrees attached to the repository.",
+      "description": "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory. The web (wasm) engine, whose files hold only the mirrored workspace, refuses it with -32003.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -3086,7 +3086,10 @@
                 "path",
                 "sha",
                 "bare",
-                "locked"
+                "locked",
+                "prunable",
+                "missing",
+                "current"
               ],
               "properties": {
                 "path": {
@@ -3103,7 +3106,197 @@
                 },
                 "locked": {
                   "type": "boolean"
+                },
+                "prunable": {
+                  "description": "`git worktree prune` would drop the entry: the worktree's directory or its .git file is gone and the entry is not locked.",
+                  "type": "boolean"
+                },
+                "missing": {
+                  "description": "The worktree's directory does not exist. git keeps a locked entry even then (a worktree on removable media, say), so this can be true while prunable is false.",
+                  "type": "boolean"
+                },
+                "current": {
+                  "description": "The worktree this repoId was opened from.",
+                  "type": "boolean"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "worktree/status": {
+      "description": "Status of one worktree, for a view or an agent to see at a glance: uncommitted paths, last activity, ahead/behind its upstream and a base revision, whether it would merge cleanly into the base, and the coding agent it appears to belong to. Reads through libgit2; the merge check alone runs git (2.38 or later), and is null where git may not run. Call it per worktree, lazily: it costs a working-tree scan.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "minLength": 1,
+            "description": "A worktree directory worktree/list reported.",
+            "type": "string"
+          },
+          "base": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to compare against. Omitted means the branch checked out in the main worktree (or the HEAD branch of a bare repository); with that HEAD detached, no base is compared.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "dirty": {
+            "minimum": 0,
+            "description": "Paths with uncommitted changes (staged, unstaged, untracked or conflicted), each counted once. Absent for a bare repository.",
+            "type": "integer"
+          },
+          "lastActivity": {
+            "description": "Seconds since the Unix epoch of the newest of the index file's modification and the latest HEAD reflog entry: when someone last staged, committed, checked out or reset in the worktree. Absent when neither exists.",
+            "type": "integer"
+          },
+          "upstream": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "ref",
+              "ahead",
+              "behind"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "ahead": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "behind": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            }
+          },
+          "base": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "ref",
+              "sha",
+              "ahead",
+              "behind",
+              "mergesCleanly"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "sha": {
+                "pattern": "^[0-9a-f]{40}$",
+                "description": "Full 40-character lowercase hex object id.",
+                "type": "string"
+              },
+              "ahead": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "behind": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mergeBase": {
+                "pattern": "^[0-9a-f]{40}$",
+                "description": "Full 40-character lowercase hex object id.",
+                "type": "string"
+              },
+              "mergesCleanly": {
+                "description": "Whether merging the worktree's HEAD into the base would apply without conflicts, as `git merge-tree --write-tree` decides it (nothing is checked out and the repository is left unchanged). True without running git when there is nothing to merge or the merge is a fast-forward; null when the check could not run (see mergeSkipped). Uncommitted changes are not part of it.",
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mergeSkipped": {
+                "description": "Why mergesCleanly is null.",
+                "anyOf": [
+                  {
+                    "const": "restricted",
+                    "type": "string"
+                  },
+                  {
+                    "const": "noGitCli",
+                    "type": "string"
+                  },
+                  {
+                    "const": "gitVersion",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partialClone",
+                    "type": "string"
+                  },
+                  {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                ]
+              },
+              "conflicts": {
+                "maxItems": 50,
+                "description": "Paths the merge would conflict in, at most 50. Only when mergesCleanly is false.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "agent": {
+            "additionalProperties": false,
+            "description": "The coding agent that appears to work in this worktree.",
+            "type": "object",
+            "required": [
+              "name",
+              "evidence"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "evidence": {
+                "anyOf": [
+                  {
+                    "const": "path",
+                    "type": "string"
+                  },
+                  {
+                    "const": "branch",
+                    "type": "string"
+                  },
+                  {
+                    "const": "trailer",
+                    "type": "string"
+                  }
+                ]
               }
             }
           }
@@ -4626,6 +4819,8 @@
     "diff/refs",
     "diff/fileHunks",
     "remote/list",
-    "commit/details"
+    "commit/details",
+    "worktree/list",
+    "worktree/status"
   ]
 }

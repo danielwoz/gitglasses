@@ -188,9 +188,36 @@ describe('workingTreeCompareEntries', () => {
     expect(entries).toEqual([
       { path: 'both.txt', left: 'both.txt', right: 'both.txt' },
       { path: 'deleted-now.txt', left: 'deleted-now.txt' },
-      { path: 'new.txt', left: 'new.txt', right: 'new.txt' },
+      // New since HEAD, so the revision does not have them either.
+      { path: 'new.txt', right: 'new.txt' },
       { path: 'only-on-branch.txt', left: 'only-on-branch.txt' },
-      { path: 'staged.txt', left: 'staged.txt', right: 'staged.txt' },
+      { path: 'staged.txt', right: 'staged.txt' },
+    ]);
+  });
+
+  it('gives each side only where the file exists', () => {
+    const entries = workingTreeCompareEntries(
+      [
+        // Deleted since the revision, then created again as an untracked file.
+        { path: 'back.txt', status: 'D' },
+        // Added since the revision, then deleted from the working tree.
+        { path: 'short-lived.txt', status: 'A' },
+      ],
+      {
+        staged: [
+          { path: 'kept-on-disk.txt', status: 'D' },
+          { path: 'renamed.txt', status: 'R', origPath: 'original.txt' },
+        ],
+        unstaged: [{ path: 'short-lived.txt', status: 'D' }],
+        untracked: ['back.txt', 'kept-on-disk.txt'],
+      },
+    );
+    expect(entries).toEqual([
+      { path: 'back.txt', left: 'back.txt', right: 'back.txt' },
+      // `git rm --cached`: out of the index, still on disk and in HEAD.
+      { path: 'kept-on-disk.txt', left: 'kept-on-disk.txt', right: 'kept-on-disk.txt' },
+      { path: 'original.txt', left: 'original.txt' },
+      { path: 'renamed.txt', right: 'renamed.txt' },
     ]);
   });
 });
