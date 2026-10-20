@@ -30,9 +30,11 @@ struct AgentMatch {
 // anything unrecognised is simply no match.
 std::optional<AgentMatch> agentFromLocation(std::string_view path, std::string_view branch);
 
-// The agent a commit trailer declares: Co-authored-by naming an agent's
-// identity (Claude, Cursor Agent, Copilot, Codex, aider, Gemini, Jules), or
-// an Assisted-by / Generated-by trailer ("Assisted-by: Claude Code:model"),
+// The agent a commit trailer declares: Co-authored-by with the exact address
+// an agent commits as (noreply@anthropic.com, cursoragent@cursor.com,
+// noreply@openai.com, noreply@aider.chat, or the GitHub noreply address of
+// the Copilot, Claude, Codex, Gemini or Jules bot accounts), or an
+// Assisted-by / Generated-by trailer ("Assisted-by: Claude Code:model"),
 // whose first field is taken as the name. Names outside the known set are
 // kept only when they are short and plain (letters, digits, spaces, . _ + -).
 std::optional<std::string> agentFromTrailer(std::string_view key, std::string_view value);

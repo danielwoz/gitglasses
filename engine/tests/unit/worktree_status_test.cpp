@@ -246,8 +246,26 @@ TEST(WorktreeAgents, ReadsAgentTrailers) {
   EXPECT_EQ(agentFromTrailer("Co-authored-by", "aider (gpt-5) <noreply@aider.chat>"), "Aider");
   EXPECT_EQ(agentFromTrailer("Assisted-by", "Claude Code:claude-opus-4 coccinelle"), "Claude Code");
   EXPECT_EQ(agentFromTrailer("Generated-by", "Kiro"), "Kiro");
+  EXPECT_EQ(agentFromTrailer("Co-authored-by", "Codex <noreply@openai.com>"), "Codex");
+  EXPECT_EQ(agentFromTrailer("Co-authored-by",
+                             "copilot-swe-agent[bot] "
+                             "<198982749+Copilot-SWE-Agent[bot]@users.noreply.github.com>"),
+            "Copilot");
+  EXPECT_EQ(agentFromTrailer("Co-authored-by",
+                             "google-labs-jules[bot] "
+                             "<161369871+google-labs-jules[bot]@users.noreply.github.com>"),
+            "Jules");
   // People who share a name with an agent are told apart by their address.
   EXPECT_FALSE(agentFromTrailer("Co-authored-by", "Claude Monet <claude@example.com>"));
+  // So are people at the companies behind the agents, and people whose
+  // address merely contains an agent's name.
+  EXPECT_FALSE(agentFromTrailer("Co-authored-by", "Jane Researcher <jane@openai.com>"));
+  EXPECT_FALSE(agentFromTrailer("Co-authored-by", "Sam <sam@anthropic.com>"));
+  EXPECT_FALSE(agentFromTrailer("Co-authored-by", "Dev <dev@cursor.com>"));
+  EXPECT_FALSE(agentFromTrailer("Co-authored-by", "Fan <copilot-fan@example.com>"));
+  EXPECT_FALSE(
+      agentFromTrailer("Co-authored-by", "Fan <1234+copilotfan@users.noreply.github.com>"));
+  EXPECT_FALSE(agentFromTrailer("Co-authored-by", "Ann <ann@aider.chat>"));
   EXPECT_FALSE(agentFromTrailer("Co-authored-by", "no address"));
   EXPECT_FALSE(agentFromTrailer("Signed-off-by", "Claude <noreply@anthropic.com>"));
   // Free-form names stay short and plain.

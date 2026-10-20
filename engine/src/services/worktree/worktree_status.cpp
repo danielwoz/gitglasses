@@ -81,17 +81,41 @@ std::vector<std::string_view> pathSegments(std::string_view path, std::string& s
   return segments;
 }
 
-// An agent identity in a Co-authored-by trailer, recognised by its address:
-// people share names with agents ("Claude", "Jules"), but not addresses.
+// An agent identity in a Co-authored-by trailer, recognised by the exact
+// address the tool commits with: people share names with agents ("Claude",
+// "Jules") and work at the companies behind them, but have addresses of
+// their own.
 std::optional<std::string> agentFromAddress(std::string_view address) {
-  const std::string email = lower(address);
-  if (endsWith(email, "@anthropic.com")) return "Claude Code";
-  if (endsWith(email, "@cursor.com")) return "Cursor";
-  if (email.find("copilot") != std::string::npos) return "Copilot";
-  if (endsWith(email, "@openai.com")) return "Codex";
-  if (endsWith(email, "@aider.chat")) return "Aider";
-  if (email.find("gemini-code-assist") != std::string::npos) return "Gemini";
-  if (email.find("google-labs-jules") != std::string::npos) return "Jules";
+  const std::string email = lower(trim(address));
+  static constexpr std::array<std::pair<std::string_view, std::string_view>, 4> kAddresses = {{
+      {"noreply@anthropic.com", "Claude Code"},
+      {"cursoragent@cursor.com", "Cursor"},
+      {"noreply@openai.com", "Codex"},
+      {"noreply@aider.chat", "Aider"},
+  }};
+  for (const auto& [known, agent] : kAddresses) {
+    if (email == known) return std::string(agent);
+  }
+  // GitHub's noreply addresses, <id>+<login>@ or <login>@, of the accounts
+  // hosted agents commit as.
+  constexpr std::string_view kGitHubNoreply = "@users.noreply.github.com";
+  if (!endsWith(email, kGitHubNoreply)) return std::nullopt;
+  std::string_view login(email);
+  login.remove_suffix(kGitHubNoreply.size());
+  if (const auto plus = login.find('+'); plus != std::string_view::npos) {
+    login.remove_prefix(plus + 1);
+  }
+  static constexpr std::array<std::pair<std::string_view, std::string_view>, 6> kLogins = {{
+      {"copilot", "Copilot"},
+      {"copilot-swe-agent[bot]", "Copilot"},
+      {"claude[bot]", "Claude Code"},
+      {"chatgpt-codex-connector[bot]", "Codex"},
+      {"gemini-code-assist[bot]", "Gemini"},
+      {"google-labs-jules[bot]", "Jules"},
+  }};
+  for (const auto& [known, agent] : kLogins) {
+    if (login == known) return std::string(agent);
+  }
   return std::nullopt;
 }
 
