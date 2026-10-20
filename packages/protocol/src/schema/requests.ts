@@ -8,6 +8,7 @@ import {
   BlameCommit,
   BlameOptions,
   CommitDetails,
+  CommitProvenance,
   CommitSummaryInfo,
   DiffHunk,
   FileChange,
@@ -65,6 +66,24 @@ export const MAX_FILE_BYTES = 16 * 1024 * 1024;
 /** Most files commit/details lists; a commit that changes more sets
  *  `truncated`. */
 export const COMMIT_DETAILS_MAX_FILES = 2000;
+
+/** Most commits one commit/provenance request may ask about. */
+export const COMMIT_PROVENANCE_MAX_SHAS = 1000;
+
+/** Most commits one notes/read request may ask about. */
+export const NOTES_READ_MAX_SHAS = 64;
+
+/** Longest note notes/read returns, in bytes. */
+export const NOTES_READ_MAX_BYTES = 128 * 1024;
+
+/** A full ref name under refs/notes/. */
+const NotesRef = Type.Optional(
+  Type.String({
+    minLength: 1,
+    pattern: '^refs/notes/.+',
+    description: 'Notes ref to read, a full ref name. Omitted means refs/notes/ai.',
+  }),
+);
 
 const Limit = Type.Optional(
   Type.Integer({
@@ -339,6 +358,80 @@ export const RequestSchemas = {
       strict,
     ),
     result: CommitDetails,
+  },
+  'commit/provenance': {
+    description:
+      "What each commit declares about who wrote it: a git-ai authorship log in refs/notes/ai (or, when that has none for the commit, in a remote's copy under refs/notes/ai-remote/), its trailers (Co-authored-by, Assisted-by or Generated-by naming an AI, and the session links agents add) and an author or committer that is a known agent identity. Declared only: nothing is inferred from the code, and a commit that declares nothing is 'unknown'. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        shas: Type.Array(Sha, {
+          minItems: 1,
+          maxItems: COMMIT_PROVENANCE_MAX_SHAS,
+          description: `Full commit shas, at most ${COMMIT_PROVENANCE_MAX_SHAS}.`,
+        }),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        commits: Type.Record(Type.String(), CommitProvenance, {
+          description: 'Keyed by sha. Shas that name no commit in the repository are left out.',
+        }),
+      },
+      strict,
+    ),
+  },
+  'notes/read': {
+    description: `The notes a notes ref attaches to commits, read with libgit2 (git_note_read) and cached per commit, so Restricted Mode and engines without the git CLI serve it too. A note longer than ${NOTES_READ_MAX_BYTES} bytes, or one whose content is missing from a partial clone, is listed in \`omitted\` instead.`,
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        shas: Type.Array(Sha, {
+          minItems: 1,
+          maxItems: NOTES_READ_MAX_SHAS,
+          description: `Full commit shas, at most ${NOTES_READ_MAX_SHAS}.`,
+        }),
+        ref: NotesRef,
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        ref: Type.String(),
+        exists: Type.Boolean({ description: 'The notes ref exists in the repository.' }),
+        notes: Type.Record(Type.String(), Type.String(), {
+          description: 'Note text keyed by sha; commits without a note are left out.',
+        }),
+        omitted: Type.Array(Sha, {
+          description: 'Commits whose note exists but is too long or could not be read.',
+        }),
+      },
+      strict,
+    ),
+  },
+  'notes/addFetchRefspec': {
+    description:
+      "Adds `+<ref>:<ref>-remote/<remote>` to remote.<remote>.fetch (`git config --add`), so later fetches from the remote bring its notes along; git does not fetch notes by default. The notes land in that ref of their own (refs/notes/ai-remote/origin for refs/notes/ai, the name git-ai uses), never in <ref> itself, so notes written locally for commits not yet pushed are kept; commit/provenance reads both. Characters of the remote's name other than letters, digits, '-' and '_' become '_'. Changes nothing when one of the remote's fetch refspecs already brings the ref into itself or into such a copy.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        remote: positional('Remote whose fetches should bring the notes.'),
+        ref: NotesRef,
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        added: Type.Boolean({
+          description: 'False when the remote already fetched the ref.',
+        }),
+        trackingRef: Type.String({
+          description: "The ref the remote's notes are fetched into.",
+        }),
+      },
+      strict,
+    ),
   },
   'history/file': {
     description: 'File history following renames, newest first.',
@@ -1295,4 +1388,6 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'commit/details',
   'worktree/list',
   'worktree/status',
+  'notes/read',
+  'commit/provenance',
 ];

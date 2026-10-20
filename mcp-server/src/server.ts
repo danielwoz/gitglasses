@@ -51,6 +51,7 @@ import {
   formatHostResults,
 } from './tools/myPrs.js';
 import { SERVER_VERSION } from './version.js';
+import { collectProvenance, formatProvenance } from './tools/provenance.js';
 import { collectWorktrees, formatWorktrees } from './tools/worktrees.js';
 
 export { configuredGitHubHost, isPlainHostname } from './tools/myPrs.js';
@@ -556,6 +557,33 @@ export function createToolHandlers(context: ToolContext) {
       } finally {
         sub.dispose();
       }
+    },
+
+    async git_provenance(args: {
+      repoPath: string;
+      file: string;
+      startLine?: number;
+      endLine?: number;
+      maxChars?: number;
+    }): Promise<string> {
+      if (args.endLine !== undefined && args.endLine < (args.startLine ?? 1)) {
+        throw new ToolError(
+          `endLine (${args.endLine}) is before startLine (${args.startLine ?? 1})`,
+        );
+      }
+      const repo = await repoFor(args.repoPath);
+      const report = await collectProvenance(repo.client, repo.repoId, args);
+      const limit = resultChars(args.maxChars);
+      return orEmptyRepository(
+        repo,
+        args.repoPath,
+        truncateText(
+          formatProvenance(report),
+          limit,
+          charLimitHint(limit, 'pass startLine and endLine for a smaller range'),
+        ),
+        report.hunks.length === 0,
+      );
     },
 
     async git_log_search(args: {
@@ -1109,6 +1137,39 @@ export function createServer(context: ToolContext): McpServer {
       annotations: readOnly,
     },
     asToolResult(handlers.git_blame),
+  );
+
+  server.registerTool(
+    'git_provenance',
+    {
+      description:
+        'Who declared they wrote a range of a file: blames the range, then reports for each ' +
+        "hunk's commit what it declares about AI authorship and where: a git-ai note in " +
+        "refs/notes/ai or a remote's copy, trailers such as Co-authored-by or Assisted-by, " +
+        'or an author or committer that is a known agent identity, with any session link ' +
+        'the commit names. ' +
+        'Commit-level and declared only: nothing is inferred from the code, and a commit ' +
+        'that declares nothing is reported as unknown.',
+      inputSchema: {
+        repoPath,
+        file: z.string().describe('File path relative to the repository root'),
+        startLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based first line of the range (default 1)'),
+        endLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based last line of the range, inclusive (default: the end of the file)'),
+        maxChars,
+      },
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_provenance),
   );
 
   server.registerTool(

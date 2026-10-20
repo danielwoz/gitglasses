@@ -2,7 +2,11 @@
 // than content-sized, so the draw loop covers only the rows visibleRange
 // reports and the context is translated by the scroll offset to place them.
 
-import type { GraphRef, GraphRow } from './ipc';
+import type { GraphRef, GraphRow, ProvenanceMark } from './ipc';
+import {
+  type ProvenanceFilter,
+  passesProvenanceFilter,
+} from '../../src/provenance/provenanceLogic';
 import {
   ChipBox,
   ColumnLayout,
@@ -36,6 +40,10 @@ const CHIP_RADIUS = 4;
 const AUTHOR_WIDTH = 150;
 /** Chips never take more than this share of the description column. */
 const MAX_CHIP_SHARE = 0.6;
+/** The badge on commits that declare an AI agent. */
+const AGENT_BADGE = 'AI';
+/** Opacity of the rows the provenance filter leaves out. */
+const FILTERED_OUT_ALPHA = 0.35;
 
 export interface ThemeColors {
   foreground: string;
@@ -55,6 +63,7 @@ export interface ThemeColors {
   chipTag: string;
   chipStash: string;
   chipHead: string;
+  chipAgent: string;
   fontFamily: string;
   fontSize: string;
   monoFontFamily: string;
@@ -90,6 +99,7 @@ export function readThemeColors(style: { getPropertyValue(name: string): string 
     chipTag: read('--vscode-charts-orange', '#d18616'),
     chipStash: read('--vscode-descriptionForeground', '#8b8b8b'),
     chipHead: read('--vscode-charts-green', '#89d185'),
+    chipAgent: read('--vscode-charts-yellow', '#cca700'),
     fontFamily: read('--vscode-font-family', 'sans-serif'),
     fontSize: read('--vscode-font-size', '13px'),
     monoFontFamily: read('--vscode-editor-font-family', 'monospace'),
@@ -134,6 +144,9 @@ export interface RenderState {
   currentMatch: string | undefined;
   /** The commit HEAD points to, drawn with a ring. */
   headSha: string | undefined;
+  /** Declared provenance of loaded commits and the filter that dims the
+   *  rows it leaves out; absent while provenance is turned off. */
+  provenance?: { marks: ReadonlyMap<string, ProvenanceMark>; filter: ProvenanceFilter };
 }
 
 export class GraphRenderer {
@@ -194,8 +207,17 @@ export class GraphRenderer {
       const centerY = rowTop + ROW_HEIGHT / 2;
       const selected = selection.selected.has(row.sha);
       const x = laneX(displayLane(row.lane, cap), LANE_PADDING, LANE_WIDTH);
+      const mark = state.provenance?.marks.get(row.sha);
+      const filteredOut =
+        state.provenance !== undefined &&
+        !passesProvenanceFilter(state.provenance.filter, row.kind === 'commit', mark?.agent);
+      ctx.save();
+      if (filteredOut) ctx.globalAlpha = FILTERED_OUT_ALPHA;
       this.drawDot(ctx, row, x, centerY, row.sha === state.headSha, theme);
-      this.drawText(ctx, row, i, centerY, layout, theme, selected, textFont, chipFont, monoFont);
+      this.drawText(ctx, row, i, centerY, layout, theme, selected, textFont, chipFont, monoFont, {
+        agentBadge: mark?.agent === true,
+      });
+      ctx.restore();
     }
 
     if (cap.overflow) this.drawOverflowMarker(ctx, cap, scrollTop, theme, chipFont);
@@ -354,6 +376,7 @@ export class GraphRenderer {
     textFont: string,
     chipFont: string,
     monoFont: string,
+    extras: { agentBadge: boolean } = { agentBadge: false },
   ): void {
     const strong =
       selected && theme.selectionForeground ? theme.selectionForeground : theme.foreground;
@@ -391,6 +414,7 @@ export class GraphRenderer {
       x += drawnWidth + CHIP_GAP;
     }
     if (row.refs.length > 0) x += CHIP_GAP;
+    if (extras.agentBadge) x = this.drawAgentBadge(ctx, x, centerY, layout, theme, chipFont);
 
     ctx.font = textFont;
     ctx.fillStyle = row.kind === 'commit' ? strong : muted;
@@ -407,6 +431,44 @@ export class GraphRenderer {
       ctx.font = textFont;
     }
     fillClippedText(ctx, rowDate(row), layout.dateX, centerY, layout.dateW);
+  }
+
+  /** The badge of a commit that declares an AI agent, drawn at `x` in front
+   *  of its summary. Returns where the summary starts. */
+  private drawAgentBadge(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    centerY: number,
+    layout: ColumnLayout,
+    theme: ThemeColors,
+    chipFont: string,
+  ): number {
+    ctx.font = chipFont;
+    const width = Math.ceil(ctx.measureText(AGENT_BADGE).width) + CHIP_PAD_X * 2;
+    if (x + width > layout.descriptionX + layout.descriptionW) return x;
+    const key = `agent:${theme.chipAgent}:${theme.background}`;
+    let color = this.chipColors.get(key);
+    if (color === undefined) {
+      color = readableOn(theme.chipAgent, theme.background);
+      this.chipColors.set(key, color);
+    }
+    const top = centerY - CHIP_HEIGHT / 2;
+    const alpha = ctx.globalAlpha;
+    ctx.save();
+    ctx.beginPath();
+    roundedRect(ctx, x + 0.5, top + 0.5, width - 1, CHIP_HEIGHT - 1, CHIP_RADIUS);
+    ctx.globalAlpha = alpha * 0.14;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(AGENT_BADGE, x + CHIP_PAD_X, centerY + 0.5);
+    ctx.restore();
+    return x + width + CHIP_GAP;
   }
 
   private chipColor(kind: GraphRef['kind'], theme: ThemeColors): string {
@@ -432,13 +494,15 @@ export class GraphRenderer {
     if (width <= CHIP_PAD_X) return;
     const top = centerY - CHIP_HEIGHT / 2;
     const color = this.chipColor(ref.kind, theme);
+    // Relative to the row's own opacity, which the provenance filter lowers.
+    const alpha = ctx.globalAlpha;
     ctx.save();
     ctx.beginPath();
     roundedRect(ctx, x + 0.5, top + 0.5, width - 1, CHIP_HEIGHT - 1, CHIP_RADIUS);
-    ctx.globalAlpha = 0.14;
+    ctx.globalAlpha = alpha * 0.14;
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = alpha;
     ctx.strokeStyle = color;
     ctx.lineWidth = 1;
     ctx.stroke();

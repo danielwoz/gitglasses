@@ -244,6 +244,8 @@ export interface CommitHoverInput {
   pullRequest?: { number: number; url: string };
   /** The forge's web routes are known, so Open on Remote has somewhere to go. */
   remote: boolean;
+  /** The commit's declared provenance as markdown, already escaped. */
+  provenance?: string;
   nowUnixSeconds?: number;
   locale?: string;
 }
@@ -275,6 +277,7 @@ export function renderCommitHover(input: CommitHoverInput): string {
   }
   if (hunk.path !== target.path) facts.push(`was ${codeSpan(hunk.path)}`);
   parts.push(facts.join(' · '));
+  if (input.provenance) parts.push(input.provenance);
 
   const links: string[] = [];
   if (target.repoPath !== '') {

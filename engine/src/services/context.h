@@ -14,6 +14,7 @@
 #include "repo/registry.h"
 #include "rpc/dispatcher.h"
 #include "services/blame/blame_service.h"
+#include "services/notes/notes_store.h"
 
 #ifndef GG_SINGLE_THREADED
 #include "watch/watch_manager.h"
@@ -28,6 +29,7 @@ struct ServiceContext {
   cache::BlameCache blameCache;
   cache::GraphCache graphCache;
   cache::DocOverlay docOverlay;
+  notes::NotesCache notesCache;
   // Restricted Mode (exec::restrictedMode()): no git process runs and nothing
   // in the repository changes. Read once at construction, like cliAvailable.
   bool restricted = exec::restrictedMode();

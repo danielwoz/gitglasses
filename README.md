@@ -66,10 +66,11 @@ release is in [the changelog](extension/CHANGELOG.md).
 [Model Context Protocol](https://modelcontextprotocol.io) server that gives
 AI agents the same engine: blame, commit search (by message, author, code
 change, path or date), file history, commit details, branch comparisons from
-the merge base, diffs, refs, a text rendering of the graph, status, patches
-and a pull request list. Every tool except `apply_patch` is marked
-read-only, and by default the server reads only the
-folders the client shares with it, without running git.
+the merge base, diffs, refs, a text rendering of the graph, status,
+worktrees, patches, a pull request list and the AI provenance commits
+declare. Every tool except `apply_patch` is marked read-only, and by default
+the server reads only the folders the client shares with it, without running
+git.
 
 The extension ships the server and registers it with the editor's agents,
 with no setup: through VS Code's MCP API on VS Code 1.101 and newer, and

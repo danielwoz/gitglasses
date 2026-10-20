@@ -85,6 +85,26 @@ their content last changed instead of line blame, since git only stores a
 pointer for them. Blame pauses while a file has more than 8 MB of unsaved
 changes.
 
+### Declared AI provenance
+
+Commits that declare an AI agent took part carry an **AI** badge in the
+Commit Graph, a line in the blame hover such as *AI-assisted (declared via
+Co-authored-by: Claude Opus 4.7) · session link*, a **Provenance** row in
+Commit Details, and a sparkle in the Commits and File History views. A graph
+filter dims everything but agent-declared commits, or everything but the
+rest. GitGlasses reads only what commits declare: git-ai notes in
+`refs/notes/ai`, `Co-authored-by`, `Assisted-by` and `Generated-by` trailers,
+and authors or committers that are known agent identities (Claude, Cursor,
+GitHub Copilot, Codex, Devin, Jules, Aider, Amp). It never infers authorship
+from the code, and a commit that declares nothing is unknown, not human.
+Turn it off everywhere with `gitglasses.provenance.enabled`.
+
+*Limits:* provenance is per commit, not per line. git does not fetch notes by
+default; **Fetch git-ai Notes with Every Fetch…** adds a refspec to the remote
+after you confirm. Fetched notes go to `refs/notes/ai-remote/<remote>`, as
+git-ai names it, so your own `refs/notes/ai` is never overwritten; GitGlasses
+reads both. Session links are shown, never fetched.
+
 ### File and line history
 
 ![Visual File History](https://raw.githubusercontent.com/danielwoz/gitglasses/main/extension/media/screenshots/history.png)
@@ -190,8 +210,9 @@ read. AI output is shown without loading any images or HTML it contains.
 GitGlasses ships an MCP server that gives AI agents tools over the same
 engine: blame, commit search by message, author, code change, path or
 date, file history, commit details, branch comparisons from the merge base,
-diffs, refs, a text rendering of the graph, status, patches and your pull
-requests. Every tool except `apply_patch` is marked read-only.
+diffs, refs, a text rendering of the graph, status, worktrees, patches, your
+pull requests and the declared AI provenance of a file's lines. Every tool
+except `apply_patch` is marked read-only.
 
 - **In VS Code 1.101 or newer and in Cursor** the server is registered with
   the editor's agents (Copilot agent mode, Cursor's agent) as soon as a folder
@@ -354,6 +375,7 @@ Every setting, generated from the extension manifest:
 | `gitglasses.graph.pageSize` | `200` | Rows loaded per page in the Commit Graph and Visual File History |
 | `gitglasses.graph.maxLanes` | `20` | Most branch lanes the Commit Graph draws side by side. Lanes past it fold into one column marked +N, so commit messages stay readable on merge-heavy repositories. The graph also never takes more than 40% of the panel's width. |
 | `gitglasses.codeLens.enabled` | `true` | Show git blame CodeLens above files and top-level symbols |
+| `gitglasses.provenance.enabled` | `true` | Show the AI provenance commits declare: an `AI` badge and a filter in the Commit Graph, a line in the blame hover and in Commit Details, and a mark in the Commits and File History views. Only declarations are read: git-ai notes in `refs/notes/ai`, `Co-authored-by`, `Assisted-by` and `Generated-by` trailers, and authors or committers that are known agent identities. Nothing is inferred from the code. Turn off to hide provenance everywhere. |
 | `gitglasses.engine.path` | `""` | Path to gitglasses-engine (defaults to the bundled binary) |
 | `gitglasses.web.maxRepoBytes` | `209715200` | Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB) |
 | `gitglasses.engine.logLevel` | `"warn"` | Engine log level (logs go to the GitGlasses output channel) One of `trace`, `debug`, `info`, `warn`, `error`. |
@@ -474,6 +496,7 @@ in Restricted Mode.
 | GitGlasses: Get Started | `gitglasses.openWalkthrough` |  |
 | GitGlasses: Select Repository… | `gitglasses.selectRepository` |  |
 | GitGlasses: Coming from Git Graph? | `gitglasses.comingFromGitGraph` |  |
+| GitGlasses: Fetch git-ai Notes with Every Fetch… | `gitglasses.provenance.fetchNotes` | trusted workspace |
 <!-- commands:end -->
 
 ## Contributing and license

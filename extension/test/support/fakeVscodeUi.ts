@@ -69,7 +69,13 @@ export type Answer = (shown: ShownInput) => void;
 
 export const ui = {
   shown: [] as ShownInput[],
-  messages: [] as { level: 'error' | 'warning' | 'info'; text: string; buttons: string[] }[],
+  messages: [] as {
+    level: 'error' | 'warning' | 'info';
+    text: string;
+    buttons: string[];
+    /** The options' `detail`, when one was given. */
+    detail?: string;
+  }[],
   status: [] as string[],
   progress: [] as string[],
   executed: [] as { command: string; args: unknown[] }[],
@@ -163,7 +169,11 @@ function quickInput(kind: 'input' | 'pick') {
 function message(level: 'error' | 'warning' | 'info') {
   return async (text: string, ...rest: unknown[]): Promise<string | undefined> => {
     const buttons = rest.filter((item): item is string => typeof item === 'string');
-    ui.messages.push({ level, text, buttons });
+    const options = rest.find(
+      (item): item is { detail?: unknown } => typeof item === 'object' && item !== null,
+    );
+    const detail = typeof options?.detail === 'string' ? options.detail : undefined;
+    ui.messages.push({ level, text, buttons, ...(detail !== undefined ? { detail } : {}) });
     return ui.messageChoices.shift();
   };
 }

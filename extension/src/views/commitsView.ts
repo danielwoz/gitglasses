@@ -1,4 +1,7 @@
-import { CommitSummaryInfo } from '@gitglasses/protocol';
+import { CommitProvenance, CommitSummaryInfo } from '@gitglasses/protocol';
+import type { EngineClient } from '@gitglasses/rpc';
+import type { RepositoryService } from '../model/repositoryService';
+import { type ProvenanceLookup, lookupProvenance } from '../provenance/provenanceView';
 import { ActiveRepo, ViewBase, ViewNode, loadMoreNode } from './viewBase';
 import { commitNode } from './nodes';
 import { PageState, appendPage, emptyPageState } from './viewLogic';
@@ -8,20 +11,34 @@ import { viewPageSize } from '../system/settings';
 export class CommitsViewProvider extends ViewBase {
   private state: PageState<CommitSummaryInfo> = emptyPageState();
   private repoId: string | undefined;
+  /** What the loaded commits declare about who wrote them. */
+  private provenance = new Map<string, CommitProvenance>();
+
+  constructor(
+    engine: EngineClient,
+    repos: RepositoryService,
+    private readonly provenanceSource?: ProvenanceLookup,
+  ) {
+    super(engine, repos);
+  }
 
   protected override invalidate(): void {
     this.state = emptyPageState();
+    this.provenance = new Map();
   }
 
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
     if (this.repoId !== repo.repoId) {
       this.repoId = repo.repoId;
       this.state = emptyPageState();
+      this.provenance = new Map();
     }
     if (!this.state.loaded) await this.fetchPage(repo.repoId);
 
     if (this.state.items.length === 0) return [];
-    const nodes = this.state.items.map((commit) => commitNode(commit));
+    const nodes = this.state.items.map((commit) =>
+      commitNode(commit, this.provenance.get(commit.sha)),
+    );
     if (this.state.nextCursor !== undefined) {
       const repoId = repo.repoId;
       nodes.push(loadMoreNode(() => void this.loadMore(repoId)));
@@ -36,6 +53,12 @@ export class CommitsViewProvider extends ViewBase {
       limit: viewPageSize(),
     });
     this.state = appendPage(this.state, { items: result.commits, nextCursor: result.nextCursor });
+    const declared = await lookupProvenance(
+      this.provenanceSource,
+      repoId,
+      result.commits.map((commit) => commit.sha),
+    );
+    for (const [sha, provenance] of declared) this.provenance.set(sha, provenance);
   }
 
   private async loadMore(repoId: string): Promise<void> {

@@ -50,6 +50,7 @@ void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         }
         context.watchManager.unwatch(repoId);
         context.graphCache.dropRepo(repoId);
+        context.notesCache.dropRepo(repoId);
         context.docOverlay.closeRepo(repoId);
         context.registry.remove(repoId);
         return rpc::Json::object();

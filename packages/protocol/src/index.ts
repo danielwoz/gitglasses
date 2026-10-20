@@ -20,7 +20,12 @@ export { PROTOCOL_VERSION } from './version.js';
 // The TypeBox schemas themselves, so consumers can validate at runtime.
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
-export { COMMIT_DETAILS_MAX_FILES, RESTRICTED_MODE_METHODS } from './schema/requests.js';
+export {
+  COMMIT_DETAILS_MAX_FILES,
+  COMMIT_PROVENANCE_MAX_SHAS,
+  NOTES_READ_MAX_SHAS,
+  RESTRICTED_MODE_METHODS,
+} from './schema/requests.js';
 
 // Sha helpers also have their own lean entry point: @gitglasses/protocol/sha.
 export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
@@ -95,6 +100,8 @@ export type CommitDetails = Static<typeof models.CommitDetails>;
 export type CommitFileChange = Static<typeof models.CommitFileChange>;
 export type CommitRef = Static<typeof models.CommitRef>;
 export type CommitTrailer = Static<typeof models.CommitTrailer>;
+export type CommitProvenance = Static<typeof models.CommitProvenance>;
+export type ProvenanceDeclaration = Static<typeof models.ProvenanceDeclaration>;
 export type FileHistoryEntry = Static<typeof models.FileHistoryEntry>;
 export type FileChange = Static<typeof models.FileChange>;
 export type GraphRef = Static<typeof models.GraphRef>;
@@ -148,6 +155,12 @@ export interface Requests {
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
   'log/compare': { params: P<'log/compare'>; result: R<'log/compare'> };
   'commit/details': { params: P<'commit/details'>; result: R<'commit/details'> };
+  'commit/provenance': { params: P<'commit/provenance'>; result: R<'commit/provenance'> };
+  'notes/read': { params: P<'notes/read'>; result: R<'notes/read'> };
+  'notes/addFetchRefspec': {
+    params: P<'notes/addFetchRefspec'>;
+    result: R<'notes/addFetchRefspec'>;
+  };
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };
   'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };
