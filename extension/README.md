@@ -312,6 +312,7 @@ Every setting, generated from the extension manifest:
 | `gitglasses.engine.path` | `""` | Path to gitglasses-engine (defaults to the bundled binary) |
 | `gitglasses.web.maxRepoBytes` | `209715200` | Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB) |
 | `gitglasses.engine.logLevel` | `"warn"` | Engine log level (logs go to the GitGlasses output channel) One of `trace`, `debug`, `info`, `warn`, `error`. |
+| `gitglasses.mcp.enabled` | `true` | Register GitGlasses' MCP server with the editor's AI agents (VS Code 1.101 or newer, and Cursor), so they can read this workspace's blame, history, branch comparisons, status and diffs with no setup. Git runs only in the workspace's folders, and nowhere in an untrusted workspace. The **Add MCP Server** commands configure other agents. |
 | `gitglasses.integrations.hosts` | `[]` | Git hosting instances beyond github.com, gitlab.com and bitbucket.org, e.g. [{ "domain": "github.example.com", "provider": "github-enterprise" }]. Azure DevOps takes dev.azure.com plus an organization. |
 | `gitglasses.integrations.issues` | `[]` | Issue tracker integrations, e.g. [{ "provider": "jira", "host": "mycompany.atlassian.net" }] |
 | `gitglasses.ai.provider` | `"none"` | Where GitGlasses AI requests go. Until a provider is chosen, the first AI command offers the ones this editor can use; change it any time with **GitGlasses: Choose AI Provider…**. Saving an API key with **GitGlasses: Set AI API Key…** switches to that provider. One of `none`, `vscode-lm`, `anthropic`, `openai`, `gemini`, `ollama`. |
@@ -421,6 +422,9 @@ in Restricted Mode.
 | GitGlasses: Import Repo Group… | `gitglasses.groups.import` |  |
 | GitGlasses: Continue Merge, Rebase, Cherry-pick or Revert | `gitglasses.continueOperation` | trusted workspace |
 | GitGlasses: Abort Merge, Rebase, Cherry-pick or Revert | `gitglasses.abortOperation` | trusted workspace |
+| GitGlasses: Add MCP Server to Claude Code | `gitglasses.mcp.addToClaudeCode` |  |
+| GitGlasses: Add MCP Server to Codex | `gitglasses.mcp.addToCodex` |  |
+| GitGlasses: Copy MCP Server Config | `gitglasses.mcp.copyConfig` |  |
 | GitGlasses: Get Started | `gitglasses.openWalkthrough` |  |
 | GitGlasses: Select Repository… | `gitglasses.selectRepository` |  |
 | GitGlasses: Coming from Git Graph? | `gitglasses.comingFromGitGraph` |  |

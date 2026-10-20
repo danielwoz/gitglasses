@@ -10,6 +10,7 @@ import {
   waitForBlameHover,
   workspaceRoot,
 } from '../suite/helpers';
+import { mcpServiceState, startMcpServer } from '../suite/mcpClient';
 
 // The planted workspace opens untrusted. GitGlasses must show blame without
 // running any program the repository's config, attributes or hooks name, and
@@ -90,5 +91,34 @@ describe('Restricted Mode', () => {
     await settle(1000);
     assert.deepStrictEqual(ran(), [], 'a planted program ran');
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
+  // The editor's agents get the MCP server here too, allowed to run git
+  // nowhere: it reads the workspace without git and refuses what needs it.
+  it('gives agents the MCP server without letting it run git', async () => {
+    const { status, launch } = await mcpServiceState();
+    assert.deepStrictEqual(status.gitRoots ?? [], [], 'git allowed in an untrusted workspace');
+    assert.ok(launch, 'no launch');
+    assert.strictEqual(launch.env.GITGLASSES_ALLOWED_ROOTS, '');
+
+    const root = workspaceRoot().fsPath;
+    const session = await startMcpServer(launch, root);
+    try {
+      const blame = await session.callTool('git_blame', {
+        repoPath: root,
+        file: FIXTURE.blameFile,
+      });
+      assert.ok(blame.includes(FIXTURE.authorName), `git_blame: ${blame}`);
+      const status = await session.callTool('git_status', { repoPath: root });
+      assert.ok(status.includes(FIXTURE.dirtyFile), `git_status: ${status}`);
+      await assert.rejects(
+        session.callTool('git_file_history', { repoPath: root, file: FIXTURE.blameFile }),
+        /needs git/,
+      );
+    } finally {
+      session.close();
+    }
+    await settle(1000);
+    assert.deepStrictEqual(ran(), [], 'a planted program ran');
   });
 });
