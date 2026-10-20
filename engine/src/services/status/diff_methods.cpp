@@ -164,7 +164,10 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
   // Hunks of one file's staged or unstaged diff, for hunk staging. Lines are
   // unified-diff lines prefixed ' ', '+', '-'; "no newline at end of file"
   // markers are omitted (stage/hunks rebuilds its patch from a fresh diff, so
-  // fidelity is preserved where it matters).
+  // fidelity is preserved where it matters). The working-tree side of a path
+  // with a filter driver or working-tree-encoding is the cleaned content git
+  // would store, so the hunks are the ones `git diff` shows. Submodules have
+  // no hunks.
   dispatcher.method(
       "diff/fileHunks",
       [&context](const rpc::Json& params, const CancelToken& token,
@@ -174,60 +177,38 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
-        auto diff = status_detail::singleFileDiff(repo.value(), path, staged);
-        if (!diff) throw rpc::HandlerError{{diff.error()}};
-
+        const status_detail::FilePatch patch =
+            status_detail::filePatch(repo.value(), path, staged, context.cliAvailable, token);
         rpc::Json hunks = rpc::Json::array();
-        if (git_diff_num_deltas(diff.value().get()) == 0) {
-          return {{"hunks", std::move(hunks)}};  // no changes for this path
-        }
-        git_patch* rawPatch = nullptr;
-        if (git_patch_from_diff(&rawPatch, diff.value().get(), 0) != 0) {
-          throw rpc::HandlerError{{core::gitError("build patch for '" + path + "'")}};
-        }
-        core::PatchPtr patch(rawPatch);
-        const size_t hunkCount = git_patch_num_hunks(patch.get());
-        for (size_t h = 0; h < hunkCount; ++h) {
+        if (patch.gitlink) return {{"hunks", std::move(hunks)}};
+
+        std::string header;
+        std::vector<status_detail::HunkBlock> blocks;
+        status_detail::splitPatch(patch.text, header, blocks);
+        for (const auto& block : blocks) {
           token.throwIfCancelled();
-          const git_diff_hunk* hunk = nullptr;
-          size_t lineCount = 0;
-          if (git_patch_get_hunk(&hunk, &lineCount, patch.get(), h) != 0) {
-            throw rpc::HandlerError{{core::gitError("read hunk of '" + path + "'")}};
-          }
-          std::string header(hunk->header, hunk->header_len);
-          while (!header.empty() && (header.back() == '\n' || header.back() == '\r')) {
-            header.pop_back();
+          std::string headerText = block.headerLine;
+          while (!headerText.empty() && (headerText.back() == '\n' || headerText.back() == '\r')) {
+            headerText.pop_back();
           }
           rpc::Json lines = rpc::Json::array();
-          for (size_t l = 0; l < lineCount; ++l) {
-            const git_diff_line* line = nullptr;
-            if (git_patch_get_line_in_hunk(&line, patch.get(), h, l) != 0) {
-              throw rpc::HandlerError{{core::gitError("read line of '" + path + "'")}};
-            }
-            char prefix = 0;
-            switch (line->origin) {
-              case GIT_DIFF_LINE_CONTEXT:
-                prefix = ' ';
-                break;
-              case GIT_DIFF_LINE_ADDITION:
-                prefix = '+';
-                break;
-              case GIT_DIFF_LINE_DELETION:
-                prefix = '-';
-                break;
-              default:
-                continue;  // end-of-file newline markers
-            }
-            std::string content(line->content, line->content_len);
-            if (!content.empty() && content.back() == '\n') content.pop_back();
-            if (!content.empty() && content.back() == '\r') content.pop_back();
-            lines.push_back(prefix + content);
+          size_t pos = 0;
+          while (pos < block.body.size()) {
+            const size_t eol = block.body.find('\n', pos);
+            const size_t end = eol == std::string::npos ? block.body.size() : eol;
+            std::string line = block.body.substr(pos, end - pos);
+            pos = end + 1;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            // diff.suppressBlankEmpty writes an empty context line bare.
+            if (line.empty()) line = " ";
+            if (line[0] != ' ' && line[0] != '+' && line[0] != '-') continue;  // EOF markers
+            lines.push_back(std::move(line));
           }
-          hunks.push_back({{"header", std::move(header)},
-                           {"oldStart", hunk->old_start},
-                           {"oldLines", hunk->old_lines},
-                           {"newStart", hunk->new_start},
-                           {"newLines", hunk->new_lines},
+          hunks.push_back({{"header", std::move(headerText)},
+                           {"oldStart", block.oldStart},
+                           {"oldLines", block.oldLines},
+                           {"newStart", block.newStart},
+                           {"newLines", block.newLines},
                            {"lines", std::move(lines)}});
         }
         return {{"hunks", std::move(hunks)}};

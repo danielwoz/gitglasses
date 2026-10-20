@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -453,6 +454,386 @@ TEST(StatusService, StageHunksStagesOnlySelectedHunk) {
                                                    {"newStart", 999},
                                                    {"newLines", 1}}})}}));
   EXPECT_EQ(stale["error"]["code"], -32001);
+}
+
+// --- Filter drivers and working-tree-encoding -----------------------------
+// git runs filter drivers (git-lfs, git-crypt, nbstripout, custom
+// clean/smudge) and working-tree-encoding when it stores content; libgit2 runs
+// neither. These pin the engine to what `git add` stores and to the
+// clean/dirty verdict `git status` gives.
+
+std::string trimmed(std::string text) {
+  while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+  return text;
+}
+
+// The blob id the index holds for `path`.
+std::string indexId(const FixtureRepo& fixture, const std::string& path) {
+  return trimmed(gitOut(fixture.root(), "rev-parse :" + path));
+}
+
+// The blob id `git add` would store for the working-tree file: hash-object
+// runs the same filter driver and working-tree-encoding.
+std::string cleanedId(const FixtureRepo& fixture, const std::string& path) {
+  return trimmed(gitOut(fixture.root(), "hash-object -- " + path));
+}
+
+// A clean filter that scrubs a secret: `git add` stores "token=REDACTED"
+// whatever the working tree holds.
+void configureScrubFilter(FixtureRepo& fixture) {
+  fixture.run("git config filter.scrub.clean \"sed -e s/SECRET/REDACTED/\"");
+  fixture.run("git config filter.scrub.smudge cat");
+  fixture.run("git config filter.scrub.required true");
+}
+
+// A stand-in for Git LFS that needs no git-lfs install: the stored blob is a
+// one-line digest of the content, much like an LFS pointer. Global config is
+// isolated for the test, since a developer's `git lfs install` would
+// otherwise route the "lfs" driver to the real git-lfs.
+class FakeLfs {
+ public:
+  explicit FakeLfs(FixtureRepo& fixture)
+      : globalConfig_("GIT_CONFIG_GLOBAL",
+                      writeEmpty(fixture.root() / ".git" / "isolated-global-config")) {
+    fixture.run("git config filter.lfs.clean \"git hash-object --stdin\"");
+    fixture.run("git config filter.lfs.smudge cat");
+  }
+
+ private:
+  static std::string writeEmpty(const std::filesystem::path& file) {
+    std::ofstream(file, std::ios::binary).flush();
+    return file.string();
+  }
+  gg::testing::ScopedEnv globalConfig_;
+};
+
+// ASCII `text` as UTF-16LE with a byte-order mark: the working-tree form of a
+// file declared `working-tree-encoding=UTF-16LE-BOM`.
+std::string utf16le(const std::string& text) {
+  std::string out = "\xff\xfe";
+  for (const char c : text) {
+    out += c;
+    out += '\0';
+  }
+  return out;
+}
+
+Json rangeOf(const Json& hunk) {
+  return {{"oldStart", hunk["oldStart"]},
+          {"oldLines", hunk["oldLines"]},
+          {"newStart", hunk["newStart"]},
+          {"newLines", hunk["newLines"]}};
+}
+
+Json fileHunks(InteractiveSession& session, std::int64_t id, const std::string& repoId,
+               const std::string& path, bool staged) {
+  return session.request(
+      req(id, "diff/fileHunks", {{"repoId", repoId}, {"path", path}, {"staged", staged}}));
+}
+
+Json stageHunks(InteractiveSession& session, std::int64_t id, const std::string& repoId,
+                const std::string& path, const std::string& action, Json ranges) {
+  return session.request(
+      req(id, "stage/hunks",
+          {{"repoId", repoId}, {"path", path}, {"action", action}, {"hunks", std::move(ranges)}}));
+}
+
+Json stageFiles(InteractiveSession& session, std::int64_t id, const std::string& repoId,
+                const std::vector<std::string>& paths, const std::string& action) {
+  return session.request(
+      req(id, "stage/files", {{"repoId", repoId}, {"paths", paths}, {"action", action}}));
+}
+
+TEST(StatusService, StageFilesRunsCleanFilter) {
+  FixtureRepo fixture;
+  configureScrubFilter(fixture);
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.run("git add .gitattributes app.env");
+  commitTick(fixture, "seed", 1);
+  fixture.writeFile("app.env", "token=SECRET\nport=2\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json stage = stageFiles(session, 10, repoId, {"app.env"}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+
+  // Parity with `git add app.env`: the index holds the cleaned bytes.
+  EXPECT_EQ(gitOut(fixture.root(), "cat-file -p :app.env"), "token=REDACTED\nport=2\n");
+  EXPECT_EQ(indexId(fixture, "app.env"), cleanedId(fixture, "app.env"));
+  EXPECT_EQ(gitOut(fixture.root(), "diff --name-only"), "");
+}
+
+TEST(StatusService, StageFilesAppliesWorkingTreeEncoding) {
+  FixtureRepo fixture;
+  fixture.writeFile(".gitattributes", "*.txt working-tree-encoding=UTF-16LE-BOM\n");
+  fixture.writeFile("notes.txt", utf16le("hello\nworld\n"));
+  fixture.run("git add .gitattributes notes.txt");
+  commitTick(fixture, "seed", 1);
+  fixture.writeFile("notes.txt", utf16le("hello\nthere\n"));
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json stage = stageFiles(session, 10, repoId, {"notes.txt"}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+
+  // git stores UTF-8; the UTF-16 bytes exist only in working trees.
+  EXPECT_EQ(gitOut(fixture.root(), "cat-file -p :notes.txt"), "hello\nthere\n");
+  EXPECT_EQ(indexId(fixture, "notes.txt"), cleanedId(fixture, "notes.txt"));
+}
+
+TEST(StatusService, StageFilesStoresPointerForLfsFilter) {
+  FixtureRepo fixture;
+  FakeLfs lfs(fixture);
+  fixture.writeFile(".gitattributes", "*.bin filter=lfs -text\n");
+  fixture.run("git add .gitattributes");
+  commitTick(fixture, "track bin", 1);
+  fixture.writeFile("big.bin", std::string(300000, '\x01'));
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json stage = stageFiles(session, 10, repoId, {"big.bin"}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+
+  EXPECT_EQ(indexId(fixture, "big.bin"), cleanedId(fixture, "big.bin"));
+  const std::string size = trimmed(gitOut(fixture.root(), "cat-file -s :big.bin"));
+  EXPECT_LT(std::stoul(size.empty() ? "0" : size), 100u)
+      << "index holds " << size << " bytes instead of a pointer";
+}
+
+TEST(StatusService, StageFilesKeepsGitLfsPointer) {
+  FixtureRepo fixture;
+  if (gitOut(fixture.root(), "lfs version").rfind("git-lfs/", 0) != 0) {
+    GTEST_SKIP() << "git-lfs is not installed";
+  }
+  fixture.run("git lfs install --local");
+  fixture.writeFile(".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+  fixture.run("git add .gitattributes");
+  commitTick(fixture, "track bin", 1);
+  fixture.writeFile("big.bin", std::string(300000, '\x01'));
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json stage = stageFiles(session, 10, repoId, {"big.bin"}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+
+  // `git add big.bin` stores a ~130-byte pointer, never the 300 kB payload.
+  const std::string staged = gitOut(fixture.root(), "cat-file -p :big.bin");
+  EXPECT_EQ(staged.rfind("version https://git-lfs.github.com/spec/v1\n", 0), 0u)
+      << "index holds " << staged.size() << " bytes instead of an LFS pointer";
+}
+
+TEST(StatusService, HunksOfFilteredFileAreGitsHunks) {
+  FixtureRepo fixture;
+  configureScrubFilter(fixture);
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.writeFile("app.env", "token=SECRET\nport=1\n");
+  fixture.run("git add .gitattributes app.env");
+  commitTick(fixture, "seed", 1);
+  fixture.writeFile("app.env", "token=SECRET\nport=2\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json hunks = fileHunks(session, 10, repoId, "app.env", false);
+  ASSERT_EQ(hunks["result"]["hunks"].size(), 1u) << hunks.dump();
+  // The port edit is the only change git sees; the scrubbed line is context
+  // in its cleaned form, never the working tree's secret.
+  const Json& hunk = hunks["result"]["hunks"][0];
+  EXPECT_EQ(hunk["lines"], Json::array({" token=REDACTED", "-port=1", "+port=2"}));
+
+  Json stage = stageHunks(session, 11, repoId, "app.env", "stage", Json::array({rangeOf(hunk)}));
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "cat-file -p :app.env"), "token=REDACTED\nport=2\n");
+  EXPECT_EQ(gitOut(fixture.root(), "diff --name-only"), "");
+
+  // The staged side was already clean; unstaging reverses the same hunk.
+  Json staged = fileHunks(session, 12, repoId, "app.env", true);
+  ASSERT_EQ(staged["result"]["hunks"].size(), 1u) << staged.dump();
+  Json unstage = stageHunks(session, 13, repoId, "app.env", "unstage",
+                            Json::array({rangeOf(staged["result"]["hunks"][0])}));
+  ASSERT_TRUE(unstage.contains("result")) << unstage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "cat-file -p :app.env"), "token=REDACTED\nport=1\n");
+}
+
+TEST(StatusService, StageHunksAppliesWorkingTreeEncoding) {
+  FixtureRepo fixture;
+  fixture.writeFile(".gitattributes", "*.txt working-tree-encoding=UTF-16LE-BOM\n");
+  std::string contents;
+  for (int i = 1; i <= 20; ++i) contents += "line" + std::to_string(100 + i) + "\n";
+  fixture.writeFile("notes.txt", utf16le(contents));
+  fixture.run("git add .gitattributes notes.txt");
+  commitTick(fixture, "seed", 1);
+  std::string edited = contents;
+  edited.replace(edited.find("line102\n"), 8, "line102 EDITED\n");
+  edited.replace(edited.find("line118\n"), 8, "line118 EDITED\n");
+  fixture.writeFile("notes.txt", utf16le(edited));
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json hunks = fileHunks(session, 10, repoId, "notes.txt", false);
+  ASSERT_EQ(hunks["result"]["hunks"].size(), 2u) << hunks.dump();
+  // UTF-8 lines, as git diffs them, not UTF-16 bytes.
+  EXPECT_EQ(
+      hunks["result"]["hunks"][0]["lines"],
+      Json::array({" line101", "-line102", "+line102 EDITED", " line103", " line104", " line105"}));
+
+  Json stage = stageHunks(session, 11, repoId, "notes.txt", "stage",
+                          Json::array({rangeOf(hunks["result"]["hunks"][0])}));
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  std::string expected = contents;
+  expected.replace(expected.find("line102\n"), 8, "line102 EDITED\n");
+  // UTF-8 in the index, holding the first edit only.
+  EXPECT_EQ(gitOut(fixture.root(), "cat-file -p :notes.txt"), expected);
+}
+
+TEST(StatusService, StageHunksStagesNewFilteredFileCleaned) {
+  FixtureRepo fixture;
+  configureScrubFilter(fixture);
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.run("git add .gitattributes");
+  commitTick(fixture, "seed", 1);
+  fixture.writeFile("new.env", "token=SECRET\nport=1\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json hunks = fileHunks(session, 10, repoId, "new.env", false);
+  ASSERT_EQ(hunks["result"]["hunks"].size(), 1u) << hunks.dump();
+  EXPECT_EQ(hunks["result"]["hunks"][0]["lines"], Json::array({"+token=REDACTED", "+port=1"}));
+
+  Json stage = stageHunks(session, 11, repoId, "new.env", "stage",
+                          Json::array({rangeOf(hunks["result"]["hunks"][0])}));
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "cat-file -p :new.env"), "token=REDACTED\nport=1\n");
+}
+
+TEST(StatusService, StageHunksRefusesLfsPointer) {
+  FixtureRepo fixture;
+  FakeLfs lfs(fixture);
+  fixture.writeFile(".gitattributes", "*.csv filter=lfs\n");
+  fixture.writeFile("data.csv", "a,b\n1,2\n");
+  fixture.run("git add .gitattributes data.csv");
+  commitTick(fixture, "seed", 1);
+  const std::string before = indexId(fixture, "data.csv");
+  fixture.writeFile("data.csv", "a,b\n1,2\n3,4\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  // git's own view: the pointer changed, nothing else.
+  Json hunks = fileHunks(session, 10, repoId, "data.csv", false);
+  ASSERT_EQ(hunks["result"]["hunks"].size(), 1u) << hunks.dump();
+  EXPECT_EQ(hunks["result"]["hunks"][0]["oldLines"], 1);
+
+  Json stage = stageHunks(session, 11, repoId, "data.csv", "stage",
+                          Json::array({rangeOf(hunks["result"]["hunks"][0])}));
+  ASSERT_TRUE(stage.contains("error")) << stage.dump();
+  EXPECT_EQ(stage["error"]["code"], -32011);
+  EXPECT_NE(stage["error"]["message"].get<std::string>().find("Git LFS"), std::string::npos);
+  EXPECT_EQ(indexId(fixture, "data.csv"), before);
+
+  // The whole file still stages, as the pointer `git add` writes.
+  Json whole = stageFiles(session, 12, repoId, {"data.csv"}, "stage");
+  ASSERT_TRUE(whole.contains("result")) << whole.dump();
+  EXPECT_EQ(indexId(fixture, "data.csv"), cleanedId(fixture, "data.csv"));
+}
+
+TEST(StatusService, StageHunksRejectsSubmodule) {
+  FixtureRepo library;
+  library.writeFile("lib.txt", "one\n");
+  library.run("git add lib.txt");
+  commitTick(library, "lib one", 1);
+
+  FixtureRepo fixture;
+  fixture.run("git -c protocol.file.allow=always submodule --quiet add \"" +
+              library.root().generic_string() + "\" sub");
+  commitTick(fixture, "add submodule", 2);
+  gg::testing::runGit(fixture.root() / "sub",
+                      "git -c user.name=F -c user.email=f@example.invalid commit -q "
+                      "--allow-empty -m moved");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  // A gitlink has no text hunks.
+  Json hunks = fileHunks(session, 10, repoId, "sub", false);
+  ASSERT_TRUE(hunks.contains("result")) << hunks.dump();
+  EXPECT_TRUE(hunks["result"]["hunks"].empty()) << hunks.dump();
+
+  // Asking to stage one anyway fails cleanly instead of taking the engine
+  // down with the index lock held.
+  Json stage = stageHunks(
+      session, 11, repoId, "sub", "stage",
+      Json::array({{{"oldStart", 1}, {"oldLines", 1}, {"newStart", 1}, {"newLines", 1}}}));
+  ASSERT_TRUE(stage.contains("error")) << stage.dump();
+  EXPECT_EQ(stage["error"]["code"], -32011);
+  EXPECT_FALSE(std::filesystem::exists(fixture.root() / ".git" / "index.lock"));
+  Json summary = statusSummary(session, 12, repoId);
+  EXPECT_EQ(changeFor(summary["unstaged"], "sub")["status"], "M");
+}
+
+TEST(StatusService, PathsAreLiteralNotGlobs) {
+  FixtureRepo fixture;
+  fixture.writeFile("app/[id]/page.tsx", "x\ny\nz\n");
+  fixture.writeFile("app/i/page.tsx", "x\ny\nz\n");
+  fixture.run("git add app");
+  commitTick(fixture, "routes", 1);
+  // `[id]` as a glob matches `i`: only the sibling changes.
+  fixture.writeFile("app/i/page.tsx", "x\nY\nz\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json hunks = fileHunks(session, 10, repoId, "app/[id]/page.tsx", false);
+  ASSERT_TRUE(hunks.contains("result")) << hunks.dump();
+  EXPECT_TRUE(hunks["result"]["hunks"].empty()) << hunks.dump();
+
+  Json hunkStage = stageHunks(
+      session, 11, repoId, "app/[id]/page.tsx", "stage",
+      Json::array({{{"oldStart", 1}, {"oldLines", 3}, {"newStart", 1}, {"newLines", 3}}}));
+  EXPECT_TRUE(hunkStage.contains("error")) << hunkStage.dump();
+  Json fileStage = stageFiles(session, 12, repoId, {"app/[id]/page.tsx"}, "stage");
+  ASSERT_TRUE(fileStage.contains("result")) << fileStage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-only"), "");
+
+  // With both staged, unstaging the bracketed route leaves the sibling.
+  fixture.writeFile("app/[id]/page.tsx", "x\ny\nZ\n");
+  Json both = stageFiles(session, 13, repoId, {"app/[id]/page.tsx", "app/i/page.tsx"}, "stage");
+  ASSERT_TRUE(both.contains("result")) << both.dump();
+  Json unstage = stageFiles(session, 14, repoId, {"app/[id]/page.tsx"}, "unstage");
+  ASSERT_TRUE(unstage.contains("result")) << unstage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-only"), "app/i/page.tsx\n");
+}
+
+TEST(StatusService, StageFilesHandlesNonAsciiNames) {
+  FixtureRepo fixture;
+  const std::filesystem::path file = fixture.root() / std::filesystem::path(u8"caf\u00e9.txt");
+  std::ofstream(file, std::ios::binary) << "one\n";
+  fixture.run("git add -A");
+  commitTick(fixture, "seed", 1);
+  std::ofstream(file, std::ios::binary | std::ios::trunc) << "one\ntwo\n";
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const std::string name = "caf\xc3\xa9.txt";
+  Json stage = stageFiles(session, 10, repoId, {name}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  // Modified, not deleted: the path reached git as UTF-8.
+  EXPECT_EQ(gitOut(fixture.root(), "-c core.quotePath=false diff --cached --name-status"),
+            "M\t" + name + "\n");
+}
+
+TEST(StatusService, StageFilesSplitsLongPathLists) {
+  FixtureRepo fixture;
+  // Enough path bytes to need several git invocations on any platform.
+  std::vector<std::string> paths;
+  for (int i = 0; i < 300; ++i) {
+    paths.push_back("batch/" + std::string(70, 'p') + "-" + std::to_string(i) + ".txt");
+    fixture.writeFile(paths.back(), std::to_string(i) + "\n");
+  }
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json stage = stageFiles(session, 10, repoId, paths, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gg::testing::gitLines(fixture.root(), "diff --cached --name-only").size(),
+            paths.size());
 }
 
 }  // namespace

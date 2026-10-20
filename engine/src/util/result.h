@@ -18,6 +18,13 @@ enum class ErrorCode {
   GitError = -32001,
   NotInitialized = -32002,
   MethodNotSupported = -32003,
+  // Refusals tied to one path's content rather than to the request as a
+  // whole. FilterNeedsGitCli: the path goes through a filter driver or
+  // working-tree-encoding that only the git CLI can apply, and this engine
+  // has none. WholeFileOnly: the path's change cannot be split into hunks
+  // (submodule, Git LFS pointer) and must be staged or unstaged whole.
+  FilterNeedsGitCli = -32010,
+  WholeFileOnly = -32011,
 };
 
 struct Error {
