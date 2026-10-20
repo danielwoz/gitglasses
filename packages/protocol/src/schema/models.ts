@@ -498,3 +498,121 @@ export const PatchFileChange = Type.Object(
   },
   strict,
 );
+
+/** One worktree as worktree/list reports it. */
+export const WorktreeEntry = Type.Object(
+  {
+    path: Type.String(),
+    branch: Type.Optional(Type.String()),
+    /** Empty for a bare worktree, which has no checked-out commit. */
+    sha: Type.String(),
+    bare: Type.Boolean(),
+    locked: Type.Boolean(),
+    prunable: Type.Boolean({
+      description:
+        'The worktree directory is gone; `git worktree prune` would drop the entry.',
+    }),
+    current: Type.Boolean({
+      description: 'The worktree this repoId was opened from.',
+    }),
+  },
+  strict,
+);
+
+/** Why a worktree/status merge check has no answer. */
+export const MergeSkipReason = Type.Union(
+  [
+    /** Restricted Mode: the engine runs no git. */
+    Type.Literal('restricted'),
+    /** This engine build has no git CLI. */
+    Type.Literal('noGitCli'),
+    /** The git on PATH is older than 2.38, or its version is unreadable. */
+    Type.Literal('gitVersion'),
+    /** A partial clone with a git older than 2.45, which would fetch missing
+     *  objects from the network to answer. */
+    Type.Literal('partialClone'),
+    /** git ran and failed (unrelated histories, a missing object); the
+     *  engine log has git's message. */
+    Type.Literal('failed'),
+  ],
+  { description: 'Why mergesCleanly is null.' },
+);
+
+/** What worktree/status reports about one worktree. */
+export const WorktreeStatus = Type.Object(
+  {
+    /** The path the request named. */
+    path: Type.String(),
+    dirty: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description:
+          'Paths with uncommitted changes (staged, unstaged, untracked or conflicted), each counted once. Absent for a bare repository.',
+      }),
+    ),
+    lastActivity: Type.Optional(
+      Type.Integer({
+        description:
+          'Seconds since the Unix epoch of the newest of the index file\'s modification and the latest HEAD reflog entry: when someone last staged, committed, checked out or reset in the worktree. Absent when neither exists.',
+      }),
+    ),
+    upstream: Type.Optional(
+      Type.Object(
+        {
+          /** Short name, e.g. origin/feature. */
+          ref: Type.String(),
+          /** Commits on the worktree's branch the upstream lacks. */
+          ahead: Count,
+          /** Commits on the upstream the branch lacks. */
+          behind: Count,
+        },
+        strict,
+      ),
+    ),
+    base: Type.Optional(
+      Type.Object(
+        {
+          /** The revision compared against, as requested or chosen. */
+          ref: Type.String(),
+          sha: Sha,
+          /** Commits on the worktree's HEAD that the base lacks. */
+          ahead: Count,
+          /** Commits on the base that the worktree's HEAD lacks. */
+          behind: Count,
+          mergeBase: Type.Optional(Sha),
+          mergesCleanly: Type.Union([Type.Boolean(), Type.Null()], {
+            description:
+              "Whether merging the worktree's HEAD into the base would apply without conflicts, as `git merge-tree --write-tree` decides it (nothing is checked out and the repository is left unchanged). True without running git when there is nothing to merge or the merge is a fast-forward; null when the check could not run (see mergeSkipped). Uncommitted changes are not part of it.",
+          }),
+          mergeSkipped: Type.Optional(MergeSkipReason),
+          conflicts: Type.Optional(
+            Type.Array(Type.String(), {
+              maxItems: 50,
+              description: 'Paths the merge would conflict in, at most 50. Only when mergesCleanly is false.',
+            }),
+          ),
+        },
+        strict,
+      ),
+    ),
+    agent: Type.Optional(
+      Type.Object(
+        {
+          /** Claude Code, Cursor, Codex, Copilot, VS Code agent, Aider, Gemini,
+           *  Jules, or a name an Assisted-by / Generated-by trailer gives. */
+          name: Type.String(),
+          evidence: Type.Union([
+            /** Where the agent creates its worktrees. */
+            Type.Literal('path'),
+            /** The branch name the agent creates. */
+            Type.Literal('branch'),
+            /** A trailer on a commit ahead of the base. */
+            Type.Literal('trailer'),
+          ]),
+        },
+        { ...strict, description: 'The coding agent that appears to work in this worktree.' },
+      ),
+    ),
+  },
+  strict,
+);

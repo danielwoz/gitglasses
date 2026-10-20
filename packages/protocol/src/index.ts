@@ -103,6 +103,9 @@ export type DiffHunk = Static<typeof models.DiffHunk>;
 export type RebaseEntry = Static<typeof models.RebaseEntry>;
 export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
 export type PatchFileChange = Static<typeof models.PatchFileChange>;
+export type WorktreeEntry = Static<typeof models.WorktreeEntry>;
+export type WorktreeStatus = Static<typeof models.WorktreeStatus>;
+export type MergeSkipReason = Static<typeof models.MergeSkipReason>;
 export type SequencerState = Static<typeof models.SequencerState>;
 export type SequencerOperation = Static<typeof models.SequencerOperation>;
 export type GitErrorKind = Static<typeof models.GitErrorKind>;
@@ -178,6 +181,7 @@ export interface Requests {
   'stash/apply': { params: P<'stash/apply'>; result: R<'stash/apply'> };
   'stash/drop': { params: P<'stash/drop'>; result: Empty };
   'worktree/list': { params: P<'worktree/list'>; result: R<'worktree/list'> };
+  'worktree/status': { params: P<'worktree/status'>; result: R<'worktree/status'> };
   'worktree/add': { params: P<'worktree/add'>; result: Empty };
   'worktree/remove': { params: P<'worktree/remove'>; result: Empty };
   'rebase/preview': { params: P<'rebase/preview'>; result: R<'rebase/preview'> };

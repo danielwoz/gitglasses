@@ -50,6 +50,7 @@ if(EMSCRIPTEN)
     src/services/status/diff_methods.cpp
     src/services/status/stage_methods.cpp
     src/services/status/status_methods.cpp
+    src/services/worktree/worktree_status.cpp
     src/services/params.cpp
     src/services/repo_methods.cpp
     src/services/rev_methods.cpp
@@ -177,6 +178,7 @@ add_library(gg_services STATIC
   src/services/status/diff_methods.cpp
   src/services/status/stage_methods.cpp
   src/services/status/status_methods.cpp
+  src/services/worktree/worktree_status.cpp
   src/services/params.cpp
   src/services/repo_methods.cpp
   src/services/rev_methods.cpp
