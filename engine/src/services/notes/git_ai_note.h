@@ -53,8 +53,8 @@ struct GitAiNote {
 // Reads a git-ai authorship log (Git AI Standard v3.0.0): an attestation
 // section of file paths and indented `<key> <line ranges>` entries, a line
 // holding exactly `---`, then a JSON metadata object. Session keys
-// (`s_<id>::t_<id>`) resolve through `sessions`, human keys (`h_<id>`)
-// through `humans`, and bare hex keys through the legacy `prompts`. Keys of
+// (`s_<id>::t_<id>`) resolve through `sessions`, human keys (`h_<id>`, or
+// `h_<id>::t_<id>`) through `humans`, and bare hex keys through the legacy `prompts`. Keys of
 // any other shape, keys the metadata does not define and malformed entries
 // are skipped, so a newer minor version that adds kinds of keys still reads.
 GitAiNote parseGitAiNote(std::string_view text);

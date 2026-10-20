@@ -168,7 +168,9 @@ GitAiNote parseGitAiNote(std::string_view text) {
       identity = "s:" + session;
       author = agentFrom(sessions[session], false);
     } else if (key.rfind("h_", 0) == 0) {
-      const std::string human(key);
+      // A human key may carry a trace id too (h_<id>::t_<id>); like a
+      // session key, it resolves through its first part.
+      const std::string human(key.substr(0, key.find("::")));
       if (!humans.contains(human)) continue;
       identity = "h:" + human;
       author.agent = false;

@@ -173,6 +173,23 @@ TEST(GitAiNote, ReadsAllThreeKeyFormatsInOneNote) {
   EXPECT_EQ(note.authors[2].model, "gpt-4");
 }
 
+TEST(GitAiNote, ResolvesHumanKeysThatCarryATraceId) {
+  const GitAiNote note = parseGitAiNote(
+      "a.txt\n"
+      "  h_31dce776f88375::t_9f8e7d6c5b4a32 1-3\n"
+      "  h_31dce776f88375::t_a1b2c3d4e5f678 7\n"
+      "---\n"
+      R"json({"schema_version": "authorship/3.1.0", "prompts": {},
+          "humans": {"h_31dce776f88375": {"author": "Dev <dev@example.com>"}}})json");
+  ASSERT_EQ(note.status, GitAiNoteStatus::Read);
+  ASSERT_EQ(note.authors.size(), 1u) << "both traces belong to one known human";
+  EXPECT_FALSE(note.authors[0].agent);
+  EXPECT_EQ(note.authors[0].human, "Dev <dev@example.com>");
+  EXPECT_EQ(provenance::declaredKind(
+                provenance::combine(provenance::noteDeclarations(note, "refs/notes/ai"), {}, {})),
+            "human");
+}
+
 TEST(GitAiNote, ReadsLaterMinorVersionsOfTheSameMajor) {
   std::string note = kSessionsNote;
   note.replace(note.find("authorship/3.0.0"), 16, "authorship/3.2.1");
