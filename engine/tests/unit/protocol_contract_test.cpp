@@ -344,6 +344,15 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   }
   EXPECT_TRUE(sawHunks) << "expected at least one blame/hunks notification";
 
+  Json blameWithOptions = checkedRequest(
+      session, 24, "blame/file",
+      {{"repoId", repoId},
+       {"path", "README.md"},
+       {"streamId", "contract-blame-options"},
+       {"docVersion", -1},
+       {"options", {{"ignoreWhitespace", true}, {"moves", "acrossFiles"}, {"ignoreRevs", false}}}});
+  EXPECT_EQ(blameWithOptions.value("docVersion", 0), -1);
+
   Json graph = checkedRequest(session, 6, "graph/rows",
                               {{"repoId", repoId},
                                {"limit", 100},
@@ -484,6 +493,21 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
   // Required members the engine will not guess.
   reject("stash/apply", {{"repoId", repoId}, {"index", 0}}, "missing pop");
   reject("blame/file", {{"repoId", repoId}, {"path", "src/main.txt"}}, "missing streamId");
+  reject("blame/file",
+         {{"repoId", repoId}, {"path", "src/main.txt"}, {"streamId", "s"}, {"docVersion", -2}},
+         "docVersion below -1");
+  reject("blame/file",
+         {{"repoId", repoId},
+          {"path", "src/main.txt"},
+          {"streamId", "s"},
+          {"options", {{"moves", "sideways"}}}},
+         "unknown move detection");
+  reject("blame/file",
+         {{"repoId", repoId},
+          {"path", "src/main.txt"},
+          {"streamId", "s"},
+          {"options", {{"ignoreWhitespace", "yes"}}}},
+         "non-boolean blame option");
   reject("history/line", {{"repoId", repoId}, {"path", "src/main.txt"}, {"startLine", 1}},
          "missing endLine");
 

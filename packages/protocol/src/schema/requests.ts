@@ -6,6 +6,7 @@ import { Type } from '@sinclair/typebox';
 
 import {
   BlameCommit,
+  BlameOptions,
   CommitDetails,
   CommitSummaryInfo,
   DiffHunk,
@@ -163,7 +164,7 @@ export const RequestSchemas = {
   },
   'blame/file': {
     description:
-      'Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table.',
+      'Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table. The request runs after every doc/didChange the engine received before it, so a buffer pushed ahead of the request is the one blamed.',
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -179,6 +180,14 @@ export const RequestSchemas = {
           minLength: 1,
           description: 'Correlates the blame/hunks notifications of this request.',
         }),
+        docVersion: Type.Optional(
+          Type.Integer({
+            minimum: -1,
+            description:
+              'Working-tree blame only: the editor buffer the client means. A doc/didChange version blames the buffer pushed for the path (the result says which version that was); -1 blames the file on disk even while a pushed buffer is held. Omitted blames whatever buffer was pushed last, or the file on disk.',
+          }),
+        ),
+        options: Type.Optional(BlameOptions),
       },
       strict,
     ),
@@ -190,6 +199,19 @@ export const RequestSchemas = {
         fromCache: Type.Boolean(),
         /** Commit metadata for every sha referenced by the streamed hunks. */
         commits: Type.Record(Type.String(), BlameCommit),
+        docVersion: Type.Optional(
+          Type.Integer({
+            minimum: -1,
+            description:
+              'Working-tree blame only: the doc/didChange version of the buffer the hunks describe, or -1 for the file on disk. A client compares it with the version it asked about before trusting the hunks for a buffer.',
+          }),
+        ),
+        lfs: Type.Optional(
+          Type.Boolean({
+            description:
+              'The path is tracked with Git LFS (filter=lfs): git stores, and so blames, the small pointer file rather than the content, so hunks describe the pointer\'s lines (version, oid, size), not the lines of the file an editor shows. The newest commit among them is the last one that changed the content.',
+          }),
+        ),
       },
       strict,
     ),

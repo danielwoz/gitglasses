@@ -98,6 +98,32 @@ export const BlameCommit = Type.Object(
   strict,
 );
 
+/** Attribution choices for blame/file. Every member is optional; the defaults
+ *  are plain `git blame`. */
+export const BlameOptions = Type.Object(
+  {
+    ignoreWhitespace: Type.Optional(
+      Type.Boolean({
+        description:
+          '`git blame -w`: a change that only touches whitespace does not take a line over. Default false.',
+      }),
+    ),
+    moves: Type.Optional(
+      Type.Union([Type.Literal('off'), Type.Literal('withinFile'), Type.Literal('acrossFiles')], {
+        description:
+          "How far blame looks for lines that were moved or copied rather than written: 'withinFile' is `git blame -M`, 'acrossFiles' is `-C`, which also covers moves within the file. Default 'off'. Ignored when the engine has no git CLI.",
+      }),
+    ),
+    ignoreRevs: Type.Optional(
+      Type.Boolean({
+        description:
+          'Look through the commits listed in the blame.ignoreRevsFile files that exist, or in the repository\'s .git-blame-ignore-revs when that setting is unset. Default true. Ignored when the engine has no git CLI.',
+      }),
+    ),
+  },
+  strict,
+);
+
 export const BlameHunk = Type.Object(
   {
     /** All-zero for lines that are not committed yet. */

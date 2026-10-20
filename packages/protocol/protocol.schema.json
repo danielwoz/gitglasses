@@ -285,7 +285,7 @@
       }
     },
     "blame/file": {
-      "description": "Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table.",
+      "description": "Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table. The request runs after every doc/didChange the engine received before it, so a buffer pushed ahead of the request is the one blamed.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -313,6 +313,42 @@
             "minLength": 1,
             "description": "Correlates the blame/hunks notifications of this request.",
             "type": "string"
+          },
+          "docVersion": {
+            "minimum": -1,
+            "description": "Working-tree blame only: the editor buffer the client means. A doc/didChange version blames the buffer pushed for the path (the result says which version that was); -1 blames the file on disk even while a pushed buffer is held. Omitted blames whatever buffer was pushed last, or the file on disk.",
+            "type": "integer"
+          },
+          "options": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+              "ignoreWhitespace": {
+                "description": "`git blame -w`: a change that only touches whitespace does not take a line over. Default false.",
+                "type": "boolean"
+              },
+              "moves": {
+                "description": "How far blame looks for lines that were moved or copied rather than written: 'withinFile' is `git blame -M`, 'acrossFiles' is `-C`, which also covers moves within the file. Default 'off'. Ignored when the engine has no git CLI.",
+                "anyOf": [
+                  {
+                    "const": "off",
+                    "type": "string"
+                  },
+                  {
+                    "const": "withinFile",
+                    "type": "string"
+                  },
+                  {
+                    "const": "acrossFiles",
+                    "type": "string"
+                  }
+                ]
+              },
+              "ignoreRevs": {
+                "description": "Look through the commits listed in the blame.ignoreRevsFile files that exist, or in the repository's .git-blame-ignore-revs when that setting is unset. Default true. Ignored when the engine has no git CLI.",
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -398,6 +434,15 @@
                 }
               }
             }
+          },
+          "docVersion": {
+            "minimum": -1,
+            "description": "Working-tree blame only: the doc/didChange version of the buffer the hunks describe, or -1 for the file on disk. A client compares it with the version it asked about before trusting the hunks for a buffer.",
+            "type": "integer"
+          },
+          "lfs": {
+            "description": "The path is tracked with Git LFS (filter=lfs): git stores, and so blames, the small pointer file rather than the content, so hunks describe the pointer's lines (version, oid, size), not the lines of the file an editor shows. The newest commit among them is the last one that changed the content.",
+            "type": "boolean"
           }
         }
       }
