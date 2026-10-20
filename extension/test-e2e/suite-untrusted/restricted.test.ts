@@ -100,6 +100,7 @@ describe('Restricted Mode', () => {
     assert.deepStrictEqual(status.gitRoots ?? [], [], 'git allowed in an untrusted workspace');
     assert.ok(launch, 'no launch');
     assert.strictEqual(launch.env.GITGLASSES_ALLOWED_ROOTS, '');
+    assert.strictEqual(launch.args.length, 1, `git allowed somewhere: ${launch.args.join(' ')}`);
 
     const root = workspaceRoot().fsPath;
     const session = await startMcpServer(launch, root);

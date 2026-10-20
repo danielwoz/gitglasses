@@ -11,6 +11,7 @@ import {
   isAlreadyExistsOutput,
   isNodeVersionOutput,
   isSupportedNodeVersion,
+  launchGitRoots,
   mcpServersJson,
   mergeCodexConfig,
   unifiedDiff,
@@ -22,20 +23,35 @@ const launch: McpLaunch = buildLaunch({
   cliPath: '/ext/dist/mcp/cli.js',
   enginePath: '/ext/bin/gitglasses-engine',
   allowedRoots: ['/work/app', '/work/lib'],
-  delimiter: ':',
 });
 
 describe('buildLaunch', () => {
   it("runs the bundled script with the editor's Node, the extension's engine and the allowed roots", () => {
     expect(launch).toEqual({
       command: '/usr/share/code/code',
-      args: ['/ext/dist/mcp/cli.js'],
+      args: ['/ext/dist/mcp/cli.js', '--allow=/work/app', '--allow=/work/lib'],
       env: {
         ELECTRON_RUN_AS_NODE: '1',
         GITGLASSES_ENGINE: '/ext/bin/gitglasses-engine',
-        GITGLASSES_ALLOWED_ROOTS: '/work/app:/work/lib',
+        GITGLASSES_ALLOWED_ROOTS: '',
       },
     });
+    expect(launchGitRoots(launch)).toEqual(['/work/app', '/work/lib']);
+  });
+
+  // The server splits GITGLASSES_ALLOWED_ROOTS at ':' (';' on Windows): a
+  // folder named so would admit other directories, or "*" every one.
+  it('passes each root as one argument, whatever its name holds', () => {
+    const odd = ['/work/client:legacy', '/work/proj:*', 'C:\\code\\a;b', '/work/trailing '];
+    const built = buildLaunch({
+      runtime: { command: '/usr/bin/node', electron: false },
+      cliPath: '/ext/dist/mcp/cli.js',
+      enginePath: '/ext/bin/gitglasses-engine',
+      allowedRoots: odd,
+    });
+    expect(built.args.slice(1)).toEqual(odd.map((root) => `--allow=${root}`));
+    expect(built.env.GITGLASSES_ALLOWED_ROOTS).toBe('');
+    expect(launchGitRoots(built)).toEqual(odd);
   });
 
   it('sets the allowed roots even when there are none, so the environment cannot widen them', () => {
@@ -188,11 +204,11 @@ describe('configuration for other agents', () => {
       mcpServers: {
         gitglasses: {
           command: '/usr/share/code/code',
-          args: ['/ext/dist/mcp/cli.js'],
+          args: ['/ext/dist/mcp/cli.js', '--allow=/work/app', '--allow=/work/lib'],
           env: {
             ELECTRON_RUN_AS_NODE: '1',
             GITGLASSES_ENGINE: '/ext/bin/gitglasses-engine',
-            GITGLASSES_ALLOWED_ROOTS: '/work/app:/work/lib',
+            GITGLASSES_ALLOWED_ROOTS: '',
           },
         },
       },
@@ -205,7 +221,7 @@ describe('configuration for other agents', () => {
     expect(JSON.parse(args[5])).toEqual({
       type: 'stdio',
       command: '/usr/share/code/code',
-      args: ['/ext/dist/mcp/cli.js'],
+      args: launch.args,
       env: launch.env,
     });
     expect(isAlreadyExistsOutput('MCP server gitglasses already exists in user config')).toBe(true);

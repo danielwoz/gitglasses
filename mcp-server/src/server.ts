@@ -102,13 +102,17 @@ export const ALLOW_ANY = '*';
  * delimited) followed by the directories passed with --allow. The server reads
  * repositories inside these directories and runs git in them with each
  * repository's own configuration. "*" admits every path.
+ *
+ * Each --allow value is one directory taken exactly as given, neither split
+ * nor trimmed, so a directory whose name holds the separator or ends in a
+ * space names that directory and no other.
  */
 export function parseAllowedRoots(
   raw: string | undefined,
   extra: readonly string[] = [],
 ): string[] {
-  return [...(raw ?? '').split(path.delimiter), ...extra]
-    .map((entry) => entry.trim())
+  const listed = (raw ?? '').split(path.delimiter).map((entry) => entry.trim());
+  return [...listed, ...extra]
     .filter((entry) => entry !== '')
     .map((entry) => (entry === ALLOW_ANY ? ALLOW_ANY : canonicalPath(entry)));
 }

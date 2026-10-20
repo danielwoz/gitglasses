@@ -29,26 +29,37 @@ export interface LaunchOptions {
   /** The engine the extension itself runs. */
   enginePath: string;
   /**
-   * Directories where the server may run git (GITGLASSES_ALLOWED_ROOTS).
-   * Empty means none: the server then reads only its client's own roots,
-   * without running git.
+   * Directories where the server may run git (--allow). Empty means none:
+   * the server then reads only its client's own roots, without running git.
    */
   allowedRoots: readonly string[];
-  /** Separator of GITGLASSES_ALLOWED_ROOTS; defaults to the platform's. */
-  delimiter?: string;
 }
 
+const ALLOW_OPTION = '--allow=';
+
 /**
- * How to start the server. GITGLASSES_ALLOWED_ROOTS is always set, even when
- * empty, so a value in the editor's own environment can never widen it.
+ * How to start the server. Each directory is its own argument, so no folder
+ * name is ever split into others. GITGLASSES_ALLOWED_ROOTS is set empty, so a
+ * value in the editor's own environment can never widen the list.
  */
 export function buildLaunch(options: LaunchOptions): McpLaunch {
   const env: Record<string, string> = {
     GITGLASSES_ENGINE: options.enginePath,
-    GITGLASSES_ALLOWED_ROOTS: options.allowedRoots.join(options.delimiter ?? path.delimiter),
+    GITGLASSES_ALLOWED_ROOTS: '',
   };
   if (options.runtime.electron) env.ELECTRON_RUN_AS_NODE = '1';
-  return { command: options.runtime.command, args: [options.cliPath], env };
+  return {
+    command: options.runtime.command,
+    args: [options.cliPath, ...options.allowedRoots.map((root) => `${ALLOW_OPTION}${root}`)],
+    env,
+  };
+}
+
+/** The directories a launch lets git run in (its --allow arguments). */
+export function launchGitRoots(launch: McpLaunch): string[] {
+  return launch.args
+    .filter((arg) => arg.startsWith(ALLOW_OPTION))
+    .map((arg) => arg.slice(ALLOW_OPTION.length));
 }
 
 /** True when `child` is `parent` or lies inside it. */

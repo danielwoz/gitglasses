@@ -39,11 +39,11 @@ describe('bundled MCP server', () => {
     assert.strictEqual(launch.env.ELECTRON_RUN_AS_NODE, '1');
     assert.match(launch.args[0], /dist[\\/]mcp[\\/]cli\.js$/);
     // The workspace is opened through a symlink; the roots are spelled as
-    // the server compares them, with links resolved.
-    assert.strictEqual(
-      launch.env.GITGLASSES_ALLOWED_ROOTS,
-      fs.realpathSync.native(workspaceRoot().fsPath),
-    );
+    // the server compares them, with links resolved, one argument each.
+    assert.deepStrictEqual(launch.args.slice(1), [
+      `--allow=${fs.realpathSync.native(workspaceRoot().fsPath)}`,
+    ]);
+    assert.strictEqual(launch.env.GITGLASSES_ALLOWED_ROOTS, '');
     assert.ok(launch.env.GITGLASSES_ENGINE, 'no engine path');
   });
 

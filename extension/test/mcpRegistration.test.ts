@@ -110,14 +110,14 @@ describe('VS Code registration', () => {
     expect(definition).toMatchObject({
       label: 'GitGlasses',
       command: '/opt/editor/code',
-      args: ['/ext/dist/mcp/cli.js'],
+      args: ['/ext/dist/mcp/cli.js', `--allow=${folderA}`, `--allow=${folderB}`],
       version: '0.4.0',
       cwd: { fsPath: folderA },
     });
     expect(definition.env).toEqual({
       ELECTRON_RUN_AS_NODE: '1',
       GITGLASSES_ENGINE: '/ext/bin/gitglasses-engine',
-      GITGLASSES_ALLOWED_ROOTS: [folderA, folderB].join(path.delimiter),
+      GITGLASSES_ALLOWED_ROOTS: '',
     });
     expect(registration.status()).toEqual({
       state: 'registered',
@@ -139,12 +139,18 @@ describe('VS Code registration', () => {
 
     const [untrusted] = (await provider.provideMcpServerDefinitions()) as Definition[];
     expect(untrusted.env?.GITGLASSES_ALLOWED_ROOTS).toBe('');
+    expect(untrusted.args).toEqual(['/ext/dist/mcp/cli.js']);
 
     state.trusted = true;
     changeWorkspace();
     expect(changes).toBe(1);
     const [trusted] = (await provider.provideMcpServerDefinitions()) as Definition[];
-    expect(trusted.env?.GITGLASSES_ALLOWED_ROOTS).toBe([folderA, folderB].join(path.delimiter));
+    expect(trusted.env?.GITGLASSES_ALLOWED_ROOTS).toBe('');
+    expect(trusted.args).toEqual([
+      '/ext/dist/mcp/cli.js',
+      `--allow=${folderA}`,
+      `--allow=${folderB}`,
+    ]);
   });
 
   it('withdraws the server when the setting is off or no folder is open', async () => {
@@ -197,11 +203,11 @@ describe('Cursor registration', () => {
           name: 'gitglasses',
           server: {
             command: '/opt/editor/code',
-            args: ['/ext/dist/mcp/cli.js'],
+            args: ['/ext/dist/mcp/cli.js', `--allow=${folderA}`, `--allow=${folderB}`],
             env: {
               ELECTRON_RUN_AS_NODE: '1',
               GITGLASSES_ENGINE: '/ext/bin/gitglasses-engine',
-              GITGLASSES_ALLOWED_ROOTS: [folderA, folderB].join(path.delimiter),
+              GITGLASSES_ALLOWED_ROOTS: '',
             },
           },
         },

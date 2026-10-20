@@ -19,6 +19,7 @@ import {
   MCP_SERVER_NAME,
   codexServerToml,
   findOnPath,
+  launchGitRoots,
   mcpServersJson,
   serverEntry,
   type McpLaunch,
@@ -71,13 +72,13 @@ function displayPath(file: string): string {
 
 /** What the agent will run, for a confirmation dialog. */
 function describeLaunch(launch: McpLaunch): string {
-  const roots = launch.env.GITGLASSES_ALLOWED_ROOTS;
+  const roots = launchGitRoots(launch);
   return [
     `Runs: ${launch.command}${launch.env.ELECTRON_RUN_AS_NODE ? ' (as Node)' : ''}`,
-    `Script: ${launch.args.join(' ')}`,
+    `Script: ${launch.args[0]}`,
     `Engine: ${launch.env.GITGLASSES_ENGINE}`,
-    roots
-      ? `Git runs in: ${roots.split(path.delimiter).join(', ')}`
+    roots.length > 0
+      ? `Git runs in: ${roots.join(', ')}`
       : "Git runs nowhere: the agent's own project is read without running git.",
   ].join('\n');
 }
