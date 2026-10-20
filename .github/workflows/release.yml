@@ -204,10 +204,7 @@ jobs:
           [ "$(printf '%s\n2.28\n' "${max#GLIBC_}" | sort -V | tail -1)" = "2.28" ]
           ! objdump -p "$ENGINE" | grep -E 'NEEDED.*(libstdc\+\+|libgcc)'
       - name: Test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          ctest --preset release
+        run: ctest --preset release
       # RelWithDebInfo carries full debug information (about 90% of the Linux
       # binary). The shipped engine goes without it; the symbols are kept as
       # an artifact and attached to the GitHub release for crash reports.
