@@ -39,31 +39,31 @@ takes `limit` hunks.
 
 ## Requirements
 
-- Node.js 20.11 or newer.
-- The `gitglasses-engine` binary. The GitGlasses extension for VS Code and
-  Open VSX editors ships one for your platform; point `GITGLASSES_ENGINE` at
-  it:
+Node.js 20.11 or newer. The `gitglasses-engine` binary the server drives
+comes with it: each platform's engine is a package of its own
+(`@gitglasses/engine-linux-x64`, `@gitglasses/engine-darwin-arm64`,
+`@gitglasses/engine-win32-x64`, and so on, with `-musl` builds for Alpine),
+listed as optional dependencies, so npm installs only the one your machine
+needs and the server finds it without any setting. Set `GITGLASSES_ENGINE`
+to use another engine, such as the one the GitGlasses extension ships.
 
-| Editor | Engine |
-| --- | --- |
-| VS Code on Linux or macOS | `~/.vscode/extensions/gitglasses.gitglasses-<version>-<platform>/bin/gitglasses-engine` |
-| VS Code on Windows | `%USERPROFILE%\.vscode\extensions\gitglasses.gitglasses-<version>-win32-x64\bin\gitglasses-engine.exe` |
-| VSCodium | the same, under `~/.vscode-oss/extensions` |
-
-Without `GITGLASSES_ENGINE`, the server looks for `gitglasses-engine` on
-`PATH`.
+If you use the GitGlasses extension for VS Code and Open VSX editors, you may
+not need this package at all: the extension registers the same server with
+VS Code's and Cursor's agents, and its **Add MCP Server to Claude Code**,
+**Add MCP Server to Codex** and **Copy MCP Server Config** commands set it up
+for other agents.
 
 ## Registration
 
 Name the exact version, so your client keeps running the release you chose.
-Replace `/path/to/gitglasses-engine` with the engine.
 
 ### Claude Code
 
 ```sh
-claude mcp add gitglasses \
-  -e GITGLASSES_ENGINE=/path/to/gitglasses-engine \
-  -- npx -y gitglasses-mcp@{{version}}
+claude mcp add gitglasses -- npx -y gitglasses-mcp@{{version}}
+# Also let git run in the repositories under ~/code (file history, patches,
+# code search, diffs):
+claude mcp add gitglasses -- npx -y gitglasses-mcp@{{version}} --allow ~/code
 ```
 
 ### VS Code (`.vscode/mcp.json`)
@@ -79,7 +79,6 @@ claude mcp add gitglasses \
       "command": "npx",
       "args": ["-y", "gitglasses-mcp@{{version}}"],
       "env": {
-        "GITGLASSES_ENGINE": "/path/to/gitglasses-engine",
         "GITGLASSES_ALLOWED_ROOTS": "${workspaceFolder}",
         "GITHUB_TOKEN": "${input:github-token}"
       }
@@ -96,27 +95,39 @@ command, with no arguments.
 
 | Variable | Purpose |
 | --- | --- |
-| `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server searches `PATH`. |
+| `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server uses the engine package npm installed for this platform, then searches `PATH`. |
 | `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
 | `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
-| `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server may read and, via `apply_patch`, write. Unset means **any repository the process can reach**. |
+| `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server reads and, via `apply_patch`, writes, with git allowed to run there. Same as passing each with `--allow`; `*` allows every path. Unset means the client's workspace roots, read without git. |
 
-## Security model
+## Trust model
 
 The server runs with the privileges of whoever starts it, and every tool takes
-an absolute `repoPath`. Read that literally: by default, an agent can name any
-path on the machine and read the history, diffs, status and blame of whatever
-repository contains it — not just the project under discussion. `repo/discover`
-walks *upwards*, so a path inside a repository grants that repository.
+an absolute `repoPath`.
 
-`apply_patch` writes: it applies a patch to the working tree of whatever
-repository `repoPath` names. The other ten tools only read.
+**Which repositories.** By default the server serves only repositories inside
+the client's MCP roots, the workspace folders the client shares with it. A
+client that offers no roots gets the server's working directory instead,
+unless that is the filesystem root, your home directory or a directory that
+holds it. `--allow <dir>` (repeatable) or `GITGLASSES_ALLOWED_ROOTS` replaces
+those defaults with the directories you name. A path outside them is rejected
+before it reaches the engine, including via `..` traversal and via a symlink
+that leaves a root, and so is a path whose repository extends outside them.
 
-`GITGLASSES_ALLOWED_ROOTS` is what bounds where either can happen. Set it to
-the directories this server may touch; paths outside are rejected before
-reaching the engine, including via `..` traversal and via a symlink that
-leaves a root — both sides of the comparison are canonicalised.
+**Whether git runs.** git runs programs that a repository's own configuration,
+attributes and hooks name (`core.fsmonitor`, filters, textconv drivers, hooks,
+`core.sshCommand`), and a prompt-injected agent can name any path. So
+repositories served from the client's roots are read by an engine that runs
+no git at all: blame, log, search, status, diffs, refs, branch comparisons
+and the commit graph come straight from the repository. File history,
+patches, code search and the diffs of `git_commit_show` and `git_compare`
+need git and work only in the directories you allow; allow only directories
+whose repositories you trust.
+
+`apply_patch` writes: it applies a patch to the working tree of the repository
+`repoPath` names, so it needs an allowed repository. The other tools only
+read.
 
 The GitHub host is deliberately **not** a tool argument. A token and the host
 it authenticates to are inseparable, so both come from the environment; if the

@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { ENGINE_PACKAGES } from '../lib/mcp-package.mjs';
 
 const workflow = readFileSync(
   fileURLToPath(new URL('../../.github/workflows/release.yml', import.meta.url)),
@@ -52,6 +53,26 @@ describe('release workflow', () => {
     expect(jobs.get('package-mcp')).toContain('node scripts/pack-mcp.mjs --out dist-npm');
     expect(jobs.get('package-mcp')).toContain('node scripts/verify-mcp-package.mjs');
     expect(jobs.get('package-mcp')).not.toMatch(/pnpm[^\n]* pack\b/);
+  });
+
+  it('packs an engine package from every engine the release builds, and runs one', () => {
+    expect(needs('package-mcp')).toEqual(expect.arrayContaining(['engine', 'engine-alpine']));
+    expect(jobs.get('package-mcp')).toContain('--engines engines --all-engines');
+    expect(jobs.get('package-mcp')).toContain('--engine-package');
+    const built = ['engine', 'engine-alpine'].flatMap((id) =>
+      [...jobs.get(id).matchAll(/^\s+(?:- )?target: ([\w-]+)$/gm)].map((match) => match[1]),
+    );
+    expect(built.sort()).toEqual(ENGINE_PACKAGES.map((engine) => engine.target).sort());
+  });
+
+  it('publishes the engine packages before gitglasses-mcp, which names them', () => {
+    const publish = jobs.get('publish-npm');
+    expect(publish).toContain('environment: release');
+    const engines = publish.indexOf('dist-npm/gitglasses-engine-');
+    const server = publish.indexOf('publish "dist-npm/gitglasses-mcp-');
+    expect(engines).toBeGreaterThan(0);
+    expect(server).toBeGreaterThan(engines);
+    expect(publish).toContain('--provenance --access public');
   });
 
   it('takes the release notes from the changelog parser the version job checks with', () => {
