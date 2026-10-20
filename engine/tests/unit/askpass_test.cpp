@@ -39,10 +39,6 @@ using gg::testing::FixtureRepo;
 using gg::testing::InteractiveSession;
 using gg::testing::ScopedEnv;
 
-Json req(std::int64_t id, const std::string& method, Json params) {
-  return {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", std::move(params)}};
-}
-
 // --- Prompt parsing -------------------------------------------------------------------
 
 TEST(AskpassPrompt, ReadsGitCredentialPrompts) {
@@ -288,6 +284,10 @@ TEST(AskpassEnvironment, SetsADisplayOnlyForAnSshThatNeedsOne) {
 // --- Through git ----------------------------------------------------------------------
 
 #ifndef _WIN32
+
+Json req(std::int64_t id, const std::string& method, Json params) {
+  return {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", std::move(params)}};
+}
 
 // A stand-in for ssh: asks for a key passphrase through SSH_ASKPASS the way
 // ssh does, then serves the repository locally. Wrong or missing answers fail
