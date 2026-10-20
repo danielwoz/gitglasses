@@ -45,6 +45,7 @@ const ALWAYS_AVAILABLE = new Set([
   'gitglasses.disconnectIntegration',
   'gitglasses.removeIntegration',
   'gitglasses.launchpad.refresh',
+  'gitglasses.ai.chooseProvider',
   'gitglasses.ai.setApiKey',
   'gitglasses.ai.clearApiKey',
   'gitglasses.switchMode',
