@@ -287,6 +287,7 @@ Every setting, generated from the extension manifest:
 | --- | --- | --- |
 | `gitglasses.rebaseEditor.enabled` | `false` | Open the todo list of an interactive rebase started outside GitGlasses, such as `git rebase -i` in a terminal, in the GitGlasses rebase editor. Git must use VS Code as its editor, for example `git config --global sequence.editor "code --wait"`. Turn it on before git opens the list: git goes on as soon as any editor of the list closes, so reopening a list that is already open as text hands it to git unchanged. Read from user settings only. |
 | `gitglasses.mode` | `"normal"` | GitGlasses mode; switch via the status bar item or the Switch Mode command. One of `normal`, `zen`, `review`. |
+| `gitglasses.keyboardShortcuts.enabled` | `false` | Turn on GitGlasses keyboard shortcuts: `Ctrl+Alt+G` (`Cmd+Alt+G` on macOS), then `G` Commit Graph, `B` inline blame, `Shift+B` file blame, `H` visual file history, `F` search commits or `C` Git Commands. Off by default, so none of the editor's own shortcuts are taken over. On Windows keyboard layouts where `AltGr+G` types a character, leave this off and bind the commands in Keyboard Shortcuts instead. |
 | `gitglasses.currentLine.enabled` | `true` | Show blame at the end of the line the cursor is on. **GitGlasses: Toggle Inline Blame** flips this setting. The status bar item follows `gitglasses.statusBar.blame` on its own. |
 | `gitglasses.currentLine.delay` | `75` | Milliseconds the cursor rests on a line before its inline and status bar blame show. After an edit, blame always waits at least 300 ms so typing does not blame every keystroke. |
 | `gitglasses.currentLine.format` | `"${author}, ${date} • ${summary}"` | Text of the current-line blame. Tokens: `${author}` (author name), `${email}` (author email), `${date}` (author date in the `gitglasses.blame.dateStyle` style), `${ago}` (author date, relative), `${summary}` (first line of the message), `${sha}` (short sha). |
@@ -379,7 +380,6 @@ in Restricted Mode.
 | GitGlasses: Suggest Change for Pull Request… | `gitglasses.suggestChange` | trusted workspace |
 | GitGlasses: Open File on Remote | `gitglasses.openOnRemote` |  |
 | GitGlasses: Copy Remote File URL | `gitglasses.copyRemoteUrl` |  |
-| Open Commit on Remote | `gitglasses.openCommitOnRemote` |  |
 | GitGlasses: Remove Integration… | `gitglasses.removeIntegration` |  |
 
 #### Patches
@@ -416,6 +416,7 @@ in Restricted Mode.
 | GitGlasses: Abort Merge, Rebase, Cherry-pick or Revert | `gitglasses.abortOperation` | trusted workspace |
 | GitGlasses: Get Started | `gitglasses.openWalkthrough` |  |
 | GitGlasses: Select Repository… | `gitglasses.selectRepository` |  |
+| GitGlasses: Coming from Git Graph? | `gitglasses.comingFromGitGraph` |  |
 <!-- commands:end -->
 
 ## Contributing and license
