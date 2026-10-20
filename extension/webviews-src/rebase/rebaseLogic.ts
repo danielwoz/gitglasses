@@ -101,6 +101,40 @@ export function setMessage(
   return plan.map((entry, i) => (i === index ? { ...entry, message } : entry));
 }
 
+/** The squash entries of each squash/fixup chain: the run of entries
+ *  folding into the same kept commit (drops in between do not break it, as
+ *  git never sees them there). git asks once per chain for the combined
+ *  commit's message. */
+function squashChains(plan: readonly PlanEntry[]): number[][] {
+  const chains: number[][] = [];
+  let chain: number[] | undefined;
+  plan.forEach((entry, index) => {
+    if (entry.action === 'drop') return;
+    if (entry.action !== 'squash' && entry.action !== 'fixup') {
+      chain = undefined;
+      return;
+    }
+    if (!chain) {
+      chain = [];
+      chains.push(chain);
+    }
+    if (entry.action === 'squash') chain.push(index);
+  });
+  return chains.filter((squashes) => squashes.length > 0);
+}
+
+/** Whether the row at `index` takes a message: a reword, and the last
+ *  squash of its chain, which describes the combined commit. A squash that
+ *  already holds a message keeps its box so the message can be seen and
+ *  cleared after a reorder. */
+export function showsMessage(plan: readonly PlanEntry[], index: number): boolean {
+  const entry = plan[index];
+  if (entry?.action === 'reword') return true;
+  if (entry?.action !== 'squash') return false;
+  if (entry.message.trim() !== '') return true;
+  return squashChains(plan).some((squashes) => squashes[squashes.length - 1] === index);
+}
+
 /** Human-readable problems; an empty array means the plan can start.
  *  `messages: false` is for a todo handed back to git, which asks for
  *  reword messages itself. */
@@ -125,6 +159,16 @@ export function validate(
     errors.push(
       `Enter the new message for ${unworded.map((entry) => entry.sha.slice(0, 7)).join(', ')}, or pick instead of reword.`,
     );
+  }
+  if (messages) {
+    for (const squashes of squashChains(plan)) {
+      const worded = squashes.filter((index) => plan[index].message.trim() !== '');
+      if (worded.length > 1) {
+        errors.push(
+          `${worded.map((index) => plan[index].sha.slice(0, 7)).join(' and ')} are squashed into the same commit, which takes one message: clear all but one of them.`,
+        );
+      }
+    }
   }
   return errors;
 }

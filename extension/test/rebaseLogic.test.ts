@@ -10,6 +10,7 @@ import {
   planFromPreview,
   setAction,
   setMessage,
+  showsMessage,
   toRebaseEntries,
   validate,
 } from '../webviews-src/rebase/rebaseLogic';
@@ -279,5 +280,56 @@ describe('isStalePlanRefusal', () => {
     expect(
       isStalePlanRefusal('git rebase failed (1): error: cannot rebase: You have unstaged changes.'),
     ).toBe(false);
+  });
+});
+
+describe('squash chain messages', () => {
+  const D = 'd'.repeat(40);
+  function four() {
+    return planFromPreview([
+      { sha: A, summary: 'first' },
+      { sha: B, summary: 'second' },
+      { sha: C, summary: 'third' },
+      { sha: D, summary: 'fourth' },
+    ]);
+  }
+
+  it('offers one message box per chain, on its last squash', () => {
+    // pick A, squash B, squash C, fixup D: git asks once, for A+B+C+D.
+    let p = setAction(four(), 1, 'squash');
+    p = setAction(p, 2, 'squash');
+    p = setAction(p, 3, 'fixup');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, false, true, false]);
+  });
+
+  it('keeps a box where a message was already typed, and rewords always have one', () => {
+    let p = setAction(four(), 1, 'squash');
+    p = setMessage(p, 1, 'combined');
+    p = setAction(p, 2, 'squash');
+    p = setAction(p, 3, 'reword');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, true, true, true]);
+  });
+
+  it('treats chains separated by a pick, but not by a drop, as separate', () => {
+    // pick A, squash B, pick C, squash D: two chains, two boxes.
+    let p = setAction(four(), 1, 'squash');
+    p = setAction(p, 3, 'squash');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, true, false, true]);
+    // pick A, squash B, drop C, squash D: one chain, git never sees C there.
+    p = setAction(p, 2, 'drop');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, false, false, true]);
+  });
+
+  it('rejects two messages for the same combined commit', () => {
+    let p = setAction(four(), 1, 'squash');
+    p = setAction(p, 2, 'squash');
+    p = setMessage(p, 1, 'MSG FROM B');
+    p = setMessage(p, 2, 'MSG FROM C');
+    expect(validate(p).join(' ')).toContain('bbbbbbb and ccccccc are squashed into the same commit');
+    expect(validate(setMessage(p, 1, ''))).toEqual([]);
+    // A todo handed back to git takes no messages from the editor.
+    expect(validate(p, { messages: false })).toEqual([]);
+    // Separate chains each take their own message.
+    expect(validate(setAction(p, 2, 'pick'))).toEqual([]);
   });
 });

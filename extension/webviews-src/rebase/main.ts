@@ -21,6 +21,7 @@ import {
   planFromPreview,
   setAction,
   setMessage,
+  showsMessage,
   toRebaseEntries,
   validate,
 } from './rebaseLogic';
@@ -193,7 +194,7 @@ function renderRow(entry: PlanEntry, index: number): HTMLElement {
 
   row.append(handle, shaEl, select, summary);
 
-  if (mode === 'plan' && (entry.action === 'reword' || entry.action === 'squash')) {
+  if (mode === 'plan' && showsMessage(plan, index)) {
     const textarea = document.createElement('textarea');
     textarea.placeholder =
       entry.action === 'reword'

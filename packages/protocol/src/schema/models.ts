@@ -328,7 +328,9 @@ export const RebaseEntry = Type.Object(
     /** Commit to act on, as rebase/preview reported it. */
     sha: Type.String({ minLength: 1 }),
     summary: Type.String(),
-    /** Replacement message for reword/squash. */
+    /** Replacement message for reword, or for squash: a squash/fixup chain
+     *  makes one commit, which takes the message of the chain's last squash
+     *  that has one (git's combined message when none has). */
     message: Type.Optional(Type.String()),
   },
   strict,
