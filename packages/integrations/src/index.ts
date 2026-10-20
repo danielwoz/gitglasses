@@ -8,6 +8,8 @@ export * from './cache.js';
 export * from './rateLimiter.js';
 export * from './rateLimitHeaders.js';
 export * from './launchpadClassifier.js';
+export * from './autolinks.js';
+export * from './pullRequestRefs.js';
 export * from './providers/github.js';
 export * from './providers/gitlab.js';
 export * from './providers/bitbucket.js';
