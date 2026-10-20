@@ -99,8 +99,10 @@ from the code, and a commit that declares nothing is unknown, not human.
 Turn it off everywhere with `gitglasses.provenance.enabled`.
 
 *Limits:* provenance is per commit, not per line. git does not fetch notes by
-default; **Fetch git-ai Notes with Every Fetch…** adds the refspec to the
-remote after you confirm. Session links are shown, never fetched.
+default; **Fetch git-ai Notes with Every Fetch…** adds a refspec to the remote
+after you confirm. Fetched notes go to `refs/notes/ai-remote/<remote>`, as
+git-ai names it, so your own `refs/notes/ai` is never overwritten; GitGlasses
+reads both. Session links are shown, never fetched.
 
 ### File and line history
 

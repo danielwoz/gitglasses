@@ -331,7 +331,7 @@ export const RequestSchemas = {
   },
   'commit/provenance': {
     description:
-      "What each commit declares about who wrote it: a git-ai authorship log in refs/notes/ai, its trailers (Co-authored-by, Assisted-by, Generated-by and the session links agents add) and an author or committer that is a known agent identity. Declared only: nothing is inferred from the code, and a commit that declares nothing is 'unknown'. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+      "What each commit declares about who wrote it: a git-ai authorship log in refs/notes/ai (or, when that has none for the commit, in a remote's copy under refs/notes/ai-remote/), its trailers (Co-authored-by, Assisted-by or Generated-by naming an AI, and the session links agents add) and an author or committer that is a known agent identity. Declared only: nothing is inferred from the code, and a commit that declares nothing is 'unknown'. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -382,7 +382,7 @@ export const RequestSchemas = {
   },
   'notes/addFetchRefspec': {
     description:
-      "Adds `+<ref>:<ref>` to remote.<remote>.fetch (`git config --add`), so later fetches from the remote bring the notes along; git does not fetch notes by default. Changes nothing when one of the remote's fetch refspecs already maps the ref onto itself.",
+      "Adds `+<ref>:<ref>-remote/<remote>` to remote.<remote>.fetch (`git config --add`), so later fetches from the remote bring its notes along; git does not fetch notes by default. The notes land in that ref of their own (refs/notes/ai-remote/origin for refs/notes/ai, the name git-ai uses), never in <ref> itself, so notes written locally for commits not yet pushed are kept; commit/provenance reads both. Characters of the remote's name other than letters, digits, '-' and '_' become '_'. Changes nothing when one of the remote's fetch refspecs already brings the ref into itself or into such a copy.",
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -395,6 +395,9 @@ export const RequestSchemas = {
       {
         added: Type.Boolean({
           description: 'False when the remote already fetched the ref.',
+        }),
+        trackingRef: Type.String({
+          description: "The ref the remote's notes are fetched into.",
         }),
       },
       strict,

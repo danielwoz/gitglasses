@@ -54,7 +54,7 @@ function report(overrides: Partial<ProvenanceReport> = {}): ProvenanceReport {
       [B]: {
         declared: 'unknown',
         declarations: [],
-        note: { read: false, schemaVersion: 'authorship/4.0.0' },
+        note: { read: false, ref: 'refs/notes/ai', schemaVersion: 'authorship/4.0.0' },
       },
     },
     ...overrides,
@@ -65,9 +65,9 @@ describe('formatProvenance', () => {
   it('reports each hunk and each commit once, quoting what the repository wrote', () => {
     expect(formatProvenance(report())).toBe(
       [
-        'provenance src/a.ts L1-9: what each commit declares (git-ai notes in refs/notes/ai, ' +
-          'trailers such as Co-authored-by, known agent identities). Nothing is inferred from ' +
-          'the code; "unknown" means the commit declares nothing.',
+        'provenance src/a.ts L1-9: what each commit declares (git-ai notes in refs/notes/ai ' +
+          "or a remote's copy, trailers such as Co-authored-by, known agent identities). " +
+          'Nothing is inferred from the code; "unknown" means the commit declares nothing.',
         '',
         'hunks:',
         'L1-3 aaaaaaa agent (trailer)',
@@ -81,7 +81,7 @@ describe('formatProvenance', () => {
           '"Claude Opus 4.7 <noreply@anthropic.com>"; session link https://example.com/s/1 (not fetched)',
         'bbbbbbb Jane 2026-01-01 "Initial"',
         '  declares nothing',
-        '  a git-ai note is attached but not read (schema "authorship/4.0.0")',
+        '  a git-ai note is attached in refs/notes/ai but not read (schema "authorship/4.0.0")',
       ].join('\n'),
     );
   });
@@ -105,7 +105,7 @@ describe('formatProvenance', () => {
                 value: '6ef2299e',
               },
             ],
-            note: { read: true, schemaVersion: 'authorship/3.0.0' },
+            note: { read: true, ref: 'refs/notes/ai', schemaVersion: 'authorship/3.0.0' },
           },
         },
       }),

@@ -1019,8 +1019,9 @@ export function createServer(context: ToolContext): McpServer {
       description:
         'Who declared they wrote a range of a file: blames the range, then reports for each ' +
         "hunk's commit what it declares about AI authorship and where: a git-ai note in " +
-        'refs/notes/ai, trailers such as Co-authored-by or Assisted-by, or an author or ' +
-        'committer that is a known agent identity, with any session link the commit names. ' +
+        "refs/notes/ai or a remote's copy, trailers such as Co-authored-by or Assisted-by, " +
+        'or an author or committer that is a known agent identity, with any session link ' +
+        'the commit names. ' +
         'Commit-level and declared only: nothing is inferred from the code, and a commit ' +
         'that declares nothing is reported as unknown.',
       inputSchema: {

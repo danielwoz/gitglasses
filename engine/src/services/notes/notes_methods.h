@@ -17,7 +17,7 @@ inline constexpr std::size_t kMaxNotesReadBytes = 128 * 1024;
 // commits, read through libgit2 alone and cached per commit, so it is served
 // in Restricted Mode and without the git CLI.
 // notes/addFetchRefspec (serial): makes a remote's fetches bring a notes ref
-// along, through `git config --add`.
+// along into a ref of their own, through `git config --add`.
 void registerNotesMethods(rpc::Dispatcher& dispatcher, ServiceContext& context);
 
 }  // namespace gg::services

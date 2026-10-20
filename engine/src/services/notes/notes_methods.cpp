@@ -33,20 +33,24 @@ std::string notesRefParam(const rpc::Json& params) {
   return ref;
 }
 
-// Whether one of `remote`'s fetch refspecs already brings `ref` to itself.
-bool fetchesRef(git_remote* remote, const std::string& ref) {
+// The local ref one of `remote`'s fetch refspecs already brings `ref` into,
+// when that is `ref` itself or a remote copy of it (`<ref>-remote/...`);
+// "" when none does.
+std::string fetchedInto(git_remote* remote, const std::string& ref) {
+  const std::string copies = ref + "-remote/";
   const std::size_t count = git_remote_refspec_count(remote);
   for (std::size_t i = 0; i < count; ++i) {
     const git_refspec* spec = git_remote_get_refspec(remote, i);
     if (!spec || git_refspec_direction(spec) != GIT_DIRECTION_FETCH) continue;
     if (!git_refspec_src_matches(spec, ref.c_str())) continue;
     core::BufDisposer target;
-    if (git_refspec_transform(&target.buf, spec, ref.c_str()) == 0 && target.buf.ptr != nullptr &&
-        ref == target.buf.ptr) {
-      return true;
+    if (git_refspec_transform(&target.buf, spec, ref.c_str()) != 0 || target.buf.ptr == nullptr) {
+      continue;
     }
+    const std::string into = target.buf.ptr;
+    if (into == ref || into.rfind(copies, 0) == 0) return into;
   }
-  return false;
+  return {};
 }
 
 }  // namespace
@@ -100,9 +104,12 @@ void registerNotesMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
       },
       rpc::Mode::Concurrent);
 
-  // Adds `+<ref>:<ref>` to remote.<remote>.fetch, so later fetches from the
-  // remote bring the notes along. Nothing changes when a fetch refspec of the
-  // remote already maps the ref onto itself.
+  // Adds `+<ref>:<ref>-remote/<remote>` to remote.<remote>.fetch, so later
+  // fetches from the remote bring its notes along. They land in a ref of
+  // their own, which commit/provenance also reads, because a forced fetch
+  // into `ref` itself would replace the notes written locally for commits
+  // not yet pushed. Nothing changes when a fetch refspec of the remote
+  // already brings the ref into itself or into such a copy.
   dispatcher.method(
       "notes/addFetchRefspec",
       [&context](const rpc::Json& params, const CancelToken& token,
@@ -118,13 +125,16 @@ void registerNotesMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
               {ErrorCode::InvalidParams, "no remote named '" + remoteName + "'"}};
         }
         std::unique_ptr<git_remote, decltype(&git_remote_free)> remote(raw, git_remote_free);
-        if (fetchesRef(remote.get(), ref)) return {{"added", false}};
+        const std::string existing = fetchedInto(remote.get(), ref);
+        if (!existing.empty()) return {{"added", false}, {"trackingRef", existing}};
 
-        runGitOrThrow(repo,
-                      {"config", "--add", "remote." + remoteName + ".fetch", "+" + ref + ":" + ref},
-                      token, "git config --add");
-        spdlog::info("notes: remote {} now fetches {}", remoteName, ref);
-        return {{"added", true}};
+        const std::string tracking = notes::remoteNotesRef(ref, remoteName);
+        runGitOrThrow(
+            repo,
+            {"config", "--add", "remote." + remoteName + ".fetch", "+" + ref + ":" + tracking},
+            token, "git config --add");
+        spdlog::info("notes: remote {} now fetches {} into {}", remoteName, ref, tracking);
+        return {{"added", true}, {"trackingRef", tracking}};
       },
       rpc::Mode::Serial);
 }

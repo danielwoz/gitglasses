@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "services/notes/notes_methods.h"
 #include "test_fixtures.h"
@@ -41,14 +42,25 @@ constexpr const char* kCursorNote =
     "  }\n"
     "}\n";
 
+constexpr const char* kHumanNote =
+    "src/a.txt\n"
+    "  h_31dce776f88375 1-2\n"
+    "---\n"
+    "{\"schema_version\": \"authorship/3.0.0\", \"prompts\": {},\n"
+    " \"humans\": {\"h_31dce776f88375\": {\"author\": \"Fixture <fixture@example.invalid>\"}}}\n";
+
 Json req(std::int64_t id, const std::string& method, Json params) {
   return {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", std::move(params)}};
 }
 
-std::string rev(const FixtureRepo& fixture, const std::string& spec) {
-  std::string sha = gg::testing::gitCapture(fixture.root(), "rev-parse " + spec);
+std::string revAt(const std::filesystem::path& dir, const std::string& spec) {
+  std::string sha = gg::testing::gitCapture(dir, "rev-parse " + spec);
   while (!sha.empty() && (sha.back() == '\n' || sha.back() == '\r')) sha.pop_back();
   return sha;
+}
+
+std::string rev(const FixtureRepo& fixture, const std::string& spec) {
+  return revAt(fixture.root(), spec);
 }
 
 void commitMessage(FixtureRepo& fixture, const std::string& message) {
@@ -135,7 +147,9 @@ TEST(ProvenanceService, ReadsGitAiNotesFirstAndFollowsTheNotesRef) {
 
   addNote(fixture, "ai", sha, kCursorNote);
   Json after = provenanceOf(session, 11, repoId, {sha});
-  EXPECT_EQ(after[sha]["note"], Json({{"read", true}, {"schemaVersion", "authorship/3.0.0"}}));
+  EXPECT_EQ(
+      after[sha]["note"],
+      Json({{"read", true}, {"ref", "refs/notes/ai"}, {"schemaVersion", "authorship/3.0.0"}}));
   ASSERT_EQ(after[sha]["declarations"].size(), 2u) << after.dump();
   EXPECT_EQ(after[sha]["declarations"][0], Json({{"source", "notes"},
                                                  {"kind", "agent"},
@@ -150,7 +164,9 @@ TEST(ProvenanceService, ReadsGitAiNotesFirstAndFollowsTheNotesRef) {
   future.replace(future.find("authorship/3.0.0"), 16, "authorship/4.0.0");
   addNote(fixture, "ai", sha, future);
   Json rewritten = provenanceOf(session, 12, repoId, {sha});
-  EXPECT_EQ(rewritten[sha]["note"], Json({{"read", false}, {"schemaVersion", "authorship/4.0.0"}}));
+  EXPECT_EQ(
+      rewritten[sha]["note"],
+      Json({{"read", false}, {"ref", "refs/notes/ai"}, {"schemaVersion", "authorship/4.0.0"}}));
   ASSERT_EQ(rewritten[sha]["declarations"].size(), 1u);
   EXPECT_EQ(rewritten[sha]["declarations"][0]["source"], "trailer");
 }
@@ -232,7 +248,7 @@ TEST(NotesService, RejectsRefsOutsideRefsNotes) {
   }
 }
 
-TEST(NotesService, AddsTheFetchRefspecOnce) {
+TEST(NotesService, AddsTheFetchRefspecIntoTheRemotesOwnRefOnce) {
   FixtureRepo fixture;
   fixture.run("git remote add origin https://example.invalid/repo.git");
   InteractiveSession session;
@@ -241,28 +257,81 @@ TEST(NotesService, AddsTheFetchRefspecOnce) {
   Json added =
       session.request(req(10, "notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "origin"}}));
   ASSERT_TRUE(added.contains("result")) << added.dump();
-  EXPECT_EQ(added["result"], Json({{"added", true}}));
+  EXPECT_EQ(added["result"],
+            Json({{"added", true}, {"trackingRef", "refs/notes/ai-remote/origin"}}));
   EXPECT_EQ(gg::testing::gitLines(fixture.root(), "config --get-all remote.origin.fetch"),
             (std::vector<std::string>{"+refs/heads/*:refs/remotes/origin/*",
-                                      "+refs/notes/ai:refs/notes/ai"}));
+                                      "+refs/notes/ai:refs/notes/ai-remote/origin"}));
 
   Json again =
       session.request(req(11, "notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "origin"}}));
-  EXPECT_EQ(again["result"], Json({{"added", false}}));
+  EXPECT_EQ(again["result"],
+            Json({{"added", false}, {"trackingRef", "refs/notes/ai-remote/origin"}}));
   EXPECT_EQ(gg::testing::gitLines(fixture.root(), "config --get-all remote.origin.fetch").size(),
             2u);
 
-  // A wildcard that maps every notes ref onto itself already covers it.
+  // A wildcard that maps every notes ref onto itself already brings it.
   fixture.run("git remote add mirror https://example.invalid/mirror.git");
   fixture.run("git config --add remote.mirror.fetch \"+refs/notes/*:refs/notes/*\"");
   Json covered =
       session.request(req(12, "notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "mirror"}}));
-  EXPECT_EQ(covered["result"], Json({{"added", false}}));
+  EXPECT_EQ(covered["result"], Json({{"added", false}, {"trackingRef", "refs/notes/ai"}}));
+
+  // Characters other than letters, digits, '-' and '_' become '_'.
+  fixture.run("git remote add my.fork https://example.invalid/fork.git");
+  Json fork = session.request(
+      req(13, "notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "my.fork"}}));
+  EXPECT_EQ(fork["result"],
+            Json({{"added", true}, {"trackingRef", "refs/notes/ai-remote/my_fork"}}));
 
   Json unknown = session.request(
-      req(13, "notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "upstream"}}));
+      req(14, "notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "upstream"}}));
   ASSERT_TRUE(unknown.contains("error")) << unknown.dump();
   EXPECT_EQ(unknown["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
+}
+
+TEST(NotesService, FetchedNotesLandBesideTheLocalOnesAndBothAreRead) {
+  FixtureRepo fixture;
+  const std::string shared = rev(fixture, "HEAD");
+  commitMessage(fixture, "pushed\n");
+  const std::string pushed = rev(fixture, "HEAD");
+  // The remote holds git-ai notes for both commits it has.
+  addNote(fixture, "ai", shared, kCursorNote);
+  addNote(fixture, "ai", pushed, kCursorNote);
+  fixture.run("git clone --mirror -q . upstream.git");
+  fixture.run("git remote add origin upstream.git");
+
+  // Locally, refs/notes/ai holds other notes: one for a pushed commit and one
+  // for a commit not pushed yet.
+  fixture.run("git update-ref -d refs/notes/ai");
+  addNote(fixture, "ai", pushed, kHumanNote);
+  commitMessage(fixture, "local\n");
+  const std::string local = rev(fixture, "HEAD");
+  addNote(fixture, "ai", local, kCursorNote);
+  const std::string localTip = rev(fixture, "refs/notes/ai");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json added =
+      session.request(req(10, "notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "origin"}}));
+  ASSERT_TRUE(added.contains("result")) << added.dump();
+  fixture.run("git fetch -q origin");
+
+  // The fetch left the local notes alone.
+  EXPECT_EQ(rev(fixture, "refs/notes/ai"), localTip);
+  EXPECT_EQ(rev(fixture, "refs/notes/ai-remote/origin"),
+            revAt(fixture.root() / "upstream.git", "refs/notes/ai"));
+
+  Json commits = provenanceOf(session, 11, repoId, {shared, pushed, local});
+  // Only the remote has a note for `shared`.
+  EXPECT_EQ(commits[shared]["note"]["ref"], "refs/notes/ai-remote/origin") << commits.dump();
+  EXPECT_EQ(commits[shared]["declared"], "agent");
+  EXPECT_EQ(commits[shared]["declarations"][0]["via"], "refs/notes/ai-remote/origin");
+  // Both do for `pushed`; the local note comes first.
+  EXPECT_EQ(commits[pushed]["note"]["ref"], "refs/notes/ai");
+  EXPECT_EQ(commits[pushed]["declared"], "human");
+  EXPECT_EQ(commits[local]["note"]["ref"], "refs/notes/ai");
+  EXPECT_EQ(commits[local]["declared"], "agent");
 }
 
 }  // namespace

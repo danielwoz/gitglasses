@@ -297,7 +297,7 @@ export const ProvenanceDeclaration = Type.Object(
   {
     source: Type.Union([Type.Literal('notes'), Type.Literal('trailer'), Type.Literal('identity')], {
       description:
-        "Where it was read, in priority order: 'notes' a git-ai authorship log in refs/notes/ai, 'trailer' a message trailer (Co-authored-by, Assisted-by, Generated-by, an agent's session link), 'identity' an author or committer that is a known agent identity.",
+        "Where it was read, in priority order: 'notes' a git-ai authorship log in refs/notes/ai or a remote's copy of it under refs/notes/ai-remote/, 'trailer' a message trailer (Co-authored-by, Assisted-by or Generated-by naming an AI, an agent's session link), 'identity' an author or committer that is a known agent identity.",
     }),
     kind: Type.Union([Type.Literal('agent'), Type.Literal('human')], {
       description: "'human' only for the known humans a git-ai note names.",
@@ -343,9 +343,17 @@ export const CommitProvenance = Type.Object(
             description:
               'The note is a git-ai authorship log this engine reads (authorship/3.x). False for another schema version, a malformed or oversized note, or one whose content is missing; nothing is then taken from it.',
           }),
+          ref: Type.String({
+            description:
+              "The notes ref the note was read from: refs/notes/ai, or a remote's copy such as refs/notes/ai-remote/origin when only that has one.",
+          }),
           schemaVersion: Type.Optional(Type.String()),
         },
-        { ...strict, description: 'Present when refs/notes/ai attaches a note to the commit.' },
+        {
+          ...strict,
+          description:
+            "Present when refs/notes/ai, or a remote's copy of it, attaches a note to the commit.",
+        },
       ),
     ),
   },

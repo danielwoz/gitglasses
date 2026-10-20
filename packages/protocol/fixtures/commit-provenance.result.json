@@ -38,12 +38,12 @@
             "url": "https://github.com/example/repo/tasks/42"
           }
         ],
-        "note": { "read": true, "schemaVersion": "authorship/3.0.0" }
+        "note": { "read": true, "ref": "refs/notes/ai", "schemaVersion": "authorship/3.0.0" }
       },
       "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567": {
         "declared": "unknown",
         "declarations": [],
-        "note": { "read": false, "schemaVersion": "authorship/4.0.0" }
+        "note": { "read": false, "ref": "refs/notes/ai", "schemaVersion": "authorship/4.0.0" }
       }
     }
   }

@@ -13,6 +13,7 @@ import {
   FETCH_NOTES_COMMAND,
   preferredRemotes,
   registerProvenanceCommands,
+  remoteNotesRef,
 } from '../src/provenance/provenanceCommands';
 import { setActiveRepoResolver } from '../src/views/viewBase';
 
@@ -26,7 +27,7 @@ function engine(remotes: string[], added = true, fail = false) {
           return { remotes: remotes.map((name) => ({ name, fetchUrl: `https://x/${name}` })) };
         case 'notes/addFetchRefspec':
           if (fail) throw new Error('git config failed');
-          return { added };
+          return { added, trackingRef: `refs/notes/ai-remote/${String(params.remote)}` };
         case 'mutate/fetch':
           return {};
         default:
@@ -61,6 +62,16 @@ describe('Fetch git-ai Notes with Every Fetch…', () => {
     });
   });
 
+  it('says the notes are fetched beside the local ones, which are never overwritten', async () => {
+    const fake = engine(['origin']);
+    ui.messageChoices = [undefined];
+    await run(fake);
+    const detail = ui.messages[0].detail ?? '';
+    expect(detail).toContain('+refs/notes/ai:refs/notes/ai-remote/origin');
+    expect(detail).toMatch(/own refs\/notes\/ai is never overwritten/);
+    expect(detail).not.toMatch(/nothing else changes/);
+  });
+
   it('adds the refspec to the remote the user picks, offering origin first', async () => {
     const fake = engine(['upstream', 'origin']);
     ui.quickPickChoices = ['upstream'];
@@ -81,6 +92,11 @@ describe('Fetch git-ai Notes with Every Fetch…', () => {
     ui.messageChoices = ['Add and Fetch Now'];
     await run(fake);
     expect(methods(fake)).toEqual(['remote/list', 'notes/addFetchRefspec', 'mutate/fetch']);
+  });
+
+  it('names the tracking ref as git-ai does', () => {
+    expect(remoteNotesRef('origin')).toBe('refs/notes/ai-remote/origin');
+    expect(remoteNotesRef('my.fork/x')).toBe('refs/notes/ai-remote/my_fork_x');
   });
 
   it('says so when there is no remote, and when adding fails', async () => {

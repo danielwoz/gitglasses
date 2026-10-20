@@ -104,6 +104,44 @@ Result<std::string> notesTip(const core::Repo& repo, const std::string& ref) {
   return core::oidToHex(oid);
 }
 
+std::string remoteNotesRef(std::string_view ref, std::string_view remote) {
+  std::string out(ref);
+  out.append("-remote/");
+  for (const char c : remote) {
+    const bool kept = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                      c == '-' || c == '_';
+    out.push_back(kept ? c : '_');
+  }
+  return out;
+}
+
+std::vector<NotesRefTip> notesSources(const core::Repo& repo, const std::string& ref) {
+  std::vector<NotesRefTip> sources;
+  const auto add = [&](const std::string& name) {
+    auto tip = notesTip(repo, name);
+    if (!tip) {
+      spdlog::warn("notes: {} is unreadable, so its notes are skipped: {}", name,
+                   tip.error().message);
+    } else if (!tip.value().empty()) {
+      sources.push_back({name, tip.value()});
+    }
+  };
+  add(ref);
+
+  std::vector<std::string> remotes;
+  const std::string glob = ref + "-remote/*";
+  git_reference_iterator* rawIter = nullptr;
+  if (git_reference_iterator_glob_new(&rawIter, repo.raw(), glob.c_str()) == 0) {
+    core::ReferenceIteratorPtr iter(rawIter);
+    const char* name = nullptr;
+    while (git_reference_next_name(&name, iter.get()) == 0) remotes.emplace_back(name);
+  }
+  std::sort(remotes.begin(), remotes.end());
+  if (remotes.size() > kMaxRemoteNotesRefs) remotes.resize(kMaxRemoteNotesRefs);
+  for (const std::string& name : remotes) add(name);
+  return sources;
+}
+
 Note readNote(const core::Repo& repo, NotesCache& cache, const std::string& repoId,
               const std::string& ref, const std::string& tip, const std::string& sha) {
   const std::string key = NotesCache::makeKey(repoId, ref, tip, sha);

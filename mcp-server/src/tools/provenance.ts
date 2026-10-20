@@ -1,8 +1,8 @@
 // git_provenance: who declared they wrote a range of a file. The range is
 // blamed, and each commit behind it reports what it declares about its
-// authorship (commit/provenance): a git-ai note in refs/notes/ai, trailers
-// such as Co-authored-by, and authors or committers that are known agent
-// identities. Commit-level and declared only: nothing is inferred from the
+// authorship (commit/provenance): a git-ai note in refs/notes/ai (or a
+// remote's copy of it), trailers such as Co-authored-by, and authors or
+// committers that are known agent identities. Commit-level and declared only: nothing is inferred from the
 // code, and a commit that declares nothing is reported as unknown.
 
 import { randomUUID } from 'node:crypto';
@@ -137,8 +137,9 @@ export function formatProvenance(report: ProvenanceReport): string {
       : `L${report.startLine}-${report.endLine}`;
   const header =
     `provenance ${report.file} ${range}: what each commit declares (git-ai notes in ` +
-    'refs/notes/ai, trailers such as Co-authored-by, known agent identities). Nothing is ' +
-    'inferred from the code; "unknown" means the commit declares nothing.';
+    "refs/notes/ai or a remote's copy, trailers such as Co-authored-by, known agent " +
+    'identities). Nothing is inferred from the code; "unknown" means the commit declares ' +
+    'nothing.';
   if (report.hunks.length === 0) return `${header}\n\nNo blame hunks cover this range.`;
 
   const hunkLines = report.hunks.map((hunk) => {
@@ -164,12 +165,11 @@ export function formatProvenance(report: ProvenanceReport): string {
     } else {
       commitLines.push(...provenance.declarations.map(declarationLine));
     }
-    if (provenance?.note && !provenance.note.read) {
+    const note = provenance?.note;
+    if (note && !note.read) {
       commitLines.push(
-        `  a git-ai note is attached but not read${
-          provenance.note.schemaVersion
-            ? ` (schema ${JSON.stringify(provenance.note.schemaVersion)})`
-            : ''
+        `  a git-ai note is attached in ${note.ref} but not read${
+          note.schemaVersion ? ` (schema ${JSON.stringify(note.schemaVersion)})` : ''
         }`,
       );
     }

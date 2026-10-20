@@ -5,6 +5,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/repo.h"
@@ -72,6 +73,27 @@ bool isNotesRef(const std::string& ref);
 
 // The commit `ref` points at, or "" when the ref does not exist.
 Result<std::string> notesTip(const core::Repo& repo, const std::string& ref);
+
+// The ref a remote's copy of the notes ref `ref` is fetched into,
+// `<ref>-remote/<remote>`, as git-ai names it: refs/notes/ai-remote/origin
+// for refs/notes/ai. Characters other than ASCII letters, digits, '-' and
+// '_' in the remote's name become '_'. Fetching into a ref of its own leaves
+// the local `ref`, and the notes written there for unpushed commits, intact.
+std::string remoteNotesRef(std::string_view ref, std::string_view remote);
+
+// A notes ref and the commit it points at.
+struct NotesRefTip {
+  std::string ref;
+  std::string tip;
+};
+
+// Most remote notes refs read for one notes ref.
+inline constexpr std::size_t kMaxRemoteNotesRefs = 16;
+
+// Where the notes of `ref` are read from, in priority order: `ref` itself,
+// then the remotes' copies under `<ref>-remote/` in name order. Refs that do
+// not exist are left out; one that cannot be resolved is logged and skipped.
+std::vector<NotesRefTip> notesSources(const core::Repo& repo, const std::string& ref);
 
 // The note `ref` attaches to commit `sha` (40 hex), read through `cache`.
 // `tip` is notesTip()'s answer for the same ref and must not be empty.
