@@ -1,0 +1,7 @@
+{
+  "method": "ui/askpassCancelled",
+  "kind": "notification",
+  "payload": {
+    "id": "e7"
+  }
+}
