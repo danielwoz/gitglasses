@@ -4,7 +4,13 @@ import type { FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
 import type { Account, AutolinkPattern, Issue } from '../models.js';
 import { p, ProviderClient } from './client.js';
-import { assertPlainHost, base64Encode, slugify } from './shared.js';
+import {
+  assertKnownOptions,
+  assertPlainHost,
+  base64Encode,
+  credentialHostOfUrl,
+  slugify,
+} from './shared.js';
 
 export interface JiraProviderOptions {
   /** Cloud site name, e.g. "acme" for https://acme.atlassian.net. */
@@ -38,6 +44,8 @@ interface JiraIssuePayload {
 
 const ISSUE_FIELDS = ['summary', 'status', 'assignee', 'updated', 'issuetype'];
 
+const OPTION_KEYS = ['site', 'baseUrl', 'id', 'fetchFn'] as const;
+
 /** Matches Jira issue keys like "PROJ-42" in plain text. */
 export const JIRA_ISSUE_KEY_REGEX = '([A-Z][A-Z0-9]+-\\d+)';
 
@@ -66,6 +74,7 @@ export class JiraProvider implements IssueProvider {
   private readonly client: ProviderClient;
 
   constructor(options: JiraProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'JiraProvider');
     this.id = options.id ?? 'jira';
     // `site` is interpolated into the base URL that carries the credential, so
     // it is held to a bare site name. baseUrl stays free-form for self-hosted
@@ -81,6 +90,7 @@ export class JiraProvider implements IssueProvider {
       name: 'Jira',
       baseUrl,
       baseUrlLabel: 'Jira baseUrl',
+      credentialHost: credentialHostOfUrl(baseUrl),
       headers: { accept: 'application/json', 'content-type': 'application/json' },
       authorize: (auth) => {
         if (!auth.username) {

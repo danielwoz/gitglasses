@@ -6,10 +6,11 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import type { PatchEnvelope, RequestParams } from '@gitglasses/protocol';
 import { shortSha } from '@gitglasses/protocol/sha';
-import { defaultFetch, supportsSnippets, type AuthContext } from '@gitglasses/integrations';
+import { defaultFetch, supportsSnippets } from '@gitglasses/integrations';
 import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
 import type { IntegrationService } from '../integrations/integrationService';
+import { getSnippetText } from '../integrations/providerSetup';
 import { requireRepo, type ActiveRepo, type ViewNode } from '../views/viewBase';
 import { errorMessage, showConflictGuidance } from '../commands/ui';
 import {
@@ -274,8 +275,7 @@ async function fetchPatchText(integrations: IntegrationService, url: string): Pr
   if (wantedHost) {
     for (const entry of await integrations.getConnectedHostingEntries()) {
       if (entry.host !== wantedHost || !supportsSnippets(entry.provider)) continue;
-      const auth: AuthContext = { token: entry.auth.token };
-      return entry.provider.getSnippet(auth, url);
+      return getSnippetText(entry.provider, entry.auth, entry.host, url);
     }
   }
   // No connected provider serves this host: fetch the raw URL directly.

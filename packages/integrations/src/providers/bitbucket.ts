@@ -4,6 +4,7 @@ import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  PullRequestHead,
   PullRequestQueryOptions,
 } from '../hostingProvider.js';
 import type {
@@ -25,7 +26,7 @@ import {
   p,
   ProviderClient,
 } from './client.js';
-import { base64Encode, escapeBbqlString } from './shared.js';
+import { assertKnownOptions, base64Encode, escapeBbqlString, sameRepoPath } from './shared.js';
 
 export interface BitbucketProviderOptions {
   /** Provider id used in RepoDescriptors. Default "bitbucket". */
@@ -52,7 +53,11 @@ interface BitbucketPullRequest {
   draft?: boolean;
   author?: BitbucketAccount;
   links?: { html?: { href?: string } };
-  source?: { branch?: { name?: string }; commit?: { hash?: string } };
+  source?: {
+    branch?: { name?: string };
+    commit?: { hash?: string };
+    repository?: { full_name?: string };
+  };
   destination?: {
     branch?: { name?: string };
     repository?: { full_name?: string };
@@ -60,6 +65,8 @@ interface BitbucketPullRequest {
   created_on: string;
   updated_on: string;
 }
+
+const OPTION_KEYS = ['id', 'apiBaseUrl', 'fetchFn'] as const;
 
 function mapState(state: BitbucketPullRequest['state']): PullRequestState {
   switch (state) {
@@ -110,6 +117,11 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
   };
 }
 
+/** True for an Atlassian account email, which Bitbucket API tokens pair with. */
+function isAccountEmail(username: string | undefined): boolean {
+  return username !== undefined && username.includes('@');
+}
+
 /**
  * Bitbucket Cloud hosting provider (api.bitbucket.org/2.0).
  *
@@ -138,13 +150,16 @@ export class BitbucketProvider implements HostingProvider {
   private readonly identity = new CachedIdentity<BitbucketAccount>();
 
   constructor(options: BitbucketProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'BitbucketProvider');
     this.id = options.id ?? 'bitbucket';
     this.client = new ProviderClient({
       name: 'Bitbucket',
       baseUrl: options.apiBaseUrl ?? 'https://api.bitbucket.org/2.0',
       baseUrlLabel: 'Bitbucket apiBaseUrl',
+      credentialHost: this.host,
       headers: { accept: 'application/json' },
-      // An app password authenticates as a named account; OAuth tokens do not.
+      // An API token or app password authenticates as a named account (the
+      // Atlassian email or the Bitbucket username); access tokens do not.
       authorize: (auth) =>
         auth.username
           ? `Basic ${base64Encode(`${auth.username}:${auth.token}`)}`
@@ -184,21 +199,37 @@ export class BitbucketProvider implements HostingProvider {
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
+    // The branch name alone matches pull requests from every fork, so the
+    // source repository is part of the query and checked on each result.
     // Branch names come from the repository, so a quote in one is escaped
     // rather than closing the BBQL literal it sits in.
-    const q = `source.branch.name = "${escapeBbqlString(branch)}" AND state = "OPEN"`;
+    const source = head ?? repo;
+    const fullName = `${source.owner}/${source.name}`;
+    const q =
+      `source.branch.name = "${escapeBbqlString(branch)}" AND state = "OPEN" AND ` +
+      `source.repository.full_name = "${escapeBbqlString(fullName)}"`;
     const json = await this.client.getJson<{ values?: BitbucketPullRequest[] }>(
       auth,
       p`/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
     );
-    const pr = json?.values?.[0];
+    const pr = json?.values?.find((candidate) => {
+      const name = candidate.source?.repository?.full_name ?? '';
+      const slash = name.indexOf('/');
+      return (
+        slash > 0 &&
+        sameRepoPath({ owner: name.slice(0, slash), name: name.slice(slash + 1) }, source)
+      );
+    });
     if (!pr) {
       return undefined;
     }
     const cached = this.identity.peek(auth.token);
-    const viewer = auth.username ?? cached?.username ?? cached?.nickname;
+    const viewer = isAccountEmail(auth.username)
+      ? (cached?.username ?? cached?.nickname)
+      : (auth.username ?? cached?.username ?? cached?.nickname);
     const role: ViewerRole =
       viewer !== undefined && mapAccount(pr.author).username === viewer ? 'author' : 'none';
     return this.mapPullRequest(pr, role);
@@ -301,12 +332,17 @@ export class BitbucketProvider implements HostingProvider {
     };
   }
 
+  /**
+   * The account `/pullrequests/{selected_user}` is asked about: the username
+   * an app password was paired with, or the profile's uuid when the account
+   * is identified by its Atlassian email (API tokens) or not at all.
+   */
   private async username(auth: AuthContext): Promise<string> {
-    if (auth.username) {
+    if (auth.username && !isAccountEmail(auth.username)) {
       return auth.username;
     }
     const user = await this.user(auth);
-    const username = user.username ?? user.nickname;
+    const username = user.uuid ?? user.username ?? user.nickname;
     if (!username) {
       throw new Error('Bitbucket /user returned no username');
     }

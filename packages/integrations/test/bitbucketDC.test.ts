@@ -135,6 +135,49 @@ describe('BitbucketDCProvider.getPullRequestForBranch', () => {
     const provider = new BitbucketDCProvider({ baseUrl, fetchFn });
     expect(await provider.getPullRequestForBranch(auth, repo, 'nope')).toBeUndefined();
   });
+
+  /** A pull request from `from` (project key, slug) into ACME/widgets. */
+  function forkPr(from: [string, string], id: number): Record<string, unknown> {
+    return pr({
+      id,
+      fromRef: {
+        id: 'refs/heads/feat/widgets',
+        displayId: 'feat/widgets',
+        latestCommit: 'beef',
+        repository: { slug: from[1], project: { key: from[0] } },
+      },
+      toRef: {
+        id: 'refs/heads/main',
+        displayId: 'main',
+        repository: { slug: 'widgets', project: { key: 'ACME' } },
+      },
+    });
+  }
+
+  it('asks the head fork and keeps only its pull request into this repository', async () => {
+    const { fetchFn, requests } = stubFetch(() =>
+      jsonResponse({
+        values: [forkPr(['MALLORY', 'widgets'], 7), forkPr(['~ALICE', 'widgets'], 8)],
+      })
+    );
+    const provider = new BitbucketDCProvider({ baseUrl, fetchFn });
+    const found = await provider.getPullRequestForBranch(auth, repo, 'feat/widgets', {
+      owner: '~ALICE',
+      name: 'widgets',
+    });
+    expect(requests[0].url).toContain('/projects/~ALICE/repos/widgets/pull-requests');
+    expect(found?.number).toBe(8);
+    // The pull request lives in the repository it targets.
+    expect(found?.repo).toMatchObject({ owner: 'ACME', name: 'widgets' });
+  });
+
+  it('matches nothing when the result comes from another repository', async () => {
+    const { fetchFn } = stubFetch(() =>
+      jsonResponse({ values: [forkPr(['MALLORY', 'widgets'], 7)] })
+    );
+    const provider = new BitbucketDCProvider({ baseUrl, fetchFn });
+    expect(await provider.getPullRequestForBranch(auth, repo, 'feat/widgets')).toBeUndefined();
+  });
 });
 
 describe('BitbucketDCProvider.getIssueOrPr', () => {

@@ -157,6 +157,27 @@ describe('AzureDevOpsProvider.getPullRequestForBranch', () => {
     const provider = new AzureDevOpsProvider({ organization: 'contoso', fetchFn });
     expect(await provider.getPullRequestForBranch(auth, repo, 'nope')).toBeUndefined();
   });
+
+  const fromFork = (project: string, name: string, id: number) =>
+    pr({ pullRequestId: id, forkSource: { repository: { name, project: { name: project } } } });
+
+  it("ignores a fork's pull request from a same-named branch", async () => {
+    const { fetchFn } = stubFetch(() => jsonResponse({ value: [fromFork('Other', 'widgets', 3)] }));
+    const provider = new AzureDevOpsProvider({ organization: 'contoso', fetchFn });
+    expect(await provider.getPullRequestForBranch(auth, repo, 'feat/widgets')).toBeUndefined();
+  });
+
+  it("matches the head fork's pull request when one is given", async () => {
+    const { fetchFn } = stubFetch(() =>
+      jsonResponse({ value: [pr(), fromFork('Other', 'widgets', 3), fromFork('Mine', 'w2', 4)] })
+    );
+    const provider = new AzureDevOpsProvider({ organization: 'contoso', fetchFn });
+    const found = await provider.getPullRequestForBranch(auth, repo, 'feat/widgets', {
+      owner: 'contoso/Mine',
+      name: 'w2',
+    });
+    expect(found?.number).toBe(4);
+  });
 });
 
 describe('AzureDevOpsProvider.getIssueOrPr', () => {

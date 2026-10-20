@@ -16,3 +16,4 @@ export * from './providers/azuredevops.js';
 export * from './providers/jira.js';
 export * from './providers/linear.js';
 export * from './defaults.js';
+export * from './factory.js';

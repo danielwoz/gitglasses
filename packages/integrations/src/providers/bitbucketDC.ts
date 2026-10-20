@@ -4,6 +4,7 @@ import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  PullRequestHead,
   PullRequestQueryOptions,
 } from '../hostingProvider.js';
 import type {
@@ -17,6 +18,7 @@ import type {
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
 import { ISSUE_TTL_MS, mergeByRole, p, ProviderClient } from './client.js';
+import { assertKnownOptions, credentialHostOfUrl, sameRepoPath } from './shared.js';
 
 export interface BitbucketDCProviderOptions {
   /** Instance base URL, e.g. "https://git.corp.example". Required. */
@@ -59,6 +61,15 @@ interface DCPullRequest {
   createdDate: number;
   updatedDate?: number;
   links?: { self?: Array<{ href?: string }> };
+}
+
+const OPTION_KEYS = ['baseUrl', 'id', 'fetchFn'] as const;
+
+/** Project key and slug of a ref's repository, when the payload carries it. */
+function refRepo(ref: DCRef): { owner: string; name: string } | undefined {
+  const owner = ref.repository?.project?.key;
+  const name = ref.repository?.slug;
+  return owner !== undefined && name !== undefined ? { owner, name } : undefined;
 }
 
 function mapState(state: DCPullRequest['state']): PullRequestState {
@@ -112,11 +123,16 @@ export class BitbucketDCProvider implements HostingProvider {
   private readonly client: ProviderClient;
 
   constructor(options: BitbucketDCProviderOptions) {
+    assertKnownOptions(options, OPTION_KEYS, 'BitbucketDCProvider');
+    if (typeof options.baseUrl !== 'string') {
+      throw new Error('BitbucketDCProvider requires a baseUrl');
+    }
     this.id = options.id ?? 'bitbucket-dc';
     this.client = new ProviderClient({
       name: 'Bitbucket Data Center',
       baseUrl: options.baseUrl,
       baseUrlLabel: 'Bitbucket Data Center baseUrl',
+      credentialHost: credentialHostOfUrl(options.baseUrl),
       prefix: '/rest/api/1.0',
       headers: { accept: 'application/json' },
       authorize: (auth) => `Bearer ${auth.token}`,
@@ -168,14 +184,26 @@ export class BitbucketDCProvider implements HostingProvider {
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
-    const repoPath = p`/projects/${repo.owner}/repos/${repo.name}`;
+    // OUTGOING lists pull requests whose source is the repository in the
+    // path, so asking the head repository leaves out other forks' branches.
+    const source = head ?? repo;
+    const repoPath = p`/projects/${source.owner}/repos/${source.name}`;
     const json = await this.client.getJson<{ values?: DCPullRequest[] }>(
       auth,
       p`${repoPath}/pull-requests?state=OPEN&direction=OUTGOING&at=${`refs/heads/${branch}`}`
     );
-    const pr = json?.values?.[0];
+    const pr = json?.values?.find((candidate) => {
+      const from = refRepo(candidate.fromRef);
+      const to = refRepo(candidate.toRef);
+      return (
+        from !== undefined &&
+        sameRepoPath(from, source) &&
+        (to === undefined || sameRepoPath(to, repo))
+      );
+    });
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
 
@@ -198,8 +226,11 @@ export class BitbucketDCProvider implements HostingProvider {
   }
 
   private mapPullRequest(pr: DCPullRequest, viewerRole: ViewerRole): PullRequest {
-    const projectKey = pr.fromRef.repository?.project?.key ?? '';
-    const repoSlug = pr.fromRef.repository?.slug ?? '';
+    // A pull request lives in its target repository; a fork's source
+    // repository is somewhere else.
+    const home = refRepo(pr.toRef) ?? refRepo(pr.fromRef);
+    const projectKey = home?.owner ?? '';
+    const repoSlug = home?.name ?? '';
     const url =
       pr.links?.self?.[0]?.href ??
       `${this.client.baseUrl}/projects/${projectKey}/repos/${repoSlug}/pull-requests/${pr.id}`;

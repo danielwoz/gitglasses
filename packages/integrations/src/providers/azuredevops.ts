@@ -4,6 +4,7 @@ import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  PullRequestHead,
   PullRequestQueryOptions,
 } from '../hostingProvider.js';
 import type {
@@ -26,9 +27,17 @@ import {
   ProviderClient,
   segments,
 } from './client.js';
-import { assertPlainHost, base64Encode } from './shared.js';
+import {
+  assertKnownOptions,
+  assertPlainHost,
+  base64Encode,
+  credentialHostOfUrl,
+  sameRepoPath,
+} from './shared.js';
 
 const API_VERSION = '7.1';
+
+const OPTION_KEYS = ['organization', 'project', 'baseUrl', 'id', 'fetchFn'] as const;
 
 export interface AzureDevOpsProviderOptions {
   /** Organization name (the first path segment on dev.azure.com). Required. */
@@ -68,6 +77,8 @@ interface AdoPullRequest {
   mergeStatus?: string;
   reviewers?: AdoReviewer[];
   repository?: { name?: string; project?: { name?: string } };
+  /** Set when the source branch lives in a fork of the target repository. */
+  forkSource?: { repository?: { name?: string; project?: { name?: string } } };
   creationDate: string;
   closedDate?: string;
 }
@@ -159,15 +170,18 @@ export class AzureDevOpsProvider implements HostingProvider {
   private readonly profile = new CachedIdentity<string>();
 
   constructor(options: AzureDevOpsProviderOptions) {
+    assertKnownOptions(options, OPTION_KEYS, 'AzureDevOpsProvider');
     this.id = options.id ?? 'azuredevops';
     // The organization is the first path segment of every credentialed
     // request, so it is restricted to the same bare-label form a hostname has.
     this.organization = assertPlainHost(options.organization, 'Azure DevOps organization');
     this.project = options.project;
+    const baseUrl = options.baseUrl ?? 'https://dev.azure.com';
     this.client = new ProviderClient({
       name: 'Azure DevOps',
-      baseUrl: options.baseUrl ?? 'https://dev.azure.com',
+      baseUrl,
       baseUrlLabel: 'Azure DevOps baseUrl',
+      credentialHost: credentialHostOfUrl(baseUrl),
       headers: { accept: 'application/json' },
       // The PAT goes in as basic auth with an empty username.
       authorize: (auth) => `Basic ${base64Encode(`:${auth.token}`)}`,
@@ -215,7 +229,8 @@ export class AzureDevOpsProvider implements HostingProvider {
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
     // repo.owner is "organization/project", so it spans two path segments.
     const repoPath = p`/${segments(repo.owner)}/_apis/git/repositories/${repo.name}`;
@@ -225,7 +240,22 @@ export class AzureDevOpsProvider implements HostingProvider {
       auth,
       p`${repoPath}/pullrequests?${criteria}&api-version=${API_VERSION}`
     );
-    const pr = prs[0];
+    // sourceRefName matches the branch in every fork too; a fork's pull
+    // request names its source repository in forkSource.
+    const forkHead = head !== undefined && !sameRepoPath(head, repo) ? head : undefined;
+    const organization = repo.owner.split('/')[0];
+    const pr = prs.find((candidate) => {
+      if (forkHead === undefined) {
+        return candidate.forkSource === undefined;
+      }
+      const fork = candidate.forkSource?.repository;
+      const project = fork?.project?.name;
+      return (
+        fork?.name !== undefined &&
+        project !== undefined &&
+        sameRepoPath({ owner: `${organization}/${project}`, name: fork.name }, forkHead)
+      );
+    });
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
 
