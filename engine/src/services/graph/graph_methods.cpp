@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -611,6 +612,143 @@ std::uint64_t filteredFingerprint(std::uint64_t refsFingerprint,
   return hash & ((1ull << 53) - 1);
 }
 
+// The walk a graph/rows or graph/find request covers: the refs snapshot, the
+// roots (every branch tip plus HEAD, or what the `refs` filter names), and
+// the fingerprint that identifies the sequence.
+struct Walk {
+  GraphSnapshot snap;
+  std::vector<std::string> tips;
+  std::uint64_t fingerprint = 0;
+};
+
+// A request's `refs` filter, when it has one.
+std::optional<std::vector<std::string>> refsFilter(const rpc::Json& params) {
+  if (!params.contains("refs")) return std::nullopt;
+  return requireStringArray(params, "refs");
+}
+
+Walk openWalk(const core::Repo& repo, const std::optional<std::vector<std::string>>& filter) {
+  auto snapshot = buildSnapshot(repo);
+  if (!snapshot) throw rpc::HandlerError{{snapshot.error()}};
+  Walk walk{std::move(snapshot.value()), {}, 0};
+  walk.tips = filter ? filteredTips(repo, *filter) : walk.snap.tips;
+  walk.fingerprint = filter ? filteredFingerprint(walk.snap.refsFingerprint, walk.tips)
+                            : walk.snap.refsFingerprint;
+  return walk;
+}
+
+// The commit order of a walk with tips. It depends only on the refs (and the
+// filter), which the fingerprint hashes, so it is built once and cached.
+std::shared_ptr<const cache::GraphPlan> planFor(ServiceContext& context, const core::Repo& repo,
+                                                const std::string& repoId, const Walk& walk,
+                                                const CancelToken& token) {
+  const std::string cacheKey = cache::GraphCache::makeKey(repoId, walk.fingerprint);
+  std::shared_ptr<const cache::GraphPlan> plan = context.graphCache.get(cacheKey);
+  if (plan) return plan;
+
+  auto nodes = collectNodes(repo, walk.tips, token);
+  if (!nodes) throw rpc::HandlerError{{nodes.error()}};
+
+  auto built = std::make_shared<cache::GraphPlan>();
+  built->commits = buildOrder(nodes.value(), token);
+  built->stashes = walk.snap.stashes;
+
+  // Stash rows precede the commit they were stashed on (the stash commit's
+  // first parent). Stashes whose base is not reachable from any walked tip
+  // produce no row.
+  for (std::size_t i = 0; i < built->stashes.size(); ++i) {
+    const std::string& stashSha = built->stashes[i].sha;
+    git_oid oid;
+    git_commit* rawCommit = nullptr;
+    if (git_oid_fromstr(&oid, stashSha.c_str()) != 0 ||
+        git_commit_lookup(&rawCommit, repo.raw(), &oid) != 0) {
+      throw rpc::HandlerError{{core::gitError("lookup stash " + stashSha)}};
+    }
+    core::CommitPtr commit(rawCommit);
+    if (git_commit_parentcount(commit.get()) == 0) continue;
+    const git_oid* base = git_commit_parent_id(commit.get(), 0);
+    if (nodes.value().find(*base) != nodes.value().end()) {
+      built->stashesByBase[core::oidToHex(*base)].push_back(i);  // index asc
+    }
+  }
+  context.graphCache.put(cacheKey, built);
+  return built;
+}
+
+// Visits the rows of a walk that follow the uncommitted-changes row, in the
+// order graph/rows emits them: the cached commit order, with each commit's
+// stash rows (when included) right before it. `visit(sha, parents, kind,
+// stash)` returns false to stop.
+template <typename Visit>
+void forEachRow(const cache::GraphPlan& plan, bool includeStashes, const CancelToken& token,
+                Visit&& visit) {
+  for (const auto& row : plan.commits) {
+    token.throwIfCancelled();
+    if (includeStashes) {
+      const auto it = plan.stashesByBase.find(row.sha);
+      if (it != plan.stashesByBase.end()) {
+        for (const std::size_t index : it->second) {
+          const GraphStash& stash = plan.stashes[index];
+          if (!visit(stash.sha, std::vector<std::string>{row.sha}, "stash", &stash)) return;
+        }
+      }
+    }
+    if (!visit(row.sha, row.parents, "commit", nullptr)) return;
+  }
+}
+
+core::CommitPtr lookupCommit(const core::Repo& repo, const std::string& sha) {
+  git_oid oid;
+  git_commit* rawCommit = nullptr;
+  if (git_oid_fromstr(&oid, sha.c_str()) != 0 ||
+      git_commit_lookup(&rawCommit, repo.raw(), &oid) != 0) {
+    throw rpc::HandlerError{{core::gitError("lookup commit " + sha)}};
+  }
+  return core::CommitPtr(rawCommit);
+}
+
+// --- find --------------------------------------------------------------------
+
+char lowerAscii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
+
+std::string lowerAscii(std::string_view text) {
+  std::string lowered(text);
+  for (char& c : lowered) c = lowerAscii(c);
+  return lowered;
+}
+
+// Case-insensitive (ASCII) substring test; `needle` is already lowercase.
+bool containsFolded(std::string_view haystack, std::string_view needle) {
+  return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+                     [](char a, char b) { return lowerAscii(a) == b; }) != haystack.end();
+}
+
+bool containsFolded(const char* haystack, std::string_view needle) {
+  return haystack != nullptr && containsFolded(std::string_view(haystack), needle);
+}
+
+// Whether a row matches the find box: a sha prefix, a ref the row shows, or
+// text in the message (the stash's own message for a stash row) or the
+// author's name or email. The cheap tests run before the commit is read.
+bool rowMatches(const core::Repo& repo, const GraphSnapshot& snap, const std::string& sha,
+                const GraphStash* stash, std::string_view needle) {
+  if (sha.compare(0, needle.size(), needle) == 0) return true;
+  if (stash) {
+    if (containsFolded("stash@{" + std::to_string(stash->index) + "}", needle) ||
+        containsFolded(stash->message, needle)) {
+      return true;
+    }
+  } else if (const auto refs = snap.refsBySha.find(sha); refs != snap.refsBySha.end()) {
+    for (const auto& ref : refs->second) {
+      if (containsFolded(ref.value("name", ""), needle)) return true;
+    }
+  }
+  core::CommitPtr commit = lookupCommit(repo, sha);
+  if (!stash && containsFolded(git_commit_message(commit.get()), needle)) return true;
+  const git_signature* author = git_commit_author(commit.get());
+  return author && (containsFolded(author->name, needle) || containsFolded(author->email, needle));
+}
+
 }  // namespace
 
 void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
@@ -622,24 +760,19 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         const rpc::Json include = optionalObject(params, "include");
         const bool includeStashes = include.value("stashes", false);
         const bool includeWip = include.value("wip", false);
-        const bool filtered = params.contains("refs");
-        const std::vector<std::string> filter =
-            filtered ? requireStringArray(params, "refs") : std::vector<std::string>{};
+        const auto filter = refsFilter(params);
         Cursor cursor;
         if (const std::string encoded = optionalString(params, "cursor"); !encoded.empty()) {
           cursor = decodeCursor(encoded);
         }
-        auto repo = context.registry.open(params.value("repoId", ""));
+        const std::string repoId = params.value("repoId", "");
+        auto repo = context.registry.open(repoId);
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
-        auto snapshot = buildSnapshot(repo.value());
-        if (!snapshot) throw rpc::HandlerError{{snapshot.error()}};
-        const GraphSnapshot& snap = snapshot.value();
-
-        const std::vector<std::string> tips =
-            filtered ? filteredTips(repo.value(), filter) : snap.tips;
-        const std::uint64_t fingerprint =
-            filtered ? filteredFingerprint(snap.refsFingerprint, tips) : snap.refsFingerprint;
+        const Walk walk = openWalk(repo.value(), filter);
+        const GraphSnapshot& snap = walk.snap;
+        const std::vector<std::string>& tips = walk.tips;
+        const std::uint64_t fingerprint = walk.fingerprint;
         // Positions in a cursor index into one walk; once any ref moves they
         // would name other rows, with lane state that no longer fits them.
         if (cursor.fingerprint && *cursor.fingerprint != fingerprint) {
@@ -655,40 +788,9 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           return {{"rows", std::move(rows)}, {"refsFingerprint", fingerprint}};
         }
 
-        // The whole walk depends only on the refs (and the filter), which the
-        // fingerprint hashes, so page 0 builds it and later pages slice it.
-        const std::string cacheKey =
-            cache::GraphCache::makeKey(params.value("repoId", ""), fingerprint);
-        std::shared_ptr<const cache::GraphPlan> plan = context.graphCache.get(cacheKey);
-        if (!plan) {
-          auto nodes = collectNodes(repo.value(), tips, token);
-          if (!nodes) throw rpc::HandlerError{{nodes.error()}};
-
-          auto built = std::make_shared<cache::GraphPlan>();
-          built->commits = buildOrder(nodes.value(), token);
-          built->stashes = snap.stashes;
-
-          // Stash rows precede the commit they were stashed on (the stash
-          // commit's first parent). Stashes whose base is not reachable from
-          // any walked tip produce no row.
-          for (std::size_t i = 0; i < built->stashes.size(); ++i) {
-            const std::string& stashSha = built->stashes[i].sha;
-            git_oid oid;
-            git_commit* rawCommit = nullptr;
-            if (git_oid_fromstr(&oid, stashSha.c_str()) != 0 ||
-                git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
-              throw rpc::HandlerError{{core::gitError("lookup stash " + stashSha)}};
-            }
-            core::CommitPtr commit(rawCommit);
-            if (git_commit_parentcount(commit.get()) == 0) continue;
-            const git_oid* base = git_commit_parent_id(commit.get(), 0);
-            if (nodes.value().find(*base) != nodes.value().end()) {
-              built->stashesByBase[core::oidToHex(*base)].push_back(i);  // index asc
-            }
-          }
-          plan = built;
-          context.graphCache.put(cacheKey, plan);
-        }
+        // Page 0 builds the whole walk and later pages slice it.
+        const std::shared_ptr<const cache::GraphPlan> plan =
+            planFor(context, repo.value(), repoId, walk, token);
 
         // Only page 0 can carry the WIP row, so only page 0 pays for the
         // status scan; later pages learn from the cursor whether the sequence
@@ -706,16 +808,6 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         const std::size_t startPos = cursor.pos;
         std::size_t pos = 0;
         std::optional<std::string> nextCursor;
-
-        auto lookupCommit = [&](const std::string& sha) -> core::CommitPtr {
-          git_oid oid;
-          git_commit* rawCommit = nullptr;
-          if (git_oid_fromstr(&oid, sha.c_str()) != 0 ||
-              git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
-            throw rpc::HandlerError{{core::gitError("lookup commit " + sha)}};
-          }
-          return core::CommitPtr(rawCommit);
-        };
 
         // Emits one row of the deterministic sequence. Rows before the cursor
         // are skipped without touching lane state (the cursor carries it);
@@ -735,7 +827,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
                            {"lane", layout.lane},  {"laneEdges", std::move(layout.edges)},
                            {"kind", kind}};
           if (stash) {
-            core::CommitPtr commit = lookupCommit(sha);
+            core::CommitPtr commit = lookupCommit(repo.value(), sha);
             row["author"] = core::signatureJson(git_commit_author(commit.get()));
             row["time"] = static_cast<std::int64_t>(git_commit_time(commit.get()));
             row["summary"] = stash->message;
@@ -748,7 +840,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
             row["summary"] = "Uncommitted changes";
             row["refs"] = rpc::Json::array();
           } else {
-            core::CommitPtr commit = lookupCommit(sha);
+            core::CommitPtr commit = lookupCommit(repo.value(), sha);
             row["author"] = core::signatureJson(git_commit_author(commit.get()));
             row["time"] = static_cast<std::int64_t>(git_commit_time(commit.get()));
             const char* summary = git_commit_summary(commit.get());
@@ -763,28 +855,55 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
 
         // Emission follows the cached order, with stash rows inserted ahead of
         // the commit they were stashed on.
-        bool more = true;
-        if (wantWip) more = emitRow(kWipSha, {snap.headSha}, "wip", nullptr);
-        for (const auto& row : plan->commits) {
-          if (!more) break;
-          token.throwIfCancelled();
-          if (includeStashes) {
-            const auto it = plan->stashesByBase.find(row.sha);
-            if (it != plan->stashesByBase.end()) {
-              for (const std::size_t index : it->second) {
-                const GraphStash& stash = plan->stashes[index];
-                more = emitRow(stash.sha, {row.sha}, "stash", &stash);
-                if (!more) break;
-              }
-              if (!more) break;
-            }
-          }
-          more = emitRow(row.sha, row.parents, "commit", nullptr);
+        if (!wantWip || emitRow(kWipSha, {snap.headSha}, "wip", nullptr)) {
+          forEachRow(*plan, includeStashes, token, emitRow);
         }
 
         rpc::Json result = {{"rows", std::move(rows)}, {"refsFingerprint", fingerprint}};
         if (nextCursor) result["nextCursor"] = *nextCursor;
         return result;
+      },
+      rpc::Mode::Concurrent);
+
+  dispatcher.method(
+      "graph/find",
+      [&context](const rpc::Json& params, const CancelToken& token,
+                 const rpc::NotifyFn&) -> rpc::Json {
+        const std::int64_t limit = pageLimit(params);
+        const std::string query = requireString(params, "query");
+        if (query.empty()) {
+          throw rpc::HandlerError{{ErrorCode::InvalidParams, "query must not be empty"}};
+        }
+        const bool includeStashes = optionalObject(params, "include").value("stashes", false);
+        const auto filter = refsFilter(params);
+        const std::string repoId = params.value("repoId", "");
+        auto repo = context.registry.open(repoId);
+        if (!repo) throw rpc::HandlerError{{repo.error()}};
+
+        const Walk walk = openWalk(repo.value(), filter);
+        rpc::Json matches = rpc::Json::array();
+        bool truncated = false;
+        if (!walk.tips.empty()) {
+          const std::shared_ptr<const cache::GraphPlan> plan =
+              planFor(context, repo.value(), repoId, walk, token);
+          const std::string needle = lowerAscii(query);
+          std::size_t index = 0;
+          forEachRow(*plan, includeStashes, token,
+                     [&](const std::string& sha, const std::vector<std::string>&, const char*,
+                         const GraphStash* stash) {
+                       const std::size_t row = index++;
+                       if (!rowMatches(repo.value(), walk.snap, sha, stash, needle)) return true;
+                       if (static_cast<std::int64_t>(matches.size()) >= limit) {
+                         truncated = true;
+                         return false;
+                       }
+                       matches.push_back({{"sha", sha}, {"index", row}});
+                       return true;
+                     });
+        }
+        return {{"matches", std::move(matches)},
+                {"truncated", truncated},
+                {"refsFingerprint", walk.fingerprint}};
       },
       rpc::Mode::Concurrent);
 }

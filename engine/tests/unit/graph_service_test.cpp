@@ -1,7 +1,7 @@
-// End-to-end tests for graph/rows: golden lane layouts for canonical
-// topologies (per docs/specs/commit-graph-lanes.md), determinism, paging,
-// synthetic WIP/stash rows and refs decorations, driven through the full
-// server loop the way the extension drives the engine.
+// End-to-end tests for graph/rows and graph/find: golden lane layouts for
+// canonical topologies (per docs/specs/commit-graph-lanes.md), determinism,
+// paging, synthetic WIP/stash rows, refs decorations and find, driven through
+// the full server loop the way the extension drives the engine.
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -801,6 +801,112 @@ TEST(GraphService, MergedTopicsReuseLanes) {
     }
   }
   EXPECT_LE(widest, 3) << rows.dump();
+}
+
+Json graphFind(InteractiveSession& session, std::int64_t id, const std::string& repoId,
+               const std::string& query, Json extra = Json::object()) {
+  Json params = {{"repoId", repoId}, {"query", query}};
+  params.update(extra);
+  Json response = session.request(req(id, "graph/find", std::move(params)));
+  EXPECT_TRUE(response.contains("result")) << response.dump();
+  return response["result"];
+}
+
+// Shas of the matches, each checked against the row at its index.
+std::vector<std::string> matchedShas(const Json& found, const Json& rows) {
+  std::vector<std::string> shas;
+  for (const auto& match : found["matches"]) {
+    const std::size_t index = match["index"].get<std::size_t>();
+    EXPECT_LT(index, rows.size()) << found.dump();
+    if (index < rows.size()) EXPECT_EQ(rows[index]["sha"], match["sha"]) << found.dump();
+    shas.push_back(match["sha"]);
+  }
+  return shas;
+}
+
+// graph/find searches the walk graph/rows pages through, so its matches are
+// rows the graph can show, at the positions it shows them.
+TEST(GraphService, FindMatchesRowsOfTheWalkAtTheirPositions) {
+  FixtureRepo fixture;
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  // A body below the subject, which only the full message carries.
+  fixture.runAt("@1700000120 +0000",
+                "git commit -q --allow-empty -m \"feature work\" -m \"Touches the Lexer too.\"");
+  fixture.run("git checkout -q main");
+  {
+    gg::testing::ScopedEnv name("GIT_AUTHOR_NAME", "Ada Lovelace");
+    gg::testing::ScopedEnv email("GIT_AUTHOR_EMAIL", "ada@example.com");
+    commitTick(fixture, "fix the parser", 3);
+  }
+  fixture.run("git tag v2.0");
+  commitTick(fixture, "tidy up", 4);
+  fixture.writeFile("README.md", "fixture\nstashed\n");
+  fixture.run("git stash push -q -m parked-idea");
+  fixture.writeFile("README.md", "fixture\ndirty\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const Json stashes = {{"stashes", true}};
+  const Json rows = graphRows(session, 10, repoId, {{"include", {{"stashes", true}}}})["rows"];
+  const std::string parser = rev(fixture, "v2.0");
+  const std::string feature = rev(fixture, "feature");
+
+  // Message text in any case, including the body; on another branch too.
+  Json found = graphFind(session, 11, repoId, "PARSER", {{"include", stashes}});
+  EXPECT_EQ(matchedShas(found, rows), std::vector<std::string>{parser});
+  EXPECT_FALSE(found["truncated"]);
+  EXPECT_EQ(matchedShas(graphFind(session, 12, repoId, "lexer", {{"include", stashes}}), rows),
+            std::vector<std::string>{feature});
+  // Author name or email, a ref name, a sha prefix.
+  EXPECT_EQ(matchedShas(graphFind(session, 13, repoId, "ada@", {{"include", stashes}}), rows),
+            std::vector<std::string>{parser});
+  EXPECT_EQ(matchedShas(graphFind(session, 14, repoId, "v2.", {{"include", stashes}}), rows),
+            std::vector<std::string>{parser});
+  std::string prefix = feature.substr(0, 9);
+  std::transform(prefix.begin(), prefix.end(), prefix.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  EXPECT_EQ(matchedShas(graphFind(session, 15, repoId, prefix, {{"include", stashes}}), rows),
+            std::vector<std::string>{feature});
+
+  // Stash rows match by their message and name, only when they are shown,
+  // and indices count them only then.
+  const std::string stash = rev(fixture, "refs/stash");
+  EXPECT_EQ(
+      matchedShas(graphFind(session, 16, repoId, "parked-idea", {{"include", stashes}}), rows),
+      std::vector<std::string>{stash});
+  EXPECT_EQ(matchedShas(graphFind(session, 17, repoId, "stash@{0}", {{"include", stashes}}), rows),
+            std::vector<std::string>{stash});
+  EXPECT_TRUE(graphFind(session, 18, repoId, "parked-idea")["matches"].empty());
+  const Json commitsOnly = graphRows(session, 19, repoId)["rows"];
+  EXPECT_EQ(matchedShas(graphFind(session, 20, repoId, "parser"), commitsOnly),
+            std::vector<std::string>{parser});
+
+  // The uncommitted-changes row is not counted: the index addresses the
+  // rows after it.
+  const Json withWip =
+      graphRows(session, 21, repoId, {{"include", {{"stashes", true}, {"wip", true}}}})["rows"];
+  ASSERT_EQ(withWip[0]["kind"], "wip");
+  EXPECT_EQ(withWip[found["matches"][0]["index"].get<std::size_t>() + 1]["sha"], parser);
+
+  // A filtered graph finds only what it shows.
+  const Json mainOnly = {{"refs", {"refs/heads/main"}}, {"include", stashes}};
+  EXPECT_TRUE(graphFind(session, 22, repoId, "lexer", mainOnly)["matches"].empty());
+  const Json featureOnly = {{"refs", {"refs/heads/feature"}}};
+  const Json featureRows = graphRows(session, 23, repoId, featureOnly)["rows"];
+  EXPECT_EQ(matchedShas(graphFind(session, 24, repoId, "lexer", featureOnly), featureRows),
+            std::vector<std::string>{feature});
+
+  // Stopping at the limit says more were left.
+  Json limited = graphFind(session, 25, repoId, "e", {{"limit", 1}});
+  EXPECT_EQ(limited["matches"].size(), 1u);
+  EXPECT_TRUE(limited["truncated"]);
+  EXPECT_EQ(limited["refsFingerprint"], graphRows(session, 26, repoId)["refsFingerprint"]);
+
+  Json empty = session.request(req(27, "graph/find", {{"repoId", repoId}, {"query", ""}}));
+  EXPECT_EQ(empty["error"]["code"], -32602) << empty.dump();
+  Json missing = session.request(req(28, "graph/find", {{"repoId", repoId}}));
+  EXPECT_EQ(missing["error"]["code"], -32602) << missing.dump();
 }
 
 bool hasWipRow(InteractiveSession& session, std::int64_t id, const std::string& repoId) {

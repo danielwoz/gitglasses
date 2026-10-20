@@ -143,6 +143,7 @@ export interface Requests {
 
   'status/summary': { params: P<'status/summary'>; result: R<'status/summary'> };
   'graph/rows': { params: P<'graph/rows'>; result: R<'graph/rows'> };
+  'graph/find': { params: P<'graph/find'>; result: R<'graph/find'> };
   'diff/commit': { params: P<'diff/commit'>; result: R<'diff/commit'> };
   'diff/refs': { params: P<'diff/refs'>; result: R<'diff/refs'> };
   'diff/fileHunks': { params: P<'diff/fileHunks'>; result: R<'diff/fileHunks'> };

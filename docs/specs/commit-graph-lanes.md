@@ -77,6 +77,16 @@ The fingerprint of a filtered walk also covers the roots it starts from. The
 WIP row is included only when HEAD is one of those roots; stash rows appear
 when the commit they were stashed on is walked.
 
+## Find
+
+`graph/find` searches the same walk (the same `refs` filter, with or without
+stash rows) and returns the matching rows in row order, each with its
+position in the walk not counting the WIP row. A row matches on a sha prefix,
+a ref it shows, or case-insensitive text in the full commit message (a stash
+row's own message) or the author's name or email. Every match is therefore a
+row the graph can show, and the client knows how many rows to load to reach
+it.
+
 ## Determinism requirements
 
 - Same repo state + same request ⇒ byte-identical row list.
