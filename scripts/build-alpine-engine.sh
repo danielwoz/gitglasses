@@ -58,7 +58,8 @@ if [ "$(git -C "$VCPKG_ROOT" rev-parse HEAD 2>/dev/null || true)" != "$baseline"
 fi
 
 cd "$src"
-"$VCPKG_ROOT/vcpkg" install --triplet "$triplet" --x-install-root="$cache/vcpkg_installed"
+# Build trees are deleted once each port is installed, so the cache stays small.
+"$VCPKG_ROOT/vcpkg" install --triplet "$triplet" --x-install-root="$cache/vcpkg_installed" --clean-after-build
 
 cmake --preset release -B "$build" \
   -DVCPKG_TARGET_TRIPLET="$triplet" \
