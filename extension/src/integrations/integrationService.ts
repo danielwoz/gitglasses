@@ -129,7 +129,9 @@ async function readGitConfig(repoRoot: string): Promise<string | undefined> {
  */
 async function userPushDefault(): Promise<string | undefined> {
   let pushDefault: string | undefined;
-  for (const file of globalGitConfigPaths(process.env, process.env.HOME || os.homedir())) {
+  // The web extension host has no process environment.
+  const env = typeof process === 'undefined' ? {} : process.env;
+  for (const file of globalGitConfigPaths(env, env.HOME || os.homedir())) {
     try {
       pushDefault = parseGitConfig(await fs.readFile(file, 'utf8')).pushDefault ?? pushDefault;
     } catch {
@@ -149,9 +151,7 @@ async function userPushDefault(): Promise<string | undefined> {
  * committed .vscode/settings.json, and a workspace array written where global
  * defines one shadows global from then on.
  */
-function settingScope<T>(
-  section: string,
-): { values: T[]; target: vscode.ConfigurationTarget } {
+function settingScope<T>(section: string): { values: T[]; target: vscode.ConfigurationTarget } {
   const inspected = vscode.workspace.getConfiguration('gitglasses').inspect<T[]>(section);
   if (inspected?.workspaceFolderValue !== undefined) {
     return {
