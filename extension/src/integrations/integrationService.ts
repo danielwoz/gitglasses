@@ -353,6 +353,12 @@ export class IntegrationService implements vscode.Disposable {
     await this.connectIntegration();
   }
 
+  /** Connects github.com directly, the provider most workspaces use, without
+   *  the full picker. */
+  async connectGitHub(): Promise<void> {
+    await this.authenticate({ kind: 'hosting', providerId: 'github', host: 'github.com' });
+  }
+
   /** Removes a configured integration from settings. */
   async removeIntegration(): Promise<void> {
     // Read through the same scope resolution the write uses, so the list can
