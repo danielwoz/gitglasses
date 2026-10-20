@@ -111,6 +111,8 @@ const TRUST_REQUIRED = [
   'gitglasses.suggestChange',
   'gitglasses.home.push',
   'gitglasses.home.pull',
+  'gitglasses.continueOperation',
+  'gitglasses.abortOperation',
   'gitglasses.home.switchBranch',
   'gitglasses.home.createBranch',
   'gitglasses.stageSelectedHunks',

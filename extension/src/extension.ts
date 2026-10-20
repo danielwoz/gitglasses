@@ -34,6 +34,7 @@ import {
 } from './scm/hunkStaging';
 import { registerPatchCommands } from './patches/patchCommands';
 import { createEngineHealth } from './engine/engineHealth';
+import { configureSync, registerSyncCommands } from './sync/syncCommands';
 
 function resolveEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -136,6 +137,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push(...core.disposables);
   const { blame, fileAnnotations, integrations } = core;
+
+  configureSync({ log, showLog });
+  context.subscriptions.push(...registerSyncCommands(engine, repos));
 
   const onTrustGranted = createTrustGrantHandler(engine, () => core.reload());
   context.subscriptions.push(

@@ -8,6 +8,8 @@ import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
 import { allowedDespiteConflicts } from './conflictGuard';
 import { back, cancel, next, runFlow } from './quickFlow';
+import * as sync from '../sync/syncCommands';
+import { pullVariants } from '../sync/syncLogic';
 import {
   confirmBranchDelete,
   confirmBranchForceDelete,
@@ -19,7 +21,6 @@ import {
 import { shortSha } from '@gitglasses/protocol/sha';
 import {
   confirmDestructive,
-  errorMessage,
   setStatus,
   showConflictGuidance,
   showInput,
@@ -49,7 +50,7 @@ const ROOT_ITEMS: RootItem[] = [
   { id: 'rebase', label: '$(history) Rebase', description: 'Interactive rebase onto a branch' },
   { id: 'stash', label: '$(archive) Stash', description: 'Push, apply, pop, or drop' },
   { id: 'push', label: '$(arrow-up) Push', description: 'Push the current branch' },
-  { id: 'pull', label: '$(arrow-down) Pull', description: 'Pull with auto-stash' },
+  { id: 'pull', label: '$(arrow-down) Pull', description: 'Merge, rebase or fast-forward' },
   { id: 'fetch', label: '$(sync) Fetch', description: 'Fetch from remotes' },
   { id: 'reset', label: '$(discard) Reset', description: 'Reset the current branch to a ref' },
   { id: 'cherryPick', label: '$(git-commit) Cherry-pick', description: 'Apply commits here' },
@@ -347,16 +348,19 @@ async function stashFlow(ctx: PaletteContext): Promise<FlowStatus> {
 }
 
 async function pushFlow(ctx: PaletteContext): Promise<FlowStatus> {
-  const status = await ctx.engine.request('status/summary', { repoId: ctx.repo.repoId });
-  const setUpstream = !status.upstream;
-  await ctx.engine.request('mutate/push', { repoId: ctx.repo.repoId, setUpstream });
-  setStatus(`Pushed '${status.branch}'${setUpstream ? ' (set upstream)' : ''}`);
+  await sync.push(ctx.engine, ctx.repo);
   return 'completed';
 }
 
 async function pullFlow(ctx: PaletteContext): Promise<FlowStatus> {
-  await ctx.engine.request('mutate/pull', { repoId: ctx.repo.repoId, autoStash: true });
-  setStatus('Pulled (auto-stash)');
+  const picked = await showPick(pullVariants(), {
+    title: 'Pull',
+    placeholder: 'How to bring in the remote branch',
+    back: true,
+  });
+  if (picked === 'back') return 'backedOut';
+  if (!picked) return 'cancelled';
+  await sync.pull(ctx.engine, ctx.repo, picked.strategy ? { strategy: picked.strategy, remember: false } : {});
   return 'completed';
 }
 
@@ -370,8 +374,7 @@ async function fetchFlow(ctx: PaletteContext): Promise<FlowStatus> {
   );
   if (picked === 'back') return 'backedOut';
   if (!picked) return 'cancelled';
-  await ctx.engine.request('mutate/fetch', { repoId: ctx.repo.repoId, prune: picked.prune });
-  setStatus(picked.prune ? 'Fetched (pruned)' : 'Fetched');
+  await sync.fetch(ctx.engine, ctx.repo, picked.prune);
   return 'completed';
 }
 
@@ -498,9 +501,7 @@ export function registerGitPalette(
       try {
         result = await FLOWS[root.id](ctx);
       } catch (error) {
-        void vscode.window.showErrorMessage(
-          `GitGlasses: ${root.id} failed: ${errorMessage(error)}`,
-        );
+        void sync.reportFailure(root.label.replace(/^\$\([^)]*\)\s*/, ''), error);
         return;
       }
       if (result !== 'backedOut') return;

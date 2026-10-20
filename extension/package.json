@@ -163,6 +163,16 @@
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
+        "command": "gitglasses.continueOperation",
+        "title": "GitGlasses: Continue Merge, Rebase, Cherry-pick or Revert",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.abortOperation",
+        "title": "GitGlasses: Abort Merge, Rebase, Cherry-pick or Revert",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
         "command": "gitglasses.worktrees.add",
         "title": "GitGlasses: Add Worktree…",
         "icon": "$(add)",
@@ -809,6 +819,14 @@
         {
           "command": "gitglasses.suggestChange",
           "when": "editorHasSelection && isWorkspaceTrusted"
+        },
+        {
+          "command": "gitglasses.continueOperation",
+          "when": "gitglasses.operationInProgress && isWorkspaceTrusted"
+        },
+        {
+          "command": "gitglasses.abortOperation",
+          "when": "gitglasses.operationInProgress && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.addIntegration",
