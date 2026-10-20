@@ -1,7 +1,7 @@
 {
   "name": "gitglasses",
   "displayName": "GitGlasses",
-  "description": "Open-source git supercharger: inline blame, history, and more — powered by a native engine",
+  "description": "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, file and line history, commit search, interactive rebase and worktrees. Works on private repos with no account, and your AI agents can use it over MCP.",
   "version": "0.2.0",
   "publisher": "gitglasses",
   "license": "MIT",
@@ -10,10 +10,12 @@
     "color": "#1b1f2a",
     "theme": "dark"
   },
+  "preview": false,
   "homepage": "https://github.com/danielwoz/gitglasses#readme",
   "bugs": {
     "url": "https://github.com/danielwoz/gitglasses/issues"
   },
+  "qna": "https://github.com/danielwoz/gitglasses/discussions",
   "repository": {
     "type": "git",
     "url": "https://github.com/danielwoz/gitglasses.git"
@@ -24,14 +26,39 @@
   "categories": [
     "SCM Providers",
     "Visualization",
-    "Education"
+    "AI"
   ],
   "keywords": [
     "git",
-    "blame",
+    "git graph",
     "commit graph",
+    "blame",
+    "git blame",
+    "inline blame",
+    "annotations",
+    "heatmap",
+    "codelens",
     "history",
-    "worktrees"
+    "file history",
+    "line history",
+    "search",
+    "rebase",
+    "interactive rebase",
+    "worktree",
+    "stash",
+    "branches",
+    "pull requests",
+    "code review",
+    "scm",
+    "ai commit message",
+    "mcp",
+    "agents",
+    "open vsx",
+    "open source",
+    "free",
+    "private repositories",
+    "self-hosted",
+    "multi-root"
   ],
   "extensionKind": [
     "workspace"
@@ -575,7 +602,7 @@
       {
         "id": "gitglasses.getStarted",
         "title": "Get Started with GitGlasses",
-        "description": "Every feature is free and works offline. There is no account to create and nothing to sign in to.",
+        "description": "Every feature is free, with no account to create and no telemetry. History, blame and the graph work offline; only integrations you connect, fetch, pull and push, and AI commands go online.",
         "steps": [
           {
             "id": "graph",
