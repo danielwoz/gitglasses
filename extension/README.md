@@ -148,8 +148,8 @@ asks where requests go:
 
 *Limits:* there is no hosted AI quota; you bring the model. Explain Commit
 sends the commit's own diff, capped at about 6,000 tokens and largest files
-trimmed first. AI output is shown without loading any images or HTML it
-contains.
+trimmed first; for a very large commit, only its 30 most relevant files are
+read. AI output is shown without loading any images or HTML it contains.
 
 ### Agents over MCP
 
@@ -201,8 +201,12 @@ GitGlasses is an independent project; it is not affiliated with either.
 GitGlasses has no servers of its own and sends no telemetry. This is
 everything that can reach the network, and when:
 
-- **Reading history** (blame, the graph, file history, search, diffs) never
-  does: the engine reads the repository on disk.
+- **Reading history** (blame, the graph, file history, search, diffs) reads
+  the repository on disk. The exception is a partial (blobless or treeless)
+  clone, which by design lacks some file contents: when a feature runs git
+  for one of those (blame, file history, a commit's diff for Explain
+  Commit), git downloads it from your own remote, as `git show` or
+  `git blame` would. Code-change searches never download them.
 - **Fetch, pull, push and publish** run `git` against your remotes with your
   own git credentials, only when you run them.
 - **Integrations** do nothing until you connect one. Then GitGlasses calls
