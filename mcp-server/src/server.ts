@@ -35,6 +35,7 @@ import {
   formatDiff,
   formatGraph,
   formatHistory,
+  formatLineHistory,
   formatLaunchpad,
   formatPatchEnvelope,
   formatRefs,
@@ -156,6 +157,9 @@ export function isWithinAllowedRoots(target: string, roots: readonly string[]): 
   });
 }
 
+/** Most commits one git_file_history call lists. */
+export const MAX_HISTORY_ENTRIES = 500;
+
 /** Blame hunks returned when the caller does not ask for a specific count. */
 export const DEFAULT_BLAME_HUNKS = 200;
 /** Hard ceiling, mirroring the limit the other tools accept. */
@@ -238,7 +242,7 @@ interface ServedRepo extends RepoInfo {
 
 /** What a tool's refusal in Restricted Mode needs explained. */
 const NEEDS_GIT: Record<string, string> = {
-  git_file_history: 'following a file through renames',
+  git_file_history: 'following a file or its lines through history',
   git_log_search: 'searching code changes, paths and dates',
   git_compare: 'rendering the diff',
   create_patch: 'creating a patch',
@@ -379,6 +383,41 @@ export function createToolHandlers(context: ToolContext) {
       "--read directory), because git would run programs that the repository's own " +
       'configuration names.'
     );
+  }
+
+  /** git_file_history for a range of lines: the commits that changed them. */
+  async function lineHistory(args: {
+    repoPath: string;
+    file: string;
+    cursor?: string;
+    limit: number;
+    startLine?: number;
+    endLine?: number;
+  }): Promise<string> {
+    if (args.startLine === undefined) throw new ToolError('"endLine" needs "startLine"');
+    const startLine = args.startLine;
+    const endLine = args.endLine ?? startLine;
+    if (endLine < startLine) throw new ToolError('"endLine" must not be before "startLine"');
+    if (args.cursor !== undefined) {
+      throw new ToolError(
+        '"cursor" pages the history of a whole file; for a range of lines raise "limit" instead',
+      );
+    }
+    const repo = await repoFor(args.repoPath);
+    const { entries } = await repo.client.request('history/line', {
+      repoId: repo.repoId,
+      path: args.file,
+      startLine,
+      endLine,
+    });
+    const shown = entries.slice(0, args.limit);
+    let rendered = formatLineHistory(args.file, startLine, endLine, shown);
+    if (entries.length > shown.length) {
+      rendered +=
+        `\n\n(${entries.length - shown.length} older commits also changed these lines; ` +
+        `raise "limit" (max ${MAX_HISTORY_ENTRIES}) to list them)`;
+    }
+    return orEmptyRepository(repo, args.repoPath, rendered, entries.length === 0);
   }
 
   /**
@@ -638,7 +677,12 @@ export function createToolHandlers(context: ToolContext) {
       file: string;
       cursor?: string;
       limit: number;
+      startLine?: number;
+      endLine?: number;
     }): Promise<string> {
+      if (args.startLine !== undefined || args.endLine !== undefined) {
+        return lineHistory(args);
+      }
       const repo = await repoFor(args.repoPath);
       const result = await repo.client.request('history/file', {
         repoId: repo.repoId,
@@ -1125,13 +1169,27 @@ export function createServer(context: ToolContext): McpServer {
     'git_file_history',
     {
       description:
-        'Commit history of a file, following renames, newest first. Runs git, so it works only ' +
-        'in repositories inside the directories the server was started with (--allow).',
+        'Commit history of a file, following renames, newest first. With startLine (and ' +
+        'endLine), only the commits that changed those lines, followed through moves and ' +
+        'renames (git log -L): when and why a function or block changed. Runs git, so it ' +
+        'works only in repositories inside the directories the server was started with (--allow).',
       inputSchema: {
         repoPath,
         file: z.string().describe('File path relative to the repository root'),
         cursor,
-        limit: z.number().int().min(1).max(500).default(20),
+        limit: z.number().int().min(1).max(MAX_HISTORY_ENTRIES).default(20),
+        startLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based first line of a range to follow instead of the whole file'),
+        endLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based last line of the range (default startLine)'),
       },
       annotations: readOnly,
     },

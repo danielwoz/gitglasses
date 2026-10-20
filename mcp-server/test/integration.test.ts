@@ -258,6 +258,44 @@ describe.skipIf(!enginePath)('engine integration', () => {
     }
   });
 
+  // When and why some lines changed: only the commits that touched them.
+  it('git_file_history follows a range of lines through the commits that changed it', async () => {
+    const file = path.join(repoDir, 'lines.txt');
+    await writeFile(file, 'a\nb\nc\nd\n');
+    git(repoDir, 'add', 'lines.txt');
+    git(repoDir, 'commit', '-m', 'Add lines');
+    await writeFile(file, 'a\nB\nc\nd\n');
+    git(repoDir, 'commit', '-am', 'Change line 2');
+    await writeFile(file, 'a\nB\nc\nD\n');
+    git(repoDir, 'commit', '-am', 'Change line 4');
+    const history = (args: {
+      startLine?: number;
+      endLine?: number;
+      limit?: number;
+      cursor?: string;
+    }) => handlers.git_file_history({ repoPath: repoDir, file: 'lines.txt', limit: 20, ...args });
+    try {
+      const line2 = await history({ startLine: 2 });
+      expect(line2.split('\n')).toEqual([
+        'history lines.txt line 2',
+        expect.stringMatching(/^[0-9a-f]{7} Test Author \S+ Change line 2$/),
+        expect.stringMatching(/^[0-9a-f]{7} Test Author \S+ Add lines$/),
+      ]);
+
+      const limited = await history({ startLine: 1, endLine: 4, limit: 1 });
+      expect(limited).toMatch(
+        /^history lines.txt lines 1-4\n[0-9a-f]{7} Test Author \S+ Change line 4\n/,
+      );
+      expect(limited).toContain('(2 older commits also changed these lines; raise "limit"');
+
+      await expect(history({ startLine: 3, endLine: 2 })).rejects.toThrow(/must not be before/);
+      await expect(history({ endLine: 2 })).rejects.toThrow(/needs "startLine"/);
+      await expect(history({ startLine: 2, cursor: 'x' })).rejects.toThrow(/raise "limit"/);
+    } finally {
+      git(repoDir, 'reset', '--hard', 'HEAD~3');
+    }
+  });
+
   // The engine streams hunks in blame order, so a page is selected by line
   // rather than by order of arrival.
   it('git_blame returns hunks in line order and pages by startLine', async () => {
@@ -471,6 +509,11 @@ describe.skipIf(!enginePath || process.platform === 'win32')('untrusted reposito
     [
       'git_file_history',
       (h: ToolHandlers, p: string) => h.git_file_history({ repoPath: p, file: 'a.txt', limit: 5 }),
+    ],
+    [
+      'git_file_history for lines',
+      (h: ToolHandlers, p: string) =>
+        h.git_file_history({ repoPath: p, file: 'a.txt', limit: 5, startLine: 1 }),
     ],
     [
       'create_patch',

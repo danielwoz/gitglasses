@@ -14,7 +14,7 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | --- | --- |
 | `git_blame` | Per-hunk author/date/sha/summary for a file or single line |
 | `git_log_search` | Search commits by message, author, sha, code change (`git log -S`/`-G`), path or date, or list recent commits |
-| `git_file_history` | File history following renames |
+| `git_file_history` | File history following renames, or the commits that changed a range of lines (`git log -L`) |
 | `git_commit_show` | Commit metadata + changed files with +/- counts |
 | `git_diff` | Uncommitted changes as a unified diff, unstaged or staged, for the repository or one file |
 | `git_refs` | Branches, remote-tracking branches and tags with the sha each points at |

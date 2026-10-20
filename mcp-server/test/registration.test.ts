@@ -93,6 +93,14 @@ describe('tool registration', () => {
     for (const name of ['path', 'since', 'until']) expect(properties[name], name).toBeDefined();
   });
 
+  it('follows a range of lines through git_file_history rather than a tool of its own', () => {
+    const history = tools.get('git_file_history')!;
+    expect(history.description).toContain('git log -L');
+    expect(history.inputSchema.properties?.startLine?.description).toContain('range');
+    expect(history.inputSchema.properties?.endLine?.description).toContain('default startLine');
+    expect(history.inputSchema.required).toEqual(['repoPath', 'file']);
+  });
+
   it('offers a cursor wherever the engine returns one', () => {
     for (const name of ['git_log_search', 'git_file_history', 'git_graph_summary']) {
       expect(tools.get(name)?.inputSchema.properties?.cursor, name).toBeDefined();

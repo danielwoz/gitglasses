@@ -120,6 +120,28 @@ export function formatCommits(
     .join('\n');
 }
 
+/**
+ * Commits that changed a range of lines (git log -L), newest first. git
+ * follows the lines through moves and renames but reports neither paths nor
+ * counts for them, so only the commits are listed.
+ */
+export function formatLineHistory(
+  file: string,
+  startLine: number,
+  endLine: number,
+  entries: readonly FileHistoryEntry[],
+): string {
+  const range = startLine === endLine ? `line ${startLine}` : `lines ${startLine}-${endLine}`;
+  if (entries.length === 0) return `No history for ${file} ${range}`;
+  return [
+    `history ${file} ${range}`,
+    ...entries.map(
+      (entry) =>
+        `${shortSha(entry.sha)} ${entry.author.name} ${isoDate(entry.author.time)} ${entry.summary}`,
+    ),
+  ].join('\n');
+}
+
 /** History lines; a differing path marks where the file lived before a rename. */
 export function formatHistory(file: string, entries: readonly FileHistoryEntry[]): string {
   if (entries.length === 0) return `No history for ${file}`;

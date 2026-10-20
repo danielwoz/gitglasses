@@ -10,6 +10,7 @@ import {
   formatDiff,
   formatGraph,
   formatHistory,
+  formatLineHistory,
   formatLaunchpad,
   formatPatchEnvelope,
   formatRefs,
@@ -378,6 +379,25 @@ describe('formatCommits / formatHistory / formatCommitShow', () => {
       },
     ]);
     expect(text).toBe('ddddddd Alice 2024-05-01 Initial commit');
+  });
+
+  it('lists the commits that changed a range of lines without counts', () => {
+    const entry = (c: string, summary: string) => ({
+      sha: c.repeat(40),
+      author: sig('Bob', T),
+      summary,
+      path: 'src/a.ts',
+      additions: 0,
+      deletions: 0,
+    });
+    expect(formatLineHistory('src/a.ts', 3, 7, [entry('e', 'Tune'), entry('f', 'Add')])).toBe(
+      [
+        'history src/a.ts lines 3-7',
+        'eeeeeee Bob 2024-05-01 Tune',
+        'fffffff Bob 2024-05-01 Add',
+      ].join('\n'),
+    );
+    expect(formatLineHistory('src/a.ts', 3, 3, [])).toBe('No history for src/a.ts line 3');
   });
 
   it('marks renamed history entries with the historical path', () => {
