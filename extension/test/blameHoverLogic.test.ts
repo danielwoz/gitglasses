@@ -216,6 +216,20 @@ describe('commit message body', () => {
     ]);
   });
 
+  it('ends the trailer lines where a patch starts', () => {
+    const body = 'Fix the parser.\n\nSigned-off-by: Ada\nAcked-by: Grace\n---\nv2: reworded';
+    const trailers = [
+      { key: 'Signed-off-by', value: 'Ada' },
+      { key: 'Acked-by', value: 'Grace' },
+    ];
+    expect(messageBlocks(body, MAX_BODY_LINES, trailers).blocks).toEqual([
+      { text: 'Fix the parser.', listItem: false },
+      { text: 'Signed-off-by: Ada', listItem: false, trailer: true },
+      { text: 'Acked-by: Grace', listItem: false, trailer: true },
+      { text: '--- v2: reworded', listItem: false },
+    ]);
+  });
+
   it('cuts long messages short', () => {
     const body = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n');
     const { blocks, truncated } = messageBlocks(body, 5);

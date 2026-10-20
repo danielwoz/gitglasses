@@ -125,15 +125,14 @@ export function messageBlocks(
 ): { blocks: MessageBlock[]; truncated: boolean } {
   const lines = bodyLines(body);
   const truncated = lines.length > maxLines;
-  const trailersStart = trailerBlock(body, trailers)?.start ?? lines.length;
+  const { start, end } = trailerBlock(body, trailers) ?? { start: 0, end: 0 };
   const blocks: MessageBlock[] = [];
   let current: MessageBlock | undefined;
   for (const [index, line] of lines.slice(0, maxLines).entries()) {
-    if (line.trim() === '') {
-      current = undefined;
-      continue;
-    }
-    if (index >= trailersStart) {
+    // Text after the trailer paragraph starts a paragraph of its own.
+    if (line.trim() === '' || index === end) current = undefined;
+    if (line.trim() === '') continue;
+    if (index >= start && index < end) {
       // A line starting with a space continues the trailer before it.
       if (current && line.startsWith(' ')) {
         current.text += ` ${line.trim()}`;

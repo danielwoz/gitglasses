@@ -42,9 +42,30 @@ describe('bodyWithoutTrailers', () => {
     expect(bodyWithoutTrailers(`${body}\nAcked-by: Grace`, [SIGNED])).toBe(
       `${body}\nAcked-by: Grace`,
     );
-    // The trailers came from before a closing paragraph that holds none.
-    const after = 'Prose.\n\nSigned-off-by: Ada Lovelace <ada@example.com>\n\n---\nnot a trailer';
-    expect(bodyWithoutTrailers(after, [SIGNED])).toBe(after);
+  });
+
+  it('reads the trailers from where git does, before a patch and trailing comments', () => {
+    const signed = 'Signed-off-by: Ada Lovelace <ada@example.com>';
+    // A "---" line starts a patch, so the trailers are the paragraph before
+    // it, even when a later one looks the same.
+    const repeated = `Prose.\n\n${signed}\n\n---\n${signed}`;
+    expect(trailerBlock(repeated, [SIGNED])).toMatchObject({ start: 2, end: 3 });
+    expect(bodyWithoutTrailers(repeated, [SIGNED])).toBe(`Prose.\n\n---\n${signed}`);
+    expect(bodyWithoutTrailers(`Prose.\n\n${signed}\n--- \nv2: reworded`, [SIGNED])).toBe(
+      'Prose.\n\n--- \nv2: reworded',
+    );
+    // Comment lines and an old merge's conflict list after them are skipped.
+    expect(bodyWithoutTrailers(`Prose.\n\n${signed}\n\n# kept as written`, [SIGNED])).toBe(
+      'Prose.\n\n# kept as written',
+    );
+    expect(
+      bodyWithoutTrailers(`Merge.\n\n${signed}\n\nConflicts:\n\tsrc/a.c\n\tsrc/b.c`, [SIGNED]),
+    ).toBe('Merge.\n\nConflicts:\n\tsrc/a.c\n\tsrc/b.c');
+    // A longer run of dashes starts no patch.
+    expect(trailerBlock(`Prose.\n\n${signed}\n----------\nmore`, [SIGNED])).toMatchObject({
+      start: 2,
+      end: 5,
+    });
   });
 
   it('keeps lines among the trailers that are not trailers', () => {
@@ -65,6 +86,7 @@ describe('bodyWithoutTrailers', () => {
     expect(bodyWithoutTrailers(body, [wrapped])).toBe('Prose.');
     expect(trailerBlock(body, [wrapped])).toEqual({
       start: 2,
+      end: 4,
       lines: [{ text: 'Co-authored-by: Grace Hopper\n <grace@example.com>', trailer: true }],
     });
   });
