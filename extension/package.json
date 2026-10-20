@@ -56,6 +56,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onWebviewPanel:gitglasses.graph",
+    "onWebviewPanel:gitglasses.timeline",
     "onWebviewPanel:gitglasses.commitDetails"
   ],
   "main": "./dist/extension.js",
