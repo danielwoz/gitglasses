@@ -56,6 +56,9 @@ export class ProcessTransport implements EngineTransport {
   private messageHandler: ((payload: string) => void) | undefined;
   private exitHandler: ((info: { code: number | null }) => void) | undefined;
   private exited = false;
+  // Set when a write to the engine's stdin failed (EPIPE once the engine has
+  // gone); later sends are dropped instead of failing again.
+  private stdinBroken = false;
 
   constructor(private readonly options: ProcessTransportOptions) {}
 
@@ -78,6 +81,13 @@ export class ProcessTransport implements EngineTransport {
     child.stderr.on('data', (chunk: Buffer) => {
       this.options.onLog?.(chunk.toString('utf8').trimEnd());
     });
+    // A write racing the engine's exit fails asynchronously with EPIPE on the
+    // stdin stream. Unhandled, that 'error' event throws and takes the host
+    // process down; the exit that follows is reported through 'exit'.
+    child.stdin.on('error', (error) => {
+      this.stdinBroken = true;
+      this.options.onLog?.(`engine stdin: ${error.message}`);
+    });
     child.on('exit', (code) => this.emitExit(code));
     child.on('error', (error) => {
       // Spawn failures (missing binary, EACCES) surface as an exit without a
@@ -95,6 +105,7 @@ export class ProcessTransport implements EngineTransport {
   }
 
   send(payload: string): void {
+    if (this.exited || this.stdinBroken) return;
     const stdin = this.process?.stdin;
     if (!stdin?.writable) return;
     try {
