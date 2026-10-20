@@ -65,6 +65,28 @@ describe('Restricted Mode', () => {
     assert.deepStrictEqual(ran(), [], 'a planted program ran');
   });
 
+  // A line's story untrusted is its blame and its commit: no git runs for
+  // its history and the forge is not asked about its pull request.
+  it("tells a line's blame and commit, without running anything the repository names", async () => {
+    const uri = vscode.Uri.joinPath(workspaceRoot(), FIXTURE.blameFile);
+    await vscode.window.showTextDocument(uri);
+    const story = await vscode.commands.executeCommand<{
+      commit: { state: string; value?: { subject: string } };
+      pullRequests: { state: string; reason?: string };
+      history: { state: string; reason?: string };
+    }>('gitglasses.showLineStory', { uri: uri.toString(), line: 1 });
+    assert.strictEqual(story?.commit.state, 'ready');
+    assert.strictEqual(story?.commit.value?.subject, 'add alpha and tracked');
+    assert.deepStrictEqual(
+      [story?.history.state, story?.history.reason],
+      ['unavailable', 'restricted'],
+    );
+    assert.strictEqual(story?.pullRequests.state, 'noForge');
+    await settle(1000);
+    assert.deepStrictEqual(ran(), [], 'a planted program ran');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
   // The graph and commit details read through libgit2 alone, so they work
   // untrusted.
   it('shows the commit graph and a commit, without running anything the repository names', async () => {

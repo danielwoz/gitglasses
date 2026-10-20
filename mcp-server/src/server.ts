@@ -53,6 +53,12 @@ import {
 import { SERVER_VERSION } from './version.js';
 import { collectProvenance, formatProvenance } from './tools/provenance.js';
 import { collectWorktrees, formatWorktrees } from './tools/worktrees.js';
+import {
+  gitHubProviders,
+  gitLineStory,
+  registerLineStoryTool,
+  type LineStoryArgs,
+} from './tools/lineStory.js';
 
 export { configuredGitHubHost, isPlainHostname } from './tools/myPrs.js';
 
@@ -242,6 +248,7 @@ export function createToolHandlers(context: ToolContext) {
   const readRoots = (context.read ?? [])
     .filter((entry) => entry !== '')
     .map((entry) => canonicalPath(entry));
+  const lineStoryProviders = gitHubProviders(context.fetchFn);
 
   /**
    * The directories served without git: those passed with --read, and the
@@ -993,6 +1000,21 @@ export function createToolHandlers(context: ToolContext) {
       }
       return formatHostResults(results);
     },
+
+    async git_line_story(args: LineStoryArgs): Promise<string> {
+      return gitLineStory(
+        {
+          repo: async (target) => {
+            const repo = await repoFor(target);
+            return { ...repo, restricted: repo.client !== context.client };
+          },
+          env,
+          githubHost: () => configuredGitHubHost(env),
+          gitHubProvider: lineStoryProviders,
+        },
+        args,
+      );
+    },
   };
 
   // Every handler reports failures through describeFailure, so a direct caller
@@ -1435,6 +1457,8 @@ export function createServer(context: ToolContext): McpServer {
     },
     asToolResult(handlers.list_my_prs),
   );
+
+  registerLineStoryTool(server, asToolResult(handlers.git_line_story), { repoPath, maxChars });
 
   return server;
 }

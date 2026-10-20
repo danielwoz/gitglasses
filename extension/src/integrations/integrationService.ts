@@ -339,13 +339,19 @@ export class IntegrationService implements vscode.Disposable {
    * with everything outside a link escaped.
    */
   async autolinkText(text: string, repoRoot: string): Promise<string> {
+    return applyAutolinks(text, await this.autolinkPatterns(repoRoot));
+  }
+
+  /** The patterns that link issue references in a repository's text: its
+   *  forge's #123, the Jira site's keys, then the user's own. No network. */
+  async autolinkPatterns(repoRoot: string): Promise<AutolinkPattern[]> {
     const patterns: AutolinkPattern[] = [];
     const hosting = await this.getHostingFor(repoRoot).catch(() => undefined);
     if (hosting) patterns.push(...repoIssuePatterns(hosting.repo));
     const jira = this.jiraHost();
     if (jira) patterns.push(jiraPattern(jira));
     patterns.push(...this.autolinkSettings);
-    return applyAutolinks(text, patterns);
+    return patterns;
   }
 
   /** Adding and connecting are one flow; the command names both. */

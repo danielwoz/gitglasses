@@ -67,8 +67,8 @@ release is in [the changelog](extension/CHANGELOG.md).
 AI agents the same engine: blame, commit search (by message, author, code
 change, path or date), file history, commit details, branch comparisons from
 the merge base, diffs, refs, a text rendering of the graph, status,
-worktrees, patches, a pull request list and the AI provenance commits
-declare. Every tool except `apply_patch` is marked read-only, and by default
+worktrees, patches, a pull request list, the AI provenance commits declare
+and the story of a line. Every tool except `apply_patch` is marked read-only, and by default
 the server reads only the folders the client shares with it, without running
 git.
 

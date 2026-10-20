@@ -125,6 +125,88 @@ TEST(HistoryLogParser, LineModeSkipsPatchOutput) {
   EXPECT_EQ(entries[1].summary, "older edit");
 }
 
+TEST(HistoryLogParser, LinePatchModeCountsTheRangeDiffAndFollowsRenames) {
+  auto entries = parse(HistoryLogParser::Stats::LinePatch, "new.txt",
+                       {
+                           record(kShaA, "A", "a@x", "5", "edit line"),
+                           "",
+                           "diff --git a/new.txt b/new.txt",
+                           "--- a/new.txt",
+                           "+++ b/new.txt",
+                           "@@ -2,1 +2,2 @@",
+                           "-\t-\tdeceptive removed line",
+                           "+--- a/not-a-header",
+                           "++++ b/not-a-path-either",
+                           record(kShaB, "B", "b@x", "3", "before the rename"),
+                           "",
+                           "diff --git a/old.txt b/old.txt",
+                           "--- /dev/null",
+                           "+++ b/old.txt",
+                           "@@ -0,0 +2,1 @@",
+                           "+b",
+                       });
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].path, "new.txt");
+  EXPECT_EQ(entries[0].additions, 2u);
+  EXPECT_EQ(entries[0].deletions, 1u);
+  // Without keepPatch() the text is counted, not kept.
+  EXPECT_TRUE(entries[0].patch.empty());
+  EXPECT_EQ(entries[1].path, "old.txt");
+  EXPECT_EQ(entries[1].additions, 1u);
+  EXPECT_EQ(entries[1].deletions, 0u);
+}
+
+TEST(HistoryLogParser, LinePatchModeKeepsEachRecordsDiff) {
+  std::vector<HistoryEntry> entries;
+  HistoryLogParser parser(HistoryLogParser::Stats::LinePatch, "f.txt",
+                          [&entries](const HistoryEntry& e) { entries.push_back(e); });
+  parser.keepPatch(1024);
+  for (const std::string& line :
+       {record(kShaA, "A", "a@x", "5", "newer"), std::string(),
+        std::string("diff --git a/f.txt b/f.txt"), std::string("--- a/f.txt"),
+        std::string("+++ b/f.txt"), std::string("@@ -1 +1 @@"), std::string("-old"),
+        std::string("+new"), std::string(" "), record(kShaB, "B", "b@x", "3", "older"),
+        std::string(), std::string("diff --git a/f.txt b/f.txt"), std::string("--- /dev/null"),
+        std::string("+++ b/f.txt"), std::string("@@ -0,0 +1 @@"), std::string("+old")}) {
+    parser.feedLine(line);
+  }
+  parser.finish();
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].patch,
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n \n");
+  EXPECT_FALSE(entries[0].patchTruncated);
+  EXPECT_EQ(entries[1].patch,
+            "diff --git a/f.txt b/f.txt\n--- /dev/null\n+++ b/f.txt\n@@ -0,0 +1 @@\n+old\n");
+}
+
+TEST(HistoryLogParser, LinePatchModeCutsALongDiffAtALineAndKeepsCounting) {
+  std::vector<HistoryEntry> entries;
+  HistoryLogParser parser(HistoryLogParser::Stats::LinePatch, "f.txt",
+                          [&entries](const HistoryEntry& e) { entries.push_back(e); });
+  parser.keepPatch(50);
+  for (const std::string& line :
+       {record(kShaA, "A", "a@x", "5", "big"), std::string("diff --git a/f.txt b/f.txt"),
+        std::string("@@ -1,3 +1,3 @@"), std::string("+one"), std::string("+two"),
+        std::string("+three")}) {
+    parser.feedLine(line);
+  }
+  parser.finish();
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_TRUE(entries[0].patchTruncated);
+  EXPECT_EQ(entries[0].patch, "diff --git a/f.txt b/f.txt\n@@ -1,3 +1,3 @@\n+one\n");
+  EXPECT_EQ(entries[0].additions, 3u);
+}
+
+TEST(HistoryLogParser, LinePatchModeUnquotesHeaderPaths) {
+  auto entries =
+      parse(HistoryLogParser::Stats::LinePatch, "fallback.txt",
+            {record(kShaA, "A", "a@x", "1", "quoted"), "",
+             "diff --git \"a/tab\\there.txt\" \"b/tab\\there.txt\"", "--- \"a/tab\\there.txt\"",
+             "+++ \"b/tab\\there.txt\"", "@@ -1 +1 @@", "-x", "+y"});
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].path, "tab\there.txt");
+}
+
 TEST(HistoryLogParser, MalformedRecordIsDropped) {
   auto entries = parse(HistoryLogParser::Stats::Numstat, "d",
                        {"\x1e" + kShaA + "\x1fonly-two-fields",

@@ -4,11 +4,11 @@
 // vscode imports, so it stays unit-testable.
 
 import type { BlameCommit, BlameHunk } from '@gitglasses/protocol';
-import type { RepoDescriptor } from '@gitglasses/integrations';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { codeSpan, escapeMarkdown, markdownLinkDestination } from '../system/markdown';
 import { relativeTime } from '../system/dates';
 import { formatDateTime, originalLineOf } from './blameFormat';
+import { LINE_STORY_COMMAND, type LineStoryArgs } from '../lineStory/lineStoryLogic';
 
 export const OPEN_CHANGES_COMMAND = 'gitglasses.blame.openChanges';
 export const PREVIOUS_REVISION_COMMAND = 'gitglasses.blame.previousRevision';
@@ -20,6 +20,7 @@ export const DIFF_WITH_HEAD_COMMAND = 'gitglasses.diffWithHead';
 /** Commands the hover's links may run; MarkdownString trusts exactly these. */
 export const BLAME_HOVER_COMMANDS: readonly string[] = [
   SHOW_COMMIT_DETAILS_COMMAND,
+  LINE_STORY_COMMAND,
   OPEN_CHANGES_COMMAND,
   PREVIOUS_REVISION_COMMAND,
   COPY_SHA_COMMAND,
@@ -94,83 +95,7 @@ export function previousRevisionArgs(
 
 // --- Pull requests ----------------------------------------------------------
 
-type MessagePart = 'subject' | 'body';
-
-const GITHUB_PULL_REQUESTS: [RegExp, MessagePart][] = [
-  // Merge commits: "Merge pull request #12 from owner/branch".
-  [/^Merge pull request #(\d+) from /, 'subject'],
-  // Squash merges: "Subject (#12)".
-  [/\(#(\d+)\)\s*$/, 'subject'],
-];
-
-/** What each forge writes into the commits its pull requests produce. A
- *  pattern applies only to its own forge: "#12" names an issue on GitLab,
- *  for one. */
-const PULL_REQUEST_MESSAGES: Record<string, [RegExp, MessagePart][]> = {
-  github: GITHUB_PULL_REQUESTS,
-  'github-enterprise': GITHUB_PULL_REQUESTS,
-  // "See merge request group/project!12" closes a merge commit's message.
-  gitlab: [[/^See merge request \S+!(\d+)\s*$/m, 'body']],
-  // "Merged in branch (pull request #12)".
-  bitbucket: [[/\(pull request #(\d+)\)/, 'subject']],
-  // "Pull request #12: Title", or "Merge pull request #12 in PROJ/repo from …".
-  bitbucketDC: [
-    [/^Pull request #(\d+): /, 'subject'],
-    [/^Merge pull request #(\d+) in /, 'subject'],
-  ],
-  // "Merged PR 12: Title".
-  azuredevops: [[/^Merged PR (\d+):/, 'subject']],
-};
-
-/** The pull request number a commit message names, in the words the forge
- *  hosting the repository (`providerId`) writes itself. */
-export function pullRequestNumber(
-  providerId: string,
-  subject: string,
-  body: string,
-): number | undefined {
-  for (const [pattern, part] of PULL_REQUEST_MESSAGES[providerId] ?? []) {
-    const match = pattern.exec(part === 'subject' ? subject : body);
-    if (match) {
-      const value = Number(match[1]);
-      if (Number.isSafeInteger(value) && value > 0) return value;
-    }
-  }
-  return undefined;
-}
-
-function encodePath(value: string): string {
-  return value
-    .split('/')
-    .filter((segment) => segment !== '')
-    .map(encodeURIComponent)
-    .join('/');
-}
-
-/** Web URL of pull request `number` on the forge hosting `repo`. */
-export function pullRequestUrl(
-  providerId: string,
-  repo: RepoDescriptor,
-  number: number,
-): string | undefined {
-  const owner = encodePath(repo.owner);
-  const name = encodePath(repo.name);
-  switch (providerId) {
-    case 'github':
-    case 'github-enterprise':
-      return `https://${repo.host}/${owner}/${name}/pull/${number}`;
-    case 'gitlab':
-      return `https://${repo.host}/${owner}/${name}/-/merge_requests/${number}`;
-    case 'bitbucket':
-      return `https://${repo.host}/${owner}/${name}/pull-requests/${number}`;
-    case 'bitbucketDC':
-      return `https://${repo.host}/projects/${owner}/repos/${name}/pull-requests/${number}`;
-    case 'azuredevops':
-      return `https://${repo.host}/${owner}/_git/${name}/pullrequest/${number}`;
-    default:
-      return undefined;
-  }
-}
+export { pullRequestNumber, pullRequestUrl } from '@gitglasses/integrations';
 
 // --- Message body -----------------------------------------------------------
 
@@ -246,6 +171,8 @@ export interface CommitHoverInput {
   remote: boolean;
   /** The commit's declared provenance as markdown, already escaped. */
   provenance?: string;
+  /** The hovered document, as a URI string; offers "Why this line?". */
+  documentUri?: string;
   nowUnixSeconds?: number;
   locale?: string;
 }
@@ -280,6 +207,17 @@ export function renderCommitHover(input: CommitHoverInput): string {
   if (input.provenance) parts.push(input.provenance);
 
   const links: string[] = [];
+  if (input.documentUri) {
+    const args: LineStoryArgs = { uri: input.documentUri, line: input.line };
+    links.push(
+      commandLink(
+        '$(question) Why this line?',
+        LINE_STORY_COMMAND,
+        args,
+        "The line's commit, pull request, linked issues and earlier versions",
+      ),
+    );
+  }
   if (target.repoPath !== '') {
     links.push(
       commandLink(

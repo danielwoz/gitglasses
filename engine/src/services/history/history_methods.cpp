@@ -40,6 +40,10 @@ namespace {
 // HistoryLogParser is its counterpart.
 constexpr const char* kLogFormat = "--format=%x1e%H%x1f%an%x1f%ae%x1f%at%x1f%s";
 
+// Most bytes of one commit's diff history/line returns; a longer diff is cut
+// at a line boundary and flagged patchTruncated.
+constexpr size_t kMaxLinePatchBytes = 256 * 1024;
+
 struct RevwalkDeleter {
   void operator()(git_revwalk* walk) const { git_revwalk_free(walk); }
 };
@@ -536,8 +540,11 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
       },
       rpc::Mode::Concurrent);
 
-  // History of a line range. -L forces patch output (and rejects --no-patch
-  // on older gits), so the parser simply skips every non-record line.
+  // History of a line range, newest first, optionally from a revision other
+  // than HEAD. -L forces patch output (and rejects --no-patch on older gits);
+  // the parser counts each commit's added and removed lines in it, takes the
+  // file's path at that commit from it (the range follows renames), and keeps
+  // the text itself when the request asks for it.
   dispatcher.method(
       "history/line",
       [&context](const rpc::Json& params, const CancelToken& token,
@@ -552,22 +559,46 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
           throw rpc::HandlerError{
               {ErrorCode::InvalidParams, "'endLine' must not be before 'startLine'"}};
         }
+        const std::string rev = optionalString(params, "rev");
+        if (exec::looksLikeGitOption(rev)) {
+          throw rpc::HandlerError{{ErrorCode::InvalidParams, "'rev' may not begin with '-'"}};
+        }
+        const std::int64_t limit = optionalInteger(params, "limit", 1, kMaxLimit, 0);
+        bool withPatch = false;
+        if (params.contains("patch")) withPatch = requireBool(params, "patch");
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
         rpc::Json entries = rpc::Json::array();
-        if (headUnborn(repo.value())) return {{"entries", std::move(entries)}};
+        if (rev.empty() && headUnborn(repo.value())) return {{"entries", std::move(entries)}};
 
-        exec::HistoryLogParser parser(
-            exec::HistoryLogParser::Stats::None, path,
-            [&entries](const exec::HistoryEntry& entry) {
-              entries.push_back(historyEntryJson(entry));
-            });
-        auto run = runGitLog(repo.value(),
-                             {"log",
-                              "-L" + std::to_string(startLine) + "," + std::to_string(endLine) +
-                                  ":" + path,
-                              kLogFormat},
-                             token, parser);
+        exec::HistoryLogParser parser(exec::HistoryLogParser::Stats::LinePatch, path,
+                                      [&entries, withPatch](const exec::HistoryEntry& entry) {
+                                        rpc::Json json = historyEntryJson(entry);
+                                        if (withPatch) {
+                                          json["patch"] = entry.patch;
+                                          if (entry.patchTruncated) json["patchTruncated"] = true;
+                                        }
+                                        entries.push_back(std::move(json));
+                                      });
+        if (withPatch) parser.keepPatch(kMaxLinePatchBytes);
+        // Colour and prefix settings would change the diff text the parser
+        // reads, so both are pinned; quotePath=false leaves non-ASCII paths
+        // in the headers unescaped.
+        std::vector<std::string> args = {
+            "-c",
+            "core.quotePath=false",
+            "log",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "-L" + std::to_string(startLine) + "," + std::to_string(endLine) + ":" + path,
+            kLogFormat};
+        if (limit > 0) args.push_back("--max-count=" + std::to_string(limit));
+        // Rejected above when it begins with '-'; "--" keeps git from
+        // reading it as a path.
+        if (!rev.empty()) args.push_back(rev);
+        args.push_back("--");
+        auto run = runGitLog(repo.value(), std::move(args), token, parser);
         if (!run) throw rpc::HandlerError{{run.error()}};
         return {{"entries", std::move(entries)}};
       },

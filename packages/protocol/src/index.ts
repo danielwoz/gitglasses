@@ -103,6 +103,7 @@ export type CommitTrailer = Static<typeof models.CommitTrailer>;
 export type CommitProvenance = Static<typeof models.CommitProvenance>;
 export type ProvenanceDeclaration = Static<typeof models.ProvenanceDeclaration>;
 export type FileHistoryEntry = Static<typeof models.FileHistoryEntry>;
+export type LineHistoryEntry = Static<typeof models.LineHistoryEntry>;
 export type FileChange = Static<typeof models.FileChange>;
 export type GraphRef = Static<typeof models.GraphRef>;
 export type GraphRow = Static<typeof models.GraphRow>;

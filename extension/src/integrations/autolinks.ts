@@ -2,25 +2,10 @@
 // plain text into markdown links. Used by the commit hover, which must stay
 // cheap and offline-safe, so everything here is string work only.
 
-import type { AutolinkPattern } from '@gitglasses/integrations';
+import { matchAutolinks, type AutolinkPattern } from '@gitglasses/integrations';
 import { escapeMarkdown, markdownLinkDestination } from '../system/markdown';
 
-interface LinkedRange {
-  start: number;
-  end: number;
-  replacement: string;
-}
-
-/**
- * Fills $1, $2, ... in a URL template from regex capture groups ($0 = whole
- * match). Group values come from repository text, so they are percent-encoded
- * and land in one path/query segment of the template's URL.
- */
-function fillTemplate(template: string, match: RegExpMatchArray): string {
-  return template.replace(/\$(\d+)/g, (_all, index: string) =>
-    encodeURIComponent(match[Number(index)] ?? ''),
-  );
-}
+export { jiraPattern, repoIssuePatterns } from '@gitglasses/integrations';
 
 /**
  * Render `text` as markdown, replacing every pattern match with a link
@@ -32,60 +17,17 @@ function fillTemplate(template: string, match: RegExpMatchArray): string {
  * ignored so one bad user-configured pattern never breaks the rest.
  */
 export function applyAutolinks(text: string, patterns: readonly AutolinkPattern[]): string {
-  const ranges: LinkedRange[] = [];
-  for (const pattern of patterns) {
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern.regex, 'g');
-    } catch {
-      continue;
-    }
-    for (const match of text.matchAll(regex)) {
-      const start = match.index ?? 0;
-      const end = start + match[0].length;
-      if (match[0].length === 0) continue;
-      if (ranges.some((taken) => start < taken.end && end > taken.start)) continue;
-      const destination = markdownLinkDestination(fillTemplate(pattern.urlTemplate, match));
-      ranges.push({
-        start,
-        end,
-        replacement: `[${escapeMarkdown(match[0])}](${destination})`,
-      });
-    }
-  }
-  if (ranges.length === 0) return escapeMarkdown(text);
-  ranges.sort((a, b) => a.start - b.start);
+  const matches = matchAutolinks(text, patterns);
+  if (matches.length === 0) return escapeMarkdown(text);
   let result = '';
   let cursor = 0;
-  for (const range of ranges) {
-    result += escapeMarkdown(text.slice(cursor, range.start)) + range.replacement;
-    cursor = range.end;
+  for (const match of matches) {
+    result +=
+      escapeMarkdown(text.slice(cursor, match.start)) +
+      `[${escapeMarkdown(match.text)}](${markdownLinkDestination(match.url)})`;
+    cursor = match.end;
   }
   return result + escapeMarkdown(text.slice(cursor));
-}
-
-/** Default #123 pattern for a GitHub/GitLab-style repo. */
-export function repoIssuePatterns(repo: {
-  host: string;
-  owner: string;
-  name: string;
-}): AutolinkPattern[] {
-  return [
-    {
-      regex: '#(\\d+)\\b',
-      urlTemplate: `https://${repo.host}/${repo.owner}/${repo.name}/issues/$1`,
-      title: `${repo.owner}/${repo.name} issue`,
-    },
-  ];
-}
-
-/** Jira issue-key pattern (PROJ-123) pointing at a Jira host's browse page. */
-export function jiraPattern(host: string): AutolinkPattern {
-  return {
-    regex: '\\b([A-Z][A-Z0-9]+-\\d+)\\b',
-    urlTemplate: `https://${host}/browse/$1`,
-    title: 'Jira issue',
-  };
 }
 
 /**

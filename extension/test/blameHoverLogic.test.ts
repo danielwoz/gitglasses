@@ -101,6 +101,16 @@ describe('blame hover', () => {
     for (const link of found) expect(BLAME_HOVER_COMMANDS).toContain(link.command);
   });
 
+  it('asks why the hovered line is the way it is, first', () => {
+    const found = links(renderCommitHover(input({ documentUri: 'file:///repo/src/new.ts' })));
+    expect(found[0]).toEqual({
+      label: '$(question) Why this line?',
+      command: 'gitglasses.showLineStory',
+      arg: { uri: 'file:///repo/src/new.ts', line: 12 },
+    });
+    expect(BLAME_HOVER_COMMANDS).toContain('gitglasses.showLineStory');
+  });
+
   it('drops the links it cannot serve', () => {
     const rootCommit = { ...commit, boundary: true };
     const noPrevious = { ...hunk, previous: undefined };

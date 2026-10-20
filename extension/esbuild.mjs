@@ -60,6 +60,16 @@ const configs = [
     minify: !watch,
   },
   {
+    entryPoints: ['webviews-src/lineStory/main.ts'],
+    bundle: true,
+    outfile: 'dist/webviews/lineStory.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2022',
+    sourcemap: true,
+    minify: !watch,
+  },
+  {
     entryPoints: ['webviews-src/rebase/main.ts'],
     bundle: true,
     outfile: 'dist/webviews/rebase.js',

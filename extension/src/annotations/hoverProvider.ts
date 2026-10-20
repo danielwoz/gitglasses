@@ -136,6 +136,7 @@ export class BlameHoverRenderer {
       pullRequest: prUrl && number !== undefined ? { number, url: prUrl } : undefined,
       remote: hosting !== undefined && supportsRemoteUrls(hosting.providerId),
       provenance: declared && provenanceHoverLine(declared),
+      documentUri: target.documentUri,
     });
     markdown.appendMarkdown(notice ? `${notice}\n\n${body}` : body);
     return markdown;

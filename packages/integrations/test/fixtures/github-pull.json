@@ -1,0 +1,92 @@
+{
+  "url": "https://api.github.com/repos/pallets/click/pulls/3820",
+  "id": 4406285146,
+  "node_id": "PR_kwDOASN_zM8AAAABBqKTWg",
+  "html_url": "https://github.com/pallets/click/pull/3820",
+  "number": 3820,
+  "state": "closed",
+  "locked": true,
+  "title": "Document calling a command as a regular function",
+  "user": {
+    "login": "kdeldycke",
+    "id": 159718,
+    "node_id": "MDQ6VXNlcjE1OTcxOA==",
+    "avatar_url": "https://avatars.githubusercontent.com/u/159718?v=4",
+    "html_url": "https://github.com/kdeldycke",
+    "type": "User"
+  },
+  "body": "Document an old open issue on how to call a command as a regular function.\r\n\r\nCloses #1054.",
+  "created_at": "2026-08-31T21:06:24Z",
+  "updated_at": "2026-09-17T00:30:34Z",
+  "closed_at": "2026-09-02T00:20:14Z",
+  "merged_at": "2026-09-02T00:20:14Z",
+  "merge_commit_sha": "be13b152cf5949a362926322c835fa76019cc6fe",
+  "draft": false,
+  "head": {
+    "label": "kdeldycke:command-as-function-faq",
+    "ref": "command-as-function-faq",
+    "sha": "bb86cdea6e83bc8e2711290eeffb4c8654baa7a3",
+    "user": {
+      "login": "kdeldycke",
+      "id": 159718,
+      "node_id": "MDQ6VXNlcjE1OTcxOA==",
+      "avatar_url": "https://avatars.githubusercontent.com/u/159718?v=4",
+      "html_url": "https://github.com/kdeldycke",
+      "type": "User"
+    },
+    "repo": {
+      "id": 1099538997,
+      "node_id": "R_kgDOQYmiNQ",
+      "name": "click",
+      "full_name": "kdeldycke/click",
+      "private": false,
+      "owner": {
+        "login": "kdeldycke",
+        "id": 159718,
+        "node_id": "MDQ6VXNlcjE1OTcxOA==",
+        "avatar_url": "https://avatars.githubusercontent.com/u/159718?v=4",
+        "html_url": "https://github.com/kdeldycke",
+        "type": "User"
+      },
+      "html_url": "https://github.com/kdeldycke/click"
+    }
+  },
+  "base": {
+    "label": "pallets:stable",
+    "ref": "stable",
+    "sha": "b0241232f775c45e28c5d5d4e9ea2fbc70b8448f",
+    "user": {
+      "login": "pallets",
+      "id": 16748505,
+      "node_id": "MDEyOk9yZ2FuaXphdGlvbjE2NzQ4NTA1",
+      "avatar_url": "https://avatars.githubusercontent.com/u/16748505?v=4",
+      "html_url": "https://github.com/pallets",
+      "type": "Organization"
+    },
+    "repo": {
+      "id": 19103692,
+      "node_id": "MDEwOlJlcG9zaXRvcnkxOTEwMzY5Mg==",
+      "name": "click",
+      "full_name": "pallets/click",
+      "private": false,
+      "owner": {
+        "login": "pallets",
+        "id": 16748505,
+        "node_id": "MDEyOk9yZ2FuaXphdGlvbjE2NzQ4NTA1",
+        "avatar_url": "https://avatars.githubusercontent.com/u/16748505?v=4",
+        "html_url": "https://github.com/pallets",
+        "type": "Organization"
+      },
+      "html_url": "https://github.com/pallets/click"
+    }
+  },
+  "author_association": "COLLABORATOR",
+  "merged": true,
+  "mergeable": null,
+  "comments": 5,
+  "review_comments": 2,
+  "commits": 1,
+  "additions": 43,
+  "deletions": 0,
+  "changed_files": 1
+}

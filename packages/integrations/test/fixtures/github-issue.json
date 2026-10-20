@@ -1,0 +1,29 @@
+{
+  "url": "https://api.github.com/repos/pallets/click/issues/1054",
+  "id": 335097021,
+  "node_id": "MDU6SXNzdWUzMzUwOTcwMjE=",
+  "html_url": "https://github.com/pallets/click/issues/1054",
+  "number": 1054,
+  "state": "closed",
+  "title": "Use function both as API and click function?",
+  "user": {
+    "login": "michaelaye",
+    "id": 69774,
+    "node_id": "MDQ6VXNlcjY5Nzc0",
+    "avatar_url": "https://avatars.githubusercontent.com/u/69774?v=4",
+    "html_url": "https://github.com/michaelaye",
+    "type": "User"
+  },
+  "assignee": {
+    "login": "Rowlando13",
+    "id": 67291205,
+    "node_id": "MDQ6VXNlcjY3MjkxMjA1",
+    "avatar_url": "https://avatars.githubusercontent.com/u/67291205?v=4",
+    "html_url": "https://github.com/Rowlando13",
+    "type": "User"
+  },
+  "created_at": "2018-06-23T12:33:27Z",
+  "updated_at": "2026-09-02T00:24:34Z",
+  "closed_at": "2026-09-02T00:24:34Z",
+  "state_reason": "completed"
+}
