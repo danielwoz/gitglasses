@@ -167,11 +167,14 @@ describe('GraphWebviewHost', () => {
   function setup() {
     const engine = graphEngine();
     const activeRepoChanged = new EventEmitter<void>();
+    const reloaded = new EventEmitter<void>();
     let active: ActiveRepo = { repoId: 'r1', rootPath: '/repos/one' };
     setActiveRepoResolver(async () => active);
     const repos = {
+      // r3 is the first repository again, as an engine restart registers it.
       isRootOf: (repoId: string, root: string) =>
-        (repoId === 'r1' && root === '/repos/one') || (repoId === 'r2' && root === '/repos/two'),
+        ((repoId === 'r1' || repoId === 'r3') && root === '/repos/one') ||
+        (repoId === 'r2' && root === '/repos/two'),
       locate: () => undefined,
     } as unknown as RepositoryService;
     const host = new GraphWebviewHost({
@@ -179,7 +182,7 @@ describe('GraphWebviewHost', () => {
       engine: engine.engine,
       repos,
       onDidChangeActiveRepo: activeRepoChanged.event,
-      onDidReload: new EventEmitter<void>().event,
+      onDidReload: reloaded.event,
       openRebase: vi.fn(),
       log: () => undefined,
     });
@@ -194,8 +197,18 @@ describe('GraphWebviewHost', () => {
         expect(resets[resets.length - 1]?.repoRoot).toBe(repo.rootPath);
       });
     };
-    return { ...engine, host, panel, switchTo };
+    /** An engine restart that registers the repositories again. */
+    const restartAs = async (repo: ActiveRepo): Promise<void> => {
+      const before = panel.postedOfType('reset').length;
+      active = repo;
+      reloaded.fire();
+      await vi.waitFor(() => expect(panel.postedOfType('reset').length).toBeGreaterThan(before));
+    };
+    return { ...engine, host, panel, switchTo, restartAs };
   }
+
+  const lastReset = (panel: FakeWebviewPanel) =>
+    panel.postedOfType<{ type: 'reset'; restore?: boolean; filter?: string[] }>('reset').at(-1);
 
   const generationOf = (panel: FakeWebviewPanel): number => {
     const resets = panel.postedOfType<{ type: 'reset'; generation: number }>('reset');
@@ -255,8 +268,6 @@ describe('GraphWebviewHost', () => {
   });
 
   it('tells a reloaded webview to restore its place only in the same repository', async () => {
-    const lastReset = (panel: FakeWebviewPanel) =>
-      panel.postedOfType<{ type: 'reset'; restore?: boolean; filter?: string[] }>('reset').at(-1);
     const same = setup();
     await same.panel.deliver({
       type: 'ready',
@@ -274,6 +285,21 @@ describe('GraphWebviewHost', () => {
     expect(reset?.restore).toBe(false);
     expect(reset?.filter).toBeUndefined();
     other.host.dispose();
+  });
+
+  it('keeps the branch filter across an engine restart only for the same repository', async () => {
+    const { panel, host, restartAs, switchTo } = setup();
+    await panel.deliver({ type: 'ready' });
+    await panel.deliver({ type: 'setFilter', refs: ['refs/heads/main'] });
+    expect(lastReset(panel)?.filter).toEqual(['refs/heads/main']);
+
+    // The same repository under a new id, its root spelled another way.
+    await restartAs({ repoId: 'r3', rootPath: '/repos/one/' });
+    expect(lastReset(panel)?.filter).toEqual(['refs/heads/main']);
+
+    await switchTo({ repoId: 'r2', rootPath: '/repos/two' });
+    expect(lastReset(panel)?.filter).toBeUndefined();
+    host.dispose();
   });
 
   it('refuses a commit action on a stash shown in the graph', async () => {
