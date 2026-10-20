@@ -55,10 +55,12 @@ std::string agentForTool(std::string_view tool);
 
 // Agent declarations among a commit's trailers, in message order: a
 // Co-authored-by naming a known agent identity, an Assisted-by or
-// Generated-by naming an AI tool (the Linux kernel's `AGENT:MODEL [TOOL...]`
-// form, or a known identity), and the session links agents add
-// (Amp-Thread-ID, Agent-Logs-Url). A co-author who is not a known agent
-// declares nothing.
+// Generated-by naming an AI (a known agent or identity, a model such as the
+// Linux kernel's `Assisted-by: LLM [TOOL...]`, or the kernel's earlier
+// `AGENT:MODEL [TOOL...]` form), and the session links agents add
+// (Amp-Thread-ID, Agent-Logs-Url). A co-author who is not a known agent, and
+// an Assisted-by or Generated-by naming a person or another kind of tool,
+// declare nothing.
 std::vector<Declaration> trailerDeclarations(
     const std::vector<std::pair<std::string, std::string>>& trailers);
 

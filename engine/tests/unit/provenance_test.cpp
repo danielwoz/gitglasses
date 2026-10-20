@@ -343,15 +343,54 @@ TEST(ProvenanceTrailers, ReadsTheKernelAssistedByForm) {
   EXPECT_EQ(declarations[1].model, "GPT-5.5");
 }
 
+TEST(ProvenanceTrailers, ReadsTheKernelsCurrentAssistedByForm) {
+  const auto declarations = provenance::trailerDeclarations(Trailers{
+      {"Assisted-by", "LLM coccinelle sparse"},
+      {"Assisted-by", "llm"},
+  });
+  ASSERT_EQ(declarations.size(), 2u);
+  EXPECT_EQ(declarations[0].name, "LLM");
+  EXPECT_EQ(declarations[0].value, "LLM coccinelle sparse");
+  EXPECT_EQ(declarations[0].kind, provenance::Kind::Agent);
+  EXPECT_EQ(declarations[1].name, "llm");
+}
+
 TEST(ProvenanceTrailers, ReadsGeneratedByToolNames) {
   const auto declarations = provenance::trailerDeclarations(Trailers{
       {"Generated-by", "GitHub Copilot Chat"},
       {"Generated-by", "ChatGPT 4o"},
+      {"Generated-by", "GPT-4o"},
+      {"Generated-by", "Llama3.1 70B"},
+      {"Generated-by", "Claude:claude-3-opus"},
   });
-  ASSERT_EQ(declarations.size(), 2u);
+  ASSERT_EQ(declarations.size(), 5u);
   EXPECT_EQ(declarations[0].name, "GitHub Copilot");
   EXPECT_EQ(declarations[1].name, "ChatGPT 4o");
   EXPECT_EQ(declarations[1].value, "ChatGPT 4o");
+  EXPECT_EQ(declarations[2].name, "GPT-4o");
+  EXPECT_EQ(declarations[3].name, "Llama3.1 70B");
+  EXPECT_EQ(declarations[4].name, "Claude");
+  EXPECT_EQ(declarations[4].model, "claude-3-opus");
+}
+
+TEST(ProvenanceTrailers, AssistedOrGeneratedByNamingNoAiDeclaresNothing) {
+  const auto declarations = provenance::trailerDeclarations(Trailers{
+      // People, named without an address.
+      {"Assisted-by", "Jane Doe"},
+      {"Generated-by", "Jane Doe"},
+      // Code generators.
+      {"Generated-by", "protoc 3.21.0"},
+      {"Generated-by", "protoc:3.21.0"},
+      {"Generated-by", "bindgen"},
+      // A link is not the kernel's AGENT:MODEL form.
+      {"Assisted-by", "https://example.com/review/1"},
+      // Words that merely start like a model's name.
+      {"Assisted-by", "Gptools Team"},
+      {"Generated-by", "Opusculum"},
+      {"Assisted-by", ""},
+  });
+  EXPECT_TRUE(declarations.empty()) << declarations.size() << " declared, first "
+                                    << (declarations.empty() ? "" : declarations[0].value);
 }
 
 TEST(ProvenanceTrailers, SessionLinksJoinTheirAgentsDeclaration) {

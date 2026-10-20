@@ -89,10 +89,21 @@ constexpr Identity kIdentities[] = {
     {"Amp", Match::Email, "amp@ampcode.com", kAnyRole},
 };
 
-// Trailers whose value names an AI tool: the Linux kernel's
-// "Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL...]" and the Apache Software
-// Foundation's "Generated-by: <tool>".
+// Trailers whose value may name an AI tool: the Linux kernel's
+// "Assisted-by: LLM [TOOL...]" (earlier "AGENT_NAME:MODEL_VERSION [TOOL...]")
+// and the Apache Software Foundation's "Generated-by: <tool>". Either can
+// also name a person or a code generator, so only values that name an AI
+// count.
 constexpr std::string_view kToolTrailers[] = {"assisted-by", "generated-by"};
+constexpr std::string_view kKernelTrailer = "assisted-by";
+
+// Words naming a language model, a model family or its maker. A word counts
+// on its own or followed by a version ("gpt4o", "llama3").
+constexpr std::string_view kModelWords[] = {
+    "llm",      "claude",   "anthropic", "opus",  "sonnet",  "haiku",   "gpt",     "chatgpt",
+    "openai",   "codex",    "gemini",    "gemma", "llama",   "mistral", "mixtral", "codestral",
+    "devstral", "deepseek", "qwen",      "grok",  "copilot", "kimi",
+};
 
 constexpr std::string_view kCoAuthorTrailer = "co-authored-by";
 
@@ -240,8 +251,49 @@ Declaration agentDeclaration(Source source, std::string name, std::string_view v
   return declaration;
 }
 
-// An Assisted-by or Generated-by value as a declaration, if it names an AI
-// tool.
+// Whether `text` holds a word of kModelWords, alone or followed by a digit.
+bool namesAModel(std::string_view text) {
+  const std::string lowered = lower(text);
+  std::size_t start = 0;
+  while (start < lowered.size()) {
+    while (start < lowered.size() && std::isalnum(static_cast<unsigned char>(lowered[start])) == 0)
+      ++start;
+    std::size_t end = start;
+    while (end < lowered.size() && std::isalnum(static_cast<unsigned char>(lowered[end])) != 0)
+      ++end;
+    const std::string_view word = std::string_view(lowered).substr(start, end - start);
+    for (const std::string_view model : kModelWords) {
+      if (word.size() < model.size() || word.substr(0, model.size()) != model) continue;
+      if (word.size() == model.size() ||
+          std::isdigit(static_cast<unsigned char>(word[model.size()])) != 0) {
+        return true;
+      }
+    }
+    start = end;
+  }
+  return false;
+}
+
+// The kernel's earlier form: a first word AGENT:MODEL, split in two. A URL
+// ("https://...") is not one.
+std::optional<std::pair<std::string_view, std::string_view>> agentAndModel(std::string_view first) {
+  const std::size_t colon = first.find(':');
+  if (colon == std::string_view::npos || colon == 0 || colon + 1 >= first.size()) {
+    return std::nullopt;
+  }
+  const std::string_view agent = first.substr(0, colon);
+  const std::string_view model = first.substr(colon + 1);
+  const bool word = std::all_of(agent.begin(), agent.end(), [](unsigned char c) {
+    return std::isalnum(c) != 0 || c == '.' || c == '_' || c == '-';
+  });
+  if (!word || model.front() == '/') return std::nullopt;
+  return std::pair{agent, model};
+}
+
+// An Assisted-by or Generated-by value as a declaration, if it names an AI:
+// a known agent, a model, or (Assisted-by only) the kernel's AGENT:MODEL
+// form. Anything else, such as a person's name or a code generator, declares
+// nothing.
 std::optional<Declaration> toolTrailerDeclaration(std::string_view key, std::string_view value) {
   const auto [name, email] = splitIdentity(value);
   if (!email.empty()) {
@@ -253,20 +305,25 @@ std::optional<Declaration> toolTrailerDeclaration(std::string_view key, std::str
     return declaration;
   }
   if (name.empty()) return std::nullopt;
-  // The kernel's form: the first word is AGENT:MODEL, the rest are tools.
   const std::string_view first = name.substr(0, name.find_first_of(" \t"));
-  const std::size_t colon = first.find(':');
-  if (colon != std::string_view::npos && colon > 0) {
-    const std::string_view agentText = first.substr(0, colon);
+  if (const auto split = agentAndModel(first)) {
+    const auto [agentText, model] = *split;
     const Agent* known = agentNamedBy(agentText);
+    if (!known && lower(key) != kKernelTrailer && !namesAModel(first)) return std::nullopt;
     Declaration declaration = agentDeclaration(
         Source::Trailer, known ? std::string(known->name) : std::string(agentText), key, value);
-    declaration.model = clip(first.substr(colon + 1), kMaxNameLength);
+    declaration.model = clip(model, kMaxNameLength);
     return declaration;
   }
-  const Agent* known = agentNamedBy(name);
-  return agentDeclaration(Source::Trailer, known ? std::string(known->name) : std::string(name),
-                          key, value);
+  if (const Agent* known = agentNamedBy(name)) {
+    return agentDeclaration(Source::Trailer, std::string(known->name), key, value);
+  }
+  // The kernel's current form: "LLM", then the analysis tools used.
+  if (lower(key) == kKernelTrailer && lower(first) == "llm") {
+    return agentDeclaration(Source::Trailer, std::string(first), key, value);
+  }
+  if (!namesAModel(name)) return std::nullopt;
+  return agentDeclaration(Source::Trailer, std::string(name), key, value);
 }
 
 std::string dedupeKey(const Declaration& declaration) {
