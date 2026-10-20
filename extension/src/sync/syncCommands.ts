@@ -277,19 +277,28 @@ export async function pull(
   }
 }
 
-/** Fetches from the remotes git fetches from by default. */
-export async function fetch(engine: EngineClient, repo: Repo, prune: boolean): Promise<void> {
+/** Fetches from `remote`, or from the remotes git fetches from by default. */
+export async function fetch(
+  engine: EngineClient,
+  repo: Repo,
+  prune: boolean,
+  remote?: string,
+): Promise<void> {
   const started = Date.now();
   try {
     await withProgress(prune ? 'Fetching (prune)…' : 'Fetching…', (token) =>
-      engine.request('mutate/fetch', { repoId: repo.repoId, prune }, token),
+      engine.request(
+        'mutate/fetch',
+        { repoId: repo.repoId, prune, ...(remote !== undefined ? { remote } : {}) },
+        token,
+      ),
     );
     setStatus(prune ? 'Fetched (pruned)' : 'Fetched');
   } catch (error) {
     await reportFailure('Fetch', error, {
       started,
       repo,
-      retry: () => fetch(engine, repo, prune),
+      retry: () => fetch(engine, repo, prune, remote),
     });
   }
 }

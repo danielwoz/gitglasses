@@ -86,7 +86,7 @@ export function registerProvenanceCommands(
           : `provenance: remote ${remote} already fetches ${GIT_AI_NOTES_REF} into ${trackingRef}`,
       );
       if (choice === addAndFetch) {
-        await fetch(engine, repo, false);
+        await fetch(engine, repo, false, remote);
         return;
       }
       void vscode.window.showInformationMessage(

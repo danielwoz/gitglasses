@@ -1,6 +1,6 @@
 // Fetch git-ai Notes with Every Fetch…: the refspec is added only after the
-// user confirms, to the remote they chose, and a fetch runs only when they
-// ask for one.
+// user confirms, to the remote they chose, and a fetch of that remote runs
+// only when they ask for one.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -92,6 +92,17 @@ describe('Fetch git-ai Notes with Every Fetch…', () => {
     ui.messageChoices = ['Add and Fetch Now'];
     await run(fake);
     expect(methods(fake)).toEqual(['remote/list', 'notes/addFetchRefspec', 'mutate/fetch']);
+  });
+
+  it('fetches the remote the user picked, not the default one', async () => {
+    const fake = engine(['origin', 'upstream']);
+    ui.quickPickChoices = ['upstream'];
+    ui.messageChoices = ['Add and Fetch Now'];
+    await run(fake);
+    expect(fake.calls.at(-1)).toMatchObject({
+      method: 'mutate/fetch',
+      params: { repoId: 'r1', remote: 'upstream' },
+    });
   });
 
   it('names the tracking ref as git-ai does', () => {
