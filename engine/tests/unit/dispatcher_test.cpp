@@ -5,6 +5,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 namespace gg::rpc {
@@ -43,6 +44,29 @@ class MessageSink {
 
   Json waitForId(std::int64_t id) {
     return waitFor([id](const Json& m) { return m.contains("id") && m["id"] == id; });
+  }
+
+  template <typename Pred>
+  size_t count(Pred pred) {
+    std::lock_guard lock(mutex_);
+    size_t n = 0;
+    for (const auto& m : messages_) {
+      if (pred(m)) ++n;
+    }
+    return n;
+  }
+
+  // Waits until `done` holds, checking whenever a message arrives and at
+  // least every few milliseconds.
+  template <typename Done>
+  bool waitUntil(Done done) {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!done()) {
+      if (std::chrono::steady_clock::now() >= deadline) return false;
+      std::unique_lock lock(mutex_);
+      cv_.wait_for(lock, 5ms);
+    }
+    return true;
   }
 
   std::vector<Json> notifications(const std::string& method) {
@@ -442,6 +466,119 @@ TEST_F(DispatcherTest, ConcurrentMethodsOverlap) {
   std::lock_guard lock(m);
   EXPECT_GE(peak, 2);
 #endif
+}
+
+// A request that reads what notifications write starts only after the
+// notifications sent ahead of it have run.
+TEST_F(DispatcherTest, AfterNotificationsRequestSeesEarlierNotifications) {
+  std::mutex m;
+  int stored = 0;
+  dispatcher.notification(
+      "store",
+      [&](Json params) {
+        // Slow enough that a request racing it on another worker would win.
+        std::this_thread::sleep_for(2ms);
+        std::lock_guard lock(m);
+        stored = params["n"].get<int>();
+      },
+      NotificationMode::Queued);
+  dispatcher.method(
+      "load",
+      [&](const Json&, const CancelToken&, const NotifyFn&) {
+        std::lock_guard lock(m);
+        return Json{{"n", stored}};
+      },
+      Mode::AfterNotifications);
+
+  for (int n = 1; n <= 20; ++n) {
+    send({{"jsonrpc", "2.0"}, {"method", "store"}, {"params", {{"n", n}}}});
+    send({{"jsonrpc", "2.0"}, {"id", n}, {"method", "load"}});
+    EXPECT_EQ(sink.waitForId(n)["result"]["n"], n) << "request " << n;
+  }
+  // The handlers use this frame's locals.
+  pool.shutdown();
+}
+
+// A small payload sent behind one big enough to be parsed off the read loop
+// is routed after it, not ahead of it.
+TEST_F(DispatcherTest, PayloadsBehindADeferredParseKeepArrivalOrder) {
+  std::mutex m;
+  int stored = 0;
+  dispatcher.notification(
+      "store",
+      [&](Json params) {
+        std::lock_guard lock(m);
+        stored = params["n"].get<int>();
+      },
+      NotificationMode::Queued);
+  dispatcher.method(
+      "load",
+      [&](const Json&, const CancelToken&, const NotifyFn&) {
+        std::lock_guard lock(m);
+        return Json{{"n", stored}};
+      },
+      Mode::AfterNotifications);
+
+  const std::string blob(kInlineParseLimit + 1024, 'x');
+  for (int n = 1; n <= 5; ++n) {
+    send({{"jsonrpc", "2.0"}, {"method", "store"}, {"params", {{"n", n}, {"blob", blob}}}});
+    send({{"jsonrpc", "2.0"}, {"id", n}, {"method", "load"}});
+    EXPECT_EQ(sink.waitForId(n)["result"]["n"], n) << "request " << n;
+  }
+  // The handlers use this frame's locals.
+  pool.shutdown();
+}
+
+// A cancel is not held behind a deferred parse; it still reaches the request
+// queued behind that parse.
+TEST_F(DispatcherTest, CancelReachesARequestQueuedBehindADeferredParse) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: the request finishes before the cancel is sent";
+#else
+  dispatcher.notification("bulk", [](Json) {}, NotificationMode::Queued);
+  dispatcher.method(
+      "slowread",
+      [](const Json&, const CancelToken& token, const NotifyFn&) {
+        for (int i = 0; i < 500; ++i) {
+          token.throwIfCancelled();
+          std::this_thread::sleep_for(1ms);
+        }
+        return Json::object();
+      },
+      Mode::Concurrent);
+
+  send({{"jsonrpc", "2.0"},
+        {"method", "bulk"},
+        {"params", {{"blob", std::string(kInlineParseLimit + 1024, 'x')}}}});
+  send({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "slowread"}});
+  send({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 1}}}});
+
+  Json response = sink.waitForId(1);
+  ASSERT_TRUE(response.contains("error")) << response.dump();
+  EXPECT_EQ(response["error"]["code"], static_cast<int>(ErrorCode::Cancelled));
+#endif
+}
+
+// A client may reuse an id once it holds the response; the second request
+// is answered too, however quickly it follows the first answer.
+TEST_F(DispatcherTest, IdReusedAfterTheResponseIsAnsweredAgain) {
+  // A writer that is still busy after the client has the bytes, which is
+  // when the client's next request can arrive.
+  MessageSink slowSink;
+  Dispatcher slow{pool, [&slowSink](const Json& m) {
+                    slowSink.push(m);
+                    std::this_thread::sleep_for(5ms);
+                  }};
+  slow.method("noop",
+              [](const Json&, const CancelToken&, const NotifyFn&) { return Json::object(); });
+  const auto answers = [&slowSink] {
+    return slowSink.count([](const Json& m) { return m.contains("id") && m["id"] == 9; });
+  };
+  for (size_t round = 1; round <= 5; ++round) {
+    slow.dispatch(Json({{"jsonrpc", "2.0"}, {"id", 9}, {"method", "noop"}}).dump());
+    ASSERT_TRUE(slowSink.waitUntil([&] { return answers() >= round; })) << "round " << round;
+  }
+  pool.shutdown();
 }
 
 TEST_F(DispatcherTest, InflightDrainsAfterCompletion) {

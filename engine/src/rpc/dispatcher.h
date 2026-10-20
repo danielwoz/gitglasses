@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -70,8 +71,11 @@ struct HandlerError {
 // delays another. SerialNetwork is a second per-repository lane for
 // remote-facing methods (fetch/pull/push), which run for minutes and need no
 // ordering against index mutations. Requests carrying no repoId share their
-// lane's unkeyed strand.
-enum class Mode { Concurrent, Serial, SerialNetwork };
+// lane's unkeyed strand. AfterNotifications runs on the task pool like
+// Concurrent, but only once every Queued notification received before the
+// request has been handled, so a read of state that notifications write (an
+// editor buffer pushed through doc/didChange) sees all of them.
+enum class Mode { Concurrent, Serial, SerialNetwork, AfterNotifications };
 
 // Where a notification handler runs.
 //
@@ -106,9 +110,10 @@ class Dispatcher {
 
   // Entry point for every inbound payload. Never throws; protocol-level
   // failures produce JSON-RPC error responses. Payloads over
-  // kInlineParseLimit are parsed and routed on a worker, keeping arrival
-  // order among themselves; smaller payloads behind them are routed inline
-  // and so can overtake them.
+  // kInlineParseLimit are parsed and routed on a worker. While such a parse
+  // is pending, later payloads are routed behind it, so every message is
+  // routed in arrival order; only Inline notifications ($/cancelRequest)
+  // still run at once.
   void dispatch(std::string payload);
 
   // Number of requests currently registered as in flight (for tests).
@@ -116,12 +121,19 @@ class Dispatcher {
 
  private:
   void route(const std::string& payload);
+  // Parses a payload, answering malformed ones with an error; nullopt when
+  // there is nothing left to route.
+  std::optional<Json> parse(const std::string& payload);
+  void routeMessage(Json message);
+  // A notification whose handler runs on the read loop.
+  bool isInlineNotification(const Json& message) const;
   // Claims `size` bytes of the deferred-parse budget, or fails when the
   // budget is exhausted and the caller must parse inline instead.
   bool reserveDeferred(size_t size);
   void runRequest(const Json& id, const std::string& methodName, Json params);
   void cancelRequest(const Json& params);
-  void sendResult(const Json& id, const Json& result);
+  static Json resultMessage(const Json& id, const Json& result);
+  static Json errorMessage(const Json& id, const Error& error);
   void sendError(const Json& id, const Error& error);
 
   // The strand for one (lane, repository) pair, created on first use.
@@ -145,8 +157,9 @@ class Dispatcher {
 
   std::mutex strandsMutex_;
   std::map<std::string, std::unique_ptr<Strand>> strands_;
-  // Carries both queued notification handlers and deferred parses, so both
-  // keep arrival order relative to each other.
+  // Carries queued notification handlers, deferred parses, the payloads
+  // routed behind a deferred parse and the starts of AfterNotifications
+  // requests, so all of them keep arrival order relative to each other.
   Strand notificationStrand_;
   std::atomic<size_t> deferredBytes_{0};
 
