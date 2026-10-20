@@ -2,11 +2,14 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -92,43 +95,95 @@ std::string configPath(const std::string& value, const std::string& base) {
 // configured.
 constexpr const char* kDefaultIgnoreRevsFile = ".git-blame-ignore-revs";
 
-// Reports a configured ignore-revs file that does not exist, once per path.
-void reportMissingIgnoreRevsFile(const std::string& path) {
+// Reports an ignore-revs file blame leaves out, once per path and reason.
+void reportSkippedIgnoreRevsFile(const std::string& path, const std::string& reason) {
   static std::mutex mutex;
   static std::set<std::string> reported;
   std::lock_guard lock(mutex);
-  if (reported.size() > 256 || !reported.insert(path).second) return;
-  spdlog::warn("blame: skipping blame.ignoreRevsFile '{}', which does not exist", path);
+  if (reported.size() > 256 || !reported.insert(path + '\0' + reason).second) return;
+  spdlog::warn("blame: skipping ignore-revs file '{}': {}", path, reason);
 }
 
-// The ignore-revs files the CLI backend hands to git. A configured file that
-// does not exist makes git refuse to blame at all ("could not open object
-// name list"), and a global blame.ignoreRevsFile naming a file most
-// repositories lack is common, so only the files that exist are passed. When
-// nothing is configured, the repository's own .git-blame-ignore-revs is used.
-std::vector<std::string> ignoreRevsFiles(const core::Repo& repo, git_config* config) {
+// Hex digits in one of the repository's object ids.
+std::size_t objectIdHexLength(git_config* config) {
+  const std::vector<std::string> formats = configValues(config, "extensions.objectFormat");
+  return !formats.empty() && formats.back() == "sha256" ? 64 : 40;
+}
+
+bool isSpace(char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+}  // namespace
+
+std::optional<std::string> invalidIgnoreRevsLine(std::string_view contents, std::size_t hexLength) {
+  std::size_t start = 0;
+  while (start <= contents.size()) {
+    std::size_t end = contents.find('\n', start);
+    if (end == std::string_view::npos) end = contents.size();
+    std::string_view line = contents.substr(start, end - start);
+    start = end + 1;
+    if (const std::size_t hash = line.find('#'); hash != std::string_view::npos) {
+      line = line.substr(0, hash);
+    }
+    while (!line.empty() && isSpace(line.front())) line.remove_prefix(1);
+    while (!line.empty() && isSpace(line.back())) line.remove_suffix(1);
+    if (line.empty()) continue;
+    const bool hex = std::all_of(line.begin(), line.end(), [](char c) {
+      return std::isxdigit(static_cast<unsigned char>(c));
+    });
+    if (!hex || line.size() != hexLength) return std::string(line);
+  }
+  return std::nullopt;
+}
+
+namespace {
+
+// An ignore-revs file blame hands to git, with the bytes it was checked with.
+struct IgnoreRevsFile {
+  std::string path;
+  std::string contents;
+};
+
+// The ignore-revs files the CLI backend hands to git. git refuses to blame
+// at all when one of them cannot be opened ("could not open object name
+// list") or holds a line that is not a full object id ("invalid object
+// name"), so such files are left out and logged: a global
+// blame.ignoreRevsFile naming a file most repositories lack is common, and a
+// repository's own file is ordinary content anyone can get wrong. When
+// nothing is configured, the repository's .git-blame-ignore-revs is used.
+std::vector<IgnoreRevsFile> ignoreRevsFiles(const core::Repo& repo, git_config* config) {
   const std::string base = gitCwd(repo);
+  std::vector<std::string> candidates;
   const std::vector<std::string> values = configValues(config, "blame.ignoreRevsFile");
-  std::vector<std::string> files;
   if (values.empty()) {
     if (!repo.workdir().empty()) {
-      const std::string candidate = joinPath(repo.workdir(), kDefaultIgnoreRevsFile);
-      if (isRegularFile(candidate)) files.push_back(candidate);
+      const std::string file = joinPath(repo.workdir(), kDefaultIgnoreRevsFile);
+      if (isRegularFile(file)) candidates.push_back(file);
     }
-    return files;
   }
   for (const std::string& value : values) {
     // An empty value resets the list read so far, as it does for git.
     if (value.empty()) {
-      files.clear();
+      candidates.clear();
       continue;
     }
-    const std::string file = configPath(value, base);
-    if (isRegularFile(file)) {
-      files.push_back(file);
-    } else {
-      reportMissingIgnoreRevsFile(file);
+    candidates.push_back(configPath(value, base));
+  }
+
+  const std::size_t hexLength = objectIdHexLength(config);
+  std::vector<IgnoreRevsFile> files;
+  for (const std::string& path : candidates) {
+    std::optional<std::string> contents = isRegularFile(path) ? readFile(path) : std::nullopt;
+    if (!contents) {
+      reportSkippedIgnoreRevsFile(path, "it does not exist");
+      continue;
     }
+    if (auto bad = invalidIgnoreRevsLine(*contents, hexLength)) {
+      reportSkippedIgnoreRevsFile(path, "'" + *bad + "' is not a full object id");
+      continue;
+    }
+    files.push_back({path, std::move(*contents)});
   }
   return files;
 }
@@ -147,10 +202,11 @@ void addInput(std::string& material, const std::string& label,
 // mailmap.file and mailmap.blob). A cached result is reused only while they
 // are unchanged.
 std::string inputsDigest(const core::Repo& repo, git_config* config,
-                         const std::vector<std::string>& ignoreRevs) {
+                         const std::vector<IgnoreRevsFile>& ignoreRevs) {
   std::string material;
-  for (const std::string& file : ignoreRevs)
-    addInput(material, "ignore-revs " + file, readFile(file));
+  for (const IgnoreRevsFile& file : ignoreRevs) {
+    addInput(material, "ignore-revs " + file.path, file.contents);
+  }
   if (!repo.workdir().empty()) {
     addInput(material, "mailmap", readFile(joinPath(repo.workdir(), ".mailmap")));
   }
@@ -313,10 +369,12 @@ Result<BlameSummary> BlameService::blame(const core::Repo& repo, const BlameRequ
   const BlameBackend backend =
       request.forceBackend.value_or(cliAvailable_ ? BlameBackend::Cli : BlameBackend::LibGit2);
   const ConfigPtr config = configSnapshot(repo);
-  std::vector<std::string> ignoreRevs;
+  std::vector<IgnoreRevsFile> ignoreRevs;
   if (backend == BlameBackend::Cli && request.options.ignoreRevs) {
     ignoreRevs = ignoreRevsFiles(repo, config.get());
   }
+  std::vector<std::string> ignoreRevsPaths;
+  for (const IgnoreRevsFile& file : ignoreRevs) ignoreRevsPaths.push_back(file.path);
   const bool lfs = isLfsTracked(repo, request.path);
   const std::optional<std::string> key =
       cacheKey(repo, request, backend, inputsDigest(repo, config.get(), ignoreRevs));
@@ -331,7 +389,7 @@ Result<BlameSummary> BlameService::blame(const core::Repo& repo, const BlameRequ
   }
 
   auto computed = backend == BlameBackend::Cli
-                      ? blameWithCli(repo, request, ignoreRevs, token, emit)
+                      ? blameWithCli(repo, request, ignoreRevsPaths, token, emit)
                       : blameWithLibGit2(repo, request, token, emit);
   if (!computed) return computed.error();
   if (key) cache_.put(*key, computed.value());
@@ -348,8 +406,8 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithCli(
   if (request.options.ignoreWhitespace) args.push_back("-w");
   if (request.options.moves == MoveDetection::WithinFile) args.push_back("-M");
   if (request.options.moves == MoveDetection::AcrossFiles) args.push_back("-C");
-  // The configured ignore-revs list is replaced by the files that exist, so a
-  // missing one cannot fail the blame.
+  // The configured ignore-revs list is replaced by the files git can read, so
+  // a missing or malformed one cannot fail the blame.
   args.push_back("--no-ignore-revs-file");
   for (const std::string& file : ignoreRevsFiles) args.push_back("--ignore-revs-file=" + file);
   std::optional<TempFile> contentsFile;

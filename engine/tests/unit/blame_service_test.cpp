@@ -233,6 +233,57 @@ TEST_F(IgnoreRevsTest, ConfiguredFilesThatExistAreHonoured) {
   for (const auto& [line, sha] : attribution) EXPECT_NE(sha, formatSha) << "line " << line;
 }
 
+// git stops the whole blame on an ignore-revs line it cannot read, such as
+// an abbreviated id. The repository's file is ordinary content, so blame
+// leaves such a file out rather than fail for every file.
+TEST_F(IgnoreRevsTest, MalformedRepositoryFileDoesNotBreakBlame) {
+  fixture.writeFile(".git-blame-ignore-revs", formatSha.substr(0, 7) + "\n");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  EXPECT_EQ(attribution.at(1), formatSha);
+}
+
+TEST_F(IgnoreRevsTest, MalformedConfiguredFileIsSkippedAndTheOthersHonoured) {
+  fixture.writeFile("bad-revs.txt", formatSha + " trailing words\n");
+  fixture.writeFile("revs.txt", formatSha + "\n");
+  fixture.run("git config blame.ignoreRevsFile bad-revs.txt");
+  fixture.run("git config --add blame.ignoreRevsFile revs.txt");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  for (const auto& [line, sha] : attribution) EXPECT_NE(sha, formatSha) << "line " << line;
+}
+
+// Full ids git does not know are fine: git skips them itself.
+TEST_F(IgnoreRevsTest, UnknownFullIdsAreAccepted) {
+  fixture.writeFile(".git-blame-ignore-revs", std::string(40, 'f') + "\n" + formatSha + "\n");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  EXPECT_EQ(attribution.at(1), revSha(fixture, "HEAD~2"));
+}
+
+TEST(InvalidIgnoreRevsLine, AcceptsWhatGitAccepts) {
+  const std::string sha1(40, 'a');
+  EXPECT_EQ(invalidIgnoreRevsLine("", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine("# only a comment\n\n   \n", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1 + "\n", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine("  " + sha1 + "  # reformat\r\n", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(40, 'A'), 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(64, 'b') + "\n", 64), std::nullopt);
+}
+
+TEST(InvalidIgnoreRevsLine, ReportsTheFirstLineGitRejects) {
+  const std::string sha1(40, 'a');
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1 + "\nabc1234\n", 40), std::optional<std::string>("abc1234"));
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1 + " extra\n", 40),
+            std::optional<std::string>(sha1 + " extra"));
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(39, 'a') + "g", 40),
+            std::optional<std::string>(std::string(39, 'a') + "g"));
+  // A SHA-1 id in a SHA-256 repository, and the other way round.
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1, 64), std::optional<std::string>(sha1));
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(64, 'b'), 40),
+            std::optional<std::string>(std::string(64, 'b')));
+}
+
 TEST_F(IgnoreRevsTest, RepositoryIgnoreRevsFileIsUsedWhenNothingIsConfigured) {
   fixture.writeFile(".git-blame-ignore-revs", "# formatting\n" + formatSha + "\n");
   auto attribution = lines({.path = "code.txt"});

@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "cache/blame_cache.h"
@@ -32,7 +34,8 @@ struct BlameOptions {
   MoveDetection moves = MoveDetection::Off;
   // Look through the commits listed in the blame.ignoreRevsFile files, or in
   // the repository's .git-blame-ignore-revs when that setting is unset.
-  // Listed files that do not exist are skipped. CLI backend only.
+  // Files that do not exist, or that git would reject, are skipped. CLI
+  // backend only.
   bool ignoreRevs = true;
 };
 
@@ -53,6 +56,11 @@ struct BlameSummary {
   // what the hunks attribute, is the pointer file, not the content.
   bool lfs = false;
 };
+
+// The first line of an ignore-revs file that git rejects, failing the whole
+// blame: one that is not empty, a comment or a full object id of `hexLength`
+// hex digits (an abbreviated id, say). nullopt when git accepts every line.
+std::optional<std::string> invalidIgnoreRevsLine(std::string_view contents, std::size_t hexLength);
 
 // Whole-file blame. Uses `git blame --incremental` when a git CLI is
 // available, and libgit2's git_blame_file/git_blame_buffer otherwise. Results
