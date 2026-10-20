@@ -28,7 +28,7 @@ import {
   NL_SEARCH_SYSTEM,
   nlSearchPrompt,
 } from './prompts';
-import { sanitizeAiMarkdown } from './sanitize';
+import { escapeMarkdownText, sanitizeAiMarkdown } from './sanitize';
 import { CommitSearchQuery, describeQuery, isoDay, needsGitLog } from '../views/searchQuery';
 
 const CONTEXT_BUDGET_TOKENS = 6000;
@@ -66,7 +66,8 @@ const AI_SCHEME = 'gitglasses-ai';
 
 /** Serves AI results as readonly virtual markdown docs; results open in the
  *  built-in markdown preview (falling back to a text editor). Every result is
- *  sanitized first, so the preview never loads an image or HTML from it. */
+ *  sanitized first, so the preview never loads an image or HTML from it, and
+ *  repository text placed around it is escaped so it reads literally. */
 class AiResultContentProvider implements vscode.TextDocumentContentProvider {
   private readonly contents = new Map<string, string>();
   private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
@@ -289,7 +290,7 @@ async function explainCommit(
   if (!result) return;
   await panel.show(
     `Explain: ${sha7}`,
-    `# ${details.subject}\n\n\`${details.sha}\` — ${details.author.name}\n\n${result}\n`,
+    `# ${escapeMarkdownText(details.subject)}\n\n\`${details.sha}\` — ${escapeMarkdownText(details.author.name)}\n\n${result}\n`,
   );
 }
 
@@ -371,7 +372,7 @@ async function explainWip(
   if (!result) return;
   await panel.show(
     'Explain: Working Changes',
-    `# Working changes on ${status.branch}\n\n${result}\n`,
+    `# Working changes on ${escapeMarkdownText(status.branch)}\n\n${result}\n`,
   );
 }
 
