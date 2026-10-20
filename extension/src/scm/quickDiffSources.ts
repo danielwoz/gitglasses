@@ -79,3 +79,20 @@ export class QuickDiffSources implements vscode.Disposable {
     this.controls.clear();
   }
 }
+
+/**
+ * Quick diff where VS Code's Git extension does not provide it: source
+ * controls kept in step with the workspace's repositories and, since repo
+ * ids change, with the engine. Where that extension runs, nothing.
+ */
+export function registerQuickDiff(
+  repos: RepositoryService,
+  listRepos: () => Promise<readonly WorkspaceRepo[]>,
+  onDidChangeRepos: vscode.Event<void>,
+  onDidChangeEngine: (listener: () => void) => vscode.Disposable,
+  log: (line: string) => void,
+): vscode.Disposable[] {
+  if (hasBuiltinGit()) return [];
+  const quickDiff = new QuickDiffSources(repos, listRepos, onDidChangeRepos, log);
+  return [quickDiff, onDidChangeEngine(() => void quickDiff.sync())];
+}

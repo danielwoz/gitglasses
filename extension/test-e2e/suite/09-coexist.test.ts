@@ -28,7 +28,7 @@ function revisionDocument(relativePath: string): vscode.TextDocument | undefined
 // Runs last: it commits in the fixture repository.
 describe('working alongside VS Code’s Git', () => {
   it('leaves Source Control to the built-in Git extension', async () => {
-    await activateExtension();
+    const extension = await activateExtension();
     const builtin = vscode.extensions.getExtension<{
       getAPI(version: 1): { repositories: unknown[] };
     }>('vscode.git');
@@ -38,6 +38,22 @@ describe('working alongside VS Code’s Git', () => {
     await poll(
       async () => (api.repositories.length > 0 ? true : undefined),
       'the built-in Git extension never opened the fixture repository',
+    );
+
+    // GitGlasses adds no source control of its own beside Git's, which
+    // would take over the Source Control Graph and the status bar's branch
+    // and sync items. vscode.scm.inputBox is the input box of the last
+    // source control created through this API instance, and code loaded
+    // from inside an extension's folder shares that extension's instance.
+    const fromExtension = path.relative(extension.extensionPath, __filename);
+    assert.ok(
+      !fromExtension.startsWith('..') && !path.isAbsolute(fromExtension),
+      `the suite must load from inside the extension to share its API: ${__filename}`,
+    );
+    assert.strictEqual(
+      vscode.scm.inputBox,
+      undefined,
+      'GitGlasses registered a source control while VS Code’s Git extension runs',
     );
   });
 

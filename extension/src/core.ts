@@ -21,7 +21,7 @@ import {
   encodeRevisionUri,
   setRevisionRootLookup,
 } from './scm/revisionContentProvider';
-import { QuickDiffSources, hasBuiltinGit } from './scm/quickDiffSources';
+import { hasBuiltinGit, registerQuickDiff } from './scm/quickDiffSources';
 import {
   ViewBase,
   ViewNode,
@@ -280,18 +280,15 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   // registers its own only where that extension is absent (see
   // QuickDiffSources for why it never adds a second source control).
   const builtinGit = hasBuiltinGit();
-  if (!builtinGit) {
-    const quickDiff = new QuickDiffSources(
+  disposables.push(
+    ...registerQuickDiff(
       repos,
       () => activeRepo.all(),
       activeRepo.onDidChange,
+      (listener) => engine.onDidChangeCapabilities(listener),
       deps.log,
-    );
-    disposables.push(
-      quickDiff,
-      engine.onDidChangeCapabilities(() => void quickDiff.sync()),
-    );
-  }
+    ),
+  );
 
   const stateHost = () => ({ hasBuiltinGit: builtinGit, trusted: vscode.workspace.isTrusted });
   const treeViews: vscode.TreeView<ViewNode>[] = [];
