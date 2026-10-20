@@ -450,7 +450,8 @@ export const RequestSchemas = {
     result: Type.Object({ files: Type.Array(FileChange) }, strict),
   },
   'diff/fileHunks': {
-    description: "Hunks of a file's working-tree (or staged) diff, for hunk staging.",
+    description:
+      "Hunks of a file's working-tree (or staged) diff, for hunk staging. Paths are literal, never globs. The working-tree side of a file with a filter driver (Git LFS, git-crypt, a clean filter) or a working-tree-encoding is its cleaned content, exactly as `git diff` shows it; without the git CLI such a file fails with FilterNeedsGitCli. Submodules have no hunks.",
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -468,7 +469,8 @@ export const RequestSchemas = {
     result: Type.Object({ hunks: Type.Array(DiffHunk) }, strict),
   },
   'stage/files': {
-    description: 'Stages or unstages whole files.',
+    description:
+      'Stages or unstages whole files, storing exactly what `git add` would: filter drivers and working-tree-encoding run, a path missing from the working tree stages as a removal, and a path in neither the index nor the working tree is skipped. Paths are literal, never globs. Skip-worktree (sparse checkout) paths are refused. Without the git CLI, a path with a filter driver or working-tree-encoding fails with FilterNeedsGitCli and nothing is staged.',
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -481,7 +483,7 @@ export const RequestSchemas = {
   },
   'stage/hunks': {
     description:
-      'Stages or unstages individual hunks. The ranges are matched against a freshly taken diff, so a request built from a stale diff/fileHunks page fails instead of applying the wrong lines.',
+      'Stages or unstages individual hunks. The ranges are matched against a freshly taken diff, so a request built from a stale diff/fileHunks page fails instead of applying the wrong lines. Submodules and Git LFS files fail with WholeFileOnly; without the git CLI, a file with a filter driver or working-tree-encoding fails with FilterNeedsGitCli.',
     params: Type.Object(
       {
         repoId: Type.String(),

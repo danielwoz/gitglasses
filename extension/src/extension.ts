@@ -26,7 +26,9 @@ import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
 import {
   describeHunk,
   describeHunkCount,
+  hunkMatchesDocument,
   hunksIntersectingSelection,
+  isWholeFileOnly,
   selectionLineRange,
   toHunkRange,
 } from './scm/hunkStaging';
@@ -194,14 +196,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      // Staged hunk positions address the index, the selection addresses the
-      // working tree. They agree only while the file has no unstaged changes;
+      // Hunk positions address the content as git stores it (the index for
+      // staged hunks, the cleaned working tree for unstaged ones); the
+      // selection addresses the editor. They agree only while each hunk's
+      // text is what the editor shows there, which a clean filter can break,
+      // and for staged hunks only while the file has no unstaged changes;
       // otherwise the hunks are picked explicitly.
+      const lineAt = (line: number): string | undefined =>
+        line <= editor.document.lineCount ? editor.document.lineAt(line - 1).text : undefined;
       let picked: typeof hunks;
-      if (action === 'unstage' && (await hasUnstagedChanges(located))) {
+      if (
+        !hunks.every((hunk) => hunkMatchesDocument(hunk, lineAt)) ||
+        (action === 'unstage' && (await hasUnstagedChanges(located)))
+      ) {
         const items = hunks.map((hunk) => ({ ...describeHunk(hunk), hunk }));
         const chosen = await vscode.window.showQuickPick(items, {
-          placeHolder: 'Which staged hunk should be unstaged?',
+          placeHolder:
+            action === 'stage'
+              ? 'Which unstaged hunk should be staged?'
+              : 'Which staged hunk should be unstaged?',
           canPickMany: true,
         });
         if (!chosen || chosen.length === 0) return;
@@ -234,9 +247,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       fileAnnotations.refresh();
       core.refreshViews();
     } catch (error) {
-      void vscode.window.showWarningMessage(
-        `GitGlasses: could not ${action} hunks — ${errorMessage(error)}`,
+      if (!isWholeFileOnly(error)) {
+        void vscode.window.showWarningMessage(
+          `GitGlasses: could not ${action} hunks — ${errorMessage(error)}`,
+        );
+        return;
+      }
+      // Submodules and Git LFS files only move as a whole.
+      const wholeFile = action === 'stage' ? 'Stage Whole File' : 'Unstage Whole File';
+      const choice = await vscode.window.showWarningMessage(
+        `GitGlasses: ${errorMessage(error)}`,
+        wholeFile,
       );
+      if (choice !== wholeFile) return;
+      try {
+        await engine.request('stage/files', {
+          repoId: located.repoId,
+          paths: [located.relativePath],
+          action,
+        });
+        blame.invalidate();
+        fileAnnotations.refresh();
+        core.refreshViews();
+      } catch (fileError) {
+        void vscode.window.showWarningMessage(
+          `GitGlasses: could not ${action} the file — ${errorMessage(fileError)}`,
+        );
+      }
     }
   };
 

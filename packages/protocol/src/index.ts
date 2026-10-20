@@ -67,6 +67,13 @@ export const ErrorCodes = {
   /** The engine runs in Restricted Mode (capabilities.restricted) and the
    *  method would run git or change the repository. */
   Restricted: -32004,
+  /** The path goes through a filter driver (Git LFS, git-crypt, a custom
+   *  clean filter) or a working-tree-encoding that only the git CLI can
+   *  apply, and this engine has no git CLI. Other paths still work. */
+  FilterNeedsGitCli: -32010,
+  /** The path's change cannot be split into hunks (a submodule, or a Git LFS
+   *  pointer); stage or unstage the whole file instead. */
+  WholeFileOnly: -32011,
 } as const;
 
 // --- Models (derived from src/schema/models.ts) -----------------------------

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { EngineError } from '@gitglasses/rpc';
 import {
   describeHunk,
   describeHunkCount,
+  hunkMatchesDocument,
   hunksIntersectingSelection,
+  isWholeFileOnly,
   selectionLineRange,
   toHunkRange,
+  type DiffHunkLike,
   type HunkRange,
 } from '../src/scm/hunkStaging';
 
@@ -132,5 +136,57 @@ describe('describeHunk', () => {
       header: '@@ -1 +1 @@', lines: [' only context'],
     });
     expect(described.detail).toBe('@@ -1 +1 @@');
+  });
+});
+
+describe('hunkMatchesDocument', () => {
+  const document = (lines: string[]) => (line: number) => lines[line - 1];
+  const portEdit: DiffHunkLike = {
+    header: '@@ -1,2 +1,2 @@',
+    oldStart: 1,
+    oldLines: 2,
+    newStart: 1,
+    newLines: 2,
+    lines: [' token=abc', '-port=1', '+port=2'],
+  };
+
+  it('accepts a hunk whose new side is the editor text at its position', () => {
+    expect(hunkMatchesDocument(portEdit, document(['token=abc', 'port=2']))).toBe(true);
+  });
+
+  // A clean filter that drops lines (notebook outputs, say) leaves hunk
+  // positions in the stored form, not the editor's.
+  it('rejects a hunk whose position addresses other editor lines', () => {
+    const reshaped = document(['token=abc', '"outputs": [1, 2]', 'port=2']);
+    expect(hunkMatchesDocument(portEdit, reshaped)).toBe(false);
+  });
+
+  // The stored form of a scrubbed line differs from what the editor holds.
+  it('rejects a hunk whose context the editor shows differently', () => {
+    const scrubbed = { ...portEdit, lines: [' token=REDACTED', '-port=1', '+port=2'] };
+    expect(hunkMatchesDocument(scrubbed, document(['token=abc', 'port=2']))).toBe(false);
+  });
+
+  it('rejects a hunk running past the end of the editor text', () => {
+    expect(hunkMatchesDocument(portEdit, document(['token=abc']))).toBe(false);
+  });
+
+  it('ignores a byte-order mark on the first line', () => {
+    const withBom = { ...portEdit, lines: [' \uFEFFtoken=abc', '-port=1', '+port=2'] };
+    expect(hunkMatchesDocument(withBom, document(['token=abc', 'port=2']))).toBe(true);
+  });
+
+  it('accepts a pure deletion anywhere', () => {
+    const deletion = { ...portEdit, newLines: 0, lines: ['-port=1'] };
+    expect(hunkMatchesDocument(deletion, document([]))).toBe(true);
+  });
+});
+
+describe('isWholeFileOnly', () => {
+  it('recognises the engine refusing to split a file into hunks', () => {
+    expect(isWholeFileOnly(new EngineError(-32011, "'sub' is a submodule"))).toBe(true);
+    expect(isWholeFileOnly(new EngineError(-32001, 'stale hunk ranges'))).toBe(false);
+    expect(isWholeFileOnly(new Error('plain'))).toBe(false);
+    expect(isWholeFileOnly(undefined)).toBe(false);
   });
 });

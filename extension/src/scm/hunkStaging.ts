@@ -4,6 +4,8 @@
 // which of a file's hunks a cursor or selection covers. Line numbers here are
 // 1-based, matching both the unified-diff header and the engine's shape.
 
+import { ErrorCodes } from '@gitglasses/protocol';
+
 /** The subset of DiffHunk that identifies a hunk to the engine. */
 export interface HunkRange {
   oldStart: number;
@@ -98,4 +100,40 @@ export function describeHunk(hunk: DiffHunkLike): { label: string; detail: strin
     label: `${hunk.header}  +${added} −${removed}`,
     detail: preview.trim(),
   };
+}
+
+/**
+ * Whether a hunk's new side is the text the editor shows at the hunk's
+ * position, so a selection there really means this hunk. The engine reports
+ * hunks in the form git stores content: for a file behind a clean filter
+ * that reshapes lines (nbstripout and the like) the positions stop
+ * addressing editor lines, and the hunk has to be picked by content instead.
+ * `lineAt` takes a 1-based line and returns undefined past the end; a
+ * byte-order mark the editor hides is ignored on line 1.
+ */
+export function hunkMatchesDocument(
+  hunk: DiffHunkLike,
+  lineAt: (line: number) => string | undefined,
+): boolean {
+  let line = Math.max(1, hunk.newStart);
+  for (const text of hunk.lines) {
+    if (text.startsWith('-')) continue;
+    let expected = text.slice(1);
+    if (line === 1 && expected.startsWith('\uFEFF')) expected = expected.slice(1);
+    if (lineAt(line) !== expected) return false;
+    line += 1;
+  }
+  return true;
+}
+
+/**
+ * True for the engine's answer that a file cannot be split into hunks (a
+ * submodule, or a Git LFS pointer); staging the whole file still works.
+ */
+export function isWholeFileOnly(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === ErrorCodes.WholeFileOnly
+  );
 }
