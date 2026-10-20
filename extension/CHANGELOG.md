@@ -5,6 +5,84 @@ All notable changes to GitGlasses are listed here. The format follows
 even minor version (0.2.x) are stable; odd minor versions (0.3.x) ship on the
 pre-release channel.
 
+## [0.3.0]
+
+### Commit Graph
+
+- Consecutive commits are joined by lines, and history is laid out like
+  `git log --graph --topo-order`. On git/git the first 200 rows need 16
+  columns instead of 105, and lanes past `gitglasses.graph.maxLanes` fold
+  into one column so messages stay readable.
+- Clicking a commit opens a details pane: full message, trailers, author and
+  committer, parents, refs and changed files. Click a file to diff it, open
+  all changes at once, or Ctrl/Cmd-click two commits to compare them.
+- Branch and tag chips have menus (checkout, merge, rebase, rename, delete,
+  push), a find box searches every branch shown, and a branch filter narrows
+  the graph.
+- Refreshes keep scroll position and selection. The graph follows Select
+  Repository, survives engine restarts and window reloads, and has full
+  keyboard and screen-reader support.
+
+### Blame
+
+- Blame stays right while you edit, after save or revert, in large files and
+  for files with identical contents.
+- `.git-blame-ignore-revs`, `.mailmap`, ignore-whitespace and moved-line
+  detection are honoured, and a missing ignore-revs file never breaks blame.
+- The hover shows the full message, both dates, the pull request when the
+  message names one, and links to Details, Changes, Blame Previous Revision,
+  Copy SHA and Open on Remote.
+- Inline and status bar text, date style and delay are configurable, and the
+  status bar item steps aside when VS Code's own blame item is showing.
+
+### Works with VS Code's Git
+
+- No more empty "GitGlasses" Source Control entry, so the built-in Source
+  Control Graph and status bar items work as usual.
+- No default shortcuts take over Ctrl+Shift+G; opt in with
+  `gitglasses.keyboardShortcuts.enabled`.
+- Fewer views open by default, the command palette offers only commands that
+  can act, and Theia shows your repository instead of an empty state.
+- "Coming from Git Graph?" copies matching Git Graph settings, and a Source
+  Control title button opens the graph.
+
+### Push, pull and signing
+
+- git's prompts appear in the editor: HTTPS credentials, ssh passphrases and
+  new host keys, and passphrases for signing keys.
+- Network operations show progress with Cancel, publishing picks the right
+  remote, diverged pulls offer merge or rebase, and stopped merges and
+  rebases offer Continue, Skip and Abort.
+- Cancelled commands no longer leave `index.lock` behind, slow fetches no
+  longer stall hovers and the graph, and a crashing engine is no longer
+  restarted forever.
+
+### Branches, tags, stashes and rebase
+
+- The Branches, Tags, Stashes and Remotes views are actionable, and clicking
+  a commit opens its details.
+- Interactive rebase applies messages to the right commits, never drops
+  commits made while it was open, works with `rebase.updateRefs` and
+  autosquash, offers to stash first, and pauses on conflicts with Continue,
+  Skip and Abort.
+
+### AI and search
+
+- AI works on every editor: the first AI command offers what the editor can
+  use (editor models, Ollama, or your own key), with current models and APIs.
+- Explain Commit sends the real diff, AI output never loads images or HTML,
+  and Generate Commit Message writes into the Source Control box.
+- Search Commits finds commits by author, code change, file and date, with
+  progress and Cancel.
+
+### Performance and correctness
+
+- History pages instantly in very large repositories, renames are detected
+  the way git does, and partial clones download what they need instead of
+  showing 0/0.
+- Polling watchers no longer cost CPU in repositories with thousands of
+  branches, and patches apply regardless of diff settings.
+
 ## [0.2.0]
 
 ### Security

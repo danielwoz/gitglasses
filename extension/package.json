@@ -2,7 +2,7 @@
   "name": "gitglasses",
   "displayName": "GitGlasses",
   "description": "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, file and line history, commit search, interactive rebase and worktrees. Works on private repos with no account, and your AI agents can use it over MCP.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "gitglasses",
   "license": "MIT",
   "icon": "media/icon.png",
