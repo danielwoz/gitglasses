@@ -151,6 +151,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   configureSync({ log, showLog, askpass });
   context.subscriptions.push(askpass, ...registerSyncCommands(engine, repos));
 
+  // The engine binary and its log level are fixed when the engine process is
+  // set up, so a change takes a window reload.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration('gitglasses.engine.path') &&
+        !e.affectsConfiguration('gitglasses.engine.logLevel')
+      ) {
+        return;
+      }
+      void vscode.window
+        .showInformationMessage(
+          'GitGlasses: reload the window to apply the engine setting.',
+          'Reload Window',
+        )
+        .then((choice) => {
+          if (choice === 'Reload Window') {
+            void vscode.commands.executeCommand('workbench.action.reloadWindow');
+          }
+        });
+    }),
+  );
+
   const onTrustGranted = createTrustGrantHandler(engine, () => core.reload());
   context.subscriptions.push(
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
@@ -440,14 +463,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand('gitglasses.openOnRemote', () => openOnRemote('open')),
     vscode.commands.registerCommand('gitglasses.copyRemoteUrl', () => openOnRemote('copy')),
-    vscode.commands.registerCommand('gitglasses.openCommitOnRemote', async (node?: ViewNode) => {
-      if (typeof node?.sha !== 'string') return;
-      // The node carries no repo of its own, so the URL is built from the
-      // active repository — the same one the views the node came from render.
-      const repo = await requireRepo(repos);
-      if (!repo) return;
-      await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
-    }),
+    vscode.commands.registerCommand(
+      'gitglasses.openCommitOnRemote',
+      async (node?: ViewNode & { repoPath?: unknown }) => {
+        if (typeof node?.sha !== 'string') return;
+        // A blame hover names the repository; a view node carries none, so
+        // the URL is built from the active repository — the same one the
+        // views the node came from render.
+        if (typeof node.repoPath === 'string' && node.repoPath !== '') {
+          await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', node.repoPath);
+          return;
+        }
+        const repo = await requireRepo(repos);
+        if (!repo) return;
+        await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
+      },
+    ),
     ...registerPatchCommands(engine, repos, integrations),
     // Internal: which repository a file resolves to and which repositories
     // the views can act on, so a test or a bug report can tell a resolution

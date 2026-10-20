@@ -71,8 +71,17 @@ heatmap, a changes annotation, and CodeLens above files and symbols. Unsaved
 edits are blamed correctly. **Zen** mode hides all of it, and **Review** mode
 turns gutter blame on for every file you open.
 
+Blame follows git: `.mailmap` names, the repository's
+`.git-blame-ignore-revs` (or `blame.ignoreRevsFile`), and optionally `-w`
+and moved-line detection. The status bar item steps aside when VS Code's own
+blame item is showing, so a line is never described twice. Inline and status
+bar text, date style and delay are configurable (see [Settings](#settings)).
+
 *Limits:* without git (or in Restricted Mode) blame comes from the engine's
-built-in reader instead of `git blame`.
+built-in reader instead of `git blame`. Files tracked with Git LFS show where
+their content last changed instead of line blame, since git only stores a
+pointer for them. Blame pauses while a file has more than 8 MB of unsaved
+changes.
 
 ### File and line history
 

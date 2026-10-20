@@ -29,7 +29,7 @@ import {
   workspaceRelativePath,
 } from './memfsBridge';
 import { WebRepositoryService } from './webRepositoryService';
-import { WebDocumentSync } from './documentSyncWeb';
+import { DocumentSync } from '../engine/documentSync';
 import { createWasmModuleLoader } from './wasmModuleLoader';
 
 const NO_GIT_NOTICE_KEY = 'gitglasses.web.noGitNoticeShown';
@@ -177,7 +177,10 @@ export async function activate(
   context.subscriptions.push({ dispose: () => engine.dispose() });
 
   const repos = new WebRepositoryService(engine, folder.uri.path, DEFAULT_MOUNT_PATH);
-  const docSync = new WebDocumentSync(engine, repos);
+  // Web workspaces surface documents under the workspace folder's scheme
+  // (vscode-test-web:, vscode-vfs: or file:), so membership is decided by the
+  // repository service alone.
+  const docSync = new DocumentSync(engine, repos, { accepts: () => true });
   context.subscriptions.push(docSync);
 
   // Integrations run degraded on web: SecretStorage/fetch flows work, but

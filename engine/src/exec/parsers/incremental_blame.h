@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace gg::exec {
 
@@ -36,6 +37,12 @@ struct BlameHunk {
   std::optional<std::string> previousSha;
   std::optional<std::string> previousPath;
 };
+
+// Decodes a path git printed in C-quoted form ("caf\303\251.txt", with \t,
+// \n, \", \\ and octal escapes), which git uses for any path holding a byte
+// core.quotePath asks it to escape, and always for a quote, a backslash or a
+// control character. A path that is not quoted comes back unchanged.
+std::string unquoteCPath(std::string_view text);
 
 // Streaming parser for `git blame --incremental` output. Feed lines in order;
 // onHunk fires as each hunk group completes (metadata lines for a commit only

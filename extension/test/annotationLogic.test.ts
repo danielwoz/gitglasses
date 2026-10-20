@@ -6,6 +6,8 @@ import {
   continuationLabel,
   formatFileLensTitle,
   formatGutterLabel,
+  formatLfsGutterLabel,
+  formatLfsLensTitle,
   formatSymbolLensTitle,
   GUTTER_LABEL_WIDTH,
   HEATMAP_BUCKETS,
@@ -32,7 +34,7 @@ function hunk(sha: string, resultLine: number, lineCount: number): BlameHunk {
 
 function blame(hunks: BlameHunk[], commits: Record<string, BlameCommit>): FileBlame {
   const totalLines = hunks.reduce((max, h) => Math.max(max, h.resultLine + h.lineCount - 1), 0);
-  return { hunks, commits, totalLines };
+  return { hunks, commits, totalLines, lfs: false };
 }
 
 const SHA_A = 'a'.repeat(40);
@@ -173,9 +175,35 @@ describe('CodeLens aggregation', () => {
     expect(formatSymbolLensTitle(summary, NOW)).toBe('Uncommitted changes');
   });
 
-  it('reports empty ranges as unavailable', () => {
+  it('offers no title for a range nothing is attributed in', () => {
     const summary = summarizeRange(fb, 100, 120);
-    expect(formatFileLensTitle(summary, NOW)).toBe('Blame unavailable');
-    expect(formatSymbolLensTitle(summary, NOW)).toBe('Blame unavailable');
+    expect(formatFileLensTitle(summary, NOW)).toBeUndefined();
+    expect(formatSymbolLensTitle(summary, NOW)).toBeUndefined();
+  });
+});
+
+describe('Git LFS files', () => {
+  const pointer = {
+    ...blame([hunk(SHA_A, 1, 1), hunk(SHA_B, 2, 2)], {
+      [SHA_A]: commit('Ada', NOW - 10 * DAY),
+      [SHA_B]: commit('Grace', NOW - 2 * DAY),
+    }),
+    lfs: true,
+  };
+
+  it('labels the gutter with the last change to the content', () => {
+    const label = formatLfsGutterLabel(pointer, NOW);
+    expect(label?.length).toBe(GUTTER_LABEL_WIDTH);
+    expect(label?.trimEnd()).toBe('LFS bbbbbbbb Grace 2 days ago');
+  });
+
+  it('titles the file lens with it', () => {
+    expect(formatLfsLensTitle(pointer, NOW)).toBe('LFS file · last changed by Grace, 2 days ago');
+  });
+
+  it('has nothing to say about a pointer nobody committed', () => {
+    const fresh = { ...blame([hunk(UNCOMMITTED_SHA, 1, 3)], {}), lfs: true };
+    expect(formatLfsGutterLabel(fresh, NOW)).toBeUndefined();
+    expect(formatLfsLensTitle(fresh, NOW)).toBeUndefined();
   });
 });
