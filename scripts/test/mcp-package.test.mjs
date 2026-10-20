@@ -2,22 +2,27 @@
 // workspace dependencies, a self-contained CLI bundle, the metadata npm and
 // provenance need, and a README that is right for the npm page.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { builtinModules } from 'node:module';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  ENGINE_PACKAGES,
   NPM_README_TEMPLATE,
   PACKAGE_FILES,
+  engineManifest,
+  enginePackageFiles,
   npmReadmeProblems,
   publishedManifest,
   renderNpmReadme,
+  tarballName,
 } from '../lib/mcp-package.mjs';
 import { smokeTestMcpServer } from '../lib/mcp-smoke.mjs';
 import { readTarGz } from '../lib/tar.mjs';
+import { elfHeader, peHeader } from './fixtures.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const packageDir = path.join(root, 'mcp-server');
@@ -89,6 +94,59 @@ describe('gitglasses-mcp package', () => {
       bin: manifest.bin,
     });
     expect(published.dependencies).toEqual(manifest.dependencies);
+    // Every engine package of the same version, for npm to pick from.
+    expect(published.optionalDependencies).toEqual(
+      Object.fromEntries(ENGINE_PACKAGES.map((engine) => [engine.name, manifest.version])),
+    );
+  });
+
+  describe('engine packages', () => {
+    it('names one package per platform and CPU, with -musl for the static Alpine builds', () => {
+      expect(ENGINE_PACKAGES.map((engine) => [engine.target, engine.name])).toEqual([
+        ['linux-x64', '@gitglasses/engine-linux-x64'],
+        ['linux-arm64', '@gitglasses/engine-linux-arm64'],
+        ['alpine-x64', '@gitglasses/engine-linux-x64-musl'],
+        ['alpine-arm64', '@gitglasses/engine-linux-arm64-musl'],
+        ['darwin-x64', '@gitglasses/engine-darwin-x64'],
+        ['darwin-arm64', '@gitglasses/engine-darwin-arm64'],
+        ['win32-x64', '@gitglasses/engine-win32-x64'],
+        ['win32-arm64', '@gitglasses/engine-win32-arm64'],
+      ]);
+      // The names the server looks for (mcp-server/src/engine.ts) follow
+      // process.platform and process.arch.
+      for (const engine of ENGINE_PACKAGES) {
+        expect(engine.name).toBe(
+          `@gitglasses/engine-${engine.os}-${engine.cpu}${engine.libc === 'musl' ? '-musl' : ''}`,
+        );
+      }
+    });
+
+    it('restricts each package to its platform and ships the engine with its notices', () => {
+      const alpine = ENGINE_PACKAGES.find((engine) => engine.target === 'alpine-arm64');
+      expect(engineManifest(alpine, manifest)).toMatchObject({
+        name: '@gitglasses/engine-linux-arm64-musl',
+        version: manifest.version,
+        license: 'MIT',
+        os: ['linux'],
+        cpu: ['arm64'],
+        libc: ['musl'],
+        files: ['bin/gitglasses-engine', 'NOTICE'],
+        publishConfig: { access: 'public', provenance: true },
+      });
+      expect(engineManifest(alpine, manifest).repository.url).toBe(manifest.repository.url);
+      const windows = ENGINE_PACKAGES.find((engine) => engine.target === 'win32-x64');
+      expect(engineManifest(windows, manifest)).not.toHaveProperty('libc');
+      expect(enginePackageFiles(windows)).toEqual([
+        'LICENSE',
+        'NOTICE',
+        'README.md',
+        'bin/gitglasses-engine.exe',
+        'package.json',
+      ]);
+      expect(tarballName('@gitglasses/engine-win32-x64', '1.2.3')).toBe(
+        'gitglasses-engine-win32-x64-1.2.3.tgz',
+      );
+    });
   });
 
   describe.skipIf(!existsSync(cli))('built CLI', () => {
@@ -115,6 +173,66 @@ describe('gitglasses-mcp package', () => {
       for (const readme of [repositoryReadme, npmReadme]) {
         const documented = [...readme.matchAll(/^\| `([a-z_]+)` \|/gm)].map((match) => match[1]);
         expect(documented.sort()).toEqual([...tools].sort());
+      }
+    });
+
+    it('packs an engine package for each engine build, and refuses a wrong or missing one', () => {
+      const work = mkdtempSync(path.join(tmpdir(), 'gitglasses-engine-pack-'));
+      const engines = path.join(work, 'engines');
+      const write = (target, file, data) => {
+        mkdirSync(path.join(engines, `engine-${target}`), { recursive: true });
+        writeFileSync(path.join(engines, `engine-${target}`, file), data);
+      };
+      const packScript = path.join(root, 'scripts', 'pack-mcp.mjs');
+      const run = (...args) =>
+        spawnSync(process.execPath, [packScript, '--out', path.join(work, 'out'), ...args], {
+          encoding: 'utf8',
+        });
+      try {
+        write('linux-x64', 'gitglasses-engine', elfHeader());
+        write('win32-x64', 'gitglasses-engine.exe', peHeader());
+        const packed = run('--engines', engines);
+        expect(packed.status, packed.stderr).toBe(0);
+        const tarballs = packed.stdout
+          .trim()
+          .split('\n')
+          .map((line) => path.basename(line));
+        expect(tarballs.sort()).toEqual(
+          [
+            tarballName('@gitglasses/engine-linux-x64', manifest.version),
+            tarballName('@gitglasses/engine-win32-x64', manifest.version),
+            `gitglasses-mcp-${manifest.version}.tgz`,
+          ].sort(),
+        );
+
+        const linux = ENGINE_PACKAGES.find((engine) => engine.target === 'linux-x64');
+        const files = readTarGz(
+          readFileSync(path.join(work, 'out', tarballName(linux.name, manifest.version))),
+        );
+        expect([...files.keys()].sort()).toEqual(
+          enginePackageFiles(linux).map((file) => `package/${file}`),
+        );
+        expect(JSON.parse(files.get('package/package.json').data.toString('utf8'))).toEqual(
+          engineManifest(linux, manifest),
+        );
+        expect(files.get('package/bin/gitglasses-engine').data.equals(elfHeader())).toBe(true);
+        expect(files.get('package/bin/gitglasses-engine').mode & 0o111).toBe(0o111);
+        expect(files.get('package/NOTICE').data.toString('utf8')).toBe(
+          readFileSync(path.join(root, 'NOTICE'), 'utf8'),
+        );
+
+        // A release needs every engine its optional dependencies name.
+        const incomplete = run('--engines', engines, '--all-engines');
+        expect(incomplete.status).toBe(1);
+        expect(incomplete.stderr).toContain('no linux-arm64 engine');
+
+        // An import library or a binary for another platform never ships.
+        write('darwin-arm64', 'gitglasses-engine', elfHeader());
+        const wrong = run('--engines', engines);
+        expect(wrong.status).toBe(1);
+        expect(wrong.stderr).toContain('is not a darwin-arm64 executable');
+      } finally {
+        rmSync(work, { recursive: true, force: true });
       }
     });
 

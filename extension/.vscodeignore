@@ -3,6 +3,7 @@
 # not being matched at all.
 **
 !dist/extension.js
+!dist/mcp/cli.js
 !dist/web/*.js
 !dist/web/*.mjs
 !dist/web/*.wasm

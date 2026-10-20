@@ -297,6 +297,34 @@ export const RequestSchemas = {
       strict,
     ),
   },
+  'log/compare': {
+    description:
+      "Compares two revisions as `git log base..head` and `git rev-list --left-right --count base...head` do: their merge base, how many commits head has that base lacks (ahead) and base has that head lacks (behind), and up to `limit` of head's own commits, newest first. Diffing from `mergeBase` (diff/refs, patch/create's range) shows what head changed since the two diverged. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        base: positional('Revision compared against, such as main or origin/main.'),
+        head: positional('Revision compared, such as HEAD or a feature branch.'),
+        limit: Limit,
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        /** The commits `base` and `head` resolved to. */
+        base: Sha,
+        head: Sha,
+        /** The best common ancestor; absent when the histories are unrelated. */
+        mergeBase: Type.Optional(Sha),
+        ahead: Type.Integer({ minimum: 0 }),
+        behind: Type.Integer({ minimum: 0 }),
+        /** Head's own commits in topological order, newest first; `ahead`
+         *  counts all of them. */
+        commits: Type.Array(CommitSummaryInfo),
+      },
+      strict,
+    ),
+  },
   'commit/details': {
     description: `One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most ${COMMIT_DETAILS_MAX_FILES} files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.`,
     params: Type.Object(
@@ -1251,6 +1279,7 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'repo/state',
   'blame/file',
   'log/commits',
+  'log/compare',
   'search/commits',
   'rev/fileAtRev',
   'refs/list',

@@ -1,7 +1,9 @@
 // Checks a packaged VSIX against what every GitGlasses release must carry:
-// the right target platform, exactly the right engine for it, the license,
-// third-party notices, a changelog entry for the version, and the icon.
+// the right target platform, exactly the right engine for it, the bundled MCP
+// server, the license, third-party notices, a changelog entry for the
+// version, and the icon.
 
+import { builtinModules } from 'node:module';
 import { hasChangelogEntry } from './changelog.mjs';
 import { readZipEntries, readZipEntry } from './zip.mjs';
 import {
@@ -22,6 +24,8 @@ const CHANGELOG = 'extension/changelog.md';
 const BIN_PREFIX = 'extension/bin/';
 const WEB_BUNDLE = 'extension/dist/web/extension.js';
 const WEB_WASM = 'extension/dist/web/gitglasses-engine-wasm.wasm';
+/** The MCP server the extension registers with the editor's agents. */
+export const MCP_BUNDLE = 'extension/dist/mcp/cli.js';
 const MIN_ICON_SIZE = 128;
 
 /**
@@ -81,6 +85,7 @@ export function inspectVsix(archive, { target, version } = {}) {
     (name) => name.startsWith(BIN_PREFIX) && !name.endsWith('/'),
   );
   let engine;
+  let mcp;
   if (target === WEB_TARGET) {
     if (binEntries.length > 0)
       problems.push(`web package carries native files: ${binEntries.join(', ')}`);
@@ -108,11 +113,46 @@ export function inspectVsix(archive, { target, version } = {}) {
         problems.push('engine is not marked executable');
       engine = { name: expected, size: entry.size, compressedSize: entry.compressedSize, data };
     }
+    if (!entries.has(MCP_BUNDLE)) {
+      problems.push(`${MCP_BUNDLE} is missing`);
+    } else {
+      const bundle = read(MCP_BUNDLE);
+      problems.push(...mcpBundleProblems(bundle.toString('utf8'), expectedVersion));
+      mcp = { name: MCP_BUNDLE, data: bundle };
+    }
   } else {
     problems.push(`unknown target ${target}`);
   }
 
-  return { problems, packageJson, engine, entries };
+  return { problems, packageJson, engine, mcp, entries };
+}
+
+/**
+ * What would stop the bundled MCP server from running on its own: the
+ * editor's Node runs it straight from the extension directory, which has no
+ * node_modules, so it may load nothing but Node's built-in modules. A
+ * `require("…")` inside a string is code a library generates, not a load.
+ */
+export function mcpBundleProblems(source, version) {
+  const problems = [];
+  const builtins = new Set(builtinModules);
+  const loaded = new Set();
+  for (const match of source.matchAll(/(?<!['"`])\brequire\("([^"]+)"\)/g)) {
+    const name = match[1];
+    if (!name.startsWith('node:') && !builtins.has(name)) loaded.add(name);
+  }
+  if (loaded.size > 0) {
+    problems.push(
+      `${MCP_BUNDLE} loads modules that are not bundled: ${[...loaded].sort().join(', ')}`,
+    );
+  }
+  if (/^\s*(import|export)\s/m.test(source)) {
+    problems.push(`${MCP_BUNDLE} is an ES module; the editor's Node runs it as CommonJS`);
+  }
+  if (version !== undefined && !source.includes(JSON.stringify(version))) {
+    problems.push(`${MCP_BUNDLE} does not report version ${version}`);
+  }
+  return problems;
 }
 
 function iconProblems(entries, read, icon) {

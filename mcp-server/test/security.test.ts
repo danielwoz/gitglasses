@@ -150,6 +150,20 @@ describe('repository containment', () => {
     expect(parseAllowedRoots(work, [code])).toEqual([work, code]);
     expect(parseAllowedRoots(undefined, [code])).toEqual([code]);
   });
+
+  // A folder name may hold the list separator (":" or ";"), or end in a
+  // space; split or trimmed, it would name other directories, or "*".
+  it('takes each --allow directory whole, however it is spelled', () => {
+    const odd = path.join(base, `client${path.delimiter}legacy`);
+    const wildcard = `${work}${path.delimiter}*`;
+    const spaced = `${work} `;
+    expect(parseAllowedRoots('', [odd])).toEqual([odd]);
+    expect(isWithinAllowedRoots(path.join(base, 'client', 'repo'), [odd])).toBe(false);
+    expect(parseAllowedRoots('', [wildcard])).toEqual([wildcard]);
+    expect(isWithinAllowedRoots(path.resolve('anything'), [wildcard])).toBe(false);
+    expect(parseAllowedRoots('', [spaced])).toEqual([spaced]);
+    expect(isWithinAllowedRoots(path.join(work, 'repoA'), [spaced])).toBe(false);
+  });
 });
 
 // path.resolve collapses "..", but it does not follow symlinks, so a lexical

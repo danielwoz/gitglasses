@@ -571,6 +571,150 @@
         }
       }
     },
+    "log/compare": {
+      "description": "Compares two revisions as `git log base..head` and `git rev-list --left-right --count base...head` do: their merge base, how many commits head has that base lacks (ahead) and base has that head lacks (behind), and up to `limit` of head's own commits, newest first. Diffing from `mergeBase` (diff/refs, patch/create's range) shows what head changed since the two diverged. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "base",
+          "head"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "base": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision compared against, such as main or origin/main.",
+            "type": "string"
+          },
+          "head": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision compared, such as HEAD or a feature branch.",
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base",
+          "head",
+          "ahead",
+          "behind",
+          "commits"
+        ],
+        "properties": {
+          "base": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "head": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "mergeBase": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "ahead": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "behind": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "parents",
+                "author",
+                "committer",
+                "summary"
+              ],
+              "properties": {
+                "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
+                  "type": "string"
+                },
+                "parents": {
+                  "type": "array",
+                  "items": {
+                    "pattern": "^[0-9a-f]{40}$",
+                    "description": "Full 40-character lowercase hex object id.",
+                    "type": "string"
+                  }
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "committer": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "commit/details": {
       "description": "One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most 2000 files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
       "params": {
@@ -4470,6 +4614,7 @@
     "repo/state",
     "blame/file",
     "log/commits",
+    "log/compare",
     "search/commits",
     "rev/fileAtRev",
     "refs/list",

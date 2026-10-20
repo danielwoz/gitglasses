@@ -1,10 +1,16 @@
-// The server reports the version of the gitglasses-mcp package it ships in,
-// read from the package manifest next to the built (or bundled) code.
+// The server reports the version of the package it ships in. The copy bundled
+// into the GitGlasses extension has it compiled in (GITGLASSES_MCP_VERSION);
+// the npm package reads it from the manifest next to the built code.
 
 import { readFileSync } from 'node:fs';
 
-export const SERVER_VERSION: string = (
-  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    version: string;
-  }
-).version;
+declare const GITGLASSES_MCP_VERSION: string | undefined;
+
+export const SERVER_VERSION: string =
+  typeof GITGLASSES_MCP_VERSION === 'string'
+    ? GITGLASSES_MCP_VERSION
+    : (
+        JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+          version: string;
+        }
+      ).version;

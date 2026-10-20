@@ -195,6 +195,125 @@ TEST(HistoryService, LogCommitsHonorsRefAndOversizedLimit) {
   EXPECT_EQ(badLimit["error"]["code"], -32602);
 }
 
+// main and a feature branch that diverged, with main merged into the feature
+// branch once along the way: the merged-in main commits belong to both sides.
+void buildDivergedBranches(FixtureRepo& fixture) {
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  commitTick(fixture, "feature one", 2);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "main one", 3);
+  fixture.run("git checkout -q feature");
+  fixture.runAt("@1700000240 +0000", "git merge -q --no-ff --no-edit main");
+  commitTick(fixture, "feature two", 5);
+  commitTick(fixture, "feature three", 6);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "main two", 7);
+  commitTick(fixture, "main three", 8);
+}
+
+TEST(HistoryService, LogCompareMatchesRevListAndMergeBase) {
+  FixtureRepo fixture;
+  buildDivergedBranches(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json compared = session.request(
+      req(10, "log/compare", {{"repoId", repoId}, {"base", "main"}, {"head", "feature"}}));
+  ASSERT_TRUE(compared.contains("result")) << compared.dump();
+  const Json& result = compared["result"];
+
+  EXPECT_EQ(result["base"], gitLines(fixture.root(), "rev-parse main")[0]);
+  EXPECT_EQ(result["head"], gitLines(fixture.root(), "rev-parse feature")[0]);
+  EXPECT_EQ(result["mergeBase"], gitLines(fixture.root(), "merge-base main feature")[0]);
+
+  // git rev-list --left-right --count main...feature prints "behind\tahead".
+  const std::string counts =
+      gitLines(fixture.root(), "rev-list --left-right --count main...feature")[0];
+  const auto tab = counts.find('\t');
+  EXPECT_EQ(result["behind"].get<std::int64_t>(), std::stoll(counts.substr(0, tab)));
+  EXPECT_EQ(result["ahead"].get<std::int64_t>(), std::stoll(counts.substr(tab + 1)));
+  EXPECT_EQ(result["ahead"], 4);
+  EXPECT_EQ(result["behind"], 2);
+
+  // The same commits git lists for main..feature, each before its parents.
+  auto expected = gitLines(fixture.root(), "rev-list main..feature");
+  std::vector<std::string> listed;
+  std::map<std::string, size_t> position;
+  for (const auto& commit : result["commits"]) {
+    position[commit["sha"].get<std::string>()] = listed.size();
+    listed.push_back(commit["sha"]);
+  }
+  std::sort(expected.begin(), expected.end());
+  auto sortedListed = listed;
+  std::sort(sortedListed.begin(), sortedListed.end());
+  EXPECT_EQ(sortedListed, expected);
+  for (const auto& commit : result["commits"]) {
+    for (const auto& parent : commit["parents"]) {
+      const auto found = position.find(parent.get<std::string>());
+      if (found == position.end()) continue;
+      EXPECT_LT(position.at(commit["sha"].get<std::string>()), found->second);
+    }
+  }
+  EXPECT_EQ(result["commits"][0]["summary"], "feature three");
+}
+
+TEST(HistoryService, LogCompareLimitsTheListButNotTheCounts) {
+  FixtureRepo fixture;
+  buildDivergedBranches(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json compared = session.request(
+      req(10, "log/compare",
+          {{"repoId", repoId}, {"base", "main"}, {"head", "feature"}, {"limit", 2}}));
+  ASSERT_TRUE(compared.contains("result")) << compared.dump();
+  EXPECT_EQ(compared["result"]["commits"].size(), 2u);
+  EXPECT_EQ(compared["result"]["ahead"], 4);
+
+  // Comparing a revision with itself, or with its own ancestor.
+  Json same = session.request(
+      req(11, "log/compare", {{"repoId", repoId}, {"base", "main"}, {"head", "main"}}));
+  EXPECT_EQ(same["result"]["ahead"], 0);
+  EXPECT_EQ(same["result"]["behind"], 0);
+  EXPECT_TRUE(same["result"]["commits"].empty());
+  EXPECT_EQ(same["result"]["mergeBase"], same["result"]["head"]);
+
+  Json ancestor = session.request(
+      req(12, "log/compare", {{"repoId", repoId}, {"base", "main~2"}, {"head", "main"}}));
+  EXPECT_EQ(ancestor["result"]["ahead"], 2);
+  EXPECT_EQ(ancestor["result"]["behind"], 0);
+  EXPECT_EQ(ancestor["result"]["mergeBase"], ancestor["result"]["base"]);
+}
+
+TEST(HistoryService, LogCompareReportsUnrelatedHistoriesAndUnknownRevisions) {
+  FixtureRepo fixture;
+  commitTick(fixture, "main one", 1);
+  fixture.run("git checkout -q --orphan other");
+  commitTick(fixture, "other root", 2);
+  commitTick(fixture, "other two", 3);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json unrelated = session.request(
+      req(10, "log/compare", {{"repoId", repoId}, {"base", "main"}, {"head", "other"}}));
+  ASSERT_TRUE(unrelated.contains("result")) << unrelated.dump();
+  EXPECT_FALSE(unrelated["result"].contains("mergeBase"));
+  EXPECT_EQ(unrelated["result"]["ahead"], 2);
+  EXPECT_EQ(unrelated["result"]["behind"], 2);
+
+  Json unknown = session.request(
+      req(11, "log/compare", {{"repoId", repoId}, {"base", "no-such-ref"}, {"head", "HEAD"}}));
+  EXPECT_EQ(unknown["error"]["code"], -32001);
+  EXPECT_NE(unknown["error"]["message"].get<std::string>().find("no-such-ref"), std::string::npos);
+
+  Json missing = session.request(req(12, "log/compare", {{"repoId", repoId}, {"base", "main"}}));
+  EXPECT_EQ(missing["error"]["code"], -32602);
+}
+
 // main: initial, base, a feature branch merged with --no-ff, then `after`
 // single-parent commits on top, so the newest commits form a first-parent run
 // that ends at the merge.

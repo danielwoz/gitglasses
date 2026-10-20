@@ -378,6 +378,9 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
                  {{"repoId", repoId}, {"sha", log["commits"][0]["sha"]}});
   checkedRequest(session, 12, "diff/refs",
                  {{"repoId", repoId}, {"base", "feature"}, {"head", "main"}});
+  Json compared = checkedRequest(session, 12, "log/compare",
+                                 {{"repoId", repoId}, {"base", "feature"}, {"head", "main"}});
+  EXPECT_TRUE(compared.contains("mergeBase"));
   Json hunks =
       checkedRequest(session, 13, "diff/fileHunks", {{"repoId", repoId}, {"path", "src/main.txt"}});
   EXPECT_FALSE(hunks.value("hunks", Json::array()).empty());
