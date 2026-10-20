@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CredentialScopeError,
+  supportsSnippets,
   type FetchLike,
   type HttpRequestInit,
   type HttpResponseLike,
@@ -17,6 +18,7 @@ import {
   buildHostingEntries,
   buildIssueEntries,
   detectHosts,
+  getSnippetText,
   guessProviderFromHostname,
   issueCredentialHost,
   toAuthContext,
@@ -224,6 +226,45 @@ describe('toAuthContext', () => {
       host: 'gitlab.corp.example',
     });
     expect(toAuthContext({ token: 't' }, '')).toEqual({ token: 't' });
+  });
+});
+
+describe('getSnippetText', () => {
+  const gist = 'https://gist.github.com/alice/0123456789abcdef0123456789abcdef';
+
+  function snippetHost(setting: { domain: string; provider: string }, fetchFn: FetchLike) {
+    const entry = buildHostingEntries([setting], fetchFn).entries.get(setting.domain);
+    if (!entry || !supportsSnippets(entry.provider)) throw new Error('no snippet host');
+    return entry.provider;
+  }
+
+  it('fetches a snippet from the host its credential was stored under', async () => {
+    const requests: Recorded = [];
+    const fetchFn: FetchLike = async (url, init) => {
+      requests.push({ url, init });
+      return url.includes('/gists/')
+        ? jsonResponse({ files: { 'a.ggpatch': { content: 'PATCH' } } })
+        : { ...jsonResponse(null), text: async () => 'RAW' };
+    };
+    const github = snippetHost({ domain: 'github.com', provider: 'github' }, fetchFn);
+    expect(await getSnippetText(github, credential, 'github.com', gist)).toBe('PATCH');
+    const corp = snippetHost({ domain: 'gitlab.corp.example', provider: 'gitlab' }, fetchFn);
+    const snippet = 'https://gitlab.corp.example/-/snippets/12';
+    expect(await getSnippetText(corp, credential, 'gitlab.corp.example', snippet)).toBe('RAW');
+    expect(requests.map((r) => r.url)).toEqual([
+      'https://api.github.com/gists/0123456789abcdef0123456789abcdef',
+      'https://gitlab.corp.example/api/v4/snippets/12/raw',
+    ]);
+  });
+
+  it('refuses to send a credential to a provider serving another host', async () => {
+    const { fetchFn, requests } = recordingFetch();
+    const gitlab = snippetHost({ domain: 'gitlab.com', provider: 'gitlab' }, fetchFn);
+    const snippet = 'https://gitlab.com/-/snippets/12';
+    await expect(
+      getSnippetText(gitlab, credential, 'gitlab.corp.example', snippet),
+    ).rejects.toBeInstanceOf(CredentialScopeError);
+    expect(requests).toEqual([]);
   });
 });
 

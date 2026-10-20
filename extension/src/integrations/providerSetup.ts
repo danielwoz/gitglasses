@@ -13,6 +13,7 @@ import {
   type HostingProvider,
   type IssueProvider,
   type RepoDescriptor,
+  type SnippetHost,
 } from '@gitglasses/integrations';
 
 /** One `gitglasses.integrations.hosts` entry. */
@@ -58,6 +59,16 @@ export function toAuthContext(credential: StoredCredential, host: string | undef
   if (credential.username) context.username = credential.username;
   if (host) context.host = host;
   return context;
+}
+
+/** A snippet's text from a connected host, its credential scoped to that host. */
+export function getSnippetText(
+  provider: SnippetHost,
+  credential: StoredCredential,
+  host: string,
+  url: string,
+): Promise<string> {
+  return provider.getSnippet(toAuthContext(credential, host), url);
 }
 
 function isHostSetting(value: unknown): value is HostSetting {
