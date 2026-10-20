@@ -255,6 +255,39 @@ describe('registration failures and bursts of changes', () => {
     expect(state.logs.join('\n')).toContain('not contributed');
   });
 
+  it('reports a Cursor registration that failed only until one succeeds', async () => {
+    const calls: string[] = [];
+    let failures = 1;
+    const api: McpApi = {
+      cursor: {
+        mcp: {
+          registerServer: () => {
+            calls.push('register');
+            if (failures-- > 0) throw new Error('MCP service not ready');
+          },
+          unregisterServer: () => calls.push('unregister'),
+        },
+      },
+    };
+    const { host, state, changeWorkspace } = setup(api);
+    const registration = registerMcpServer(host);
+    const statuses: string[] = [];
+    registration.onDidChangeStatus((status) => statuses.push(status.state));
+    await settle();
+    expect(registration.status()).toEqual({
+      state: 'unavailable',
+      host: 'cursor',
+      reason: 'the editor refused the registration',
+    });
+    expect(state.logs.join('\n')).toContain('MCP service not ready');
+
+    changeWorkspace();
+    for (let i = 0; i < 3; i++) await settle();
+    expect(calls).toEqual(['register', 'register']);
+    expect(registration.status()).toMatchObject({ state: 'registered', host: 'cursor' });
+    expect(statuses.at(-1)).toBe('registered');
+  });
+
   it('keeps one Cursor registration however quickly the workspace changes', async () => {
     const { api, calls } = cursorApi();
     const { host, changeWorkspace } = setup(api);

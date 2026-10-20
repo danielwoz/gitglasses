@@ -233,11 +233,15 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
     }
   } else if (editor === 'cursor') {
     // One sync at a time, so changes in quick succession never register twice.
+    // A failure shows until a later sync gets through.
     let syncing: Promise<void> = Promise.resolve();
     const sync = (): void => {
       syncing = syncing
         .then(syncCursor)
-        .then(() => statusChanged.fire(status()))
+        .then(() => {
+          registrationFailed = false;
+          statusChanged.fire(status());
+        })
         .catch((error) => {
           registrationFailed = true;
           host.log(`MCP server: Cursor registration failed: ${String(error)}`);
