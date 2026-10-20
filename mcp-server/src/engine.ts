@@ -62,6 +62,8 @@ export const ENGINE_NOT_FOUND_MESSAGE =
 export interface CreateEngineClientOptions {
   /** Resolved engine binary path; undefined defers the failure to first use. */
   enginePath: string | undefined;
+  /** Starts the engine with --restricted: it runs no git and changes nothing. */
+  restricted?: boolean;
   onLog?: (line: string) => void;
   /** Per-request ceiling; defaults to the client's own default. */
   requestTimeoutMs?: number;
@@ -76,7 +78,11 @@ export function createEngineClient(options: CreateEngineClientOptions): EngineCl
   return new EngineClient(
     () => {
       if (!options.enginePath) throw new Error(ENGINE_NOT_FOUND_MESSAGE);
-      return new ProcessTransport({ enginePath: options.enginePath, onLog: options.onLog });
+      return new ProcessTransport({
+        enginePath: options.enginePath,
+        restricted: options.restricted,
+        onLog: options.onLog,
+      });
     },
     {
       autoStart: true,

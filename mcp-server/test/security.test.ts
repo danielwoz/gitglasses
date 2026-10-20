@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  ALLOW_ANY,
   canonicalPath,
   configuredGitHubHost,
   createToolHandlers,
@@ -137,10 +138,17 @@ describe('repository containment', () => {
     expect(isWithinAllowedRoots(path.resolve('somewhere-else'), roots)).toBe(false);
   });
 
-  it('is unrestricted when unset, preserving existing setups', () => {
+  it('admits nothing from an empty list, and everything from "*"', () => {
     expect(parseAllowedRoots(undefined)).toEqual([]);
     expect(parseAllowedRoots('   ')).toEqual([]);
-    expect(isWithinAllowedRoots(path.resolve('anything'), [])).toBe(true);
+    expect(isWithinAllowedRoots(path.resolve('anything'), [])).toBe(false);
+    expect(parseAllowedRoots('*')).toEqual([ALLOW_ANY]);
+    expect(isWithinAllowedRoots(path.resolve('anything'), [ALLOW_ANY])).toBe(true);
+  });
+
+  it('merges --allow directories after the environment list', () => {
+    expect(parseAllowedRoots(work, [code])).toEqual([work, code]);
+    expect(parseAllowedRoots(undefined, [code])).toEqual([code]);
   });
 });
 
@@ -214,7 +222,7 @@ describe('symlinked repository containment', () => {
       env: { GITGLASSES_ALLOWED_ROOTS: jail },
     });
     await expect(handlers.git_status({ repoPath: escaping })).rejects.toThrow(
-      /outside GITGLASSES_ALLOWED_ROOTS/,
+      /outside the directories this server was started with/,
     );
   });
 
