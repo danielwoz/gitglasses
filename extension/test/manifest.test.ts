@@ -1,6 +1,6 @@
 // What the manifest promises the user before any code runs: palette entries
-// only where a command can act, one category for every command, and view
-// states the extension renders itself.
+// only where a command can act, one category for every command, a focused
+// default sidebar, and view states the extension renders itself.
 
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
@@ -103,6 +103,22 @@ describe('command palette', () => {
 
 describe('sidebar', () => {
   const sidebar = views.gitglasses;
+
+  it('opens on a focused set of views and keeps the rest a click away', () => {
+    const expanded = sidebar.filter((view) => !view.visibility || view.visibility === 'visible');
+    const collapsed = sidebar.filter((view) => view.visibility === 'collapsed');
+    const hidden = sidebar.filter((view) => view.visibility === 'hidden');
+    expect(expanded.map((view) => view.name)).toEqual(['Home', 'Commits', 'File History']);
+    expect(collapsed.map((view) => view.name)).toEqual([
+      'Branches',
+      'Worktrees',
+      'Search & Compare',
+      'Launchpad',
+    ]);
+    expect(hidden.map((view) => view.name).sort()).toEqual(
+      ['Contributors', 'Remotes', 'Stashes', 'Tags'].sort(),
+    );
+  });
 
   it('contributes no welcome content, which some hosts show in place of the tree', () => {
     expect(manifest.contributes.viewsWelcome).toBeUndefined();

@@ -4,7 +4,6 @@ import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, ViewBase, ViewNode, messageNode, withRepo } from '../views/viewBase';
-import { commitNode } from '../views/nodes';
 import type { LaunchpadService } from '../integrations/launchpadService';
 import { BUCKET_LABELS } from '../integrations/launchpadLogic';
 import { setStatus } from '../commands/ui';
@@ -14,7 +13,6 @@ import { conflictLabel } from '../model/conflictLogic';
 import { allowedDespiteConflicts } from '../commands/conflictGuard';
 
 const REFRESH_DEBOUNCE_MS = 300;
-const RECENT_COMMITS = 5;
 
 export const GET_STARTED_DISMISSED_KEY = 'gitglasses.home.getStartedDismissed';
 
@@ -82,7 +80,8 @@ function conflictsSection(repo: ActiveRepo, conflicted: readonly string[]): View
 }
 
 // Home: at-a-glance branch card with quick actions, a launchpad glimpse,
-// recent commits, and a dismissible get-started section.
+// and a dismissible get-started section. Recent commits are the Commits
+// view's job, right below.
 export class HomeViewProvider extends ViewBase {
   private refreshTimer: NodeJS.Timeout | undefined;
 
@@ -106,17 +105,15 @@ export class HomeViewProvider extends ViewBase {
   }
 
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
-    // The three sections read independent sources, so they are fetched
-    // together: the view renders one round trip after the repo resolves.
-    const [status, glimpse, recent] = await Promise.all([
+    // The sections read independent sources, so they are fetched together:
+    // the view renders one round trip after the repo resolves.
+    const [status, glimpse] = await Promise.all([
       this.engine.request('status/summary', { repoId: repo.repoId }),
       this.launchpadGlimpse(),
-      this.recentActivity(repo),
     ]);
     const nodes: ViewNode[] = [this.branchCard(status)];
     if (status.conflicted.length > 0) nodes.push(conflictsSection(repo, status.conflicted));
     nodes.push(glimpse);
-    nodes.push(recent);
     if (showGetStarted(this.globalState.get<boolean>(GET_STARTED_DISMISSED_KEY))) {
       nodes.push(this.getStarted());
     }
@@ -167,16 +164,6 @@ export class HomeViewProvider extends ViewBase {
       children = [messageNode('Launchpad unavailable')];
     }
     return sectionNode('Launchpad', 'rocket', children, description);
-  }
-
-  private async recentActivity(repo: ActiveRepo): Promise<ViewNode> {
-    const { commits } = await this.engine.request('log/commits', {
-      repoId: repo.repoId,
-      limit: RECENT_COMMITS,
-    });
-    const children =
-      commits.length > 0 ? commits.map(commitNode) : [messageNode('No commits yet')];
-    return sectionNode('Recent Activity', 'history', children);
   }
 
   private getStarted(): ViewNode {

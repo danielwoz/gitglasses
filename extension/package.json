@@ -430,29 +430,12 @@
           "name": "Home"
         },
         {
-          "id": "gitglasses.views.launchpad",
-          "name": "Launchpad"
-        },
-        {
           "id": "gitglasses.views.commits",
           "name": "Commits"
         },
         {
           "id": "gitglasses.views.branches",
-          "name": "Branches"
-        },
-        {
-          "id": "gitglasses.views.remotes",
-          "name": "Remotes",
-          "visibility": "collapsed"
-        },
-        {
-          "id": "gitglasses.views.stashes",
-          "name": "Stashes"
-        },
-        {
-          "id": "gitglasses.views.tags",
-          "name": "Tags",
+          "name": "Branches",
           "visibility": "collapsed"
         },
         {
@@ -460,19 +443,39 @@
           "name": "File History"
         },
         {
+          "id": "gitglasses.views.worktrees",
+          "name": "Worktrees",
+          "visibility": "collapsed"
+        },
+        {
           "id": "gitglasses.views.searchCompare",
           "name": "Search & Compare",
           "visibility": "collapsed"
         },
         {
-          "id": "gitglasses.views.contributors",
-          "name": "Contributors",
+          "id": "gitglasses.views.launchpad",
+          "name": "Launchpad",
           "visibility": "collapsed"
         },
         {
-          "id": "gitglasses.views.worktrees",
-          "name": "Worktrees",
-          "visibility": "collapsed"
+          "id": "gitglasses.views.stashes",
+          "name": "Stashes",
+          "visibility": "hidden"
+        },
+        {
+          "id": "gitglasses.views.tags",
+          "name": "Tags",
+          "visibility": "hidden"
+        },
+        {
+          "id": "gitglasses.views.remotes",
+          "name": "Remotes",
+          "visibility": "hidden"
+        },
+        {
+          "id": "gitglasses.views.contributors",
+          "name": "Contributors",
+          "visibility": "hidden"
         }
       ]
     },
