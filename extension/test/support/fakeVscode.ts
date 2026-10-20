@@ -86,12 +86,15 @@ export const controls = {
   documentClosed: new EventEmitter<FakeTextDocument>(),
   documentSaved: new EventEmitter<FakeTextDocument>(),
   messages: [] as string[],
+  /** Documents workspace.textDocuments lists. */
+  openDocuments: [] as Array<{ uri: FakeUri }>,
 
   reset(): void {
     this.folders = [];
     this.settings.clear();
     this.watchedPatterns = [];
     this.messages = [];
+    this.openDocuments = [];
   },
 
   /** Fires a configuration change touching the given setting keys. */
@@ -125,8 +128,8 @@ export const workspace = {
       index,
     }));
   },
-  get textDocuments(): FakeTextDocument[] {
-    return [];
+  get textDocuments(): Array<{ uri: FakeUri }> {
+    return controls.openDocuments;
   },
   getConfiguration(section: string) {
     return {

@@ -16,7 +16,11 @@ import { LineBlameController } from './annotations/lineBlame';
 import { FileAnnotationsController } from './annotations/fileAnnotations';
 import { BlameHoverProvider } from './annotations/hoverProvider';
 import { BlameCodeLensProvider } from './codelens/blameCodeLens';
-import { RevisionContentProvider, encodeRevisionUri } from './scm/revisionContentProvider';
+import {
+  RevisionContentProvider,
+  encodeRevisionUri,
+  setRevisionRootLookup,
+} from './scm/revisionContentProvider';
 import { QuickDiffSources, hasBuiltinGit } from './scm/quickDiffSources';
 import { ViewBase, ViewNode, setActiveRepoResolver } from './views/viewBase';
 import { CommitsViewProvider } from './views/commitsView';
@@ -148,7 +152,13 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const lineBlame = new LineBlameController(blame, repos);
   const fileAnnotations = new FileAnnotationsController(blame, repos, context.workspaceState);
   const codeLens = new BlameCodeLensProvider(blame, repos);
-  const revisionContent = new RevisionContentProvider(engine);
+  // Revision documents record their repository's root, so one read after an
+  // engine restart (which hands out new repo ids) still finds it.
+  setRevisionRootLookup((repoId) => repos.rootOf(repoId));
+  const revisionContent = new RevisionContentProvider(
+    engine,
+    (root) => repos.repositories().find((repo) => repos.isRootOf(repo.repoId, root))?.repoId,
+  );
 
   const auth = new AuthManager(context.secrets);
   const integrations = new IntegrationService(auth);
@@ -206,11 +216,15 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const onHeadChanged = (repoId: string): void => {
     refreshViews(HISTORY_VIEWS);
     refreshAnnotations(repoId);
+    // Open "HEAD" documents (Open Changes with HEAD, quick diff) now name
+    // other content.
+    revisionContent.refreshMoved(repoId);
     conflicts.schedule();
   };
   const refreshAll = (): void => {
     refreshAnnotations();
     refreshViews();
+    revisionContent.refreshMoved();
     conflicts.schedule();
   };
   const reload = async (): Promise<void> => {
@@ -220,6 +234,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     activeRepo.reset();
     docSync.resync();
     refreshAll();
+    revisionContent.refreshAll();
   };
   const handleEngineRestarted = (): void => {
     void reload().catch((error) => deps.log(`reload after engine restart failed: ${error}`));
@@ -243,6 +258,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     lineBlame,
     fileAnnotations,
     codeLens,
+    revisionContent,
     auth,
     integrations,
     activeRepo,
@@ -295,6 +311,19 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     }),
     // The handshake is the first moment repositories can be discovered.
     engine.onDidChangeCapabilities(() => void updateRepoLabels()),
+  );
+
+  // Revision documents follow the refs and the index, which change without
+  // HEAD moving: a commit on the current branch moves a ref, staging
+  // rewrites the index.
+  disposables.push(
+    engine.onNotification('repo/didChange', (params) => {
+      if (!Array.isArray(params?.changed)) return;
+      const { changed } = params;
+      if (changed.includes('HEAD') || changed.includes('refs') || changed.includes('index')) {
+        revisionContent.refreshMoved(params.repoId);
+      }
+    }),
   );
 
   disposables.push(
