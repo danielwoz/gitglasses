@@ -38,6 +38,8 @@ function rows(): Thenable<Row[]> {
 describe('worktrees view', () => {
   let scratch = '';
   let mainBranch = '';
+  /** How many commits the base has that the conflicting worktree lacks. */
+  let conflictBehind = 0;
   const cleanDir = (): string => path.join(scratch, 'agent-clean');
   const conflictDir = (): string => path.join(scratch, 'agent-conflict');
 
@@ -53,13 +55,17 @@ describe('worktrees view', () => {
     git(cleanDir(), 'add', 'agent.txt');
     git(cleanDir(), 'commit', '-q', '-m', 'agent work');
     fs.writeFileSync(path.join(cleanDir(), 'notes.txt'), 'not committed\n');
-    // One that edits the line the base revised since.
-    git(root, 'worktree', 'add', '-q', '-b', 'agent-conflict', conflictDir(), 'HEAD~3');
+    // One that edits the line the base revised since: it starts from the
+    // fixture's first commit, which still has the line's initial contents,
+    // however many commits other suites have added on top.
+    const first = git(root, 'rev-list', '--max-parents=0', 'HEAD');
+    git(root, 'worktree', 'add', '-q', '-b', 'agent-conflict', conflictDir(), first);
     fs.writeFileSync(
       path.join(conflictDir(), FIXTURE.blameFile),
       FIXTURE.blameFileInitialContents.replace('alpha two', 'alpha two by the agent'),
     );
     git(conflictDir(), 'commit', '-q', '-am', 'agent edit');
+    conflictBehind = Number(git(root, 'rev-list', '--count', `${first}..HEAD`));
   });
 
   after(() => {
@@ -76,18 +82,23 @@ describe('worktrees view', () => {
     // Blame proves the engine has discovered the repository the view lists.
     await waitForBlameHover(vscode.Uri.joinPath(workspaceRoot(), FIXTURE.blameFile));
     await vscode.commands.executeCommand('gitglasses.refreshViews');
-    const listed = await poll(
-      async () => {
-        const current = await rows();
-        const clean = current.find((row) => row.label === 'worktree-agent-clean');
-        const conflict = current.find((row) => row.label === 'agent-conflict');
-        return clean?.description.includes('merges cleanly') &&
-          conflict?.description.includes('conflicts')
-          ? current
-          : undefined;
-      },
-      `the worktree rows never showed their status: ${JSON.stringify(await rows())}`,
-    );
+    let last: Row[] = [];
+    const listed = await poll(async () => {
+      last = await rows();
+      const clean = last.find((row) => row.label === 'worktree-agent-clean');
+      const conflict = last.find((row) => row.label === 'agent-conflict');
+      return clean?.description.includes('merges cleanly') &&
+        conflict?.description.includes('conflicts')
+        ? last
+        : undefined;
+    }, 'the worktree rows never showed their status').catch((error: Error) => {
+      const shown = last.map(({ label, description, loading }) => ({
+        label,
+        description,
+        loading,
+      }));
+      throw new Error(`${error.message}; last rows: ${JSON.stringify(shown)}`);
+    });
 
     // Opened through a symlink, the workspace's own worktree is still the
     // current one.
@@ -103,7 +114,7 @@ describe('worktrees view', () => {
     assert.match(clean.tooltip, /Last activity: /);
 
     const conflict = listed.find((row) => row.label === 'agent-conflict')!;
-    assert.strictEqual(conflict.description, '↑1 ↓3 · conflicts in 1 file');
+    assert.strictEqual(conflict.description, `↑1 ↓${conflictBehind} · conflicts in 1 file`);
     assert.match(
       conflict.tooltip,
       new RegExp(`Conflicts with ${mainBranch} in ${FIXTURE.blameFile}`),
