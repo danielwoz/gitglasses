@@ -337,6 +337,68 @@ describe('buildLineStory', () => {
   });
 });
 
+describe('buildLineStory issues on forges with their own pull request numbers', () => {
+  function forgeOf(providerId: string, host: string, fake: HostingProvider): StoryForge {
+    const where: RepoDescriptor = { provider: providerId, host, owner: 'g', name: 'p' };
+    return {
+      kind: 'hosted',
+      label: { providerId, host, name: providerId, owner: 'g', repo: 'p' },
+      provider: fake,
+      repo: where,
+      auth: { token: 't' },
+    };
+  }
+
+  it('keeps a GitLab issue that has the number of the merge request', async () => {
+    const mr = makePr({ number: 12, state: 'merged', body: 'Closes #12' });
+    const forge = forgeOf('gitlab', 'gitlab.com', provider([mr]));
+    const story = await buildLineStory(
+      input,
+      sources({
+        forge,
+        issuePatterns: repoIssuePatterns({ host: 'gitlab.com', owner: 'g', name: 'p' }),
+        commit: async () =>
+          commit({ subject: 'Fix the parser', body: 'Closes #12\n\nSee merge request g/p!12' }),
+      }),
+    );
+    expect(story.issues).toMatchObject({
+      state: 'ready',
+      value: [{ ref: '#12', url: 'https://gitlab.com/g/p/issues/12', source: 'commit' }],
+    });
+  });
+
+  it("drops the forge's own pull request wording but keeps a Bitbucket issue of that number", async () => {
+    const { getPullRequestsForCommit: _omit, ...bitbucket } = provider();
+    const forge = forgeOf('bitbucket', 'bitbucket.org', bitbucket as HostingProvider);
+    const patterns = repoIssuePatterns({ host: 'bitbucket.org', owner: 'g', name: 'p' });
+    const refs = async (message: Pick<StoryCommit, 'subject' | 'body'>) => {
+      const story = await buildLineStory(
+        input,
+        sources({ forge, issuePatterns: patterns, commit: async () => commit(message) }),
+      );
+      return story.issues.state === 'ready' ? story.issues.value.map((issue) => issue.ref) : [];
+    };
+    expect(await refs({ subject: 'Merged in fix (pull request #12)', body: 'Fixes #3.' })).toEqual([
+      '#3',
+    ]);
+    expect(await refs({ subject: 'Merged in fix (pull request #12)', body: 'Fixes #12.' })).toEqual(
+      ['#12'],
+    );
+  });
+
+  it('still treats a GitHub "#N" naming the pull request as that pull request', async () => {
+    const pr = makePr({ number: 12, state: 'merged', body: 'Follow-up to #12, fixes #3' });
+    const story = await buildLineStory(
+      input,
+      sources({
+        forge: hosted(provider([pr])),
+        commit: async () => commit({ subject: 'Fix the parser (#12)', body: 'See #12.' }),
+      }),
+    );
+    expect(story.issues.state === 'ready' && story.issues.value.map((i) => i.ref)).toEqual(['#3']);
+  });
+});
+
 describe('descriptionExcerpt', () => {
   it('drops template comments, including an unclosed one', () => {
     expect(descriptionExcerpt('Intro\n<!-- hidden -->\nMore\n<!-- never closed\nsecret')).toEqual({

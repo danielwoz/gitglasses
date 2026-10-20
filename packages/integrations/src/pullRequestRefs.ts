@@ -34,6 +34,35 @@ const PULL_REQUEST_MESSAGES: Record<string, [RegExp, MessagePart][]> = {
   azuredevops: [[/^Merged PR (\d+):/, 'subject']],
 };
 
+/** Where a commit message names a pull request in its forge's own words. */
+export interface PullRequestMention {
+  number: number;
+  /** The part of the message holding the words. */
+  part: MessagePart;
+  /** Offsets of the words in that part, e.g. of "(pull request #12)". */
+  start: number;
+  end: number;
+}
+
+/** The pull request a commit message names, and where, in the words the
+ *  forge hosting the repository (`providerId`) writes itself. */
+export function pullRequestMention(
+  providerId: string,
+  subject: string,
+  body: string,
+): PullRequestMention | undefined {
+  for (const [pattern, part] of PULL_REQUEST_MESSAGES[providerId] ?? []) {
+    const match = pattern.exec(part === 'subject' ? subject : body);
+    if (match) {
+      const value = Number(match[1]);
+      if (Number.isSafeInteger(value) && value > 0) {
+        return { number: value, part, start: match.index, end: match.index + match[0].length };
+      }
+    }
+  }
+  return undefined;
+}
+
 /** The pull request number a commit message names, in the words the forge
  *  hosting the repository (`providerId`) writes itself. */
 export function pullRequestNumber(
@@ -41,14 +70,16 @@ export function pullRequestNumber(
   subject: string,
   body: string,
 ): number | undefined {
-  for (const [pattern, part] of PULL_REQUEST_MESSAGES[providerId] ?? []) {
-    const match = pattern.exec(part === 'subject' ? subject : body);
-    if (match) {
-      const value = Number(match[1]);
-      if (Number.isSafeInteger(value) && value > 0) return value;
-    }
-  }
-  return undefined;
+  return pullRequestMention(providerId, subject, body)?.number;
+}
+
+/**
+ * True when the forge numbers pull requests and issues in one sequence, so
+ * "#12" may name a pull request. On GitLab, Bitbucket and Azure DevOps it
+ * names an issue (or work item) whatever the pull requests are numbered.
+ */
+export function issuesSharePullRequestNumbers(providerId: string): boolean {
+  return providerId === 'github' || providerId === 'github-enterprise';
 }
 
 function encodePath(value: string): string {

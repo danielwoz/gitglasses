@@ -19,7 +19,12 @@ import {
   type HostingProvider,
 } from './hostingProvider.js';
 import type { AutolinkPattern, PullRequest, PullRequestState, RepoDescriptor } from './models.js';
-import { pullRequestNumber, pullRequestUrl } from './pullRequestRefs.js';
+import {
+  issuesSharePullRequestNumbers,
+  pullRequestMention,
+  pullRequestNumber,
+  pullRequestUrl,
+} from './pullRequestRefs.js';
 
 /** The sha blame reports for lines that are not committed yet. */
 export const UNCOMMITTED = '0000000000000000000000000000000000000000';
@@ -352,6 +357,11 @@ function failureReason(error: unknown): 'auth' | 'rateLimit' | 'other' {
   return 'other';
 }
 
+/** `text` with the span `start`..`end` blanked out. */
+function without(text: string, start: number, end: number): string {
+  return `${text.slice(0, start)} ${text.slice(end)}`;
+}
+
 /**
  * Assembles the story of `input.blame`'s line from `sources`. Each part is
  * asked for at once; `onUpdate` sees the story every time a part arrives (the
@@ -480,13 +490,25 @@ export async function buildLineStory<C extends StoryCommit>(
       story.issues = { state: 'ready', value: [] };
       return;
     }
-    // A "#N" naming one of the pull requests above is not an issue.
-    const prNumbers = new Set(pullRequests.map((pr) => pr.number));
-    const fromMessage = namedPullRequest(forge, details);
-    if (fromMessage) prNumbers.add(fromMessage.number);
+    let { subject, body } = details;
+    const prNumbers = new Set<number>();
+    if (forge.kind === 'hosted') {
+      // The words the forge writes for its own pull request ("(#12)",
+      // "(pull request #12)") name no issue.
+      const mention = pullRequestMention(forge.label.providerId, subject, body);
+      if (mention?.part === 'subject') subject = without(subject, mention.start, mention.end);
+      if (mention?.part === 'body') body = without(body, mention.start, mention.end);
+      // Where pull requests and issues share their numbers (GitHub), a "#N"
+      // naming one of the pull requests above is that pull request. Elsewhere
+      // "#N" is an issue, whatever number the pull requests have.
+      if (issuesSharePullRequestNumbers(forge.label.providerId)) {
+        for (const pr of pullRequests) prNumbers.add(pr.number);
+        if (mention) prNumbers.add(mention.number);
+      }
+    }
     const texts: { text: string; source: StoryIssue['source'] }[] = [
-      { text: details.subject, source: 'commit' },
-      { text: details.body, source: 'commit' },
+      { text: subject, source: 'commit' },
+      { text: body, source: 'commit' },
     ];
     for (const pr of pullRequests) {
       texts.push({ text: pr.title, source: 'pullRequest' });
