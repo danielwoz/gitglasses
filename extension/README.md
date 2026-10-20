@@ -279,9 +279,10 @@ In Restricted Mode no git runs at all, so nothing a repository configures
 | vscode.dev | WebAssembly engine, read-only |
 
 The editor picks the right package. Outside the browser, features that run
-git need `git` on `PATH`; 2.34 or newer is recommended (the version is not
-checked). Without git, blame, the graph, commit details and message search
-still work.
+git need `git` on `PATH`; 2.34 or newer is recommended. The Worktrees view's
+merge check needs 2.38 or newer (2.45 in a partial clone), which GitGlasses
+checks and otherwise skips. Without git, blame, the graph, commit details and
+message search still work.
 
 ## Troubleshooting
 
