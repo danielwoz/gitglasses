@@ -87,3 +87,18 @@ export function confirmWorktreeForceRemove(path: string): Confirmation {
     detail: `git worktree remove --force ${path}\n\nRemoves the worktree even if it has modified or untracked files.`,
   };
 }
+
+/**
+ * Names the repository a confirmation's operation runs in: the question ends
+ * with it and the detail leads with the repository's path, so a workspace
+ * with several repositories never leaves the target implicit.
+ */
+export function inRepository(
+  confirmation: Confirmation,
+  repo: { name: string; rootPath: string },
+): Confirmation {
+  const message = confirmation.message.endsWith('?')
+    ? `${confirmation.message.slice(0, -1)} in ${repo.name}?`
+    : `${confirmation.message} (${repo.name})`;
+  return { message, detail: `Repository: ${repo.rootPath}\n\n${confirmation.detail}` };
+}
