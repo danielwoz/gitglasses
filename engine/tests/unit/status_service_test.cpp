@@ -735,6 +735,10 @@ class PartialCloneFixture {
     parent_ = gg::testing::makeTempDir("gg-partial-");
     gg::testing::runGit(parent_, "git clone -q --filter=blob:none --no-checkout \"" +
                                      fileUrl(source_.root()) + "\" clone");
+    // As in every fixture repository: the engine's libgit2 reads the system
+    // config even with GIT_CONFIG_NOSYSTEM set, and Git for Windows sets
+    // core.autocrlf=true there.
+    gg::testing::runGit(root(), "git config core.autocrlf false");
   }
   ~PartialCloneFixture() {
     std::error_code ec;
