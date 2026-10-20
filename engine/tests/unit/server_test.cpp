@@ -7,6 +7,9 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <filesystem>
+#include <system_error>
 #include <vector>
 
 #include "test_fixtures.h"
@@ -217,6 +220,38 @@ TEST(Server, WatcherPushesRepoDidChange) {
     }
   }
   EXPECT_TRUE(sawRelevantCategory) << note.dump();
+#endif
+}
+
+// A repository opened from a linked worktree keeps its branches in the common
+// dir shared with the main checkout; a branch made there must still be pushed.
+TEST(Server, WatcherPushesSharedRefChangesForALinkedWorktree) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+  const std::filesystem::path linked =
+      fixture.root().parent_path() / (fixture.root().filename().string() + "-linked");
+  fixture.run("git worktree add -q -b linked \"" + linked.string() + "\"");
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", linked.string()}}}});
+  ASSERT_TRUE(discover.contains("result")) << discover.dump();
+  const std::string repoId = discover["result"]["repoId"];
+
+  fixture.run("git branch made-in-main");
+
+  Json note = session.readNotificationUntil("repo/didChange", 5000);
+  std::error_code ec;
+  std::filesystem::remove_all(linked, ec);
+  ASSERT_EQ(note.value("method", ""), "repo/didChange") << "no repo/didChange for the worktree";
+  EXPECT_EQ(note["params"]["repoId"], repoId);
+  const auto& changed = note["params"]["changed"];
+  EXPECT_NE(std::find(changed.begin(), changed.end(), "refs"), changed.end()) << note.dump();
 #endif
 }
 

@@ -60,6 +60,16 @@ std::string classify(const std::string& rel) {
   return "";
 }
 
+// The same mapping for a path relative to a linked worktree's common dir,
+// where only the shared refs concern the worktree.
+std::string classifyShared(const std::string& rel) {
+  if (endsWith(rel, ".lock")) return "";
+  if (rel == "packed-refs") return "refs";
+  if (rel == "refs/stash") return "stash";
+  if (rel == "refs" || startsWith(rel, "refs/")) return "refs";
+  return "";
+}
+
 #ifdef __linux__
 // Directory trees inside the gitdir that are watched recursively; everything
 // else is covered by the watch on the gitdir itself.
@@ -68,6 +78,11 @@ bool isRecursiveRoot(const std::string& rel) {
          startsWith(rel, "rebase-merge/") || rel == "rebase-apply" ||
          startsWith(rel, "rebase-apply/") || rel == "worktrees" ||
          startsWith(rel, "worktrees/");
+}
+
+// The common dir's only recursive tree is refs/.
+bool isSharedRecursiveRoot(const std::string& rel) {
+  return rel == "refs" || startsWith(rel, "refs/");
 }
 
 std::string joinRel(const std::string& dir, const std::string& name) {
@@ -116,19 +131,26 @@ class InotifyHub {
   InotifyHub(const InotifyHub&) = delete;
   InotifyHub& operator=(const InotifyHub&) = delete;
 
-  // Registers the repo's gitdir tree. Returns false when the kernel refuses
-  // every descriptor, leaving the repo unwatched for the caller to fall back.
-  bool add(const std::string& repoId, const std::string& gitdir) {
+  // Registers the repo's gitdir tree, plus the shared refs in `commondir`
+  // when it is not empty. Returns false when the kernel refuses every
+  // descriptor, leaving the repo unwatched for the caller to fall back.
+  bool add(const std::string& repoId, const std::string& gitdir, const std::string& commondir) {
     std::lock_guard lock(mutex_);
     if (repos_.find(repoId) != repos_.end()) return true;
     RepoState& state = repos_[repoId];
     state.gitdir = gitdir;
-    addDirWatchLocked(repoId, state, "");
-    addDirTreeLocked(repoId, state, "refs");
+    state.commondir = commondir;
+    addDirWatchLocked(repoId, state, "", false);
+    addDirTreeLocked(repoId, state, "refs", false);
     // A rebase or cherry-pick may already be in flight when the watch starts.
-    addDirTreeLocked(repoId, state, "rebase-merge");
-    addDirTreeLocked(repoId, state, "rebase-apply");
-    addDirTreeLocked(repoId, state, "worktrees");
+    addDirTreeLocked(repoId, state, "rebase-merge", false);
+    addDirTreeLocked(repoId, state, "rebase-apply", false);
+    addDirTreeLocked(repoId, state, "worktrees", false);
+    if (!commondir.empty()) {
+      // The common dir itself for packed-refs, rewritten by rename.
+      addDirWatchLocked(repoId, state, "", true);
+      addDirTreeLocked(repoId, state, "refs", true);
+    }
     if (state.wds.empty()) {
       repos_.erase(repoId);
       return false;
@@ -136,13 +158,23 @@ class InotifyHub {
     return true;
   }
 
+  // Drops the repo's watchers; a descriptor is released only once no other
+  // repository watches the same directory.
   void remove(const std::string& repoId) {
     std::lock_guard lock(mutex_);
     const auto it = repos_.find(repoId);
     if (it == repos_.end()) return;
     for (const int wd : it->second.wds) {
-      inotify_rm_watch(inotifyFd_, wd);
-      watchDirs_.erase(wd);
+      const auto dirIt = watchDirs_.find(wd);
+      if (dirIt == watchDirs_.end()) continue;
+      auto& watchers = dirIt->second;
+      watchers.erase(std::remove_if(watchers.begin(), watchers.end(),
+                                    [&](const WatchDir& dir) { return dir.repoId == repoId; }),
+                     watchers.end());
+      if (watchers.empty()) {
+        inotify_rm_watch(inotifyFd_, wd);
+        watchDirs_.erase(dirIt);
+      }
     }
     repos_.erase(it);
   }
@@ -155,11 +187,15 @@ class InotifyHub {
  private:
   struct WatchDir {
     std::string repoId;
-    std::string rel;  // directory path relative to the gitdir
+    std::string rel;  // directory path relative to the gitdir or common dir
+    bool shared = false;  // under the linked worktree's common dir
+
+    bool operator==(const WatchDir&) const = default;
   };
 
   struct RepoState {
     std::string gitdir;
+    std::string commondir;  // empty unless the repo is a linked worktree
     std::set<int> wds;
     std::uint64_t generation = 0;
     std::set<std::string> pending;
@@ -174,30 +210,45 @@ class InotifyHub {
     thread_ = std::thread([this] { run(); });
   }
 
-  void addDirWatchLocked(const std::string& repoId, RepoState& state, const std::string& rel) {
-    const fs::path dir = rel.empty() ? fs::path(state.gitdir) : fs::path(state.gitdir) / rel;
+  static const std::string& baseOf(const RepoState& state, bool shared) {
+    return shared ? state.commondir : state.gitdir;
+  }
+
+  // inotify hands out one descriptor per directory, so a directory several
+  // repositories watch (a main checkout and its linked worktrees share the
+  // common dir) carries one entry per watcher.
+  void addDirWatchLocked(const std::string& repoId, RepoState& state, const std::string& rel,
+                         bool shared) {
+    const fs::path base(baseOf(state, shared));
+    const fs::path dir = rel.empty() ? base : base / rel;
     const int wd = inotify_add_watch(
         inotifyFd_, dir.c_str(),
         IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE |
             IN_ONLYDIR);
     if (wd < 0) return;
-    watchDirs_[wd] = {repoId, rel};
+    auto& watchers = watchDirs_[wd];
+    const WatchDir entry{repoId, rel, shared};
+    if (std::find(watchers.begin(), watchers.end(), entry) == watchers.end()) {
+      watchers.push_back(entry);
+    }
     state.wds.insert(wd);
   }
 
   // Watches `rel` and every directory below it. New nested directories that
   // appear later get their own watches from the IN_CREATE events.
-  void addDirTreeLocked(const std::string& repoId, RepoState& state, const std::string& rel) {
-    const fs::path root = fs::path(state.gitdir) / rel;
+  void addDirTreeLocked(const std::string& repoId, RepoState& state, const std::string& rel,
+                        bool shared) {
+    const fs::path base(baseOf(state, shared));
+    const fs::path root = base / rel;
     std::error_code ec;
     if (!fs::is_directory(root, ec)) return;
-    addDirWatchLocked(repoId, state, rel);
+    addDirWatchLocked(repoId, state, rel, shared);
     fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
     const fs::recursive_directory_iterator end;
     for (; !ec && it != end; it.increment(ec)) {
       if (it->is_directory(ec)) {
-        addDirWatchLocked(repoId, state,
-                          fs::relative(it->path(), state.gitdir, ec).generic_string());
+        addDirWatchLocked(repoId, state, fs::relative(it->path(), base, ec).generic_string(),
+                          shared);
       }
     }
   }
@@ -214,8 +265,10 @@ class InotifyHub {
         cursor += sizeof(inotify_event) + event->len;
         if (event->mask & IN_IGNORED) {
           if (const auto it = watchDirs_.find(event->wd); it != watchDirs_.end()) {
-            if (const auto repo = repos_.find(it->second.repoId); repo != repos_.end()) {
-              repo->second.wds.erase(event->wd);
+            for (const auto& watcher : it->second) {
+              if (const auto repo = repos_.find(watcher.repoId); repo != repos_.end()) {
+                repo->second.wds.erase(event->wd);
+              }
             }
             watchDirs_.erase(it);
           }
@@ -223,19 +276,24 @@ class InotifyHub {
         }
         const auto dirIt = watchDirs_.find(event->wd);
         if (dirIt == watchDirs_.end()) continue;
-        const std::string repoId = dirIt->second.repoId;
-        const auto repoIt = repos_.find(repoId);
-        if (repoIt == repos_.end()) continue;
         const std::string name = event->len > 0 ? std::string(event->name) : std::string();
-        const std::string rel = joinRel(dirIt->second.rel, name);
-        if ((event->mask & IN_ISDIR) && (event->mask & (IN_CREATE | IN_MOVED_TO)) &&
-            isRecursiveRoot(rel)) {
-          addDirTreeLocked(repoId, repoIt->second, rel);
+        // Copied: registering a new subtree below may add entries to the map.
+        const std::vector<WatchDir> watchers = dirIt->second;
+        for (const auto& watcher : watchers) {
+          const auto repoIt = repos_.find(watcher.repoId);
+          if (repoIt == repos_.end()) continue;
+          const std::string rel = joinRel(watcher.rel, name);
+          const bool recursive =
+              watcher.shared ? isSharedRecursiveRoot(rel) : isRecursiveRoot(rel);
+          if ((event->mask & IN_ISDIR) && (event->mask & (IN_CREATE | IN_MOVED_TO)) &&
+              recursive) {
+            addDirTreeLocked(watcher.repoId, repoIt->second, rel, watcher.shared);
+          }
+          const std::string category = watcher.shared ? classifyShared(rel) : classify(rel);
+          if (category.empty()) continue;
+          repoIt->second.pending.insert(category);
+          if (!repoIt->second.deadline) repoIt->second.deadline = Clock::now() + kDebounce;
         }
-        const std::string category = classify(rel);
-        if (category.empty()) continue;
-        repoIt->second.pending.insert(category);
-        if (!repoIt->second.deadline) repoIt->second.deadline = Clock::now() + kDebounce;
       }
     }
   }
@@ -284,7 +342,7 @@ class InotifyHub {
   const int wakeRead_;
   const int wakeWrite_;
   const WatchManager::Callback callback_;
-  std::map<int, WatchDir> watchDirs_;   // inotify wd -> owning repo + dir
+  std::map<int, std::vector<WatchDir>> watchDirs_;  // inotify wd -> watching repos + dirs
   std::map<std::string, RepoState> repos_;
   bool stop_ = false;
   std::thread thread_;
@@ -296,7 +354,7 @@ class InotifyHub {
 class InotifyHub {
  public:
   static std::unique_ptr<InotifyHub> create(WatchManager::Callback) { return nullptr; }
-  bool add(const std::string&, const std::string&) { return false; }
+  bool add(const std::string&, const std::string&, const std::string&) { return false; }
   void remove(const std::string&) {}
   bool has(const std::string&) const { return false; }
 };
@@ -304,12 +362,16 @@ class InotifyHub {
 #endif
 
 // A single repository's polling fallback: one thread running a periodic stat
-// sweep of the gitdir. Members are confined to that thread after
-// construction, except the stop flag.
+// sweep of the gitdir (and of a linked worktree's shared refs). Members are
+// confined to that thread after construction, except the stop flag.
 class RepoWatch {
  public:
-  RepoWatch(std::string repoId, std::string gitdir, WatchManager::Callback callback)
-      : repoId_(std::move(repoId)), gitdir_(std::move(gitdir)), callback_(std::move(callback)) {
+  RepoWatch(std::string repoId, std::string gitdir, std::string commondir,
+            WatchManager::Callback callback)
+      : repoId_(std::move(repoId)),
+        gitdir_(std::move(gitdir)),
+        commondir_(std::move(commondir)),
+        callback_(std::move(callback)) {
     thread_ = std::thread([this] { runPoll(); });
   }
 
@@ -332,38 +394,70 @@ class RepoWatch {
     callback_(repoId_, ++generation_, changed);
   }
 
-  // Snapshot of everything under the gitdir the protocol reports on:
+  // Snapshot of everything under one root the protocol reports on:
   // path -> (mtime, size). Directories record size 0 so their appearance
   // and disappearance (rebase-merge/ etc.) still diff.
-  using Snapshot = std::map<std::string, std::pair<std::int64_t, std::uint64_t>>;
+  using Stamps = std::map<std::string, std::pair<std::int64_t, std::uint64_t>>;
 
-  void scanEntry(Snapshot& snapshot, const std::string& rel) const {
-    const fs::path path = fs::path(gitdir_) / rel;
+  struct Snapshot {
+    Stamps own;     // relative to the gitdir
+    Stamps shared;  // relative to the common dir; empty unless linked
+  };
+
+  static void scanEntry(Stamps& stamps, const std::string& base, const std::string& rel) {
+    const fs::path path = fs::path(base) / rel;
     std::error_code ec;
     const auto mtime = fs::last_write_time(path, ec);
     if (ec) return;
     std::uint64_t size = 0;
     if (fs::is_regular_file(path, ec)) size = fs::file_size(path, ec);
-    snapshot[rel] = {mtime.time_since_epoch().count(), size};
+    stamps[rel] = {mtime.time_since_epoch().count(), size};
+  }
+
+  static void scanTree(Stamps& stamps, const std::string& base, const char* root) {
+    scanEntry(stamps, base, root);
+    std::error_code ec;
+    fs::recursive_directory_iterator it(fs::path(base) / root,
+                                        fs::directory_options::skip_permission_denied, ec);
+    const fs::recursive_directory_iterator end;
+    for (; !ec && it != end; it.increment(ec)) {
+      std::error_code relEc;
+      scanEntry(stamps, base, fs::relative(it->path(), base, relEc).generic_string());
+    }
   }
 
   Snapshot scan() const {
     Snapshot snapshot;
     for (const char* rel : {"HEAD", "index", "packed-refs", "MERGE_HEAD", "CHERRY_PICK_HEAD"}) {
-      scanEntry(snapshot, rel);
+      scanEntry(snapshot.own, gitdir_, rel);
     }
     for (const char* root : {"refs", "rebase-merge", "rebase-apply", "worktrees"}) {
-      scanEntry(snapshot, root);
-      std::error_code ec;
-      fs::recursive_directory_iterator it(fs::path(gitdir_) / root,
-                                          fs::directory_options::skip_permission_denied, ec);
-      const fs::recursive_directory_iterator end;
-      for (; !ec && it != end; it.increment(ec)) {
-        std::error_code relEc;
-        scanEntry(snapshot, fs::relative(it->path(), gitdir_, relEc).generic_string());
-      }
+      scanTree(snapshot.own, gitdir_, root);
+    }
+    if (!commondir_.empty()) {
+      scanEntry(snapshot.shared, commondir_, "packed-refs");
+      scanTree(snapshot.shared, commondir_, "refs");
     }
     return snapshot;
+  }
+
+  // Adds the category of every path that appeared, changed or vanished.
+  static void diff(const Stamps& previous, const Stamps& current,
+                   std::string (*categorize)(const std::string&),
+                   std::set<std::string>& pending) {
+    for (const auto& [rel, stamp] : current) {
+      const auto it = previous.find(rel);
+      if (it == previous.end() || it->second != stamp) {
+        const std::string category = categorize(rel);
+        if (!category.empty()) pending.insert(category);
+      }
+    }
+    for (const auto& [rel, stamp] : previous) {
+      if (current.find(rel) == current.end()) {
+        const std::string category = categorize(rel);
+        if (!category.empty()) pending.insert(category);
+      }
+    }
   }
 
   void runPoll() {
@@ -373,19 +467,8 @@ class RepoWatch {
       lock.unlock();
       Snapshot current = scan();
       std::set<std::string> pending;
-      for (const auto& [rel, stamp] : current) {
-        const auto it = previous.find(rel);
-        if (it == previous.end() || it->second != stamp) {
-          const std::string category = classify(rel);
-          if (!category.empty()) pending.insert(category);
-        }
-      }
-      for (const auto& [rel, stamp] : previous) {
-        if (current.find(rel) == current.end()) {
-          const std::string category = classify(rel);
-          if (!category.empty()) pending.insert(category);
-        }
-      }
+      diff(previous.own, current.own, &classify, pending);
+      diff(previous.shared, current.shared, &classifyShared, pending);
       previous = std::move(current);
       emit(pending);
       lock.lock();
@@ -394,6 +477,7 @@ class RepoWatch {
 
   const std::string repoId_;
   const std::string gitdir_;
+  const std::string commondir_;
   const WatchManager::Callback callback_;
 
   std::uint64_t generation_ = 0;  // touched only by the watch thread
@@ -420,14 +504,25 @@ WatchManager::~WatchManager() {
   hub_.reset();
 }
 
-void WatchManager::watch(const std::string& repoId, const std::string& gitdir) {
+void WatchManager::watch(const std::string& repoId, const std::string& gitdir,
+                         const std::string& commondir) {
+  // A common dir equal to the gitdir (any repository but a linked worktree)
+  // adds nothing to watch.
+  std::string shared = commondir;
+  if (!shared.empty()) {
+    std::error_code ec;
+    const bool same = fs::equivalent(gitdir, shared, ec);
+    if (same || fs::path(gitdir).lexically_normal() == fs::path(shared).lexically_normal()) {
+      shared.clear();
+    }
+  }
   std::lock_guard lock(mutex_);
   if (polls_.find(repoId) != polls_.end()) return;
-  if (hub_ && hub_->add(repoId, gitdir)) return;
+  if (hub_ && hub_->add(repoId, gitdir, shared)) return;
   if (hub_) {
     spdlog::warn("inotify refused every watch for '{}'; falling back to a stat sweep", gitdir);
   }
-  polls_[repoId] = std::make_unique<RepoWatch>(repoId, gitdir, callback_);
+  polls_[repoId] = std::make_unique<RepoWatch>(repoId, gitdir, shared, callback_);
 }
 
 void WatchManager::unwatch(const std::string& repoId) {

@@ -43,7 +43,7 @@ struct ServiceContext {
   // Single-threaded builds (wasm, debug-st) have no watcher threads; the
   // capability is reported as watch:false and watch requests are ignored.
   struct NullWatchManager {
-    void watch(const std::string&, const std::string&) {}
+    void watch(const std::string&, const std::string&, const std::string& = {}) {}
     void unwatch(const std::string&) {}
     bool isWatching(const std::string&) const { return false; }
     bool nativeBackendActive() const { return false; }
