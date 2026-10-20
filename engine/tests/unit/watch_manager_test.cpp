@@ -496,8 +496,8 @@ TEST(PollingWatch, BacksOffWhileNothingChanges) {
   Collector collector;
   WatchManager::PollTiming timing;
   timing.active = 25ms;
-  timing.idle = 400ms;
-  timing.idleAfter = 150ms;
+  timing.idle = 1000ms;
+  timing.idleAfter = 400ms;
   timing.fullSweep = std::chrono::hours(1);
   WatchManager manager(collector.callback(), WatchManager::Backend::kPolling, timing);
   manager.watch("r1", (fixture.root() / ".git").string());
@@ -505,17 +505,26 @@ TEST(PollingWatch, BacksOffWhileNothingChanges) {
   std::this_thread::sleep_for(1500ms);
   const auto quiet = manager.lastSweepCost("r1");
   ASSERT_TRUE(quiet.has_value());
-  // About 6 sweeps at the active pace, then one per 400 ms; without the
-  // back-off it would be about 60.
+  // At most about 16 sweeps at the active pace, then one per second; without
+  // the back-off it would be about 60.
   EXPECT_LE(quiet->sweeps, 20u);
 
-  // A change is still reported, and the pace picks up again.
+  // A change is still reported, and the pace picks up again: two more sweeps
+  // follow well within one idle interval, which the idle pace could not do.
+  // A slow machine (a sweep taking far longer than the active interval) still
+  // fits both in the active window that follows the change.
   fixture.run("git branch wake-up");
   ASSERT_TRUE(collector.waitFor({"refs"}, 0).has_value());
   const auto woken = manager.lastSweepCost("r1");
-  std::this_thread::sleep_for(100ms);
-  const auto after = manager.lastSweepCost("r1");
-  ASSERT_TRUE(woken.has_value() && after.has_value());
+  ASSERT_TRUE(woken.has_value());
+  const auto deadline = std::chrono::steady_clock::now() + timing.idle * 9 / 10;
+  auto after = woken;
+  while (after && after->sweeps < woken->sweeps + 2 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(5ms);
+    after = manager.lastSweepCost("r1");
+  }
+  ASSERT_TRUE(after.has_value());
   EXPECT_GE(after->sweeps, woken->sweeps + 2) << "no faster sweeps after a change";
 #endif
 }
