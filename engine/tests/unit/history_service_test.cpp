@@ -742,7 +742,11 @@ TEST(HistoryService, LineHistoryFromARevisionWithDiffsFollowsRenames) {
   ASSERT_EQ(entries.size(), 3u) << history.dump();
   EXPECT_EQ(entries[0]["summary"], "edit again");
   EXPECT_EQ(entries[0]["path"], "new.txt");
-  EXPECT_EQ(entries[0]["patch"],
+  // git 2.56 and later also print each side's blob ids on an index line.
+  std::string patch = entries[0]["patch"];
+  const size_t index = patch.find("\nindex ");
+  if (index != std::string::npos) patch.erase(index + 1, patch.find('\n', index + 1) - index);
+  EXPECT_EQ(patch,
             "diff --git a/new.txt b/new.txt\n--- a/new.txt\n+++ b/new.txt\n@@ -2,1 +2,1 @@\n"
             "-B\n+BB\n");
   EXPECT_EQ(entries[1]["summary"], "edit b");

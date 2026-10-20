@@ -422,8 +422,11 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
     Json status =
         checkedRequest(session, 15, "worktree/status",
                        {{"repoId", repoId}, {"path", prefix + "wt"}, {"base", "contract-base"}});
-    EXPECT_EQ(status["base"].value("conflicts", Json::array()), Json::array({"src/main.txt"}))
-        << status.dump();
+    // The merge check, and with it the conflict list, needs git 2.38.
+    if (gg::testing::gitAtLeast(fixture.root(), 2, 38)) {
+      EXPECT_EQ(status["base"].value("conflicts", Json::array()), Json::array({"src/main.txt"}))
+          << status.dump();
+    }
     checkedRequest(session, 15, "worktree/status",
                    {{"repoId", repoId}, {"path", fixture.root().string()}});
   }

@@ -324,8 +324,15 @@ TEST(WorktreeStatus, CountsUncommittedPathsAndComparesWithTheMainBranch) {
   EXPECT_EQ(base["ahead"], 2);
   EXPECT_EQ(base["behind"], 1);
   EXPECT_EQ(base["mergeBase"], start);
-  EXPECT_EQ(base["mergesCleanly"], true) << status.dump();
-  EXPECT_FALSE(base.contains("mergeSkipped"));
+  // git merge-tree --write-tree, which the merge check runs, needs git 2.38.
+  const bool mergeCheck = gg::testing::gitAtLeast(fixture.root(), 2, 38);
+  if (mergeCheck) {
+    EXPECT_EQ(base["mergesCleanly"], true) << status.dump();
+    EXPECT_FALSE(base.contains("mergeSkipped"));
+  } else {
+    EXPECT_TRUE(base["mergesCleanly"].is_null()) << status.dump();
+    EXPECT_EQ(base["mergeSkipped"], "gitVersion") << status.dump();
+  }
   EXPECT_FALSE(base.contains("conflicts"));
   // The merge check writes its trees to a quarantine, not the repository.
   EXPECT_EQ(objectFiles(fixture.root() / ".git"), objectsBefore);
@@ -361,8 +368,13 @@ TEST(WorktreeStatus, ReportsConflictsWithTheBase) {
   const Json& base = status["base"];
   EXPECT_EQ(base["ahead"], 1);
   EXPECT_EQ(base["behind"], 1);
-  EXPECT_EQ(base["mergesCleanly"], false) << status.dump();
-  EXPECT_EQ(base["conflicts"], Json::array({"other.txt", "shared.txt"})) << status.dump();
+  if (gg::testing::gitAtLeast(fixture.root(), 2, 38)) {
+    EXPECT_EQ(base["mergesCleanly"], false) << status.dump();
+    EXPECT_EQ(base.value("conflicts", Json::array()), Json::array({"other.txt", "shared.txt"}))
+        << status.dump();
+  } else {
+    EXPECT_EQ(base["mergeSkipped"], "gitVersion") << status.dump();
+  }
   EXPECT_EQ(status["dirty"], 0);
   // Neither branch moved: merge-tree only looked.
   EXPECT_NE(rev(fixture.root(), "main"), rev(fixture.root(), "feature"));
