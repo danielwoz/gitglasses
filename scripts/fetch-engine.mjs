@@ -19,6 +19,7 @@
 // repository: set GITHUB_TOKEN (or GH_TOKEN), or sign in with `gh auth login`.
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -68,6 +69,29 @@ export function repositorySlug(cwd) {
   const match = /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?$/.exec(url ?? '');
   if (!match) throw new Error(`cannot find the GitHub repository in extension/package.json`);
   return match[1];
+}
+
+export function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+// What `engineFile` holds: nothing ({ kind: 'none' }), the engine this script
+// installed ({ kind: 'prebuilt', key }), or an engine built or replaced
+// locally ({ kind: 'local' }). The marker records the digest of the binary
+// it installed, so a local build over a fetched engine counts as local even
+// though the marker is still there.
+export function installedEngine(engineFile, markerFile) {
+  if (!existsSync(engineFile)) return { kind: 'none' };
+  let marker;
+  try {
+    marker = JSON.parse(readFileSync(markerFile, 'utf8'));
+  } catch {
+    return { kind: 'local' };
+  }
+  if (typeof marker?.sha256 !== 'string' || marker.sha256 !== sha256(readFileSync(engineFile))) {
+    return { kind: 'local' };
+  }
+  return { kind: 'prebuilt', key: marker.key };
 }
 
 // The newest unexpired artifact from a run of this repository's own main
@@ -169,18 +193,16 @@ async function main(argv) {
   const outDir = path.join(repoRoot, 'build', 'release', 'engine');
   const outFile = path.join(outDir, binary);
   const markerFile = path.join(outDir, 'prebuilt-engine.json');
-  const marker = existsSync(markerFile) ? JSON.parse(readFileSync(markerFile, 'utf8')) : undefined;
-  if (existsSync(outFile)) {
-    if (marker?.key === key) {
-      console.log(`${path.relative(repoRoot, outFile)} already matches engine sources ${key}`);
-      return 0;
-    }
-    if (!marker && !force) {
-      console.error(
-        `${path.relative(repoRoot, outFile)} was built locally; pass --force to replace it`,
-      );
-      return 1;
-    }
+  const installed = installedEngine(outFile, markerFile);
+  if (installed.kind === 'prebuilt' && installed.key === key) {
+    console.log(`${path.relative(repoRoot, outFile)} already matches engine sources ${key}`);
+    return 0;
+  }
+  if (installed.kind === 'local' && !force) {
+    console.error(
+      `${path.relative(repoRoot, outFile)} was built locally; pass --force to replace it`,
+    );
+    return 1;
   }
 
   const token = githubToken();
@@ -232,8 +254,11 @@ async function main(argv) {
   renameSync(partial, outFile);
   writeFileSync(
     markerFile,
-    JSON.stringify({ key, artifact: name, run: run.html_url, commit: run.head_sha }, null, 2) +
-      '\n',
+    JSON.stringify(
+      { key, sha256: sha256(bytes), artifact: name, run: run.html_url, commit: run.head_sha },
+      null,
+      2,
+    ) + '\n',
   );
   console.log(`installed ${path.relative(repoRoot, outFile)} (engine sources ${key})`);
   return 0;

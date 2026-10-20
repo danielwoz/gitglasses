@@ -15,8 +15,10 @@ import {
   engineSourcesModified,
   extractZipEntry,
   hostTarget,
+  installedEngine,
   pickArtifact,
   repositorySlug,
+  sha256,
 } from '../fetch-engine.mjs';
 
 let repo;
@@ -129,6 +131,57 @@ describe('repositorySlug', () => {
   it('prefers GITGLASSES_REPO', () => {
     process.env.GITGLASSES_REPO = 'fork/gitglasses';
     assert.equal(repositorySlug(repo), 'fork/gitglasses');
+  });
+});
+
+describe('installedEngine', () => {
+  const fetched = Buffer.from('\x7fELF fetched engine');
+  let engineFile;
+  let markerFile;
+
+  beforeEach(() => {
+    engineFile = path.join(repo, 'build', 'release', 'engine', 'gitglasses-engine');
+    markerFile = path.join(repo, 'build', 'release', 'engine', 'prebuilt-engine.json');
+    mkdirSync(path.dirname(engineFile), { recursive: true });
+  });
+
+  function writeMarker(fields) {
+    writeFileSync(markerFile, JSON.stringify({ key: '0123456789abcdef', ...fields }));
+  }
+
+  it('finds nothing when there is no engine, even with a marker left over', () => {
+    assert.deepEqual(installedEngine(engineFile, markerFile), { kind: 'none' });
+    writeMarker({ sha256: sha256(fetched) });
+    assert.deepEqual(installedEngine(engineFile, markerFile), { kind: 'none' });
+  });
+
+  it('treats an engine without a marker as a local build', () => {
+    writeFileSync(engineFile, 'local build');
+    assert.deepEqual(installedEngine(engineFile, markerFile), { kind: 'local' });
+  });
+
+  it('recognises the engine it fetched by its digest', () => {
+    writeFileSync(engineFile, fetched);
+    writeMarker({ sha256: sha256(fetched) });
+    assert.deepEqual(installedEngine(engineFile, markerFile), {
+      kind: 'prebuilt',
+      key: '0123456789abcdef',
+    });
+  });
+
+  it('treats a local build over a fetched engine as local although the marker remains', () => {
+    writeFileSync(engineFile, fetched);
+    writeMarker({ sha256: sha256(fetched) });
+    writeFileSync(engineFile, 'rebuilt by cmake --build --preset release');
+    assert.deepEqual(installedEngine(engineFile, markerFile), { kind: 'local' });
+  });
+
+  it('treats a marker without a digest, or an unreadable one, as a local build', () => {
+    writeFileSync(engineFile, fetched);
+    writeMarker({});
+    assert.deepEqual(installedEngine(engineFile, markerFile), { kind: 'local' });
+    writeFileSync(markerFile, '{ not json');
+    assert.deepEqual(installedEngine(engineFile, markerFile), { kind: 'local' });
   });
 });
 
