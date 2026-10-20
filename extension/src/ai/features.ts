@@ -443,7 +443,7 @@ async function nlSearch(
   const sub = engine.onNotification('search/matches', (params) => {
     if (params.streamId === streamId) matches.push(...params.matches);
   });
-  let truncated = false;
+  let truncated: boolean;
   try {
     const result = await engine.request('search/commits', {
       repoId: repo.repoId,

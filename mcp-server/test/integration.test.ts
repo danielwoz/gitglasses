@@ -325,11 +325,17 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
   });
 });
 
+// The fields of an MCP initialize response the smoke test inspects.
+interface InitializeResponse {
+  id?: number;
+  result?: { serverInfo?: { name?: string }; capabilities?: { tools?: unknown } };
+}
+
 describe.skipIf(!existsSync(cliPath))('MCP stdio smoke', () => {
   it('dist/cli.js answers an MCP initialize request over stdio', async () => {
     const child = spawn(process.execPath, [cliPath], { stdio: ['pipe', 'pipe', 'pipe'] });
     try {
-      const response = await new Promise<Record<string, any>>((resolve, reject) => {
+      const response = await new Promise<InitializeResponse>((resolve, reject) => {
         let buffer = '';
         const timer = setTimeout(() => reject(new Error('initialize timed out')), 10000);
         child.stdout.on('data', (chunk: Buffer) => {
@@ -337,7 +343,7 @@ describe.skipIf(!existsSync(cliPath))('MCP stdio smoke', () => {
           const newline = buffer.indexOf('\n');
           if (newline >= 0) {
             clearTimeout(timer);
-            resolve(JSON.parse(buffer.slice(0, newline)));
+            resolve(JSON.parse(buffer.slice(0, newline)) as InitializeResponse);
           }
         });
         child.on('error', reject);
