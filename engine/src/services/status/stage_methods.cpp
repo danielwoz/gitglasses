@@ -136,9 +136,20 @@ void runIndexWriter(const core::Repo& repo, std::vector<std::string> args,
 // stores; -A stages a path missing from the working tree as a removal. Each
 // batch is one index update, so a failure or cancellation before a later
 // batch leaves the earlier ones staged, as separate `git add` commands would.
-void stageWithGit(const core::Repo& repo, const std::vector<std::string>& paths,
-                  const CancelToken& token) {
-  for (auto& batch : status_detail::argvBatches(paths)) {
+void stageWithGit(const core::Repo& repo, git_index* index,
+                  const std::vector<std::string>& paths, const CancelToken& token) {
+  // Git rejects a pathspec that matches nothing and then stages none of its
+  // batch. A path in neither the index nor the working tree (an untracked
+  // file deleted since the client's last status) has nothing to stage, so it
+  // is left out rather than failing the others.
+  std::vector<std::string> matched;
+  matched.reserve(paths.size());
+  for (const auto& path : paths) {
+    if (status_detail::indexHas(index, path) || status_detail::workdirHas(repo, path)) {
+      matched.push_back(path);
+    }
+  }
+  for (auto& batch : status_detail::argvBatches(matched)) {
     token.throwIfCancelled();
     std::vector<std::string> args = {"--literal-pathspecs", "add", "-A", "--"};
     for (auto& path : batch) args.push_back(std::move(path));
@@ -261,7 +272,7 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (action == "stage") {
           refuseSkipWorktree(index.value().get(), paths);
           if (context.cliAvailable) {
-            stageWithGit(repo.value(), paths, token);
+            stageWithGit(repo.value(), index.value().get(), paths, token);
           } else {
             stageWithLibgit2(repo.value(), index.value().get(), paths);
           }

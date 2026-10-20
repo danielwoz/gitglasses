@@ -53,6 +53,14 @@ Result<core::IndexPtr> readIndex(git_repository* repo);
 // an entry as unchanged whatever the working tree holds.
 bool skipWorktree(git_index* index, const char* path);
 
+// Whether anything (a file, directory or symlink, even a dangling one) is at
+// `path` in the working tree. An unreadable location counts as present.
+bool workdirHas(const core::Repo& repo, const std::string& path);
+
+// Whether the index has an entry at `path`, at any conflict stage, or below
+// it as a directory.
+bool indexHas(git_index* index, const std::string& path);
+
 // Whether git leaves this status entry's working-tree side out of what can
 // be staged. libgit2 reports a skip-worktree entry missing from the working
 // tree as deleted, and a submodule whose checked-out commit still matches

@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 #include <utility>
 
 #include "exec/git_runner.h"
@@ -20,6 +22,15 @@ constexpr size_t kArgvBudget = 16 * 1024;
 
 bool isRegularFileMode(std::uint32_t mode) {
   return mode == GIT_FILEMODE_BLOB || mode == GIT_FILEMODE_BLOB_EXECUTABLE;
+}
+
+// A filesystem path from UTF-8 text. On Windows a path built from a narrow
+// string goes through the ANSI code page and misreads non-ASCII names.
+std::filesystem::path pathFromUtf8(const std::string& text) {
+  std::u8string utf8;
+  utf8.reserve(text.size());
+  for (const char c : text) utf8.push_back(static_cast<char8_t>(c));
+  return std::filesystem::path(utf8);
 }
 
 std::string lowercase(std::string text) {
@@ -149,6 +160,21 @@ Result<core::IndexPtr> readIndex(git_repository* repo) {
 bool skipWorktree(git_index* index, const char* path) {
   const git_index_entry* entry = git_index_get_bypath(index, path, 0);
   return entry && (entry->flags_extended & GIT_INDEX_ENTRY_SKIP_WORKTREE) != 0;
+}
+
+bool workdirHas(const core::Repo& repo, const std::string& path) {
+  std::error_code ec;
+  const auto status =
+      std::filesystem::symlink_status(pathFromUtf8(repo.workdir()) / pathFromUtf8(path), ec);
+  return status.type() != std::filesystem::file_type::not_found;
+}
+
+bool indexHas(git_index* index, const std::string& path) {
+  for (int stage = 0; stage <= 3; ++stage) {
+    if (git_index_get_bypath(index, path.c_str(), stage)) return true;
+  }
+  size_t position = 0;
+  return git_index_find_prefix(&position, index, (path + "/").c_str()) == 0;
 }
 
 bool workdirSideHidden(git_index* index, const git_status_entry& entry) {

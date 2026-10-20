@@ -451,7 +451,7 @@ export const RequestSchemas = {
   },
   'stage/files': {
     description:
-      'Stages or unstages whole files, storing exactly what `git add` would: filter drivers and working-tree-encoding run, and a path missing from the working tree stages as a removal. Paths are literal, never globs. Skip-worktree (sparse checkout) paths are refused. Without the git CLI, a path with a filter driver or working-tree-encoding fails with FilterNeedsGitCli and nothing is staged.',
+      'Stages or unstages whole files, storing exactly what `git add` would: filter drivers and working-tree-encoding run, a path missing from the working tree stages as a removal, and a path in neither the index nor the working tree is skipped. Paths are literal, never globs. Skip-worktree (sparse checkout) paths are refused. Without the git CLI, a path with a filter driver or working-tree-encoding fails with FilterNeedsGitCli and nothing is staged.',
     params: Type.Object(
       {
         repoId: Type.String(),

@@ -636,6 +636,36 @@ TEST(StatusService, StageFilesKeepsGitLfsPointer) {
       << "index holds " << staged.size() << " bytes instead of an LFS pointer";
 }
 
+// Stage All sends what the last status listed. A path that has since left
+// both the index and the working tree has nothing to stage and must not stop
+// the others, which `git add` would do for a pathspec matching nothing.
+TEST(StatusService, StageFilesSkipsPathsThatMatchNothing) {
+  FixtureRepo fixture;
+  fixture.writeFile("a.txt", "one\n");
+  fixture.writeFile("old.txt", "old\n");
+  fixture.writeFile("gone.txt", "gone\n");
+  fixture.run("git add a.txt old.txt gone.txt");
+  commitTick(fixture, "seed", 1);
+  fixture.writeFile("a.txt", "one\ntwo\n");
+  fixture.writeFile("new.txt", "new\n");
+  std::filesystem::remove(fixture.root() / "old.txt");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json summary = statusSummary(session, 10, repoId);
+  ASSERT_TRUE(hasPath(summary["unstaged"], "a.txt")) << summary.dump();
+  ASSERT_EQ(summary["untracked"], Json::array({"new.txt"})) << summary.dump();
+  // Meanwhile the untracked file is deleted and gone.txt's removal is staged.
+  std::filesystem::remove(fixture.root() / "new.txt");
+  fixture.run("git rm -q gone.txt");
+
+  Json stage =
+      stageFiles(session, 11, repoId, {"a.txt", "new.txt", "gone.txt", "old.txt"}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-status"),
+            "M\ta.txt\nD\tgone.txt\nD\told.txt\n");
+}
+
 // `git add` holds index.lock while its clean filters run, and a killed git
 // leaves the lock behind. Cancelling stage/files therefore lets a running
 // `git add` finish instead of locking the repository for every git tool.
