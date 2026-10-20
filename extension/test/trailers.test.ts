@@ -3,7 +3,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CommitDetails } from '@gitglasses/protocol';
-import { bodyWithoutTrailers, trailerBlock, type Trailer } from '../src/system/trailers';
+import {
+  bodyWithoutTrailers,
+  isListedTrailer,
+  trailerBlock,
+  type Trailer,
+} from '../src/system/trailers';
 import { renderDetails } from '../webviews-src/graph/details';
 import { FakeElement, fakeDocument } from './support/fakeDom';
 
@@ -91,6 +96,26 @@ describe('bodyWithoutTrailers', () => {
     });
   });
 
+  it('keeps a URL that git read as a trailer', () => {
+    // git keys a line that starts with a URL by its scheme.
+    const url: Trailer = { key: 'https', value: '//github.com/org/repo/issues/123' };
+    const alone = 'Details here.\n\nhttps://github.com/org/repo/issues/123';
+    expect(bodyWithoutTrailers(alone, [url])).toBe(alone);
+    const review: Trailer = { key: 'https', value: '//example.com/review/7' };
+    expect(
+      bodyWithoutTrailers(
+        'Details here.\n\nSigned-off-by: Ada Lovelace <ada@example.com>\nhttps://example.com/review/7',
+        [SIGNED, review],
+      ),
+    ).toBe('Details here.\n\nhttps://example.com/review/7');
+    // A trailer whose value is a URL is listed like any other.
+    const link: Trailer = { key: 'Link', value: 'https://lore.kernel.org/r/123' };
+    expect(
+      bodyWithoutTrailers('Details here.\n\nLink: https://lore.kernel.org/r/123', [link]),
+    ).toBe('Details here.');
+    expect([url, link, SIGNED].filter(isListedTrailer)).toEqual([link, SIGNED]);
+  });
+
   it('leaves out the rule that set the trailers off, and only that one', () => {
     // GitHub's squash merges put a rule between the commit list and the
     // co-authors.
@@ -167,6 +192,29 @@ describe('commit details view', () => {
         '</dl>',
     );
     expect(root.textContent.split('grace@example.com')).toHaveLength(2);
+  });
+
+  it('shows a URL that closes the message once, in the message', () => {
+    const root = render(
+      'Details here.\n\nSigned-off-by: Ada Lovelace <ada@example.com>\n' +
+        'https://github.com/org/repo/issues/123',
+      [SIGNED, { key: 'https', value: '//github.com/org/repo/issues/123' }],
+    );
+    expect(root.querySelector('.details-message')?.outerHTML).toBe(
+      '<div class="details-message">Details here.\n\nhttps://github.com/org/repo/issues/123</div>',
+    );
+    expect(root.querySelector('.details-trailers')?.outerHTML).toBe(
+      '<dl class="details-trailers">' +
+        '<dt>Signed-off-by</dt><dd>Ada Lovelace &lt;ada@example.com&gt;</dd>' +
+        '</dl>',
+    );
+    const alone = render('Details here.\n\nhttps://github.com/org/repo/issues/123', [
+      { key: 'https', value: '//github.com/org/repo/issues/123' },
+    ]);
+    expect(alone.querySelector('.details-message')?.textContent).toBe(
+      'Details here.\n\nhttps://github.com/org/repo/issues/123',
+    );
+    expect(alone.querySelector('.details-trailers')).toBeNull();
   });
 
   it("shows a GitHub squash merge's commit list without its co-authors", () => {

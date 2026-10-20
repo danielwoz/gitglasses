@@ -13,8 +13,8 @@ export interface Trailer {
 export interface TrailerLine {
   /** The line as written, with the lines that continue it. */
   text: string;
-  /** False for a line among the trailers that is not one, such as
-   *  "(cherry picked from commit …)". */
+  /** False for a line among the trailers that views do not list as one:
+   *  "(cherry picked from commit …)", say, or a URL git took for a trailer. */
   trailer: boolean;
 }
 
@@ -67,6 +67,15 @@ function trailerSearchEnd(lines: readonly string[]): number {
   return tail ?? end;
 }
 
+/**
+ * Whether views that list trailers on their own list `trailer`. A URL alone
+ * on a line is not listed: git reads it as a trailer keyed by its scheme
+ * ("https", "//example.com/…"), and it stays in the message instead.
+ */
+export function isListedTrailer(trailer: Trailer): boolean {
+  return !trailer.value.startsWith('//');
+}
+
 /** Whitespace runs folded to one space, so values compare however they wrap. */
 function fold(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
@@ -112,7 +121,14 @@ export function trailerBlock(body: string, trailers: readonly Trailer[]): Traile
         line.key === trailers[i].key && fold(line.value ?? '') === fold(trailers[i].value),
     );
   return same
-    ? { start, end, lines: block.map(({ text, trailer }) => ({ text, trailer })) }
+    ? {
+        start,
+        end,
+        lines: block.map(({ text, trailer, key = '', value = '' }) => ({
+          text,
+          trailer: trailer && isListedTrailer({ key, value }),
+        })),
+      }
     : undefined;
 }
 
@@ -134,10 +150,10 @@ function withoutClosingRule(text: string): string {
 }
 
 /**
- * `body` for a view that lists `trailers` on their own: without the trailer
- * lines of the paragraph they were parsed from, or a rule that set them off
- * at the end. Other lines of that paragraph, and anything after it, stay; a
- * body whose trailers cannot be placed is returned whole.
+ * `body` for a view that lists `trailers` on their own: without the listed
+ * trailer lines of the paragraph they were parsed from, or a rule that set
+ * them off at the end. Other lines of that paragraph, and anything after
+ * it, stay; a body whose trailers cannot be placed is returned whole.
  */
 export function bodyWithoutTrailers(body: string, trailers: readonly Trailer[]): string {
   const block = trailerBlock(body, trailers);
