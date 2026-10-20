@@ -1,10 +1,13 @@
-// End-to-end test entry point: downloads VS Code stable, builds a
+// End-to-end test entry point: downloads a pinned VS Code release, builds a
 // deterministic git fixture workspace, and launches the extension host with
 // the compiled mocha suite (dist-e2e/suite/index).
 //
 // Environment:
-//   GITGLASSES_E2E_ALIAS=0  open the fixture by its real path instead of
-//                           through a symlink (Linux and macOS)
+//   GITGLASSES_E2E_ALIAS=0       open the fixture by its real path instead of
+//                                through a symlink (Linux and macOS)
+//   GITGLASSES_E2E_VSCODE=<ver>  run another VS Code: a release such as
+//                                1.90.0 (the engines.vscode floor), 'stable'
+//                                or 'insiders'
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -184,6 +187,11 @@ function workspaceSpelling(fixturePath: string, scratch: string): string {
   return link;
 }
 
+/** The VS Code release the suite runs against unless GITGLASSES_E2E_VSCODE
+ *  names another, so a run is not at the mercy of whatever stable is that
+ *  day. Raise it deliberately. */
+const PINNED_VSCODE = '1.142.0';
+
 // VS Code's own logs, the GitGlasses output channel (engine stderr included)
 // among them; CI uploads this directory when the suite fails.
 const logsPath = path.join(extensionDevelopmentPath, '.vscode-test', 'logs');
@@ -202,10 +210,12 @@ async function main(): Promise<void> {
   );
   fs.rmSync(logsPath, { recursive: true, force: true });
   console.log(`[e2e] VS Code logs: ${logsPath}`);
+  const version = process.env.GITGLASSES_E2E_VSCODE || PINNED_VSCODE;
+  console.log(`[e2e] VS Code: ${version}`);
 
   try {
     await runTests({
-      version: 'stable',
+      version,
       extensionDevelopmentPath,
       extensionTestsPath: path.resolve(__dirname, 'suite', 'index'),
       // --disable-extensions turns off every installed extension while still
