@@ -61,7 +61,7 @@ import { HomeViewProvider, registerHomeCommands } from './home/homeView';
 import { ModeController } from './modes/modeController';
 import { registerSuggestChange } from './reviews/suggestCommands';
 import { registerCommitDetails } from './commitDetails/commitDetails';
-import { openWalkthrough } from './home/walkthrough';
+import { WalkthroughOpener } from './home/walkthrough';
 import { registerGitGraphMigration } from './onboarding/gitGraphMigration';
 
 /** Views whose contents follow HEAD and the ref graph. */
@@ -252,6 +252,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   };
 
   const repoGroups = new RepoGroupsManager(context, engine, repos);
+  const walkthrough = new WalkthroughOpener(deps.log);
 
   // Capability gating: expose gitCli as a when-clause context so mutation
   // commands grey out on engine builds without the git CLI. Unknown (before
@@ -422,7 +423,8 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       log: deps.log,
     }),
     ...registerKeyboardShortcuts(),
-    vscode.commands.registerCommand('gitglasses.openWalkthrough', () => openWalkthrough(deps.log)),
+    walkthrough,
+    vscode.commands.registerCommand('gitglasses.openWalkthrough', () => walkthrough.open()),
     ...registerGitGraphMigration(context),
     vscode.commands.registerCommand('gitglasses.loadMore', (loadMore: unknown) => {
       if (typeof loadMore === 'function') (loadMore as () => void)();

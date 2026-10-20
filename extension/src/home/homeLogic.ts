@@ -178,3 +178,23 @@ export function walkthroughTabState(label: string | undefined): 'shown' | 'welco
   if (label === 'Welcome' || label?.startsWith('Walkthrough: ')) return 'welcome';
   return 'elsewhere';
 }
+
+/** On browser hosts, extension walkthroughs register about five seconds
+ *  after the Welcome editor first starts in a window; this allows for a
+ *  busy page. */
+export const WALKTHROUGHS_REGISTERED_AFTER_MS = 7000;
+
+/**
+ * When to ask a browser host for the walkthrough again: once the extension
+ * walkthroughs have registered, and only if the request came before that,
+ * when the host showed its own walkthrough instead. A later request finds
+ * ours registered, and asking again would rebuild the walkthrough page and
+ * drop the step the user picked.
+ */
+export function walkthroughRetryAt(
+  requestedAt: number,
+  welcomeStartedAt: number,
+): number | undefined {
+  const registeredAt = welcomeStartedAt + WALKTHROUGHS_REGISTERED_AFTER_MS;
+  return requestedAt < registeredAt ? registeredAt : undefined;
+}
