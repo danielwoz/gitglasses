@@ -36,6 +36,31 @@ Tools that render a whole commit, diff, status, ref list or patch take a
 `maxChars` argument and truncate with a footer naming the limit; `git_blame`
 takes `limit` hunks.
 
+## With the GitGlasses extension
+
+The GitGlasses extension for VS Code and Open VSX editors ships this server
+and its engine, so most people need no installation at all:
+
+- **VS Code 1.101 or newer and Cursor**: the extension registers the server
+  with the editor's agents (Copilot agent mode, Cursor's agent) as soon as a
+  folder is open. It runs on the editor's own Node with the extension's
+  engine. In a trusted workspace git may run in the workspace folders; in
+  Restricted Mode it runs nowhere. The `gitglasses.mcp.enabled` setting
+  turns this off.
+- **Claude Code and Codex**: run **GitGlasses: Add MCP Server to Claude
+  Code** (it uses `claude mcp add-json` for your user configuration) or
+  **GitGlasses: Add MCP Server to Codex** (it shows the change to
+  `~/.codex/config.toml` before writing it).
+- **Any other agent** (Claude Desktop, Windsurf, Kiro, Theia AI and others):
+  **GitGlasses: Copy MCP Server Config** copies an `mcpServers` entry with
+  absolute paths to paste into the agent's settings.
+
+Each command asks whether the agent may run git in the workspace's folders;
+by default it may not, and the server reads the project the agent works in
+without git. The paths point into the installed extension, so run the
+command again after GitGlasses updates. The Home view's **MCP Server**
+section shows the registration and offers the same commands.
+
 ## Installation
 
 `gitglasses-mcp` is not on npm yet. Until a release publishes it, do not run
@@ -54,9 +79,14 @@ The server is `mcp-server/dist/cli.js` in the clone; start it with `node`.
 
 ### The engine
 
-The server drives the `gitglasses-engine` binary. The GitGlasses extension
-ships one for your platform, so once the extension is installed, point
-`GITGLASSES_ENGINE` at it:
+The server drives the `gitglasses-engine` binary. Installed from npm, it
+comes with the server: each platform's engine is a package of its own
+(`@gitglasses/engine-linux-x64`, `@gitglasses/engine-darwin-arm64`, and so
+on, with `-musl` builds for Alpine), listed as optional dependencies of
+`gitglasses-mcp`, so npm installs only the one your machine needs and the
+server finds it without any setting. Run from a clone, it needs an engine;
+the GitGlasses extension ships one for your platform, so once the extension
+is installed, point `GITGLASSES_ENGINE` at it:
 
 | Editor | Engine |
 | --- | --- |
@@ -110,7 +140,7 @@ claude mcp add gitglasses \
 
 | Variable | Purpose |
 | --- | --- |
-| `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server looks for a release build in the clone it runs from (`build/release/engine/`), then searches `PATH`. |
+| `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server looks for the `@gitglasses/engine-*` package npm installed for this platform, then for a release build in the clone it runs from (`build/release/engine/`), then searches `PATH`. |
 | `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
 | `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |

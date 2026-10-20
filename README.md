@@ -64,17 +64,24 @@ release is in [the changelog](extension/CHANGELOG.md).
 
 `gitglasses-mcp` (in [`mcp-server/`](mcp-server/)) is a stdio
 [Model Context Protocol](https://modelcontextprotocol.io) server that gives
-AI agents the same engine: blame, commit search, file history, commit
-details, diffs, refs, a text rendering of the graph, status, patches and a
-pull request list, eleven tools in all. Every tool except `apply_patch` is
-marked read-only, and by default the server reads only the folders the
-client shares with it, without running git.
+AI agents the same engine: blame, commit search (by message, author, code
+change, path or date), file history, commit details, branch comparisons from
+the merge base, diffs, refs, a text rendering of the graph, status, patches
+and a pull request list, twelve tools in all. Every tool except
+`apply_patch` is marked read-only, and by default the server reads only the
+folders the client shares with it, without running git.
 
-Register it with Claude Code, Cursor, VS Code agent mode or any other MCP
-client, pointing it at the engine the extension installed. From 0.3,
-releases publish it to npm as `gitglasses-mcp`; before that, build it from a
-clone. [Its README](mcp-server/README.md) has the setup for each client and
-the trust model.
+The extension ships the server and registers it with the editor's agents,
+with no setup: through VS Code's MCP API on VS Code 1.101 and newer, and
+through Cursor's own registration in Cursor. Commands add it to Claude Code
+(`claude mcp add-json`), to Codex (`~/.codex/config.toml`, after showing the
+change) or copy its configuration for any other agent.
+
+Releases also publish it to npm as `gitglasses-mcp`, with the engine for each
+platform as an optional dependency; it is not on npm yet, so until then
+register the copy the extension ships, or build it from a clone.
+[Its README](mcp-server/README.md) has the setup for each client and the
+trust model.
 
 ## Layout
 
