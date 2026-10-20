@@ -15,6 +15,8 @@ import { fakeEngine, type FakeRepo } from './support/fakeEngine';
 import { ErrorCodes } from '@gitglasses/protocol';
 import { EngineError, EngineRestartedError } from '@gitglasses/rpc';
 import { RepositoryService } from '../src/model/repositoryService';
+import { identityAliasResolver } from '../src/model/pathAliases';
+import { nodeFileIdentity } from '../src/model/nodeFileIdentity';
 import { ACTIVE_REPO_KEY, ActiveRepoManager } from '../src/model/activeRepo';
 import { MAX_WORKSPACE_REPOSITORIES } from '../src/model/repoDiscovery';
 
@@ -270,6 +272,36 @@ describe('ActiveRepoManager selection', () => {
     expect((await active.resolve())?.repoId).toBe('r2');
     expect(repos.isWatched('r2')).toBe(true);
     expect(engine.discoveries().at(-1)?.params).toEqual({ path: path.join(root, 'api') });
+  });
+
+  it('gives the root in the spelling the workspace was opened with', async () => {
+    // The workspace folder is a symlink; the engine reports the real path.
+    layout('real/.git', 'real/nested/.git');
+    const link = path.join(root, 'link');
+    fs.symlinkSync(path.join(root, 'real'), link, process.platform === 'win32' ? 'junction' : 'dir');
+    controls.folders = [link];
+    const fake = fakeEngine([
+      { id: 'r1', root: path.join(root, 'real'), match: path.join(root, 'real') },
+      { id: 'r1', root: path.join(root, 'real'), match: link },
+      { id: 'r2', root: path.join(root, 'real/nested'), match: path.join(link, 'nested') },
+    ]);
+    const repos = new RepositoryService(fake.engine, {
+      caseInsensitive: false,
+      resolveAlias: identityAliasResolver(nodeFileIdentity),
+    });
+    const active = new ActiveRepoManager(repos, memento());
+    managers.push(active);
+
+    expect(await active.all()).toEqual([
+      { repoId: 'r1', rootPath: path.join(root, 'real'), workspacePath: link, name: 'link' },
+      {
+        repoId: 'r2',
+        rootPath: path.join(root, 'real/nested'),
+        workspacePath: path.join(link, 'nested'),
+        name: 'nested',
+      },
+    ]);
+    expect((await active.resolve())?.workspacePath).toBe(link);
   });
 
   it('falls back to the folder repository when the stored choice is gone', async () => {

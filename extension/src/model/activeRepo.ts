@@ -24,11 +24,17 @@ export interface ActiveRepo {
   repoId: string;
   /** The root in the engine's spelling. */
   rootPath: string;
+  /** The root in the spelling the editor uses for the files in it, which
+   *  differs from rootPath under a symlink, an 8.3 short name or a junction.
+   *  URIs of working-tree files are built from it, so they name the
+   *  documents the explorer shows. */
+  workspacePath?: string;
 }
 
 export interface WorkspaceRepo extends ActiveRepo {
   /** Last path segment of the root, the label used in pickers and titles. */
   name: string;
+  workspacePath: string;
 }
 
 export const ACTIVE_REPO_KEY = 'gitglasses.activeRepoRoot';
@@ -103,8 +109,8 @@ function workspaceHost(repos: RepositoryService): DiscoveryHost {
 }
 
 /** A repository for the repo-scoped surfaces: the root in the engine's
- *  spelling, labelled with the last segment of the spelling it was found by,
- *  which is the name the user sees in the explorer. */
+ *  spelling and in the spelling it was found by, labelled with the last
+ *  segment of the latter, which is the name the user sees in the explorer. */
 function workspaceRepo(
   repos: RepositoryService,
   repoId: string,
@@ -113,6 +119,7 @@ function workspaceRepo(
   return {
     repoId,
     rootPath: repos.rootOf(repoId) ?? spelledRoot,
+    workspacePath: spelledRoot,
     name: repoName(spelledRoot),
   };
 }
