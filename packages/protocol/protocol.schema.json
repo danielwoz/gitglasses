@@ -2901,6 +2901,284 @@
         "properties": {}
       }
     },
+    "branch/rename": {
+      "description": "Renames a local branch (git branch -m).",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name",
+          "newName"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Branch to rename.",
+            "type": "string"
+          },
+          "newName": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Its new name.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "branch/setUpstream": {
+      "description": "Sets or clears the remote-tracking branch a local branch follows.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Local branch.",
+            "type": "string"
+          },
+          "upstream": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote-tracking branch to follow, e.g. origin/main. Omitted clears the upstream.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "branch/push": {
+      "description": "Pushes a local branch, checked out or not. A branch tracking a branch on the same remote updates it; otherwise the remote branch takes the local name.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Local branch to push.",
+            "type": "string"
+          },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to push to. Omitted uses the branch's pushRemote, remote.pushDefault, the remote it tracks, or the only remote; with several and none configured the push is refused.",
+            "type": "string"
+          },
+          "setUpstream": {
+            "type": "boolean"
+          },
+          "force": {
+            "const": "with-lease",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "remote"
+        ],
+        "properties": {
+          "remote": {
+            "description": "The remote pushed to.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tag/create": {
+      "description": "Creates a tag: annotated when a message is given, lightweight otherwise.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Tag to create.",
+            "type": "string"
+          },
+          "ref": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to tag. Omitted means HEAD.",
+            "type": "string"
+          },
+          "message": {
+            "minLength": 1,
+            "description": "Annotation message.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "tag/delete": {
+      "description": "Deletes a local tag.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Tag to delete.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "tag/push": {
+      "description": "Pushes a tag to a remote, or deletes it there.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name",
+          "remote"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Tag to push.",
+            "type": "string"
+          },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to push to.",
+            "type": "string"
+          },
+          "delete": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "remote/add": {
+      "description": "Adds a remote.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name",
+          "url"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote name.",
+            "type": "string"
+          },
+          "url": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Fetch URL.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "remote/remove": {
+      "description": "Removes a remote and its remote-tracking branches.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to remove.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
     "remote/list": {
       "description": "Configured remotes and their URLs.",
       "params": {

@@ -170,6 +170,14 @@ export interface Requests {
   'rebase/continue': { params: P<'rebase/continue'>; result: R<'rebase/continue'> };
   'rebase/skip': { params: P<'rebase/skip'>; result: R<'rebase/skip'> };
   'rebase/abort': { params: P<'rebase/abort'>; result: Empty };
+  'branch/rename': { params: P<'branch/rename'>; result: Empty };
+  'branch/setUpstream': { params: P<'branch/setUpstream'>; result: Empty };
+  'branch/push': { params: P<'branch/push'>; result: R<'branch/push'> };
+  'tag/create': { params: P<'tag/create'>; result: Empty };
+  'tag/delete': { params: P<'tag/delete'>; result: Empty };
+  'tag/push': { params: P<'tag/push'>; result: Empty };
+  'remote/add': { params: P<'remote/add'>; result: Empty };
+  'remote/remove': { params: P<'remote/remove'>; result: Empty };
 
   // --- P4: remotes / open patches ------------------------------------------
 

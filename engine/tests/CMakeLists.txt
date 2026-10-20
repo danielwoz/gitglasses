@@ -24,6 +24,7 @@ add_executable(engine_tests
   unit/mutate_service_test.cpp
   unit/patch_service_test.cpp
   unit/rebase_service_test.cpp
+  unit/ref_methods_test.cpp
   unit/sha256_test.cpp
   unit/hardening_test.cpp
   unit/watch_manager_test.cpp

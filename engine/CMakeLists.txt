@@ -40,6 +40,7 @@ if(EMSCRIPTEN)
     src/services/mutate/mutate_common.cpp
     src/services/mutate/mutate_methods.cpp
     src/services/mutate/rebase_methods.cpp
+    src/services/mutate/ref_methods.cpp
     src/services/mutate/stash_worktree_methods.cpp
     src/services/patch/patch_methods.cpp
     src/services/refs/refs_methods.cpp
@@ -162,6 +163,7 @@ add_library(gg_services STATIC
   src/services/mutate/mutate_common.cpp
   src/services/mutate/mutate_methods.cpp
   src/services/mutate/rebase_methods.cpp
+  src/services/mutate/ref_methods.cpp
   src/services/mutate/stash_worktree_methods.cpp
   src/services/patch/patch_methods.cpp
   src/services/refs/refs_methods.cpp

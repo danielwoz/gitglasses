@@ -392,6 +392,13 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   EXPECT_FALSE(details.value("files", Json::array()).empty());
   checkedRequest(session, 23, "commit/details",
                  {{"repoId", repoId}, {"sha", log["commits"].back()["sha"]}});
+
+  checkedRequest(session, 24, "tag/create",
+                 {{"repoId", repoId}, {"name", "v2.0"}, {"message", "annotated"}});
+  checkedRequest(session, 25, "tag/delete", {{"repoId", repoId}, {"name", "v2.0"}});
+  checkedRequest(session, 26, "branch/rename",
+                 {{"repoId", repoId}, {"name", "feature"}, {"newName", "feature-2"}});
+  checkedRequest(session, 27, "branch/setUpstream", {{"repoId", repoId}, {"name", "feature-2"}});
 }
 
 // The engine must refuse what the schema forbids. Every case here is params
@@ -469,6 +476,14 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
          "option-like createBranch");
   reject("commit/details", {{"repoId", repoId}, {"sha", "--output=/dev/null"}},
          "option-like commit/details sha");
+  reject("branch/rename", {{"repoId", repoId}, {"name", "main"}, {"newName", "--force"}},
+         "option-like new branch name");
+  reject("branch/push", {{"repoId", repoId}, {"name", "main"}, {"remote", "--exec=x"}},
+         "option-like push remote");
+  reject("tag/push", {{"repoId", repoId}, {"name", "v1"}, {"remote", "--mirror"}},
+         "option-like tag remote");
+  reject("remote/add", {{"repoId", repoId}, {"name", "x"}, {"url", "--upload-pack=x"}},
+         "option-like remote url");
 
   // Empty strings never stand in for an omitted value.
   reject("mutate/fetch", {{"repoId", repoId}, {"remote", ""}}, "empty remote");

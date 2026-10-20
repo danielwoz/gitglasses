@@ -818,6 +818,101 @@ export const RequestSchemas = {
     params: Type.Object({ repoId: Type.String() }, strict),
     result: EmptyObject,
   },
+  'branch/rename': {
+    description: 'Renames a local branch (git branch -m).',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Branch to rename.'),
+        newName: positional('Its new name.'),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'branch/setUpstream': {
+    description: "Sets or clears the remote-tracking branch a local branch follows.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Local branch.'),
+        upstream: optionalPositional(
+          'Remote-tracking branch to follow, e.g. origin/main. Omitted clears the upstream.',
+        ),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'branch/push': {
+    description:
+      'Pushes a local branch, checked out or not. A branch tracking a branch on the same remote updates it; otherwise the remote branch takes the local name.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Local branch to push.'),
+        remote: optionalPositional(
+          "Remote to push to. Omitted uses the branch's pushRemote, remote.pushDefault, the remote it tracks, or the only remote; with several and none configured the push is refused.",
+        ),
+        /** Makes the pushed branch the local branch's upstream (-u). */
+        setUpstream: Type.Optional(Type.Boolean()),
+        /** Only the lease-checked force is offered; a bare --force is not. */
+        force: Type.Optional(Type.Literal('with-lease')),
+      },
+      strict,
+    ),
+    result: Type.Object({ remote: Type.String({ description: 'The remote pushed to.' }) }, strict),
+  },
+  'tag/create': {
+    description: 'Creates a tag: annotated when a message is given, lightweight otherwise.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Tag to create.'),
+        ref: optionalPositional('Revision to tag. Omitted means HEAD.'),
+        message: Type.Optional(Type.String({ minLength: 1, description: 'Annotation message.' })),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'tag/delete': {
+    description: 'Deletes a local tag.',
+    params: Type.Object({ repoId: Type.String(), name: positional('Tag to delete.') }, strict),
+    result: EmptyObject,
+  },
+  'tag/push': {
+    description: 'Pushes a tag to a remote, or deletes it there.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Tag to push.'),
+        remote: positional('Remote to push to.'),
+        /** Deletes the tag on the remote instead; the local tag stays. */
+        delete: Type.Optional(Type.Boolean()),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'remote/add': {
+    description: 'Adds a remote.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Remote name.'),
+        url: positional('Fetch URL.'),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'remote/remove': {
+    description: 'Removes a remote and its remote-tracking branches.',
+    params: Type.Object({ repoId: Type.String(), name: positional('Remote to remove.') }, strict),
+    result: EmptyObject,
+  },
+
   // --- P4: remotes / open patches ------------------------------------------
 
   'remote/list': {
