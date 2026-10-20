@@ -285,8 +285,18 @@ Every setting, generated from the extension manifest:
 <!-- settings:start -->
 | Setting | Default | Description |
 | --- | --- | --- |
+| `gitglasses.rebaseEditor.enabled` | `false` | Open the todo list of an interactive rebase started outside GitGlasses, such as `git rebase -i` in a terminal, in the GitGlasses rebase editor. Git must use VS Code as its editor, for example `git config --global sequence.editor "code --wait"`. Turn it on before git opens the list: git goes on as soon as any editor of the list closes, so reopening a list that is already open as text hands it to git unchanged. Read from user settings only. |
 | `gitglasses.mode` | `"normal"` | GitGlasses mode; switch via the status bar item or the Switch Mode command. One of `normal`, `zen`, `review`. |
-| `gitglasses.currentLine.enabled` | `true` | Show blame annotation for the current line |
+| `gitglasses.currentLine.enabled` | `true` | Show blame at the end of the line the cursor is on. **GitGlasses: Toggle Inline Blame** flips this setting. The status bar item follows `gitglasses.statusBar.blame` on its own. |
+| `gitglasses.currentLine.delay` | `75` | Milliseconds the cursor rests on a line before its inline and status bar blame show. After an edit, blame always waits at least 300 ms so typing does not blame every keystroke. |
+| `gitglasses.currentLine.format` | `"${author}, ${date} • ${summary}"` | Text of the current-line blame. Tokens: `${author}` (author name), `${email}` (author email), `${date}` (author date in the `gitglasses.blame.dateStyle` style), `${ago}` (author date, relative), `${summary}` (first line of the message), `${sha}` (short sha). |
+| `gitglasses.statusBar.blame` | `"auto"` | Status bar blame for the current line, independent of `gitglasses.currentLine.enabled`. Its tooltip shows the full commit like the hover does, and clicking it opens the commit's details. In `auto`, GitGlasses steps aside while VS Code's built-in `git.blame.statusBarItem.enabled` is showing (it does not while `git.enabled` is off); set this to `show` (and optionally turn the built-in item off) to use the GitGlasses item instead. One of `auto`, `show`, `hide`. |
+| `gitglasses.statusBar.format` | `"${author}, ${date}"` | Text of the status bar blame, with the tokens of `gitglasses.currentLine.format`. |
+| `gitglasses.hovers.enabled` | `true` | Show the blamed commit when hovering a line: author and dates, the full message, the pull request it came from when the message names one, and links to the commit's details and changes, the file before the commit, the sha and the commit on the remote. |
+| `gitglasses.blame.dateStyle` | `"relative"` | How `${date}` renders in the current-line and status bar blame. One of `relative`, `absolute`, `iso`. |
+| `gitglasses.blame.ignoreWhitespace` | `false` | Ignore whitespace-only changes when attributing lines (`git blame -w`). |
+| `gitglasses.blame.detectMovedLines` | `"off"` | Move and copy detection. Slower on large histories. Needs the git CLI; without it blame works as with `off`. One of `off`, `withinFile`, `acrossFiles`. |
+| `gitglasses.blame.useIgnoreRevsFile` | `true` | Look through the commits listed in the files `blame.ignoreRevsFile` names, or in the repository's `.git-blame-ignore-revs` when that git setting is unset, as GitHub does. A file that does not exist, or that git cannot read (an abbreviated sha, say), is skipped with a note in the GitGlasses output. Needs the git CLI. |
 | `gitglasses.views.pageSize` | `50` | Commits loaded per page in the Commits and File History views |
 | `gitglasses.graph.pageSize` | `200` | Rows loaded per page in the Commit Graph and Visual File History |
 | `gitglasses.codeLens.enabled` | `true` | Show git blame CodeLens above files and top-level symbols |
@@ -350,6 +360,12 @@ in Restricted Mode.
 | GitGlasses: Add Worktree… | `gitglasses.worktrees.add` | trusted workspace |
 | GitGlasses: Stage Selected Hunk(s) | `gitglasses.stageSelectedHunks` | trusted workspace |
 | GitGlasses: Unstage Selected Hunk(s) | `gitglasses.unstageSelectedHunks` | trusted workspace |
+| GitGlasses: Create Tag… | `gitglasses.tag.create` | trusted workspace |
+| GitGlasses: Add Remote… | `gitglasses.remote.add` | trusted workspace |
+| GitGlasses: Show Paused Rebase | `gitglasses.rebase.show` |  |
+| GitGlasses: Continue Rebase | `gitglasses.rebase.continue` | trusted workspace |
+| GitGlasses: Skip Commit and Continue Rebase | `gitglasses.rebase.skip` | trusted workspace |
+| GitGlasses: Abort Rebase | `gitglasses.rebase.abort` | trusted workspace |
 
 #### Pull requests, issues and remotes
 
@@ -395,6 +411,8 @@ in Restricted Mode.
 | GitGlasses: Delete Repo Group | `gitglasses.groups.delete` |  |
 | GitGlasses: Export Repo Group… | `gitglasses.groups.export` |  |
 | GitGlasses: Import Repo Group… | `gitglasses.groups.import` |  |
+| GitGlasses: Continue Merge, Rebase, Cherry-pick or Revert | `gitglasses.continueOperation` | trusted workspace |
+| GitGlasses: Abort Merge, Rebase, Cherry-pick or Revert | `gitglasses.abortOperation` | trusted workspace |
 | GitGlasses: Get Started | `gitglasses.openWalkthrough` |  |
 | GitGlasses: Select Repository… | `gitglasses.selectRepository` |  |
 <!-- commands:end -->
