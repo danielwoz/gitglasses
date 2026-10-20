@@ -393,7 +393,13 @@ function pullRequestSection(
       );
       break;
     case 'failed':
-      lines.push(`Could not ask ${prs.forge.name}: ${prs.message}`);
+      lines.push(
+        prs.reason === 'notVisible'
+          ? `Not looked up: ${prs.forge.name} does not show ` +
+              `${quoted(`${prs.forge.owner}/${prs.forge.repo}`)} to the token in the server ` +
+              'environment (it has no access to the repository, or needs SSO authorisation).'
+          : `Could not ask ${prs.forge.name}: ${prs.message}`,
+      );
       break;
     case 'found':
       if (prs.pullRequests.length === 0) {

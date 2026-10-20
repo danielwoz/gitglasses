@@ -12,7 +12,7 @@
  */
 
 import { matchAutolinks } from './autolinks.js';
-import { AuthError, RateLimitError } from './errors.js';
+import { AuthError, ProviderError, RateLimitError } from './errors.js';
 import {
   supportsCommitPullRequests,
   type AuthContext,
@@ -175,7 +175,9 @@ export type StoryPullRequests =
   | {
       state: 'failed';
       forge: StoryForgeLabel;
-      reason: 'auth' | 'rateLimit' | 'other';
+      /** 'notVisible': the forge does not show the repository to the
+       *  credential (private to others, or awaiting SSO authorisation). */
+      reason: 'auth' | 'rateLimit' | 'notVisible' | 'other';
       message: string;
       named?: NamedPullRequest;
     };
@@ -351,9 +353,10 @@ function repoIssueNumber(issue: StoryIssue, repo: RepoDescriptor): number | unde
   return issue.url === expected ? Number(match[1]) : undefined;
 }
 
-function failureReason(error: unknown): 'auth' | 'rateLimit' | 'other' {
+function failureReason(error: unknown): 'auth' | 'rateLimit' | 'notVisible' | 'other' {
   if (error instanceof AuthError) return 'auth';
   if (error instanceof RateLimitError) return 'rateLimit';
+  if (error instanceof ProviderError && error.status === 404) return 'notVisible';
   return 'other';
 }
 

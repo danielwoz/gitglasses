@@ -474,6 +474,20 @@ describe.skipIf(!enginePath)('git_line_story', () => {
     expect(asked('/issues/12')).toBe(1);
   });
 
+  it('says GitHub does not show the repository, rather than that it has no pull request', async () => {
+    // The stub answers 404 for any commit but the fix, as GitHub does for a
+    // repository the token cannot see.
+    const text = await handlers({ GITHUB_TOKEN: 'secret-token' }, 'allowed').git_line_story({
+      repoPath: repoDir,
+      file: 'parser.ts',
+      line: 1,
+    });
+    expect(text).toContain(
+      'Not looked up: GitHub does not show "acme/widgets" to the token in the server environment',
+    );
+    expect(text).not.toContain('knows no pull request');
+  });
+
   it('asks GitHub nothing without a token, and names the variables to set', async () => {
     requests.length = 0;
     const text = await handlers({}, 'allowed').git_line_story({

@@ -280,7 +280,9 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
    * The merge requests containing `sha`, from GET
    * /projects/:id/repository/commits/:sha/merge_requests, cached per commit.
    * One call carries the description and the comment count (every note,
-   * review comments included). A commit GitLab does not have (404) has none.
+   * review comments included). GitLab answers 404 both for a commit it does
+   * not have, which has none, and for a project the credential cannot see,
+   * which fails the lookup; the project itself tells the two apart.
    */
   async getPullRequestsForCommit(
     auth: AuthContext,
@@ -295,6 +297,21 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
       p`/projects/${projectPath(repo)}/repository/commits/${sha}/merge_requests`,
       COMMIT_PULL_REQUESTS_TTL_MS
     );
+    if (mrs === undefined) {
+      const project = await this.client.getJsonCached<Record<string, unknown>>(
+        auth,
+        p`/projects/${projectPath(repo)}`,
+        COMMIT_PULL_REQUESTS_TTL_MS
+      );
+      if (project === undefined) {
+        throw new ProviderError(
+          `GitLab does not show ${repo.owner}/${repo.name} to this credential (404): it has no ` +
+            'access to the project',
+          404
+        );
+      }
+      return [];
+    }
     const mapped = await Promise.all(
       (Array.isArray(mrs) ? mrs : []).map(async (mr) => ({
         ...(await this.enrichAndMap(auth, mr, '', false, false)),

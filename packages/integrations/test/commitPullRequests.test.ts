@@ -4,7 +4,7 @@
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { CredentialScopeError, RateLimitError } from '../src/errors.js';
+import { CredentialScopeError, ProviderError, RateLimitError } from '../src/errors.js';
 import { orderCommitPullRequests, supportsCommitPullRequests } from '../src/hostingProvider.js';
 import type { RepoDescriptor } from '../src/models.js';
 import { BitbucketProvider } from '../src/providers/bitbucket.js';
@@ -86,6 +86,22 @@ describe('GitHubProvider.getPullRequestsForCommit', () => {
     const provider = new GitHubProvider({ fetchFn });
 
     expect(await provider.getPullRequestsForCommit(auth, click, SHA)).toEqual([]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('fails, rather than finding none, when the repository is out of sight', async () => {
+    // GitHub answers 404 for a repository the token cannot see.
+    const { fetchFn, requests } = gitHubRoutes({
+      '/pulls?per_page': () => jsonResponse({ message: 'Not Found', status: '404' }, 404),
+    });
+    const provider = new GitHubProvider({ fetchFn });
+
+    const failure = provider.getPullRequestsForCommit(auth, click, SHA);
+    await expect(failure).rejects.toBeInstanceOf(ProviderError);
+    await expect(failure).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringContaining('does not show pallets/click to this credential'),
+    });
     expect(requests).toHaveLength(1);
   });
 
@@ -187,13 +203,51 @@ describe('GitLabProvider.getPullRequestsForCommit', () => {
     expect(prs[0].body).toContain('## What does this MR do?');
   });
 
+  const project = {
+    id: 250833,
+    name: 'gitlab-runner',
+    path_with_namespace: 'gitlab-org/gitlab-runner',
+    default_branch: 'main',
+    visibility: 'public',
+    web_url: 'https://gitlab.com/gitlab-org/gitlab-runner',
+  };
+
   it('finds none for a commit GitLab does not have', async () => {
-    const { fetchFn } = stubFetch(() => jsonResponse({ message: '404 Commit Not Found' }, 404));
+    const { fetchFn, requests } = stubFetch((url) =>
+      url.endsWith('/merge_requests')
+        ? jsonResponse({ message: '404 Commit Not Found' }, 404)
+        : jsonResponse(project),
+    );
     const provider = new GitLabProvider({ fetchFn });
 
     expect(
       await provider.getPullRequestsForCommit({ token: 't', host: 'gitlab.com' }, runner, squash),
     ).toEqual([]);
+    expect(requests.map((request) => request.url)).toEqual([
+      `https://gitlab.com/api/v4/projects/gitlab-org%2Fgitlab-runner/repository/commits/${squash}/merge_requests`,
+      'https://gitlab.com/api/v4/projects/gitlab-org%2Fgitlab-runner',
+    ]);
+  });
+
+  it('fails, rather than finding none, when the project is out of sight', async () => {
+    const { fetchFn } = stubFetch((url) =>
+      jsonResponse(
+        {
+          message: url.endsWith('/merge_requests')
+            ? '404 Commit Not Found'
+            : '404 Project Not Found',
+        },
+        404,
+      ),
+    );
+    const provider = new GitLabProvider({ fetchFn });
+
+    await expect(
+      provider.getPullRequestsForCommit({ token: 't', host: 'gitlab.com' }, runner, squash),
+    ).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringContaining('does not show gitlab-org/gitlab-runner to this credential'),
+    });
   });
 });
 

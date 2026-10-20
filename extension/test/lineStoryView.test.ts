@@ -123,6 +123,15 @@ describe('notices', () => {
     ).toBe('connect');
   });
 
+  it('says the forge does not show the repository, rather than that it has no pull request', () => {
+    expect(
+      pullRequestNotice({ state: 'failed', forge, reason: 'notVisible', message: '404' }),
+    ).toEqual({
+      text: 'GitHub does not show o/r to the connected account, so its pull requests cannot be looked up.',
+      action: { label: 'Reconnect GitHub', message: 'connect' },
+    });
+  });
+
   it('explains an empty answer and says nothing over a list', () => {
     expect(pullRequestNotice({ state: 'found', forge, pullRequests: [] })?.text).toMatch(
       /rebase merge/,

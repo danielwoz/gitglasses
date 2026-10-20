@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { jiraPattern, matchAutolinks, repoIssuePatterns } from '../src/autolinks.js';
-import { AuthError } from '../src/errors.js';
+import { AuthError, ProviderError } from '../src/errors.js';
 import type { AuthContext, HostingProvider } from '../src/hostingProvider.js';
 import {
   boundText,
@@ -279,6 +279,16 @@ describe('buildLineStory', () => {
     });
     expect(story.history.state).toBe('ready');
     expect(log).toHaveBeenCalledWith(expect.stringContaining('bad token'));
+  });
+
+  it('says when the forge does not show the repository to the credential', async () => {
+    const hidden = new ProviderError('GitHub does not show acme/widgets to this credential', 404);
+    const story = await buildLineStory(input, sources({ forge: hosted(provider(hidden)) }));
+    expect(story.pullRequests).toMatchObject({
+      state: 'failed',
+      reason: 'notVisible',
+      named: { number: 7 },
+    });
   });
 
   it('does not offer to connect a forge that cannot look pull requests up', async () => {

@@ -362,7 +362,9 @@ export class GitHubProvider
    * /repos/{o}/{r}/commits/{sha}/pulls. The list carries no comment counts,
    * so the first few are read in full (GET /pulls/{n}) for them. Both answers
    * are cached per commit and pull request. A commit GitHub does not have
-   * (422: not pushed, or rewritten) has none.
+   * (422: not pushed, or rewritten) has none. A 404 means the repository is
+   * out of the credential's sight, which says nothing about the commit, so
+   * it fails the lookup.
    */
   async getPullRequestsForCommit(
     auth: AuthContext,
@@ -384,6 +386,13 @@ export class GitHubProvider
         return [];
       }
       throw error;
+    }
+    if (pulls === undefined) {
+      throw new ProviderError(
+        `GitHub does not show ${repo.owner}/${repo.name} to this credential (404): it has no ` +
+          'access to the repository, or the organization wants it authorised for SSO',
+        404
+      );
     }
     const listed = orderCommitPullRequests(
       (Array.isArray(pulls) ? pulls : []).map((pull) => this.mapRestPullRequest(pull, repo))

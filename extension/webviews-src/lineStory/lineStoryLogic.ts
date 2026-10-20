@@ -148,6 +148,14 @@ export function pullRequestNotice(section: StoryPullRequests): Notice | undefine
       if (section.reason === 'rateLimit') {
         return { text: `${section.forge.name}'s rate limit is used up; try again later.` };
       }
+      if (section.reason === 'notVisible') {
+        return {
+          text:
+            `${section.forge.name} does not show ${section.forge.owner}/${section.forge.repo} ` +
+            'to the connected account, so its pull requests cannot be looked up.',
+          action: { label: `Reconnect ${section.forge.name}`, message: 'connect' },
+        };
+      }
       return { text: `Could not ask ${section.forge.name}: ${section.message}` };
     case 'found':
       return section.pullRequests.length > 0
