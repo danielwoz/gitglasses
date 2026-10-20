@@ -21,13 +21,13 @@
 #include "services/status/diff_methods.h"
 #include "services/status/stage_methods.h"
 #include "services/status/status_methods.h"
+#include "version.h"
 
 namespace gg {
 
 namespace {
 
 constexpr const char* kProtocolVersion = "0.1.0";
-constexpr const char* kEngineVersion = "0.1.2";
 
 // watch/threads are static truths of the build: single-threaded builds
 // (wasm, debug-st) have no watcher threads and no worker pool.
@@ -67,7 +67,7 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
                std::string("protocol version mismatch: engine speaks ") + kProtocolVersion +
                    ", client sent '" + clientProtocol + "'"}};
         }
-        return {{"engineVersion", kEngineVersion},
+        return {{"engineVersion", kVersion},
                 {"protocolVersion", kProtocolVersion},
                 {"capabilities",
                  {{"gitCli", context.cliAvailable},
