@@ -136,7 +136,11 @@ describe('gitglasses-mcp package', () => {
           publishedManifest(manifest),
         );
         expect(files.get('package/dist/cli.js').data.equals(readFileSync(cli))).toBe(true);
-        expect(files.get('package/dist/cli.js').mode & 0o111).toBe(0o111);
+        // Windows has no executable bit to carry into the tarball; the npm
+        // package is packed and published on Linux.
+        if (process.platform !== 'win32') {
+          expect(files.get('package/dist/cli.js').mode & 0o111).toBe(0o111);
+        }
       } finally {
         rmSync(out, { recursive: true, force: true });
       }

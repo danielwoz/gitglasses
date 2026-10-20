@@ -175,12 +175,20 @@ class InteractiveSession {
   void notify(const Json& message) { writeFrame(message); }
 
   // Sends the request and blocks until its response arrives; interleaved
-  // notifications are collected into `notifications`.
-  Json request(const Json& message) {
+  // notifications are collected into `notifications`. A response that does
+  // not arrive within `timeoutMs` fails the test naming the request, rather
+  // than leaving the test to hang until the harness kills it.
+  Json request(const Json& message, int timeoutMs = 120'000) {
     writeFrame(message);
     std::istream in(&fromServer_);
     FrameReaderStream reader(in);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     for (;;) {
+      if (!fromServer_.waitReadable(deadline)) {
+        ADD_FAILURE() << "timed out waiting for the response to " << message.value("method", "")
+                      << " (id " << message.value("id", Json()).dump() << ")";
+        return {};
+      }
       auto payload = reader.read();
       if (!payload) {
         ADD_FAILURE() << "server closed stream before response";

@@ -118,7 +118,9 @@ export function canonicalPath(target: string): string {
   let current = resolved;
   for (;;) {
     try {
-      return path.join(fs.realpathSync(current), ...remainder);
+      // The native realpath also expands Windows 8.3 short names (RUNNER~1),
+      // which the engine reports in their long form.
+      return path.join(fs.realpathSync.native(current), ...remainder);
     } catch {
       const parent = path.dirname(current);
       if (parent === current) return resolved;

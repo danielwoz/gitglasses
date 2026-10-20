@@ -1,0 +1,9 @@
+# Check out text with LF on every platform. Scripts with a shebang, the
+# workflow parser in the release tests, and byte-exact fixtures all expect it.
+* text=auto eol=lf
+
+*.png binary
+*.wasm binary
+*.ico binary
+*.gif binary
+*.webp binary

@@ -117,8 +117,9 @@ describe('suggestion against the pull request head', () => {
     // The pull request author applies it in their own checkout of the head.
     const recipient = mkdtempSync(path.join(tmpdir(), 'gg-suggest-recipient-'));
     repos.push(recipient);
-    git(recipient, 'clone', '-q', root, '.');
-    git(recipient, 'config', 'core.autocrlf', 'false');
+    // Checked out without line-ending conversion, as the pull request head
+    // stores the file: a CRLF working tree would not take an LF patch.
+    git(recipient, 'clone', '-q', '-c', 'core.autocrlf=false', root, '.');
     const parsed = parseEnvelope(json);
     expect(parsed.ok).toBe(true);
     const target = await client.request('repo/discover', { path: recipient });
