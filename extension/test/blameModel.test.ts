@@ -3,7 +3,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ErrorCodes, type BlameHunk } from '@gitglasses/protocol';
 import type { CancellationLike, EngineClient } from '@gitglasses/rpc';
-import { BlameModel, StaleBlameError, type BlameKey } from '../src/model/blameModel';
+import {
+  affectsOtherFilesBlame,
+  BlameModel,
+  StaleBlameError,
+  type BlameKey,
+} from '../src/model/blameModel';
 
 const SHA = 'c'.repeat(40);
 
@@ -145,6 +150,40 @@ describe('BlameModel shared requests', () => {
     calls[1].answer(-1);
     await expect(other).resolves.toBeDefined();
     expect(model.stats().entries).toBe(1);
+  });
+});
+
+describe('BlameModel saves', () => {
+  it('drops every file of the repository when a file blame reads is saved', async () => {
+    for (const saved of ['.mailmap', '.git-blame-ignore-revs', 'src/.gitattributes']) {
+      const { engine, calls } = controlledEngine();
+      const model = new BlameModel(engine);
+      const pending = [model.getBlame(onDisk('a.ts')), model.getBlame(onDisk('b.ts'))];
+      for (const call of calls) call.answer(-1);
+      await Promise.all(pending);
+      model.invalidateSaved('r1', saved);
+      expect(model.stats().entries, saved).toBe(0);
+    }
+  });
+
+  it('drops only the saved file otherwise', async () => {
+    const { engine, calls } = controlledEngine();
+    const model = new BlameModel(engine);
+    const pending = [model.getBlame(onDisk('a.ts')), model.getBlame(onDisk('b.ts'))];
+    for (const call of calls) call.answer(-1);
+    await Promise.all(pending);
+    model.invalidateSaved('r1', 'a.ts');
+    expect(model.stats().entries).toBe(1);
+  });
+
+  it('knows which files change how other files are blamed', () => {
+    expect(affectsOtherFilesBlame('.mailmap')).toBe(true);
+    expect(affectsOtherFilesBlame('config/mailmap')).toBe(true);
+    expect(affectsOtherFilesBlame('.git-blame-ignore-revs')).toBe(true);
+    expect(affectsOtherFilesBlame('tools/blame-ignore-revs.txt')).toBe(true);
+    expect(affectsOtherFilesBlame('docs/.gitattributes')).toBe(true);
+    expect(affectsOtherFilesBlame('src/mailmap.ts')).toBe(false);
+    expect(affectsOtherFilesBlame('README.md')).toBe(false);
   });
 });
 

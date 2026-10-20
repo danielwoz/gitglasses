@@ -304,10 +304,10 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   disposables.push(
     vscode.window.registerTerminalLinkProvider(new ShaTerminalLinkProvider(engine, repos)),
     // Blame cached at version -1 describes the file on disk, which a save
-    // changes.
+    // changes; saving .mailmap and the like changes every file's.
     vscode.workspace.onDidSaveTextDocument((doc) => {
       const located = repos.locate(doc.uri);
-      if (located) blame.invalidatePath(located.repoId, located.relativePath);
+      if (located) blame.invalidateSaved(located.repoId, located.relativePath);
       refreshBlameConsumers();
     }),
     vscode.languages.registerHoverProvider(

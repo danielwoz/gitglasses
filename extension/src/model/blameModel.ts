@@ -101,6 +101,24 @@ export function optionsKey(options: BlameOptions | undefined): string {
   ].join(',');
 }
 
+/**
+ * Whether a file's contents change how other files of its repository are
+ * blamed, so saving it drops the repository's blame rather than its own:
+ * .mailmap (and a mailmap.file named like it) maps author names, an
+ * ignore-revs file lists the commits blame looks through, and a
+ * .gitattributes in any directory decides which paths are Git LFS.
+ */
+export function affectsOtherFilesBlame(relativePath: string): boolean {
+  const name = (relativePath.split('/').pop() ?? '').toLowerCase();
+  return (
+    name === '.gitattributes' ||
+    name === '.mailmap' ||
+    name === 'mailmap' ||
+    name.includes('ignore-revs') ||
+    name.includes('ignorerevs')
+  );
+}
+
 function cacheKeyFor(key: BlameKey): string {
   return `${key.repoId}\0${key.path}\0${key.rev ?? ''}\0${key.version}\0${optionsKey(key.options)}`;
 }
@@ -184,6 +202,13 @@ export class BlameModel {
     for (const [cacheKey, entry] of this.cache) {
       if (entry.repoId === repoId && entry.path === path) this.remove(cacheKey, true);
     }
+  }
+
+  /** Drop what a saved file invalidates: its own blame on disk, or the
+   *  repository's when the file changes how other files are blamed. */
+  invalidateSaved(repoId: string, path: string): void {
+    if (affectsOtherFilesBlame(path)) this.invalidate(repoId);
+    else this.invalidatePath(repoId, path);
   }
 
   /** Entry count and approximate bytes held, for tests and diagnostics. */
