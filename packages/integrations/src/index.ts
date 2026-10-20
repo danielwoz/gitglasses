@@ -10,6 +10,7 @@ export * from './rateLimitHeaders.js';
 export * from './launchpadClassifier.js';
 export * from './autolinks.js';
 export * from './pullRequestRefs.js';
+export * from './lineStory.js';
 export * from './providers/github.js';
 export * from './providers/gitlab.js';
 export * from './providers/bitbucket.js';
