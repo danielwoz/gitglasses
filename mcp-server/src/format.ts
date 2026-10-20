@@ -416,7 +416,11 @@ export type PatchSourceParam =
   | { kind: 'stash'; index: number }
   | { kind: 'commit'; sha: string };
 
-/** Parse the tool-facing source string: 'wip' | 'stash:<n>' | 'commit:<sha>'. */
+/**
+ * Parse the tool-facing source string: 'wip' | 'stash:<n>' | 'commit:<rev>',
+ * where <rev> is any revision git resolves (a sha, HEAD~2, a branch or tag).
+ * A revision may not start with '-', so it can never read as a git option.
+ */
 export function parsePatchSource(source: string): PatchSourceParam {
   if (source === 'wip') {
     return { kind: 'wip', includeUntracked: true };
@@ -425,12 +429,12 @@ export function parsePatchSource(source: string): PatchSourceParam {
   if (stash) {
     return { kind: 'stash', index: Number(stash[1]) };
   }
-  const commit = /^commit:([0-9a-fA-F]{4,40})$/.exec(source);
+  const commit = /^commit:([^-\s]\S*)$/.exec(source);
   if (commit) {
     return { kind: 'commit', sha: commit[1] };
   }
   throw new Error(
-    `Invalid patch source "${source}"; expected 'wip', 'stash:<n>' or 'commit:<sha>'`,
+    `Invalid patch source "${source}"; expected 'wip', 'stash:<n>' or 'commit:<revision>'`,
   );
 }
 

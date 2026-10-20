@@ -842,7 +842,7 @@ export function createToolHandlers(context: ToolContext) {
         limit,
         `a truncated patch cannot be applied; ${charLimitHint(
           limit,
-          "narrow the source to a single commit with 'commit:<sha>'",
+          "narrow the source to a single commit with 'commit:<revision>'",
         )}`,
       );
     },
@@ -1226,10 +1226,15 @@ export function createServer(context: ToolContext): McpServer {
     'create_patch',
     {
       description:
-        "Create a shareable gitglasses patch from 'wip', 'stash:<n>' or 'commit:<sha>': envelope metadata lines followed by the raw patch. Runs git, so it works only in repositories inside the directories the server was started with (--allow).",
+        "Create a shareable gitglasses patch from 'wip', 'stash:<n>' or 'commit:<revision>': envelope metadata lines followed by the raw patch. Runs git, so it works only in repositories inside the directories the server was started with (--allow).",
       inputSchema: {
         repoPath,
-        source: z.string().describe("Patch source: 'wip', 'stash:<n>' or 'commit:<sha>'"),
+        source: z
+          .string()
+          .describe(
+            "Patch source: 'wip', 'stash:<n>' or 'commit:<revision>', where the revision is a " +
+              'sha, HEAD, HEAD~2, a branch or a tag',
+          ),
         maxChars,
       },
       annotations: readOnly,

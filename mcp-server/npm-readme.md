@@ -26,7 +26,7 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `git_compare` | A branch against another from their merge base: commits ahead and behind, changed files with +/- counts, optionally the diff |
 | `git_graph_summary` | Lane-indented text rendering of the commit graph |
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
-| `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
+| `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<revision>` |
 | `apply_patch` | Apply a patch to the working tree (**writes**) |
 | `list_my_prs` | Open PRs involving you, grouped into launchpad buckets |
 

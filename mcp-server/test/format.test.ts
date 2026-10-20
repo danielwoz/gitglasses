@@ -470,9 +470,19 @@ describe('parsePatchSource', () => {
     expect(parsePatchSource('commit:abc123f')).toEqual({ kind: 'commit', sha: 'abc123f' });
   });
 
+  // git_commit_show takes any revision, and create_patch takes the same.
+  it('takes any revision for a commit, as git_commit_show does', () => {
+    for (const rev of ['HEAD', 'HEAD~2', 'v1.0', 'feature/login', 'main^']) {
+      expect(parsePatchSource(`commit:${rev}`)).toEqual({ kind: 'commit', sha: rev });
+    }
+  });
+
   it('rejects malformed sources', () => {
     expect(() => parsePatchSource('stash:x')).toThrow(/Invalid patch source/);
     expect(() => parsePatchSource('branch:main')).toThrow(/Invalid patch source/);
+    expect(() => parsePatchSource('commit:')).toThrow(/Invalid patch source/);
+    expect(() => parsePatchSource('commit:--output=x')).toThrow(/Invalid patch source/);
+    expect(() => parsePatchSource('commit:a b')).toThrow(/Invalid patch source/);
   });
 });
 
