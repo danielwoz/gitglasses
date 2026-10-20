@@ -552,6 +552,29 @@ describe('EngineClient crash handling', () => {
     client.dispose();
   });
 
+  it('restart and dispose cancel the requests in flight in the engine before closing it', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    const beforeRestart = client.request('repo/list', {});
+    await client.restart();
+    await expect(beforeRestart).rejects.toBeInstanceOf(EngineRestartedError);
+    const first = transports[0].sent.find((m) => m.method === 'repo/list');
+    expect(transports[0].sent.at(-1)).toMatchObject({
+      method: '$/cancelRequest',
+      params: { id: first?.id },
+    });
+
+    const beforeDispose = client.request('repo/list', {});
+    client.dispose();
+    await expect(beforeDispose).rejects.toBeInstanceOf(EngineRestartedError);
+    const second = transports[1].sent.find((m) => m.method === 'repo/list');
+    expect(transports[1].sent.at(-1)).toMatchObject({
+      method: '$/cancelRequest',
+      params: { id: second?.id },
+    });
+    expect(transports[1].killed).toBe(true);
+  });
+
   it('carries the error data the engine sends', async () => {
     const { client, transports } = makeClient();
     await client.start();

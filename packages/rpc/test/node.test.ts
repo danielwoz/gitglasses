@@ -6,7 +6,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { engineArgs, ProcessTransport } from '../src/node.js';
+import { ENGINE_EXIT_GRACE_MS, engineArgs, ProcessTransport } from '../src/node.js';
 
 describe('engineArgs', () => {
   it('starts a full engine by default', () => {
@@ -60,4 +60,25 @@ describe.skipIf(process.platform === 'win32')('ProcessTransport', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // The engine takes up to 3 s after its stdin closes to stop the git it
+  // runs; killing it sooner would leave that git behind.
+  it('lets the engine stop its work before killing it', async () => {
+    expect(ENGINE_EXIT_GRACE_MS).toBeGreaterThan(3000);
+    const dir = mkdtempSync(path.join(tmpdir(), 'gg-rpc-grace-'));
+    try {
+      const enginePath = path.join(dir, 'engine.sh');
+      writeFileSync(enginePath, '#!/bin/sh\ncat >/dev/null\nsleep 3.2\nexit 7\n');
+      chmodSync(enginePath, 0o755);
+      const transport = new ProcessTransport({ enginePath });
+      const exited = new Promise<number | null>((resolve) =>
+        transport.onExit(({ code }) => resolve(code)),
+      );
+      await transport.start();
+      transport.kill();
+      expect(await exited).toBe(7);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
 });

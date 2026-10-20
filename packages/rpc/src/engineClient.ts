@@ -323,6 +323,19 @@ export class EngineClient {
     this.respawnTimer = undefined;
   }
 
+  /** Rejects every request in flight and, while the engine is still up,
+   *  cancels them there too, so the git they run stops now instead of after
+   *  the engine notices its stdin closed. */
+  private abandonAll(error: Error): void {
+    const transport = this.transportAlive ? this.transport : undefined;
+    for (const id of this.pending.keys()) {
+      transport?.send(
+        JSON.stringify({ jsonrpc: '2.0', method: '$/cancelRequest', params: { id } }),
+      );
+    }
+    this.failAllPending(error);
+  }
+
   private failAllPending(error: Error): void {
     for (const pending of this.pending.values()) {
       if (pending.timer !== undefined) clearTimeout(pending.timer);
@@ -569,9 +582,9 @@ export class EngineClient {
   async restart(): Promise<void> {
     this.clearRespawn();
     const transport = this.transport;
+    this.abandonAll(new EngineRestartedError());
     this.generation += 1; // orphan the old transport's exit handler
     this.transportAlive = false;
-    this.failAllPending(new EngineRestartedError());
     this.cancelInbound();
     transport?.kill();
     this.crashTimes = [];
@@ -594,7 +607,7 @@ export class EngineClient {
     if (this.disposed) return;
     this.disposed = true;
     this.clearRespawn();
-    this.failAllPending(new EngineRestartedError());
+    this.abandonAll(new EngineRestartedError());
     this.cancelInbound();
     this.transport?.kill();
   }

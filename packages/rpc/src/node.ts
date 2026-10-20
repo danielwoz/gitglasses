@@ -42,6 +42,12 @@ export function findEngineBinary(options: {
   return options.candidates.find((candidate) => fs.existsSync(candidate));
 }
 
+/** How long kill() waits for the engine to exit on its own before killing
+ *  it. Once its stdin closes the engine lets requests in flight finish for
+ *  up to 2 s, then cancels the rest and gives their git up to 1 s to exit on
+ *  SIGTERM; killing the engine sooner would leave that git running. */
+export const ENGINE_EXIT_GRACE_MS = 5000;
+
 /** Factory for EngineClient: each call yields a fresh transport, so respawns
  *  never reuse a dead process's streams. */
 export function createProcessTransportFactory(
@@ -120,6 +126,8 @@ export class ProcessTransport implements EngineTransport {
     child?.stdin?.end(); // engine exits when stdin closes
     // Backstop for an engine that does not; unref'd so the wait never holds
     // the host process open.
-    setTimeout(() => child?.kill('SIGKILL'), 2000).unref?.();
+    setTimeout(() => {
+      if (!this.exited) child?.kill('SIGKILL');
+    }, ENGINE_EXIT_GRACE_MS).unref?.();
   }
 }
