@@ -47,6 +47,11 @@
         "gitglasses.integrations.issues",
         "gitglasses.ai.provider",
         "gitglasses.ai.model",
+        "gitglasses.ai.anthropic.model",
+        "gitglasses.ai.openai.model",
+        "gitglasses.ai.gemini.model",
+        "gitglasses.ai.ollama.model",
+        "gitglasses.ai.vscodeLm.model",
         "gitglasses.ai.openai.baseUrl",
         "gitglasses.ai.ollama.host",
         "gitglasses.autolinks"
@@ -215,32 +220,43 @@
       },
       {
         "command": "gitglasses.ai.explainCommit",
-        "title": "GitGlasses: AI Explain Commit",
+        "title": "AI Explain Commit",
+        "category": "GitGlasses",
         "icon": "$(sparkle)"
       },
       {
         "command": "gitglasses.ai.explainWip",
-        "title": "GitGlasses: AI Explain Working Changes",
+        "title": "AI Explain Working Changes",
+        "category": "GitGlasses",
         "icon": "$(sparkle)"
       },
       {
         "command": "gitglasses.ai.generateCommitMessage",
-        "title": "GitGlasses: AI Generate Commit Message",
+        "title": "AI Generate Commit Message",
+        "category": "GitGlasses",
         "icon": "$(sparkle)",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.ai.nlSearch",
-        "title": "GitGlasses: AI Search Commits (Natural Language)",
+        "title": "AI Search Commits (Natural Language)",
+        "category": "GitGlasses",
         "icon": "$(sparkle)"
       },
       {
+        "command": "gitglasses.ai.chooseProvider",
+        "title": "Choose AI Provider…",
+        "category": "GitGlasses"
+      },
+      {
         "command": "gitglasses.ai.setApiKey",
-        "title": "GitGlasses: Set AI API Key…"
+        "title": "Set AI API Key…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.ai.clearApiKey",
-        "title": "GitGlasses: Clear AI API Key…"
+        "title": "Clear AI API Key…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.createPatch",
@@ -1026,6 +1042,7 @@
           "type": "string",
           "scope": "machine-overridable",
           "enum": [
+            "none",
             "vscode-lm",
             "anthropic",
             "openai",
@@ -1033,20 +1050,52 @@
             "ollama"
           ],
           "enumDescriptions": [
-            "VS Code Language Model API (GitHub Copilot) — zero configuration when available",
+            "Not chosen yet: the first AI command asks which provider to use",
+            "A language model another extension provides to the editor, such as GitHub Copilot (VS Code only)",
             "Anthropic Claude API (bring your own key)",
             "OpenAI API or any compatible endpoint (bring your own key)",
             "Google Gemini API (bring your own key)",
-            "Local Ollama server — no key, data stays on your machine"
+            "Ollama: on this machine, no key, nothing sent over the network"
           ],
-          "default": "vscode-lm",
-          "description": "AI provider used by the GitGlasses AI commands"
+          "default": "none",
+          "markdownDescription": "Where GitGlasses AI requests go. Until a provider is chosen, the first AI command offers the ones this editor can use; change it any time with **GitGlasses: Choose AI Provider…**. Saving an API key with **GitGlasses: Set AI API Key…** switches to that provider."
         },
         "gitglasses.ai.model": {
           "type": "string",
           "scope": "machine-overridable",
           "default": "",
-          "description": "Model id for the selected AI provider (empty = provider default)"
+          "description": "Model id for the selected AI provider (empty = provider default)",
+          "markdownDeprecationMessage": "Use the per-provider model settings instead, such as `#gitglasses.ai.anthropic.model#`; GitGlasses moves this value there when it switches provider."
+        },
+        "gitglasses.ai.anthropic.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Anthropic model id, such as claude-sonnet-5-5 or claude-haiku-5-5 (empty = claude-opus-5-5)"
+        },
+        "gitglasses.ai.openai.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "OpenAI model id, or the model name an OpenAI-compatible endpoint expects (empty = gpt-6-luna)"
+        },
+        "gitglasses.ai.gemini.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Gemini model id (empty = gemini-3.8-flash)"
+        },
+        "gitglasses.ai.ollama.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Ollama model name (empty = gemma4 when installed, otherwise the first installed model)"
+        },
+        "gitglasses.ai.vscodeLm.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Id, family or name of the editor language model to use (empty = the first available, preferring GitHub Copilot)"
         },
         "gitglasses.ai.openai.baseUrl": {
           "type": "string",

@@ -423,7 +423,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     new ModeController(lineBlame, fileAnnotations, codeLens),
     registerStartWork(integrations, engine, repos),
     ...registerLaunchpad(launchpad, integrations),
-    ...registerAiFeatures(context, engine, repos, searchView),
+    ...registerAiFeatures(context, engine, repos, searchView, deps.log),
     registerSuggestChange(engine, repos, integrations),
   );
 

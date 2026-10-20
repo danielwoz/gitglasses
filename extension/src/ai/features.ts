@@ -6,14 +6,9 @@ import { requireRepo, ViewNode } from '../views/viewBase';
 import { errorMessage, setStatus } from '../commands/ui';
 import { openCommitDoc } from '../views/nodes';
 import { shortSha } from '@gitglasses/protocol/sha';
-import {
-  AI_PROVIDER_IDS,
-  AI_PROVIDER_LABELS,
-  AiProviderId,
-  CompletionRequest,
-  requiresConsent,
-} from './aiProvider';
+import { AI_PROVIDER_LABELS, AiProvider, AiProviderId, CompletionRequest } from './aiProvider';
 import { registerAiAuthCommands } from './aiAuth';
+import { chooseProvider, ensureAiReady } from './aiSetup';
 import { buildDiffContext, DiffFile } from './contextBuilder';
 import { parseNlSearchQuery } from './nlQuery';
 import {
@@ -26,13 +21,14 @@ import {
   NL_SEARCH_SYSTEM,
   nlSearchPrompt,
 } from './prompts';
-import { createAiProvider } from './providers';
 
 const CONTEXT_BUDGET_TOKENS = 6000;
 const MAX_CONTEXT_FILES = 30;
 /** Cap per-file content pulled for commit explanation before budgeting. */
 const MAX_FILE_CONTENT_CHARS = 20_000;
 const NL_SEARCH_LIMIT = 100;
+
+type Log = (line: string) => void;
 
 function isCancellation(error: unknown): boolean {
   const message = errorMessage(error).toLowerCase();
@@ -93,56 +89,47 @@ class AiResultContentProvider implements vscode.TextDocumentContentProvider {
   }
 }
 
-// --- Provider dispatch, consent, progress -----------------------------------
+// --- Provider readiness, progress, errors -----------------------------------
+
+interface ReadyProvider {
+  id: AiProviderId;
+  provider: AiProvider;
+}
 
 class AiService {
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly log: Log,
+  ) {}
 
-  providerId(): AiProviderId {
-    const raw = vscode.workspace
-      .getConfiguration('gitglasses.ai')
-      .get<string>('provider', 'vscode-lm');
-    return (AI_PROVIDER_IDS as readonly string[]).includes(raw)
-      ? (raw as AiProviderId)
-      : 'vscode-lm';
+  /** The provider to use, chosen and ready; asked before any other input
+   *  so a missing provider is found out before anything is typed. */
+  prepare(): Promise<ReadyProvider | undefined> {
+    return ensureAiReady(this.context, this.log);
   }
 
-  private consentKey(id: AiProviderId): string {
-    const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.toString() ?? 'no-workspace';
-    return `gitglasses.ai.consent:${id}:${workspace}`;
-  }
-
-  /** First-use confirmation per workspace before diffs leave the machine.
-   *  Ollama (local) and vscode-lm (an already-consented surface) skip it. */
-  private async ensureConsent(id: AiProviderId): Promise<boolean> {
-    if (!requiresConsent(id)) return true;
-    const key = this.consentKey(id);
-    if (this.context.globalState.get<boolean>(key) === true) return true;
-    const choice = await vscode.window.showWarningMessage(
-      `Send code diffs to ${AI_PROVIDER_LABELS[id]}? They leave your machine.`,
-      { modal: true },
-      'Send',
-    );
-    if (choice !== 'Send') return false;
-    await this.context.globalState.update(key, true);
-    return true;
-  }
-
-  /** Runs a completion with consent, progress, and cancellation. Returns
-   *  undefined when declined, cancelled, or failed (already reported). */
-  async complete(title: string, req: CompletionRequest): Promise<string | undefined> {
-    const id = this.providerId();
-    if (!(await this.ensureConsent(id))) return undefined;
-    const provider = createAiProvider(id, this.context.secrets);
+  /** Runs a completion with progress and cancellation. Returns undefined
+   *  when cancelled or failed (already reported). */
+  async complete(
+    ready: ReadyProvider,
+    title: string,
+    req: CompletionRequest,
+  ): Promise<string | undefined> {
     try {
       return await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title, cancellable: true },
-        (_progress, token) => provider.complete(req, token),
+        (_progress, token) => ready.provider.complete(req, token),
       );
     } catch (error) {
-      if (!isCancellation(error)) {
-        void vscode.window.showErrorMessage(`GitGlasses AI: ${errorMessage(error)}`);
-      }
+      if (isCancellation(error)) return undefined;
+      const label = AI_PROVIDER_LABELS[ready.id];
+      this.log(`AI: ${label} request failed: ${errorMessage(error)}`);
+      const choose = 'Choose AI Provider…';
+      void vscode.window
+        .showErrorMessage(`GitGlasses AI (${label}): ${errorMessage(error)}`, choose)
+        .then(async (choice) => {
+          if (choice === choose) await chooseProvider(this.context.secrets, { log: this.log });
+        });
       return undefined;
     }
   }
@@ -167,7 +154,9 @@ async function resolveCommit(
     const { commits } = await engine.request('log/commits', { repoId, ref, limit: 1 });
     return commits[0];
   } catch (error) {
-    void vscode.window.showWarningMessage(`GitGlasses: cannot resolve "${ref}": ${errorMessage(error)}`);
+    void vscode.window.showWarningMessage(
+      `GitGlasses: cannot resolve "${ref}": ${errorMessage(error)}`,
+    );
     return undefined;
   }
 }
@@ -217,6 +206,8 @@ async function explainCommit(
 ): Promise<void> {
   const repo = await requireRepo(repos);
   if (!repo) return;
+  const ready = await ai.prepare();
+  if (!ready) return;
   const commit = await resolveCommit(engine, repo.repoId, node);
   if (!commit) return;
 
@@ -238,7 +229,7 @@ async function explainCommit(
     context.text,
   );
   const sha7 = shortSha(commit.sha);
-  const result = await ai.complete(`GitGlasses: explaining ${sha7}…`, {
+  const result = await ai.complete(ready, `GitGlasses: explaining ${sha7}…`, {
     system: EXPLAIN_COMMIT_SYSTEM,
     prompt,
     maxTokens: 1024,
@@ -311,8 +302,10 @@ async function explainWip(
     void vscode.window.showInformationMessage('GitGlasses: working tree is clean.');
     return;
   }
+  const ready = await ai.prepare();
+  if (!ready) return;
   const context = buildDiffContext(collected.files, CONTEXT_BUDGET_TOKENS);
-  const result = await ai.complete('GitGlasses: explaining working changes…', {
+  const result = await ai.complete(ready, 'GitGlasses: explaining working changes…', {
     system: EXPLAIN_WIP_SYSTEM,
     prompt: explainWipPrompt(status, context.text),
     maxTokens: 1024,
@@ -344,6 +337,8 @@ async function generateCommitMessage(
     );
     return;
   }
+  const ready = await ai.prepare();
+  if (!ready) return;
   const files: DiffFile[] = [];
   for (const change of status.staged.slice(0, MAX_CONTEXT_FILES)) {
     try {
@@ -363,7 +358,7 @@ async function generateCommitMessage(
   const context = buildDiffContext(files, CONTEXT_BUDGET_TOKENS);
 
   for (;;) {
-    const raw = await ai.complete('GitGlasses: generating commit message…', {
+    const raw = await ai.complete(ready, 'GitGlasses: generating commit message…', {
       system: COMMIT_MESSAGE_SYSTEM,
       prompt: commitMessagePrompt(context.text),
       maxTokens: 400,
@@ -413,13 +408,15 @@ async function nlSearch(
 ): Promise<void> {
   const repo = await requireRepo(repos);
   if (!repo) return;
+  const ready = await ai.prepare();
+  if (!ready) return;
   const request = await vscode.window.showInputBox({
     prompt: 'Describe the commits to find',
     placeHolder: 'e.g. commits by alice about the login crash last month',
   });
   if (!request) return;
 
-  const raw = await ai.complete('GitGlasses: translating search…', {
+  const raw = await ai.complete(ready, 'GitGlasses: translating search…', {
     system: NL_SEARCH_SYSTEM,
     prompt: nlSearchPrompt(request),
     maxTokens: 200,
@@ -453,7 +450,9 @@ async function nlSearch(
     });
     truncated = result.truncated;
   } catch (error) {
-    void vscode.window.showWarningMessage(`GitGlasses: commit search failed: ${errorMessage(error)}`);
+    void vscode.window.showWarningMessage(
+      `GitGlasses: commit search failed: ${errorMessage(error)}`,
+    );
     return;
   } finally {
     sub.dispose();
@@ -499,8 +498,9 @@ export function registerAiFeatures(
   engine: EngineClient,
   repos: RepositoryService,
   searchView?: ExternalSearchTarget,
+  log: Log = () => undefined,
 ): vscode.Disposable[] {
-  const ai = new AiService(context);
+  const ai = new AiService(context, log);
   const panel = new AiResultContentProvider();
   let streamCounter = 0;
   return [
@@ -517,6 +517,6 @@ export function registerAiFeatures(
     vscode.commands.registerCommand('gitglasses.ai.nlSearch', () =>
       nlSearch(engine, repos, ai, () => `ai-search-${streamCounter++}`, searchView),
     ),
-    ...registerAiAuthCommands(context),
+    ...registerAiAuthCommands(context, log),
   ];
 }
