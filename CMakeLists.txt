@@ -21,6 +21,9 @@ option(GG_SINGLE_THREADED "Run all tasks inline on the caller (no worker threads
 # only dynamic dependency is glibc (whose floor is set by building in a
 # glibc-2.28 container, matching VS Code's own minimum).
 option(GG_STATIC_RUNTIME "Statically link libstdc++ and libgcc (Linux)" OFF)
+# Alpine builds link the engine fully statically against musl, so it has no
+# runtime dependencies at all and runs on any Linux of the same architecture.
+option(GG_FULLY_STATIC "Link the engine executable fully statically (Linux)" OFF)
 
 # Wasm has no worker pool, watcher threads, or child processes.
 if(EMSCRIPTEN)
