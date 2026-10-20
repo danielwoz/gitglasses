@@ -14,7 +14,9 @@ then:
    `web`), refusing an engine whose format or CPU does not match the target,
    and runs each packaged engine on its own platform;
 4. packs `gitglasses-mcp` and runs it from a clean npm install;
-5. waits for the CI workflow to have passed on the tagged commit;
+5. waits for the CI workflow to have passed on the tagged commit itself,
+   from its push to `main` (a pull request run does not count: it tested
+   the pull request merged into its base branch);
 6. publishes to the Visual Studio Marketplace, Open VSX and npm, each from
    its own job in the `release` environment, which needs your approval;
 7. creates the GitHub release (VSIXes, `SHA256SUMS`, symbol archives, build
@@ -222,7 +224,10 @@ Add two rulesets under **Settings > Rules > Rulesets**:
    section becomes the GitHub release notes, so it must not be empty.
    `node scripts/check-versions.mjs` must pass.
 2. Merge to `main` and let CI pass.
-3. Tag the merge commit and push the tag:
+3. Tag the merge commit and push the tag. CI must have run on that exact
+   commit when it was pushed to `main`, so tag the last commit of the push,
+   never a commit from inside the pull request. The release fails if no
+   such run starts within 30 minutes.
 
    ```sh
    git tag v0.2.0 <commit on main>

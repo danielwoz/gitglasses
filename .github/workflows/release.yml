@@ -64,8 +64,10 @@ jobs:
             exit 1
           fi
 
-  # Publishing waits for the CI workflow's run on the tagged commit (pushed
-  # to main) to succeed; the builds below run meanwhile.
+  # Publishing waits for CI to pass on the tagged commit itself: its run from
+  # the push to main (or a manual run of it). A pull request run does not
+  # count, because it tested the pull request merged into its base branch.
+  # The builds below run meanwhile.
   ci:
     name: CI passed on the tagged commit
     if: github.event_name == 'push'
@@ -74,30 +76,18 @@ jobs:
     timeout-minutes: 240
     permissions:
       actions: read
+      contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
       - name: Wait for CI
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          deadline=$((SECONDS + 230 * 60))
-          while :; do
-            runs=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=50" \
-              --jq '[.workflow_runs[] | {status, conclusion, url: .html_url}]')
-            if jq -e 'any(.[]; .conclusion == "success")' <<<"$runs" >/dev/null; then
-              echo "CI passed: $(jq -r '[.[] | select(.conclusion == "success")][0].url' <<<"$runs")"
-              exit 0
-            fi
-            if jq -e 'length > 0 and all(.[]; .status == "completed")' <<<"$runs" >/dev/null; then
-              echo "::error::CI did not pass on $GITHUB_SHA: $(jq -r 'map(.url) | join(" ")' <<<"$runs"). Re-run CI and then this job, or fix main and release a new version."
-              exit 1
-            fi
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::No successful CI run on $GITHUB_SHA after 230 minutes."
-              exit 1
-            fi
-            sleep 60
-          done
+        run: node scripts/wait-for-ci.mjs --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --timeout 230 --grace 30
 
   engine:
     name: engine (${{ matrix.target }})

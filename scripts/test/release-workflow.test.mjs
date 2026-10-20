@@ -35,6 +35,11 @@ describe('release workflow', () => {
     );
   });
 
+  it('waits for CI through the tested gate, which ignores pull request runs', () => {
+    expect(jobs.get('ci')).toContain('node scripts/wait-for-ci.mjs --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"');
+    expect(jobs.get('ci')).not.toContain('gh api');
+  });
+
   it('takes the release notes from the changelog parser the version job checks with', () => {
     expect(jobs.get('version')).toContain('node scripts/check-versions.mjs');
     expect(jobs.get('release-assets')).toContain('node scripts/release-notes.mjs "$VERSION" > release-notes.md');
