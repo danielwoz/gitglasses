@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { encodeRevisionUri } from '../scm/revisionContentProvider';
 import {
+  DiffWithHeadArgs,
   OPEN_CHANGES_COMMAND,
   OpenChangesArgs,
   PREVIOUS_REVISION_COMMAND,
@@ -26,31 +27,50 @@ function isOpenChangesArgs(value: unknown): value is OpenChangesArgs {
   );
 }
 
-/** The revision and path the lines came from, defaulting to the first
- *  parent and the same path. */
-function previousOf(args: OpenChangesArgs): { rev: string; path: string } {
-  return { rev: args.previousSha || `${args.sha}^`, path: args.previousPath || args.path };
+/** Scheme of the empty document a file's change is diffed against when the
+ *  commit added the file. */
+export const EMPTY_DOCUMENT_SCHEME = 'gitglasses-empty';
+
+/** The empty left side of an added file's diff; its path keeps the file's
+ *  name, so both sides get the same language. */
+export function emptyDocumentUri(path: string): vscode.Uri {
+  return vscode.Uri.from({ scheme: EMPTY_DOCUMENT_SCHEME, path: `/${path}` });
+}
+
+/** The revision and path the lines came from, when the file existed before
+ *  the commit. */
+function previousOf(args: OpenChangesArgs): { rev: string; path: string } | undefined {
+  if (!args.previousSha) return undefined;
+  return { rev: args.previousSha, path: args.previousPath || args.path };
 }
 
 async function openChanges(args: unknown): Promise<void> {
   if (!isOpenChangesArgs(args)) return;
   const previous = previousOf(args);
-  const left = encodeRevisionUri(args.repoId, previous.path, previous.rev);
   const right = encodeRevisionUri(args.repoId, args.path, args.sha);
   const name = args.path.split('/').pop() ?? args.path;
-  // A root commit has no parent; its left side opens empty.
-  await vscode.commands.executeCommand(
-    'vscode.diff',
-    left,
-    right,
-    `${name} (${shortSha(args.sha)}^ ↔ ${shortSha(args.sha)})`,
-  );
+  const short = shortSha(args.sha);
+  // A commit that added the file (a root commit, say) changed all of it, so
+  // its change is diffed against an empty document.
+  const left = previous
+    ? encodeRevisionUri(args.repoId, previous.path, previous.rev)
+    : emptyDocumentUri(args.path);
+  const title = previous
+    ? `${name} (${shortSha(previous.rev)} ↔ ${short})`
+    : `${name} (added in ${short})`;
+  await vscode.commands.executeCommand('vscode.diff', left, right, title);
 }
 
 async function previousRevision(args: unknown): Promise<void> {
   if (!isOpenChangesArgs(args)) return;
-  const line = (args as Partial<PreviousRevisionArgs>).line;
   const previous = previousOf(args);
+  if (!previous) {
+    void vscode.window.showInformationMessage(
+      `${shortSha(args.sha)} added ${args.path}, so there is no earlier revision to blame.`,
+    );
+    return;
+  }
+  const line = (args as Partial<PreviousRevisionArgs>).line;
   const uri = encodeRevisionUri(args.repoId, previous.path, previous.rev);
   const document = await vscode.workspace.openTextDocument(uri);
   const target = Math.min(
@@ -64,9 +84,26 @@ async function previousRevision(args: unknown): Promise<void> {
   });
 }
 
+/** The document gitglasses.diffWithHead compares: the resource a menu passes,
+ *  or the one a hover link names (DiffWithHeadArgs). Undefined means the
+ *  active editor's. */
+export function diffWithHeadTarget(arg: unknown): vscode.Uri | undefined {
+  if (arg instanceof vscode.Uri) return arg;
+  const uri = (arg as Partial<DiffWithHeadArgs> | undefined)?.uri;
+  if (typeof uri !== 'string' || uri === '') return undefined;
+  try {
+    return vscode.Uri.parse(uri, true);
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerBlameCommands(): vscode.Disposable[] {
   return [
     vscode.commands.registerCommand(OPEN_CHANGES_COMMAND, openChanges),
     vscode.commands.registerCommand(PREVIOUS_REVISION_COMMAND, previousRevision),
+    vscode.workspace.registerTextDocumentContentProvider(EMPTY_DOCUMENT_SCHEME, {
+      provideTextDocumentContent: () => '',
+    }),
   ];
 }

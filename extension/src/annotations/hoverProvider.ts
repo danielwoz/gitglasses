@@ -72,7 +72,7 @@ export class BlameHoverRenderer {
     markdown.supportThemeIcons = true;
     markdown.isTrusted = { enabledCommands: [...BLAME_HOVER_COMMANDS] };
     if (hunk.sha === UNCOMMITTED_SHA) {
-      markdown.appendMarkdown(renderUncommittedHover());
+      markdown.appendMarkdown(renderUncommittedHover(target.documentUri));
       return markdown;
     }
     const commit = blame.commits[hunk.sha];

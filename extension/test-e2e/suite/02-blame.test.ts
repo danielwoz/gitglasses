@@ -274,6 +274,25 @@ describe('blame pipeline', () => {
     }
   });
 
+  it('compares the hovered document with HEAD from an uncommitted line', async () => {
+    const dirty = vscode.Uri.joinPath(workspaceRoot(), FIXTURE.dirtyFile);
+    await vscode.window.showTextDocument(dirty);
+    const text = await waitForHover(dirty, 1, isUncommitted, 'the uncommitted local edit');
+    const match = /\(command:gitglasses\.diffWithHead\?([^ )]+)/.exec(text);
+    assert.ok(match, `no open-changes link: ${text}`);
+    const [args] = JSON.parse(decodeURIComponent(match[1])) as unknown[];
+    // Another editor has the focus when the link is clicked.
+    await openBlameFile();
+    await vscode.commands.executeCommand('gitglasses.diffWithHead', args);
+    const input = await poll(async () => {
+      const tab = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+      return tab instanceof vscode.TabInputTextDiff ? tab : undefined;
+    }, 'Open Changes opened no diff');
+    assert.strictEqual(input.modified.toString(), dirty.toString());
+    const original = await vscode.workspace.openTextDocument(input.original);
+    assert.strictEqual(original.getText(), FIXTURE.dirtyFileCommittedContents);
+  });
+
   it('offers blame CodeLens for tracked files only', async () => {
     const tracked = vscode.Uri.joinPath(workspaceRoot(), FIXTURE.blameFile);
     await vscode.window.showTextDocument(tracked);
@@ -357,5 +376,53 @@ describe('blame pipeline', () => {
     ]);
     assert.strictEqual(left.getText(), FIXTURE.blameFileInitialContents);
     assert.strictEqual(right.getText(), FIXTURE.blameFileHeadContents);
+  });
+
+  it('opens the change of a commit that added the file, and offers no earlier revision', async () => {
+    // The submodule commit, which is not the root commit, adds .gitmodules;
+    // the root commit adds the blame file.
+    const cases = [
+      {
+        uri: vscode.Uri.joinPath(workspaceRoot(), '.gitmodules'),
+        sha: revParse(':/^add submodule'),
+      },
+      { uri: vscode.Uri.joinPath(workspaceRoot(), FIXTURE.blameFile), sha: firstSha },
+    ];
+    for (const { uri, sha } of cases) {
+      const name = uri.path.split('/').pop() ?? '';
+      await vscode.window.showTextDocument(uri);
+      const text = await waitForHover(
+        uri,
+        0,
+        (t) => t.includes(sha.slice(0, 7)),
+        `commit ${sha.slice(0, 7)} in ${name}`,
+      );
+      assert.ok(
+        !text.includes('command:gitglasses.blame.previousRevision?'),
+        `a previous-revision link for a file the commit added: ${text}`,
+      );
+      const match = /\(command:gitglasses\.blame\.openChanges\?([^ )]+)/.exec(text);
+      assert.ok(match, `no open-changes link: ${text}`);
+      const [args] = JSON.parse(decodeURIComponent(match[1])) as unknown[];
+      await vscode.commands.executeCommand('gitglasses.blame.openChanges', args);
+      const input = await poll(async () => {
+        const tab = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+        return tab instanceof vscode.TabInputTextDiff && tab.modified.path === `/${name}`
+          ? tab
+          : undefined;
+      }, `Open Changes opened no diff for ${name}`);
+      const [left, right] = await Promise.all([
+        vscode.workspace.openTextDocument(input.original),
+        vscode.workspace.openTextDocument(input.modified),
+      ]);
+      assert.strictEqual(left.getText(), '');
+      assert.strictEqual(
+        right.getText(),
+        execFileSync('git', ['show', `${sha}:${name}`], {
+          cwd: workspaceRoot().fsPath,
+        }).toString(),
+      );
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
   });
 });

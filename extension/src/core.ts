@@ -16,7 +16,7 @@ import { LineBlameController } from './annotations/lineBlame';
 import { FileAnnotationsController } from './annotations/fileAnnotations';
 import { BlameHoverProvider, BlameHoverRenderer } from './annotations/hoverProvider';
 import { BufferSync, DocumentBlameService } from './annotations/documentBlame';
-import { registerBlameCommands } from './annotations/blameCommands';
+import { diffWithHeadTarget, registerBlameCommands } from './annotations/blameCommands';
 import { BlameCodeLensProvider } from './codelens/blameCodeLens';
 import { RevisionContentProvider, encodeRevisionUri } from './scm/revisionContentProvider';
 import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
@@ -318,16 +318,16 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     vscode.languages.registerCodeLensProvider(deps.documentSelector, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
     ...registerCommitDetails(engine, repos),
-    vscode.commands.registerCommand('gitglasses.diffWithHead', async () => {
-      const editor = deps.activeEditor();
-      if (!editor) return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
+    vscode.commands.registerCommand('gitglasses.diffWithHead', async (arg?: unknown) => {
+      const uri = diffWithHeadTarget(arg) ?? deps.activeEditor()?.document.uri;
+      if (!uri) return;
+      const located = await repos.locateOrDiscover(uri);
       if (!located) return;
       const original = encodeRevisionUri(located.repoId, located.relativePath, 'HEAD');
       await vscode.commands.executeCommand(
         'vscode.diff',
         original,
-        editor.document.uri,
+        uri,
         `${located.relativePath} (HEAD ↔ Working Tree)`,
       );
     }),

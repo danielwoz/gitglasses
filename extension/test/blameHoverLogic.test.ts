@@ -5,6 +5,7 @@ import {
   commandLink,
   joinBlocks,
   messageBlocks,
+  openChangesArgs,
   previousRevisionArgs,
   pullRequestNumber,
   pullRequestUrl,
@@ -117,8 +118,23 @@ describe('blame hover', () => {
       'gitglasses.blame.openChanges',
       'gitglasses.copySha',
     ]);
-    // Without a reported parent, the first parent stands in.
-    expect(found[0].arg).toMatchObject({ previousSha: `${SHA}^`, previousPath: 'src/old.ts' });
+    // The commit added the file: its change is the whole file.
+    expect(found[0].arg).toEqual({ repoId: 'r1', sha: SHA, path: 'src/old.ts' });
+  });
+
+  it('offers no earlier revision for lines from the commit that added the file', () => {
+    // git reports neither `previous` nor `boundary` for a file added after
+    // the root commit; its first parent does not have the file.
+    const added = { ...hunk, previous: undefined };
+    const found = links(renderCommitHover(input({ hunk: added })));
+    expect(found.map((l) => l.command)).toEqual([
+      'gitglasses.showCommitDetails',
+      'gitglasses.blame.openChanges',
+      'gitglasses.copySha',
+      'gitglasses.openCommitOnRemote',
+    ]);
+    expect(found[1].arg).not.toHaveProperty('previousSha');
+    expect(openChangesArgs('r1', added)).toEqual({ repoId: 'r1', sha: SHA, path: 'src/old.ts' });
   });
 
   it('keeps a quote in a title from ending the link', () => {
@@ -127,10 +143,11 @@ describe('blame hover', () => {
     );
   });
 
-  it('offers the working-tree diff for uncommitted lines', () => {
-    expect(links(renderUncommittedHover()).map((l) => l.command)).toEqual([
-      'gitglasses.diffWithHead',
-    ]);
+  it('offers the working-tree diff of the hovered document for uncommitted lines', () => {
+    // Hovering an editor that is not the active one compares that document.
+    const found = links(renderUncommittedHover('file:///w/repo/a.txt'));
+    expect(found.map((l) => l.command)).toEqual(['gitglasses.diffWithHead']);
+    expect(found[0].arg).toEqual({ uri: 'file:///w/repo/a.txt' });
   });
 
   it('carries the previous revision line through the hunk offset', () => {

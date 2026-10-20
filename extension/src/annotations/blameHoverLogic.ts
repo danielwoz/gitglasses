@@ -37,10 +37,18 @@ export interface OpenChangesArgs {
   sha: string;
   /** The file's path in `sha`. */
   path: string;
-  /** The commit the lines came from and the file's path there, when git
-   *  reported it; otherwise the first parent and the same path. */
+  /** The revision the commit changed the lines from and the file's path
+   *  there. Absent when the commit added the file, whose change is then the
+   *  whole file. */
   previousSha?: string;
   previousPath?: string;
+}
+
+/** Arguments of gitglasses.diffWithHead from a link: the document to compare
+ *  with HEAD, rather than whichever editor is active when the link is
+ *  clicked. */
+export interface DiffWithHeadArgs {
+  uri: string;
 }
 
 /** Arguments of gitglasses.blame.previousRevision: OpenChangesArgs plus the
@@ -65,22 +73,15 @@ export function commandLink(label: string, command: string, args: unknown, title
   return `[${label}](${uri} "${title.replace(/"/g, "'")}")`;
 }
 
-/** The revision a hunk's lines were blamed from before `sha` changed them. */
-export function previousOf(hunk: BlameHunk): { sha: string; path: string } {
-  return hunk.previous
-    ? { sha: hunk.previous.sha, path: hunk.previous.path }
-    : { sha: `${hunk.sha}^`, path: hunk.path };
-}
-
 export function openChangesArgs(repoId: string, hunk: BlameHunk): OpenChangesArgs {
-  const previous = previousOf(hunk);
-  return {
-    repoId,
-    sha: hunk.sha,
-    path: hunk.path,
-    previousSha: previous.sha,
-    previousPath: previous.path,
-  };
+  const args: OpenChangesArgs = { repoId, sha: hunk.sha, path: hunk.path };
+  // Blame reports where the lines were before the commit only when the file
+  // existed there; the commit's first parent may not have it at all.
+  if (hunk.previous) {
+    args.previousSha = hunk.previous.sha;
+    args.previousPath = hunk.previous.path;
+  }
+  return args;
 }
 
 export function previousRevisionArgs(
@@ -274,7 +275,9 @@ export function renderCommitHover(input: CommitHoverInput): string {
       "Open this file's changes in the commit",
     ),
   );
-  if (!commit.boundary || hunk.previous) {
+  // Lines from the commit that added the file (root commit or not) have no
+  // earlier revision to blame.
+  if (hunk.previous) {
     links.push(
       commandLink(
         '$(history) Blame Previous Revision',
@@ -298,11 +301,12 @@ export function renderCommitHover(input: CommitHoverInput): string {
   return `${parts.join('\n\n')}\n\n---\n\n${links.join(' · ')}`;
 }
 
-/** Markdown for a line that is not committed yet. */
-export function renderUncommittedHover(): string {
+/** Markdown for a line of `documentUri` that is not committed yet. */
+export function renderUncommittedHover(documentUri: string): string {
+  const args: DiffWithHeadArgs = { uri: documentUri };
   return (
     '$(edit) **Uncommitted changes**\n\n' +
-    commandLink('$(diff) Open Changes', DIFF_WITH_HEAD_COMMAND, {}, 'Compare with HEAD')
+    commandLink('$(diff) Open Changes', DIFF_WITH_HEAD_COMMAND, args, 'Compare with HEAD')
   );
 }
 

@@ -16,6 +16,8 @@ const REVISION_SCHEME = 'gitglasses';
 
 /** What a blame of a document is about. */
 export interface BlameTarget {
+  /** The blamed document, as a URI string. */
+  documentUri: string;
   repoId: string;
   /** Repository root; empty when the host cannot tell. */
   rootPath: string;
@@ -104,6 +106,7 @@ export class DocumentBlameService implements vscode.Disposable {
     const decoded = decodeRevisionUri(document.uri);
     if (!decoded) return { kind: 'none' };
     const target: BlameTarget = {
+      documentUri: document.uri.toString(),
       repoId: decoded.repoId,
       rootPath: this.repos.rootOf(decoded.repoId) ?? '',
       relativePath: decoded.relativePath,
@@ -129,6 +132,7 @@ export class DocumentBlameService implements vscode.Disposable {
     const located = await this.repos.locateOrDiscover(document.uri);
     if (!located || token?.isCancellationRequested) return { kind: 'none' };
     const target: BlameTarget = {
+      documentUri: document.uri.toString(),
       repoId: located.repoId,
       rootPath: located.rootPath,
       relativePath: located.relativePath,
