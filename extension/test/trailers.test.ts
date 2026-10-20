@@ -91,6 +91,25 @@ describe('bodyWithoutTrailers', () => {
     });
   });
 
+  it('leaves out the rule that set the trailers off, and only that one', () => {
+    // GitHub's squash merges put a rule between the commit list and the
+    // co-authors.
+    const squash =
+      '* first\n\n* second\n\n---------\n\nCo-authored-by: Grace Hopper <grace@example.com>';
+    expect(bodyWithoutTrailers(squash, [COAUTHOR])).toBe('* first\n\n* second');
+    // A row of dashes under a line of text underlines it.
+    const underline = 'Notes\n-----\n\nCo-authored-by: Grace Hopper <grace@example.com>';
+    expect(bodyWithoutTrailers(underline, [COAUTHOR])).toBe('Notes\n-----');
+    // A rule above lines that stay still sets them off.
+    const cherry = squash.replace(
+      'Co-authored-by',
+      '(cherry picked from commit 0123abc)\nCo-authored-by',
+    );
+    expect(bodyWithoutTrailers(cherry, [COAUTHOR])).toBe(
+      '* first\n\n* second\n\n---------\n\n(cherry picked from commit 0123abc)',
+    );
+  });
+
   it('leaves nothing when the body is only trailers', () => {
     expect(bodyWithoutTrailers('Signed-off-by: Ada Lovelace <ada@example.com>', [SIGNED])).toBe('');
   });
@@ -148,6 +167,22 @@ describe('commit details view', () => {
         '</dl>',
     );
     expect(root.textContent.split('grace@example.com')).toHaveLength(2);
+  });
+
+  it("shows a GitHub squash merge's commit list without its co-authors", () => {
+    const root = render(
+      '* Read trailers\n\n* Show them once\n\n---------\n\n' +
+        'Co-authored-by: Grace Hopper <grace@example.com>',
+      [COAUTHOR],
+    );
+    expect(root.querySelector('.details-message')?.outerHTML).toBe(
+      '<div class="details-message">* Read trailers\n\n* Show them once</div>',
+    );
+    expect(root.querySelector('.details-trailers')?.outerHTML).toBe(
+      '<dl class="details-trailers">' +
+        '<dt>Co-authored-by</dt><dd>Grace Hopper &lt;grace@example.com&gt;</dd>' +
+        '</dl>',
+    );
   });
 
   it('shows no message when the body is only trailers', () => {

@@ -121,19 +121,33 @@ function withoutBlankEdges(text: string): string {
   return text.replace(/^(?:[ \t]*\n)+/, '').trimEnd();
 }
 
+/** A paragraph that is only a line of dashes, as GitHub puts between a squash
+ *  merge's commit list and its co-authors. */
+const RULE = /^-{3,}$/;
+
+/** `text` without a closing paragraph that is only a rule. */
+function withoutClosingRule(text: string): string {
+  const lines = text.split('\n');
+  const last = lines.length - 1;
+  if (!RULE.test(lines[last].trim()) || (last > 0 && !isBlank(lines[last - 1]))) return text;
+  return withoutBlankEdges(lines.slice(0, last).join('\n'));
+}
+
 /**
  * `body` for a view that lists `trailers` on their own: without the trailer
- * lines of the paragraph they were parsed from. Other lines of that
- * paragraph, and anything after it, stay; a body whose trailers cannot be
- * placed is returned whole.
+ * lines of the paragraph they were parsed from, or a rule that set them off
+ * at the end. Other lines of that paragraph, and anything after it, stay; a
+ * body whose trailers cannot be placed is returned whole.
  */
 export function bodyWithoutTrailers(body: string, trailers: readonly Trailer[]): string {
   const block = trailerBlock(body, trailers);
   if (!block) return body;
   const lines = bodyLines(body);
   const kept = block.lines.filter((line) => !line.trailer).map((line) => line.text);
-  return [lines.slice(0, block.start), kept, lines.slice(block.end)]
-    .map((part) => withoutBlankEdges(part.join('\n')))
-    .filter((part) => part !== '')
-    .join('\n\n');
+  const [before, rest, after] = [lines.slice(0, block.start), kept, lines.slice(block.end)].map(
+    (part) => withoutBlankEdges(part.join('\n')),
+  );
+  // A rule left closing the message only set off the trailers.
+  const message = rest === '' && after === '' ? withoutClosingRule(before) : before;
+  return [message, rest, after].filter((part) => part !== '').join('\n\n');
 }
