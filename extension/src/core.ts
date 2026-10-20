@@ -41,6 +41,7 @@ import { registerGraphWebview } from './webviews/graphHost';
 import { registerRebaseWebview } from './webviews/rebaseHost';
 import { registerTimelineWebview } from './webviews/timelineHost';
 import { registerGitPalette } from './commands/gitPalette';
+import { registerKeyboardShortcuts } from './commands/keyboardShortcuts';
 import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
 import { AuthManager } from './integrations/auth';
 import { IntegrationService } from './integrations/integrationService';
@@ -405,6 +406,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     }),
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
     vscode.commands.registerCommand('gitglasses.selectRepository', () => activeRepo.pick()),
+    ...registerKeyboardShortcuts(),
     vscode.commands.registerCommand('gitglasses.openWalkthrough', () =>
       vscode.commands.executeCommand(
         'workbench.action.openWalkthrough',

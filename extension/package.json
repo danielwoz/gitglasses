@@ -380,6 +380,38 @@
         "title": "Select Repository…",
         "category": "GitGlasses",
         "icon": "$(repo)"
+      },
+      {
+        "command": "gitglasses.shortcut.showGraph",
+        "title": "Show Commit Graph (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.toggleLineBlame",
+        "title": "Toggle Inline Blame (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.toggleFileBlame",
+        "title": "Toggle File Blame Annotations (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.showFileHistory",
+        "title": "Show Visual File History (Keyboard Shortcut)",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "gitglasses.shortcut.searchCommits",
+        "title": "Search Commits… (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.gitCommands",
+        "title": "Git Commands… (Keyboard Shortcut)",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted"
       }
     ],
     "viewsContainers": {
@@ -701,37 +733,40 @@
     ],
     "keybindings": [
       {
-        "command": "gitglasses.showGraph",
-        "key": "ctrl+shift+g g",
-        "mac": "cmd+shift+g g"
+        "command": "gitglasses.shortcut.showGraph",
+        "key": "ctrl+alt+g g",
+        "mac": "cmd+alt+g g",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && !terminalFocus"
       },
       {
-        "command": "gitglasses.toggleLineBlame",
-        "key": "ctrl+shift+g b",
-        "mac": "cmd+shift+g b",
-        "when": "editorTextFocus"
+        "command": "gitglasses.shortcut.toggleLineBlame",
+        "key": "ctrl+alt+g b",
+        "mac": "cmd+alt+g b",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && editorTextFocus"
       },
       {
-        "command": "gitglasses.toggleFileBlame",
-        "key": "ctrl+shift+g shift+b",
-        "mac": "cmd+shift+g shift+b",
-        "when": "editorTextFocus"
+        "command": "gitglasses.shortcut.toggleFileBlame",
+        "key": "ctrl+alt+g shift+b",
+        "mac": "cmd+alt+g shift+b",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && editorTextFocus"
       },
       {
-        "command": "gitglasses.showFileHistory",
-        "key": "ctrl+shift+g h",
-        "mac": "cmd+shift+g h",
-        "when": "editorTextFocus"
+        "command": "gitglasses.shortcut.showFileHistory",
+        "key": "ctrl+alt+g h",
+        "mac": "cmd+alt+g h",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && editorTextFocus"
       },
       {
-        "command": "gitglasses.searchCommits",
-        "key": "ctrl+shift+g f",
-        "mac": "cmd+shift+g f"
+        "command": "gitglasses.shortcut.searchCommits",
+        "key": "ctrl+alt+g f",
+        "mac": "cmd+alt+g f",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && !terminalFocus"
       },
       {
-        "command": "gitglasses.gitCommands",
-        "key": "ctrl+shift+g c",
-        "mac": "cmd+shift+g c"
+        "command": "gitglasses.shortcut.gitCommands",
+        "key": "ctrl+alt+g c",
+        "mac": "cmd+alt+g c",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && !terminalFocus"
       }
     ],
     "menus": {
@@ -1042,6 +1077,30 @@
         {
           "command": "gitglasses.selectRepository",
           "when": "gitglasses.multiRepoWorkspace"
+        },
+        {
+          "command": "gitglasses.shortcut.showGraph",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.toggleLineBlame",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.toggleFileBlame",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.showFileHistory",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.searchCommits",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.gitCommands",
+          "when": "false"
         }
       ]
     },
@@ -1063,6 +1122,12 @@
           ],
           "default": "normal",
           "description": "GitGlasses mode; switch via the status bar item or the Switch Mode command"
+        },
+        "gitglasses.keyboardShortcuts.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": false,
+          "markdownDescription": "Turn on GitGlasses keyboard shortcuts: `Ctrl+Alt+G` (`Cmd+Alt+G` on macOS), then `G` Commit Graph, `B` inline blame, `Shift+B` file blame, `H` visual file history, `F` search commits or `C` Git Commands. Off by default, so none of the editor's own shortcuts are taken over. On Windows keyboard layouts where `AltGr+G` types a character, leave this off and bind the commands in Keyboard Shortcuts instead."
         },
         "gitglasses.currentLine.enabled": {
           "type": "boolean",
