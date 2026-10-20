@@ -9,7 +9,13 @@ import { shortSha } from '@gitglasses/protocol/sha';
 import { AI_PROVIDER_LABELS, AiProvider, AiProviderId, CompletionRequest } from './aiProvider';
 import { registerAiAuthCommands } from './aiAuth';
 import { chooseProvider, ensureAiReady } from './aiSetup';
-import { buildDiffContext, DiffFile, splitPatch } from './contextBuilder';
+import {
+  buildDiffContext,
+  DiffFile,
+  pickFilesToShow,
+  splitPatch,
+  wholePatchFits,
+} from './contextBuilder';
 import { unifiedDiff } from './lineDiff';
 import { parseNlSearchQuery } from './nlQuery';
 import {
@@ -154,8 +160,10 @@ function changeLabel(status: string): string {
   return labels[status] ?? status;
 }
 
-/** The commit's diff computed here from each file's two versions, for
- *  engines that cannot run git (Restricted Mode, no git CLI, the web). */
+/** The commit's diff computed here from each file's two versions: for
+ *  engines that cannot run git (Restricted Mode, no git CLI, the web), and
+ *  for commits too big to read whole, where only the files that can fit the
+ *  context are read. */
 async function diffFromVersions(
   engine: EngineClient,
   repoId: string,
@@ -173,7 +181,7 @@ async function diffFromVersions(
     return file.binary || file.truncated ? undefined : file.contents;
   };
   const files: DiffFile[] = [];
-  for (const change of details.files.slice(0, MAX_CONTEXT_FILES)) {
+  for (const change of pickFilesToShow(details.files, MAX_CONTEXT_FILES)) {
     const from = change.origPath ? `${change.origPath} → ` : '';
     const header = `${changeLabel(change.status)}: ${from}${change.path}  +${change.additions} −${change.deletions}`;
     if (change.binary) {
@@ -197,13 +205,15 @@ async function diffFromVersions(
 }
 
 /** The commit's real diff, split per file: git's own patch when the engine
- *  can run git, otherwise computed from the file versions. */
+ *  can run git and the commit is small enough to read whole, otherwise
+ *  computed from the file versions. */
 async function collectCommitDiff(
   engine: EngineClient,
   repoId: string,
   details: CommitDetails,
   log: Log,
 ): Promise<DiffFile[]> {
+  if (!wholePatchFits(details)) return diffFromVersions(engine, repoId, details);
   try {
     const { envelope } = await engine.request('patch/create', {
       repoId,

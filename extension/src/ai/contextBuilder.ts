@@ -56,6 +56,32 @@ export function rankFiles<T extends { path: string }>(files: readonly T[]): T[] 
     .map((entry) => entry.file);
 }
 
+/** The `max` files most worth showing a model: ranked source > config >
+ *  docs, with generated files last so they are only named, never read. */
+export function pickFilesToShow<T extends { path: string }>(files: readonly T[], max: number): T[] {
+  const generated = files.filter((file) => isGeneratedPath(file.path));
+  const kept = files.filter((file) => !isGeneratedPath(file.path));
+  return [...rankFiles(kept), ...generated].slice(0, max);
+}
+
+/** Largest commit whose whole patch is read for a model. A bigger one (a
+ *  vendor drop, an initial import) would mostly be cut from the context, so
+ *  only the files that can fit are read instead. */
+export const WHOLE_PATCH_MAX_FILES = 300;
+export const WHOLE_PATCH_MAX_LINES = 30_000;
+
+export function wholePatchFits(commit: {
+  truncated: boolean;
+  files: readonly unknown[];
+  stats: { additions: number; deletions: number };
+}): boolean {
+  return (
+    !commit.truncated &&
+    commit.files.length <= WHOLE_PATCH_MAX_FILES &&
+    commit.stats.additions + commit.stats.deletions <= WHOLE_PATCH_MAX_LINES
+  );
+}
+
 export const CHARS_PER_TOKEN = 4;
 
 export function estimateTokens(text: string): number {
@@ -122,21 +148,37 @@ export function buildDiffContext(files: readonly DiffFile[], budgetTokens: numbe
   const ranked = rankFiles(kept);
   const budgetChars = Math.max(0, budgetTokens * CHARS_PER_TOKEN);
 
-  // Omit lowest-ranked files until the per-file cap gives everyone a useful
-  // allocation within the budget (headers and markers reserved up front).
-  const included = [...ranked];
-  let cap: number | undefined;
-  for (; included.length > 0; included.pop()) {
-    const overhead = included.reduce(
-      (sum, file) => sum + sectionHeader(file.path).length + TRUNCATION_MARKER.length + 1,
-      0,
-    );
-    cap = biggestFirstCap(
-      included.map((file) => file.patch.length),
-      budgetChars - overhead,
-    );
-    if (cap !== undefined) break;
+  // Keep the longest run of top-ranked files whose per-file cap still gives
+  // each a useful allocation within the budget (headers and markers reserved
+  // up front). Dropping a file only frees budget for the rest, so whether the
+  // first k fit is monotone in k and a binary search finds the longest run.
+  // No more files can fit than their reserved overhead alone allows.
+  const overheads = [0];
+  for (const file of ranked) {
+    const next =
+      overheads[overheads.length - 1] +
+      sectionHeader(file.path).length +
+      TRUNCATION_MARKER.length +
+      1;
+    if (next > budgetChars) break;
+    overheads.push(next);
   }
+  const capFor = (count: number): number | undefined =>
+    count === 0
+      ? undefined
+      : biggestFirstCap(
+          ranked.slice(0, count).map((file) => file.patch.length),
+          budgetChars - overheads[count],
+        );
+  let low = 0;
+  let high = overheads.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (capFor(middle) !== undefined) low = middle;
+    else high = middle - 1;
+  }
+  const included = ranked.slice(0, low);
+  const cap = capFor(low);
 
   const omitted = [...ranked.slice(included.length).map((file) => file.path), ...generated];
   let truncated = false;
