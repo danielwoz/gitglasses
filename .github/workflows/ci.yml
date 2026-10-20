@@ -11,9 +11,13 @@ permissions:
   contents: read
 
 # A new push to a pull request supersedes the checks still running for the
-# previous one; runs for main always finish.
+# previous one. Every other run has a group of its own, so pushes to main
+# neither wait for nor cancel one another: each commit of main gets its
+# checks and its engine artifacts, which `pnpm fetch-engine` and the release
+# workflow look up by commit. A calling workflow's name (github.workflow is
+# the caller's) keeps its run apart from the pull request's own.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Each platform's release engine is built and tested once, then shared with
