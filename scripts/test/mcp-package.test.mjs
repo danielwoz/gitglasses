@@ -216,7 +216,10 @@ describe('gitglasses-mcp package', () => {
           engineManifest(linux, manifest),
         );
         expect(files.get('package/bin/gitglasses-engine').data.equals(elfHeader())).toBe(true);
-        expect(files.get('package/bin/gitglasses-engine').mode & 0o111).toBe(0o111);
+        // Windows has no executable bit to pack; releases pack on Linux.
+        if (process.platform !== 'win32') {
+          expect(files.get('package/bin/gitglasses-engine').mode & 0o111).toBe(0o111);
+        }
         expect(files.get('package/NOTICE').data.toString('utf8')).toBe(
           readFileSync(path.join(root, 'NOTICE'), 'utf8'),
         );
