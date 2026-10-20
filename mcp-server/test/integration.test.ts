@@ -418,7 +418,11 @@ describe.skipIf(!enginePath || process.platform === 'win32')('untrusted reposito
   it('serves blame, status, diff and log without running anything the repository names', async () => {
     expect(await handlers.git_blame({ repoPath: repoDir, file: 'a.txt' })).toContain('Test Author');
     expect(await handlers.git_status({ repoPath: repoDir })).toContain('a.txt');
-    expect(await handlers.git_diff({ repoPath: repoDir })).toContain('+three');
+    // Every path goes through the planted filter, which only git can apply, so
+    // the restricted engine lists the change without its hunks.
+    expect(await handlers.git_diff({ repoPath: repoDir })).toContain(
+      'a.txt (diff omitted: a filter or working-tree-encoding that needs git applies to it)',
+    );
     expect(await handlers.git_log_search({ repoPath: repoDir, limit: 5 })).toContain(
       'Initial commit',
     );

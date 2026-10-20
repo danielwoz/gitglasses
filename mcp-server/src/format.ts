@@ -165,6 +165,8 @@ export interface DiffFileEntry {
   hunks: readonly DiffHunk[];
   /** Set when the file holds binary content, which produces no text hunks. */
   binary?: boolean;
+  /** Why the engine gave no hunks for this file, when it refused to. */
+  omitted?: string;
 }
 
 /** Added and removed line counts of a hunk list. */
@@ -206,11 +208,13 @@ export function formatDiff(
   const lines = [header];
   for (const entry of entries) {
     const rename = entry.origPath ? `${entry.origPath} -> ` : '';
-    const counts = entry.binary
-      ? 'binary'
-      : entry.hunks.length === 0
-        ? 'no text diff; binary or mode change'
-        : (({ additions, deletions }) => `+${additions} -${deletions}`)(hunkCounts(entry.hunks));
+    const counts = entry.omitted
+      ? `diff omitted: ${entry.omitted}`
+      : entry.binary
+        ? 'binary'
+        : entry.hunks.length === 0
+          ? 'no text diff; binary or mode change'
+          : (({ additions, deletions }) => `+${additions} -${deletions}`)(hunkCounts(entry.hunks));
     lines.push(`${entry.status}  ${rename}${entry.path} (${counts})`);
     for (const hunk of entry.hunks) {
       lines.push(hunk.header, ...hunk.lines);

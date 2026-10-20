@@ -106,6 +106,14 @@ describe('formatDiff', () => {
     ).toBe('diff unstaged (1 file):\nM  logo.png (binary)');
   });
 
+  it('gives the reason when the engine refused to split a file into hunks', () => {
+    expect(
+      formatDiff('unstaged', [
+        { path: 'big.bin', status: 'M', hunks: [], omitted: 'a submodule or Git LFS file' },
+      ]),
+    ).toBe('diff unstaged (1 file):\nM  big.bin (diff omitted: a submodule or Git LFS file)');
+  });
+
   it('names the remaining ambiguity when a file has no hunks and is not binary', () => {
     expect(formatDiff('staged', [{ path: 'run.sh', status: 'M', hunks: [] }])).toBe(
       'diff staged (1 file):\nM  run.sh (no text diff; binary or mode change)',

@@ -326,6 +326,17 @@ export function createToolHandlers(context: ToolContext) {
   }
 
   /** True for an engine refusal caused by Restricted Mode. */
+  function hunklessReason(error: unknown): string | undefined {
+    switch ((error as { code?: unknown } | undefined)?.code) {
+      case ErrorCodes.FilterNeedsGitCli:
+        return 'a filter or working-tree-encoding that needs git applies to it';
+      case ErrorCodes.WholeFileOnly:
+        return 'a submodule or Git LFS file, changed as a whole';
+      default:
+        return undefined;
+    }
+  }
+
   function isRestrictedRefusal(error: unknown): boolean {
     return (error as { code?: unknown } | undefined)?.code === ErrorCodes.Restricted;
   }
@@ -699,11 +710,21 @@ export function createToolHandlers(context: ToolContext) {
       for (let start = 0; start < selected.length && budget > 0; start += DIFF_FETCH_BATCH) {
         const batch = await Promise.all(
           selected.slice(start, start + DIFF_FETCH_BATCH).map(async (file) => {
-            const { hunks } = await repo.client.request('diff/fileHunks', {
-              repoId: repo.repoId,
-              path: file.path,
-              staged,
-            });
+            let hunks;
+            try {
+              ({ hunks } = await repo.client.request('diff/fileHunks', {
+                repoId: repo.repoId,
+                path: file.path,
+                staged,
+              }));
+            } catch (error) {
+              // A path whose content only the git CLI can clean, or whose change
+              // can't be split into hunks, is listed with the reason instead of
+              // failing the whole diff.
+              const omitted = hunklessReason(error);
+              if (omitted === undefined) throw error;
+              return { ...file, hunks: [], omitted };
+            }
             return {
               ...file,
               hunks,
