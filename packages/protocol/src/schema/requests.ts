@@ -739,7 +739,8 @@ export const RequestSchemas = {
     result: EmptyObject,
   },
   'rebase/preview': {
-    description: 'Commits upstream..HEAD, oldest first — the editable rebase plan.',
+    description:
+      'The commits `git rebase -i <upstream>` will replay, in its order, oldest first: the editable rebase plan. Merges are left out (git flattens them) and so are commits whose change the upstream already has.',
     params: Type.Object(
       { repoId: Type.String(), upstream: positional('Revision to rebase onto.') },
       strict,
@@ -747,20 +748,46 @@ export const RequestSchemas = {
     result: Type.Object(
       {
         entries: Type.Array(Type.Object({ sha: Sha, summary: Type.String() }, strict)),
+        /** HEAD when the plan was made; pass it back as rebase/start's expectedHead. */
+        headSha: Sha,
+        /** The commit `upstream` named; pass it back as expectedUpstream. */
+        upstreamSha: Sha,
+        /** Merge commits in upstream..HEAD, which the rebase flattens. */
+        mergeCount: Type.Integer({ minimum: 0 }),
       },
       strict,
     ),
   },
   'rebase/start': {
     description:
-      'Executes an interactive rebase with the given plan via sequence-editor interception. Conflicts pause the rebase; repo/state then reports the sequencer step.',
+      'Executes an interactive rebase with the given plan via sequence-editor interception. A plan that no longer matches the commits git would replay is refused before anything changes. Conflicts and edit steps pause the rebase; repo/state then reports the sequencer step, and rebase/continue, rebase/skip and rebase/abort resume or end it.',
     params: Type.Object(
       {
         repoId: Type.String(),
         upstream: positional('Revision to rebase onto.'),
         plan: Type.Array(RebaseEntry, {
-          description: 'Steps in execution order. An empty plan rebases nothing.',
+          minItems: 1,
+          description:
+            'Every commit rebase/preview returned, in execution order. A commit to remove is listed with action drop: one left out means the plan is stale, and the rebase is refused.',
         }),
+        expectedHead: Type.Optional(
+          Type.String({
+            pattern: '^[0-9a-f]{40}$',
+            description: "rebase/preview's headSha. The rebase is refused when HEAD moved since.",
+          }),
+        ),
+        expectedUpstream: Type.Optional(
+          Type.String({
+            pattern: '^[0-9a-f]{40}$',
+            description:
+              "rebase/preview's upstreamSha. The rebase is refused when `upstream` moved since.",
+          }),
+        ),
+        /** Stashes uncommitted changes first and restores them afterwards (--autostash). */
+        autoStash: Type.Optional(Type.Boolean()),
+        /** Moves branches that point into the rebased range (--update-refs /
+         *  --no-update-refs). Omitted follows rebase.updateRefs. */
+        updateRefs: Type.Optional(Type.Boolean()),
       },
       strict,
     ),
@@ -770,7 +797,16 @@ export const RequestSchemas = {
     ),
   },
   'rebase/continue': {
-    description: 'Resumes a paused rebase once the conflicts are staged.',
+    description:
+      'Resumes a paused rebase once the conflicts are staged. A rebase rebase/start began keeps applying its plan\'s messages.',
+    params: Type.Object({ repoId: Type.String() }, strict),
+    result: Type.Object(
+      { conflicts: Type.Boolean(), completed: Type.Boolean() },
+      strict,
+    ),
+  },
+  'rebase/skip': {
+    description: 'Resumes a paused rebase without the commit it stopped at (--skip).',
     params: Type.Object({ repoId: Type.String() }, strict),
     result: Type.Object(
       { conflicts: Type.Boolean(), completed: Type.Boolean() },
@@ -782,7 +818,6 @@ export const RequestSchemas = {
     params: Type.Object({ repoId: Type.String() }, strict),
     result: EmptyObject,
   },
-
   // --- P4: remotes / open patches ------------------------------------------
 
   'remote/list': {

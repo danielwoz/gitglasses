@@ -2642,7 +2642,7 @@
       }
     },
     "rebase/preview": {
-      "description": "Commits upstream..HEAD, oldest first — the editable rebase plan.",
+      "description": "The commits `git rebase -i <upstream>` will replay, in its order, oldest first: the editable rebase plan. Merges are left out (git flattens them) and so are commits whose change the upstream already has.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2666,7 +2666,10 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "entries"
+          "entries",
+          "headSha",
+          "upstreamSha",
+          "mergeCount"
         ],
         "properties": {
           "entries": {
@@ -2689,12 +2692,26 @@
                 }
               }
             }
+          },
+          "headSha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "upstreamSha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "mergeCount": {
+            "minimum": 0,
+            "type": "integer"
           }
         }
       }
     },
     "rebase/start": {
-      "description": "Executes an interactive rebase with the given plan via sequence-editor interception. Conflicts pause the rebase; repo/state then reports the sequencer step.",
+      "description": "Executes an interactive rebase with the given plan via sequence-editor interception. A plan that no longer matches the commits git would replay is refused before anything changes. Conflicts and edit steps pause the rebase; repo/state then reports the sequencer step, and rebase/continue, rebase/skip and rebase/abort resume or end it.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2714,7 +2731,8 @@
             "type": "string"
           },
           "plan": {
-            "description": "Steps in execution order. An empty plan rebases nothing.",
+            "minItems": 1,
+            "description": "Every commit rebase/preview returned, in execution order. A commit to remove is listed with action drop: one left out means the plan is stale, and the rebase is refused.",
             "type": "array",
             "items": {
               "additionalProperties": false,
@@ -2765,6 +2783,22 @@
                 }
               }
             }
+          },
+          "expectedHead": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "rebase/preview's headSha. The rebase is refused when HEAD moved since.",
+            "type": "string"
+          },
+          "expectedUpstream": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "rebase/preview's upstreamSha. The rebase is refused when `upstream` moved since.",
+            "type": "string"
+          },
+          "autoStash": {
+            "type": "boolean"
+          },
+          "updateRefs": {
+            "type": "boolean"
           }
         }
       },
@@ -2786,7 +2820,38 @@
       }
     },
     "rebase/continue": {
-      "description": "Resumes a paused rebase once the conflicts are staged.",
+      "description": "Resumes a paused rebase once the conflicts are staged. A rebase rebase/start began keeps applying its plan's messages.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts",
+          "completed"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          },
+          "completed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "rebase/skip": {
+      "description": "Resumes a paused rebase without the commit it stopped at (--skip).",
       "params": {
         "additionalProperties": false,
         "type": "object",

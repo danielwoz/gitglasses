@@ -503,6 +503,8 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
           {"upstream", "HEAD"},
           {"plan", Json::array({{{"action", "pick"}, {"sha", ""}, {"summary", "x"}}})}},
          "rebase step without a sha");
+  reject("rebase/start", {{"repoId", repoId}, {"upstream", "HEAD"}, {"plan", Json::array()}},
+         "empty rebase plan");
 
   // Payload caps are bounded on both sides.
   reject("rev/fileAtRev",

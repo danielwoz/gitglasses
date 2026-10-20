@@ -168,6 +168,7 @@ export interface Requests {
   'rebase/preview': { params: P<'rebase/preview'>; result: R<'rebase/preview'> };
   'rebase/start': { params: P<'rebase/start'>; result: R<'rebase/start'> };
   'rebase/continue': { params: P<'rebase/continue'>; result: R<'rebase/continue'> };
+  'rebase/skip': { params: P<'rebase/skip'>; result: R<'rebase/skip'> };
   'rebase/abort': { params: P<'rebase/abort'>; result: Empty };
 
   // --- P4: remotes / open patches ------------------------------------------
