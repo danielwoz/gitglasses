@@ -807,6 +807,40 @@ TEST(StatusService, SummaryIgnoresTouchedFilteredFiles) {
   EXPECT_EQ(gitOut(fixture.root(), "status --porcelain"), " M edited.env\n");
 }
 
+// The content recheck of filtered files must not hide a change of the
+// executable bit, which git reports and stages whatever the content.
+TEST(StatusService, SummaryKeepsModeChangeOfFilteredFiles) {
+#ifdef _WIN32
+  GTEST_SKIP() << "Windows checkouts have no executable bit (core.fileMode=false)";
+#endif
+  FixtureRepo fixture;
+  configureScrubFilter(fixture);
+  fixture.writeFile(".gitattributes",
+                    "*.env filter=scrub\n*.txt working-tree-encoding=UTF-16LE-BOM\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.writeFile("notes.txt", utf16le("hello\n"));
+  fixture.run("git add .gitattributes app.env notes.txt");
+  commitTick(fixture, "seed", 1);
+  for (const char* path : {"app.env", "notes.txt"}) {
+    std::filesystem::permissions(fixture.root() / path, std::filesystem::perms::owner_exec,
+                                 std::filesystem::perm_options::add);
+  }
+  ASSERT_EQ(gitOut(fixture.root(), "status --porcelain"), " M app.env\n M notes.txt\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json summary = statusSummary(session, 10, repoId);
+  ASSERT_EQ(summary["unstaged"].size(), 2u) << summary.dump();
+  EXPECT_EQ(changeFor(summary["unstaged"], "app.env")["status"], "M");
+  EXPECT_EQ(changeFor(summary["unstaged"], "notes.txt")["status"], "M");
+
+  // Stage All then records the new mode.
+  Json stage = stageFiles(session, 11, repoId, {"app.env", "notes.txt"}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --summary"),
+            " mode change 100644 => 100755 app.env\n mode change 100644 => 100755 notes.txt\n");
+}
+
 TEST(StatusService, PathsAreLiteralNotGlobs) {
   FixtureRepo fixture;
   fixture.writeFile("app/[id]/page.tsx", "x\ny\nz\n");

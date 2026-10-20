@@ -60,7 +60,7 @@ bool workdirSideHidden(git_index* index, const git_status_entry& entry);
 
 // Whether libgit2's "modified" verdict for this entry's working-tree side
 // rests on raw bytes that git would clean first: a regular file with a
-// filter driver or working-tree-encoding.
+// filter driver or working-tree-encoding whose mode is unchanged.
 bool needsCleanRecheck(git_repository* repo, const git_status_entry& entry);
 
 // A working-tree file libgit2 reports as modified, with the index blob it was

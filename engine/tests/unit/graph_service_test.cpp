@@ -539,6 +539,26 @@ TEST(GraphService, WipRowIgnoresTouchedFilteredFile) {
   EXPECT_TRUE(hasWipRow(session, 11, repoId));
 }
 
+// A new executable bit is a change git commits, whatever the content.
+TEST(GraphService, WipRowKeepsModeChangeOfFilteredFile) {
+#ifdef _WIN32
+  GTEST_SKIP() << "Windows checkouts have no executable bit (core.fileMode=false)";
+#endif
+  FixtureRepo fixture;
+  fixture.run("git config filter.scrub.clean \"sed -e s/SECRET/REDACTED/\"");
+  fixture.run("git config filter.scrub.smudge cat");
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.run("git add .gitattributes app.env");
+  commitTick(fixture, "seed", 1);
+  std::filesystem::permissions(fixture.root() / "app.env", std::filesystem::perms::owner_exec,
+                               std::filesystem::perm_options::add);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_TRUE(hasWipRow(session, 10, repoId));
+}
+
 // Out-of-cone files of a sparse checkout are absent by design.
 TEST(GraphService, WipRowIgnoresSparseCheckoutExclusions) {
   FixtureRepo fixture;

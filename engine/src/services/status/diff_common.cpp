@@ -172,6 +172,9 @@ bool needsCleanRecheck(git_repository* repo, const git_status_entry& entry) {
   if (!isRegularFileMode(delta->old_file.mode) || !isRegularFileMode(delta->new_file.mode)) {
     return false;
   }
+  // A changed executable bit is a change whatever the content, and the
+  // recheck compares content only.
+  if (delta->old_file.mode != delta->new_file.mode) return false;
   return pathFilter(repo, delta->new_file.path).any();
 }
 
