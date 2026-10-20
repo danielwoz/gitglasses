@@ -1,6 +1,6 @@
 // Pure logic behind the commit details views (no vscode imports, so it stays
 // unit-testable): which revisions and paths the two sides of a file's diff
-// show, and the editor titles.
+// show, the editor titles, and how a host reports a command it lacks.
 
 import type { CommitFileChange, FileChange } from '@gitglasses/protocol';
 
@@ -60,4 +60,15 @@ export function diffTitle(
 /** Title of the multi-file diff editor for a commit or comparison. */
 export function changeTitle(label: string): string {
   return `Changes in ${label}`;
+}
+
+/** Whether `error` is a host's refusal to run `command` because nothing
+ *  registered it: VS Code says "command 'x' not found", Theia that it
+ *  "cannot be executed" for lack of a handler. */
+export function isMissingCommand(error: unknown, command: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes(`'${command}'`) &&
+    /not found|cannot be executed|no (active )?handler/i.test(message)
+  );
 }

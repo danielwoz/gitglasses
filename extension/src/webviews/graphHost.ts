@@ -325,7 +325,9 @@ export class GraphWebviewHost implements vscode.Disposable {
           }
           break;
         case 'openChanges':
-          if (repo) await openAllChanges(this.deps.engine, repo.repoId, message.target);
+          if (repo) {
+            await openAllChanges(this.deps.engine, repo.repoId, message.target, this.deps.log);
+          }
           break;
         case 'copy':
           await copyText(message.text, message.label);

@@ -4,6 +4,7 @@ import {
   commitDiffSides,
   compareDiffSides,
   diffTitle,
+  isMissingCommand,
 } from '../src/commitDetails/commitDetailsLogic';
 
 const SHA = '1a2b3c4d5e6f708192a3b4c5d6e7f80912345678';
@@ -52,5 +53,26 @@ describe('titles', () => {
       'old.md → new.md (x ↔ y)',
     );
     expect(changeTitle('1a2b3c4')).toBe('Changes in 1a2b3c4');
+  });
+});
+
+describe('isMissingCommand', () => {
+  it("recognizes VS Code's and Theia's refusals of an unregistered command", () => {
+    expect(
+      isMissingCommand(new Error("command 'vscode.changes' not found"), 'vscode.changes'),
+    ).toBe(true);
+    expect(
+      isMissingCommand(
+        new Error(
+          "The command 'vscode.changes' cannot be executed. There are no active handlers available for the command.",
+        ),
+        'vscode.changes',
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves other failures alone', () => {
+    expect(isMissingCommand(new Error('Unable to resolve resource'), 'vscode.changes')).toBe(false);
+    expect(isMissingCommand(new Error("command 'other' not found"), 'vscode.changes')).toBe(false);
   });
 });

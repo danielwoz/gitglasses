@@ -73,6 +73,7 @@ class CommitDetailsPanel implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly engine: EngineClient,
     private readonly repos: RepositoryService,
+    private readonly log: (line: string) => void,
   ) {}
 
   async show(args: ShowCommitDetailsArgs): Promise<void> {
@@ -133,6 +134,7 @@ class CommitDetailsPanel implements vscode.Disposable {
       // Name the panel by the full sha a branch or tag resolved to.
       if (view.kind === 'commit') shown = { ...target, sha: view.details.sha };
     } catch (error) {
+      this.log(`commit details: loading ${target.sha} failed: ${errorMessage(error)}`);
       view = errorView(`commit ${shortSha(target.sha)}`, error);
     }
     if (load !== this.loads) return;
@@ -162,12 +164,13 @@ class CommitDetailsPanel implements vscode.Disposable {
           if (message.type === 'openFile') {
             await openFileDiff(repoId, target.repoPath, message.target);
           } else {
-            await openAllChanges(this.engine, repoId, message.target);
+            await openAllChanges(this.engine, repoId, message.target, this.log);
           }
           break;
         }
       }
     } catch (error) {
+      this.log(`commit details: ${message.type} failed: ${errorMessage(error)}`);
       void vscode.window.showErrorMessage(`GitGlasses: ${errorMessage(error)}`);
     }
   }
@@ -190,8 +193,9 @@ export function registerCommitDetails(
   context: vscode.ExtensionContext,
   engine: EngineClient,
   repos: RepositoryService,
+  log: (line: string) => void,
 ): vscode.Disposable[] {
-  const panel = new CommitDetailsPanel(context, engine, repos);
+  const panel = new CommitDetailsPanel(context, engine, repos, log);
   return [
     panel,
     registerEmptyDocuments(),
@@ -210,6 +214,7 @@ export function registerCommitDetails(
       try {
         await panel.show(args);
       } catch (error) {
+        log(`commit details: showing ${args.sha} failed: ${errorMessage(error)}`);
         void vscode.window.showErrorMessage(
           `GitGlasses: cannot show commit ${shortSha(args.sha)}: ${errorMessage(error)}`,
         );

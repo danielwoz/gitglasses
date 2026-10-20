@@ -14,6 +14,7 @@ import {
   commitDiffSides,
   compareDiffSides,
   diffTitle,
+  isMissingCommand,
 } from './commitDetailsLogic';
 
 /** One commit in full. `stashIndex` marks a stash entry. */
@@ -125,11 +126,13 @@ export async function openFileDiff(
 }
 
 /** Opens every file of a commit or comparison in VS Code's multi-file diff
- *  editor. Hosts without it get the first file's diff instead. */
+ *  editor. Hosts without that editor get the first file's diff instead, and
+ *  are told so; any other failure is the caller's to report. */
 export async function openAllChanges(
   engine: EngineClient,
   repoId: string,
   target: ChangesTarget,
+  log: (line: string) => void,
 ): Promise<void> {
   const files =
     target.kind === 'commit'
@@ -153,8 +156,13 @@ export async function openAllChanges(
       : changeTitle(`${shortSha(target.base)} ↔ ${shortSha(target.head)}`);
   try {
     await vscode.commands.executeCommand('vscode.changes', title, resources);
-  } catch {
+  } catch (error) {
     // vscode.changes is missing on some hosts (older VS Code builds, Theia).
+    if (!isMissingCommand(error, 'vscode.changes')) throw error;
+    log(`multi-file diff editor unavailable, opening the first file: ${errorMessage(error)}`);
+    void vscode.window.showInformationMessage(
+      `GitGlasses: this editor cannot show several diffs at once, so only ${files[0].path} was opened.`,
+    );
     const first = files[0];
     await openFileDiff(
       repoId,
