@@ -173,8 +173,8 @@ read. AI output is shown without loading any images or HTML it contains.
 
 ### Agents over MCP
 
-GitGlasses ships an MCP server that gives AI agents twelve tools over the
-same engine: blame, commit search by message, author, code change, path or
+GitGlasses ships an MCP server that gives AI agents tools over the same
+engine: blame, commit search by message, author, code change, path or
 date, file history, commit details, branch comparisons from the merge base,
 diffs, refs, a text rendering of the graph, status, patches and your pull
 requests. Every tool except `apply_patch` is marked read-only.

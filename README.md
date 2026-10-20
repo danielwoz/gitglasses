@@ -67,8 +67,8 @@ release is in [the changelog](extension/CHANGELOG.md).
 AI agents the same engine: blame, commit search (by message, author, code
 change, path or date), file history, commit details, branch comparisons from
 the merge base, diffs, refs, a text rendering of the graph, status, patches
-and a pull request list, twelve tools in all. Every tool except
-`apply_patch` is marked read-only, and by default the server reads only the
+and a pull request list. Every tool except `apply_patch` is marked
+read-only, and by default the server reads only the
 folders the client shares with it, without running git.
 
 The extension ships the server and registers it with the editor's agents,
