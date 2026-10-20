@@ -7,8 +7,8 @@ in this directory describes running the server from a clone.
 
 MCP (Model Context Protocol) server exposing GitGlasses repository insight as
 tools: blame, log search, file history, commit show, diffs, refs, graph
-summary, status, patch envelopes, and a Launchpad-classified pull request
-list.
+summary, status, patch envelopes, a Launchpad-classified pull request list,
+and the story of a line.
 
 The server speaks MCP over stdio and drives a `gitglasses-engine` process
 (spawned lazily on the first repository tool call).
@@ -111,7 +111,7 @@ repository contains it — not just the project under discussion. `repo/discover
 walks *upwards*, so a path inside a repository grants that repository.
 
 `apply_patch` writes: it applies a patch to the working tree of whatever
-repository `repoPath` names. The other ten tools only read.
+repository `repoPath` names. The other eleven tools only read.
 
 `GITGLASSES_ALLOWED_ROOTS` is what bounds where either can happen. Set it to
 the directories this server may touch; paths outside are rejected before
