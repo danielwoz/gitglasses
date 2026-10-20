@@ -7,7 +7,7 @@
 import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
-import { BlameModel } from './model/blameModel';
+import { BlameModel, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES } from './model/blameModel';
 import { RepositoryService, repoName } from './model/repositoryService';
 import { ActiveRepoManager } from './model/activeRepo';
 import { RefsModel } from './model/refsModel';
@@ -121,7 +121,7 @@ export interface Core {
 export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Core {
   const { engine, repos, docSync } = deps;
 
-  const blame = new BlameModel(engine);
+  const blame = new BlameModel(engine, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES, deps.log);
   const lineBlame = new LineBlameController(blame, repos);
   const fileAnnotations = new FileAnnotationsController(blame, repos, context.workspaceState);
   const codeLens = new BlameCodeLensProvider(blame, repos);

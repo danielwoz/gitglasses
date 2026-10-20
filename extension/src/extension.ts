@@ -46,7 +46,13 @@ function resolveEngineBinary(context: vscode.ExtensionContext): string | undefin
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('GitGlasses');
   context.subscriptions.push(output);
-  const log = (line: string): void => output.appendLine(line);
+  // GITGLASSES_LOG_TO_CONSOLE=1 copies the channel, engine stderr included, to
+  // the extension host's console, which is all a headless test run shows.
+  const mirrorToConsole = process.env.GITGLASSES_LOG_TO_CONSOLE === '1';
+  const log = (line: string): void => {
+    output.appendLine(line);
+    if (mirrorToConsole) console.log(`[gitglasses] ${line}`);
+  };
 
   const enginePath = resolveEngineBinary(context);
   if (!enginePath) {

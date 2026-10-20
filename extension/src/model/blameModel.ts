@@ -1,5 +1,5 @@
-import { BlameCommit, BlameHunk } from '@gitglasses/protocol';
-import { CancellationLike, EngineClient } from '@gitglasses/rpc';
+import { BlameCommit, BlameHunk, ErrorCodes } from '@gitglasses/protocol';
+import { CancellationLike, EngineClient, EngineRestartedError } from '@gitglasses/rpc';
 
 export interface FileBlame {
   hunks: BlameHunk[];
@@ -22,6 +22,9 @@ export const MAX_CACHE_ENTRIES = 200;
 
 /** Version standing for the on-disk contents rather than a dirty buffer. */
 const ON_DISK_VERSION = -1;
+
+/** Bound on the set of failures already logged once. */
+const MAX_LOGGED_FAILURES = 200;
 
 // Per-object allowances covering the fixed-width fields and the JS runtime's
 // object headers; the variable-length strings are counted exactly.
@@ -71,11 +74,15 @@ export class BlameModel {
   private cache = new Map<string, CacheEntry>();
   private streamCounter = 0;
   private totalBytes = 0;
+  private loggedFailures = new Set<string>();
 
   constructor(
     private readonly engine: EngineClient,
     private readonly maxBytes: number = MAX_CACHE_BYTES,
     private readonly maxEntries: number = MAX_CACHE_ENTRIES,
+    /** Writes a line to the host's log; failed blame requests are reported
+     *  here once each, since the editor surfaces show nothing for them. */
+    private readonly log?: (line: string) => void,
   ) {}
 
   getBlame(key: BlameKey, token?: CancellationLike): Promise<FileBlame> {
@@ -123,7 +130,10 @@ export class BlameModel {
         this.evictToBudget();
       },
       // A failed/cancelled request must not poison the cache.
-      () => this.remove(cacheKey),
+      (error: unknown) => {
+        this.remove(cacheKey);
+        this.reportFailure(key, error);
+      },
     );
     return promise;
   }
@@ -149,6 +159,19 @@ export class BlameModel {
   /** Entry count and approximate bytes held, for tests and diagnostics. */
   stats(): { entries: number; bytes: number } {
     return { entries: this.cache.size, bytes: this.totalBytes };
+  }
+
+  /** Logs a failed request once per file and message. Cancellation and an
+   *  engine restart are routine and not reported. */
+  private reportFailure(key: BlameKey, error: unknown): void {
+    if (!this.log || error instanceof EngineRestartedError) return;
+    if ((error as { code?: unknown } | undefined)?.code === ErrorCodes.Cancelled) return;
+    const message = error instanceof Error ? error.message : String(error);
+    const id = `${key.repoId}\0${key.path}\0${message}`;
+    if (this.loggedFailures.has(id)) return;
+    if (this.loggedFailures.size >= MAX_LOGGED_FAILURES) this.loggedFailures.clear();
+    this.loggedFailures.add(id);
+    this.log(`blame failed for ${key.path} in ${key.repoId}: ${message}`);
   }
 
   /** Moves an entry to the most-recently-used end. Map iterates in insertion
