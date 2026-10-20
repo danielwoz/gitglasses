@@ -132,9 +132,11 @@ else()
 endif()
 
 add_library(gg_exec STATIC
+  src/exec/askpass.cpp
   src/exec/cli_detect.cpp
   ${GG_GIT_PROCESS_SOURCE}
   src/exec/git_runner.cpp
+  src/exec/gpg_shim.cpp
   src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp
   src/exec/sequence_editor.cpp

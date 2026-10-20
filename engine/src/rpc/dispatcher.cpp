@@ -2,6 +2,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include "util/request_context.h"
+
 namespace gg::rpc {
 
 std::string dumpForWire(const Json& message) {
@@ -66,6 +68,8 @@ void Dispatcher::notification(const std::string& name, NotificationHandler handl
 }
 
 void Dispatcher::setErrorData(ErrorDataFn errorData) { errorData_ = std::move(errorData); }
+
+void Dispatcher::onResponse(ResponseHandler handler) { responseHandler_ = std::move(handler); }
 
 void Dispatcher::cancelAll() {
   std::lock_guard lock(inflightMutex_);
@@ -145,6 +149,17 @@ void Dispatcher::route(const std::string& payload) {
 
   const auto methodIt = message.find("method");
   if (methodIt == message.end() || !methodIt->is_string()) {
+    // An answer to a request this process sent: it has an id and a result or
+    // an error, and no method.
+    if (methodIt == message.end() && message.contains("id") &&
+        (message.contains("result") || message.contains("error"))) {
+      if (responseHandler_) {
+        responseHandler_(message);
+      } else {
+        spdlog::debug("ignoring a response to no outstanding request");
+      }
+      return;
+    }
     sendError(message.value("id", Json()), {ErrorCode::InvalidRequest, "missing method"});
     return;
   }
@@ -201,7 +216,12 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
 
   const MethodEntry& entry = it->second;
   Strand* strand = entry.mode == Mode::Concurrent ? nullptr : &strandFor(entry.mode, params);
-  auto task = [this, id, numericId, handler = entry.handler, params = std::move(params)] {
+  RequestContext context{numericId, methodName, ""};
+  if (const auto repoIt = params.find("repoId"); repoIt != params.end() && repoIt->is_string()) {
+    context.repoId = repoIt->get<std::string>();
+  }
+  auto task = [this, id, numericId, handler = entry.handler, params = std::move(params),
+               context = std::move(context)] {
     CancelToken token;
     {
       std::lock_guard lock(inflightMutex_);
@@ -218,6 +238,7 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
     };
 
     try {
+      const ScopedRequestContext scope(context);
       Json result = handler(params, token, notify);
       token.throwIfCancelled();
       sendResult(id, result);

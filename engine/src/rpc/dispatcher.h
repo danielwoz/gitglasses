@@ -69,6 +69,9 @@ struct HandlerError {
 // it once for every method.
 using ErrorDataFn = std::function<Json(const Error& error)>;
 
+// Receives a response to a request this process sent to the client.
+using ResponseHandler = std::function<void(const Json& message)>;
+
 // Where a handler runs.
 //
 // Concurrent is the default: handlers run on the task pool with no ordering
@@ -115,6 +118,10 @@ class Dispatcher {
 
   // Installs the hook that describes errors thrown without data.
   void setErrorData(ErrorDataFn errorData);
+
+  // Routes messages that carry an id and a result or error but no method,
+  // which answer requests this process sent to the client.
+  void onResponse(ResponseHandler handler);
 
   // Cancels every request in flight, as if the client had cancelled each
   // one. Used when the client is gone, so nothing keeps git running for an
@@ -164,6 +171,7 @@ class Dispatcher {
   std::map<std::string, MethodEntry> methods_;
   std::map<std::string, NotificationEntry> notifications_;
   ErrorDataFn errorData_;
+  ResponseHandler responseHandler_;
 
   std::mutex strandsMutex_;
   std::map<std::string, std::unique_ptr<Strand>> strands_;

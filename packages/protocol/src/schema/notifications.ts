@@ -74,4 +74,9 @@ export const EngineNotificationSchemas = {
       strict,
     ),
   },
+  'ui/askpassCancelled': {
+    description:
+      'Withdraws a ui/askpass request: git stopped waiting for the answer (it exited, timed out, or its request was cancelled). The client closes the prompt; an answer sent afterwards is ignored.',
+    params: Type.Object({ id: Type.String({ minLength: 1 }) }, strict),
+  },
 };

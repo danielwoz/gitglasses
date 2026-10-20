@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <istream>
 #include <mutex>
 #include <optional>
@@ -174,6 +175,13 @@ class InteractiveSession {
 
   void notify(const Json& message) { writeFrame(message); }
 
+  // Answers requests the engine sends (ui/askpass): given the request, returns
+  // its result. Requests arriving while none is set are answered
+  // {"cancelled": true}. Every engine request is also kept in
+  // `engineRequests`.
+  std::function<Json(const Json& request)> onEngineRequest;
+  std::vector<Json> engineRequests;
+
   // Sends the request and blocks until its response arrives; interleaved
   // notifications are collected into `notifications`.
   Json request(const Json& message) {
@@ -187,6 +195,7 @@ class InteractiveSession {
         return {};
       }
       Json m = Json::parse(*payload);
+      if (answerEngineRequest(m)) continue;
       if (m.contains("id") && m["id"] == message["id"]) return m;
       notifications.push_back(std::move(m));
     }
@@ -221,6 +230,7 @@ class InteractiveSession {
         return {};
       }
       Json m = Json::parse(*payload);
+      if (answerEngineRequest(m)) continue;
       if (!m.contains("id") && m.value("method", "") == method) return m;
       notifications.push_back(std::move(m));
     }
@@ -254,6 +264,15 @@ class InteractiveSession {
     }
   };
 
+  // Replies to a request from the engine; false for any other message.
+  bool answerEngineRequest(const Json& message) {
+    if (!message.contains("method") || !message.contains("id")) return false;
+    engineRequests.push_back(message);
+    const Json result = onEngineRequest ? onEngineRequest(message) : Json{{"cancelled", true}};
+    writeFrame({{"jsonrpc", "2.0"}, {"id", message["id"]}, {"result", result}});
+    return true;
+  }
+
   void writeFrame(const Json& message) {
     const std::string payload = message.dump();
     std::ostream out(&toServer_);
@@ -271,6 +290,14 @@ inline Json initRequest(std::int64_t id = 1) {
           {"id", id},
           {"method", "initialize"},
           {"params", {{"protocolVersion", "0.1.0"}}}};
+}
+
+// initialize from a client that answers ui/askpass.
+inline Json initAskpassRequest(std::int64_t id = 1) {
+  return {{"jsonrpc", "2.0"},
+          {"id", id},
+          {"method", "initialize"},
+          {"params", {{"protocolVersion", "0.1.0"}, {"clientCapabilities", {{"askpass", true}}}}}};
 }
 
 }  // namespace gg::testing

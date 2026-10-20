@@ -1,6 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,10 +38,23 @@ inline bool looksLikeGitOption(std::string_view value) {
   return !value.empty() && value.front() == '-';
 }
 
+class AskpassSession;
+
 // How long a cancelled or timed-out git gets to exit after SIGTERM before its
 // process group is killed outright. git removes its lock files on SIGTERM, so
 // a stopped commit or rebase leaves no index.lock behind.
 inline constexpr std::chrono::milliseconds kTerminateGrace{1000};
+
+// What the prompts one git invocation raised have cost: the broker updates
+// it, GitProcess reads it to keep time spent on prompts off git's clock.
+struct AskpassPromptStats {
+  // Prompts open right now.
+  std::atomic<int> open{0};
+  // Total time prompts have been open.
+  std::atomic<std::int64_t> millis{0};
+  // The user dismissed one.
+  std::atomic<bool> declined{false};
+};
 
 // Options for GitProcess::spawn beyond the defaults every caller wants.
 struct SpawnOpts {
@@ -56,12 +72,15 @@ struct SpawnOpts {
 
 // "NAME=value" settings every git child gets on top of the inherited
 // environment: stable parse output, no lock contention with the user's own
-// git commands, and never a hung child waiting for a credential prompt.
+// git commands, and never a hung child waiting for a terminal prompt.
+// `askpassEnv` (see askpassEnvironment) routes prompts to the client instead.
 // opts.extraEnv comes last, so a caller's entry wins over a default of the
 // same name.
-inline std::vector<std::string> childEnvOverrides(const SpawnOpts& opts) {
+inline std::vector<std::string> childEnvOverrides(const SpawnOpts& opts,
+                                                  const std::vector<std::string>& askpassEnv = {}) {
   std::vector<std::string> overrides = {"GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
                                         "LC_ALL=C"};
+  overrides.insert(overrides.end(), askpassEnv.begin(), askpassEnv.end());
   overrides.insert(overrides.end(), opts.extraEnv.begin(), opts.extraEnv.end());
   return overrides;
 }
@@ -82,7 +101,9 @@ bool makeCloexecPipe(int fds[2]);
 // group (SIGTERM, then SIGKILL after kTerminateGrace), so a blame of a huge
 // file stops costing CPU the moment the client scrolls away. A child that
 // outlives SpawnOpts::timeout is stopped the same way and reported through
-// timedOut().
+// timedOut(); time spent waiting on a credential prompt does not count.
+// While an askpass broker is installed, git, ssh and gpg prompts go to the
+// client (see exec/askpass.h).
 class GitProcess {
  public:
   // Spawns `git <args...>` with `cwd` as working directory and the
@@ -121,6 +142,9 @@ class GitProcess {
   // The configured ceiling, for error messages.
   std::chrono::milliseconds timeout() const { return timeout_; }
 
+  // True when the user dismissed a prompt this git raised.
+  bool promptDeclined() const { return promptStats_ && promptStats_->declined.load(); }
+
  private:
   GitProcess() = default;
 
@@ -129,10 +153,16 @@ class GitProcess {
   void killGroup();
 
   // Kills the process group once the deadline has passed, latching timedOut_.
-  // Called from every loop that waits on the child.
+  // Called from every loop that waits on the child. The deadline moves by
+  // the time the user spent on prompts, and never passes while one is open.
   bool expired() {
     if (timedOut_) return true;
-    if (std::chrono::steady_clock::now() < deadline_) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < deadline_) return false;
+    if (promptStats_) {
+      if (promptStats_->open.load() > 0) return false;
+      if (now < deadline_ + std::chrono::milliseconds(promptStats_->millis.load())) return false;
+    }
     timedOut_ = true;
     killGroup();
     return true;
@@ -158,6 +188,10 @@ class GitProcess {
   std::chrono::milliseconds timeout_ = kDefaultGitTimeout;
   std::chrono::steady_clock::time_point deadline_ = std::chrono::steady_clock::time_point::max();
   bool timedOut_ = false;
+  // Prompts this invocation raises are answered through this session; null
+  // when no askpass broker is installed.
+  std::shared_ptr<AskpassSession> askpass_;
+  std::shared_ptr<const AskpassPromptStats> promptStats_;
 };
 
 }  // namespace gg::exec

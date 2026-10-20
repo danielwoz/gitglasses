@@ -3,17 +3,31 @@
 #include <git2.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 #include <utility>
 
+#include "exec/askpass.h"
 #include "exec/git_process.h"
 #include "exec/git_runner.h"
+#include "exec/sequence_editor.h"
 #include "services/mutate/git_errors.h"
 
 namespace gg::services::mutate_detail {
 
 namespace {
+
+// The subcommand of a git argv: the first word after the global options (-c
+// and -C take their value as the next word).
+std::string_view subcommandOf(const std::vector<std::string>& args) {
+  size_t i = 0;
+  while (i < args.size() && exec::looksLikeGitOption(args[i])) {
+    i += (args[i] == "-c" || args[i] == "-C") ? 2 : 1;
+  }
+  return i < args.size() ? std::string_view(args[i]) : std::string_view();
+}
 
 // Value of a string config entry, with the level it was found at.
 struct ConfigValue {
@@ -32,9 +46,57 @@ ConfigValue configEntry(git_config* config, const char* name) {
   return out;
 }
 
+// Puts the gpg signing shim (exec/gpg_shim.cpp) in front of gpg for a
+// command that may sign a commit, so a passphrase gpg cannot ask for on a
+// terminal is asked for in the editor instead. Applies only while prompts
+// reach a client, to repositories that sign with OpenPGP (commit.gpgSign,
+// gpg.format unset or openpgp); the user's own gpg program, if configured,
+// is the one the shim runs.
+void prepareSigning(const std::string& cwd, std::vector<std::string>& args, exec::RunOpts& opts) {
+#ifdef _WIN32
+  (void)cwd;
+  (void)args;
+  (void)opts;
+#else
+  if (!exec::askpassEnabled()) return;
+  static constexpr std::array<std::string_view, 7> kCommitting = {
+      "am", "cherry-pick", "commit", "merge", "pull", "rebase", "revert"};
+  const std::string_view subcommand = subcommandOf(args);
+  bool committing = false;
+  for (std::string_view name : kCommitting) committing = committing || subcommand == name;
+  if (!committing) return;
+
+  git_repository* raw = nullptr;
+  if (git_repository_open_ext(&raw, cwd.c_str(), 0, nullptr) != 0) return;
+  git_config* config = nullptr;
+  const bool haveConfig = git_repository_config_snapshot(&config, raw) == 0;
+  git_repository_free(raw);
+  if (!haveConfig) return;
+  int sign = 0;
+  const bool signs = git_config_get_bool(&sign, config, "commit.gpgsign") == 0 && sign;
+  const std::string format = configEntry(config, "gpg.format").value;
+  // gpg.program and gpg.openpgp.program name the same setting; the one from
+  // the more specific config file wins.
+  const ConfigValue openpgp = configEntry(config, "gpg.openpgp.program");
+  const ConfigValue generic = configEntry(config, "gpg.program");
+  git_config_free(config);
+  if (!signs || (!format.empty() && format != "openpgp")) return;
+
+  std::string program = "gpg";
+  if (openpgp.level >= 0 && openpgp.level >= generic.level && !openpgp.value.empty()) {
+    program = openpgp.value;
+  } else if (generic.level >= 0 && !generic.value.empty()) {
+    program = generic.value;
+  }
+  args.insert(args.begin(), {"-c", "gpg.program=" + exec::selfExePath()});
+  opts.extraEnv.push_back(std::string(exec::kGpgProgramVar) + "=" + program);
+#endif
+}
+
 // Collects a run's stdout lines and exit status into a GitOutput.
 Result<GitOutput> collectLines(const std::string& cwd, std::vector<std::string> args,
-                               const exec::RunOpts& opts, const CancelToken& token) {
+                               exec::RunOpts opts, const CancelToken& token) {
+  prepareSigning(cwd, args, opts);
   GitOutput output;
   auto status = exec::runGit(cwd, std::move(args), opts, token, [&output](std::string line) {
     output.lines.push_back(std::move(line));
@@ -42,6 +104,7 @@ Result<GitOutput> collectLines(const std::string& cwd, std::vector<std::string> 
   if (!status) return status.error();
   output.exitCode = status.value().exitCode;
   output.stderrText = status.value().stderrText;
+  output.promptDeclined = status.value().promptDeclined;
   return output;
 }
 
@@ -99,6 +162,11 @@ void throwGitFailure(const std::string& what, const GitOutput& output,
   for (const auto& line : output.lines) stdoutText += line + "\n";
   const std::string& detail = blank(output.stderrText) ? stdoutText : output.stderrText;
   rpc::Json data = describeGitFailure(output.stderrText + "\n" + stdoutText);
+  if (output.promptDeclined) {
+    rpc::Json cancelled = {{"kind", "cancelled"}};
+    if (data.is_object() && data.contains("host")) cancelled["host"] = data["host"];
+    data = std::move(cancelled);
+  }
   if (operation != "none") {
     if (data.is_null()) data = {{"kind", "stopped"}};
     data["operation"] = operation;

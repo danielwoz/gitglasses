@@ -14,6 +14,15 @@
           "protocolVersion": {
             "minLength": 1,
             "type": "string"
+          },
+          "clientCapabilities": {
+            "additionalProperties": true,
+            "type": "object",
+            "properties": {
+              "askpass": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -3509,6 +3518,127 @@
             }
           }
         }
+      }
+    },
+    "ui/askpassCancelled": {
+      "direction": "engine",
+      "description": "Withdraws a ui/askpass request: git stopped waiting for the answer (it exited, timed out, or its request was cancelled). The client closes the prompt; an answer sent afterwards is ignored.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "engineRequests": {
+    "ui/askpass": {
+      "description": "Asks the user for what git, ssh or gpg prompted for while running a request: a credential, a key passphrase or a host-key confirmation. Sent only to clients that declared clientCapabilities.askpass. The value never reaches a log. A ui/askpassCancelled notification withdraws the request when git stops waiting (it exited, timed out or was cancelled); the client then closes its prompt and its answer is ignored.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "prompt",
+          "secret",
+          "interactive"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "integer"
+          },
+          "method": {
+            "type": "string"
+          },
+          "repoId": {
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "const": "username",
+                "type": "string"
+              },
+              {
+                "const": "password",
+                "type": "string"
+              },
+              {
+                "const": "passphrase",
+                "type": "string"
+              },
+              {
+                "const": "hostKey",
+                "type": "string"
+              },
+              {
+                "const": "confirm",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "interactive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "cancelled"
+            ],
+            "properties": {
+              "cancelled": {
+                "const": true,
+                "type": "boolean"
+              }
+            }
+          }
+        ]
       }
     }
   },

@@ -13,6 +13,7 @@ import {
   EngineNotificationSchemas,
 } from './schema/notifications.js';
 import { RequestSchemas } from './schema/requests.js';
+import { EngineRequestSchemas } from './schema/engineRequests.js';
 
 export { PROTOCOL_VERSION } from './version.js';
 
@@ -49,7 +50,9 @@ export interface RpcError {
 
 export interface RpcResponse {
   jsonrpc: '2.0';
-  id: number | null;
+  /** Integer for answers to the client's requests; requests the engine sends
+   *  carry string ids. */
+  id: number | string | null;
   result?: unknown;
   error?: RpcError;
 }
@@ -101,6 +104,7 @@ export type SequencerState = Static<typeof models.SequencerState>;
 export type SequencerOperation = Static<typeof models.SequencerOperation>;
 export type GitErrorKind = Static<typeof models.GitErrorKind>;
 export type GitErrorData = Static<typeof models.GitErrorData>;
+export type AskpassKind = Static<typeof models.AskpassKind>;
 
 // --- Method map (derived from src/schema/requests.ts) -----------------------
 
@@ -211,8 +215,27 @@ export interface EngineNotifications {
   'repo/didChange': {
     params: Static<(typeof EngineNotificationSchemas)['repo/didChange']['params']>;
   };
+  'ui/askpassCancelled': {
+    params: Static<(typeof EngineNotificationSchemas)['ui/askpassCancelled']['params']>;
+  };
 }
 
 export type EngineNotificationMethod = keyof EngineNotifications;
 export type EngineNotificationParams<M extends EngineNotificationMethod> =
   EngineNotifications[M]['params'];
+
+// --- Engine-to-client requests (derived from src/schema/engineRequests.ts) ---
+
+export interface EngineRequests {
+  'ui/askpass': {
+    params: Static<(typeof EngineRequestSchemas)['ui/askpass']['params']>;
+    result: Static<(typeof EngineRequestSchemas)['ui/askpass']['result']>;
+  };
+}
+
+export type EngineRequestMethod = keyof EngineRequests;
+export type EngineRequestParams<M extends EngineRequestMethod> = EngineRequests[M]['params'];
+export type EngineRequestResult<M extends EngineRequestMethod> = EngineRequests[M]['result'];
+
+/** Client capabilities sent with initialize. */
+export type ClientCapabilities = NonNullable<P<'initialize'>['clientCapabilities']>;

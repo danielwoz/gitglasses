@@ -21,6 +21,8 @@ struct GitOutput {
   int exitCode = -1;
   std::vector<std::string> lines;  // stdout split on newlines
   std::string stderrText;
+  // The user dismissed a credential or passphrase prompt git raised.
+  bool promptDeclined = false;
 };
 
 // Rejects a value that git's option parser would read as a flag (see
@@ -49,8 +51,8 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
 // Throws HandlerError(GitError) for a run that failed: "<what> failed
 // (<code>): " and git's stderr, or its stdout when stderr is empty (some
 // commands explain themselves there). error.data describes the failure
-// (see git_errors.h), with `operation` when the repository was left in the
-// middle of one.
+// (see git_errors.h): kind 'cancelled' when the user dismissed a prompt, and
+// `operation` when the repository was left in the middle of one.
 [[noreturn]] void throwGitFailure(const std::string& what, const GitOutput& output,
                                   const std::string& operation = "none");
 

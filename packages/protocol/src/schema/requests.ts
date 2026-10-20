@@ -113,7 +113,23 @@ export const RequestSchemas = {
   initialize: {
     description:
       'Handshake. The engine rejects a protocolVersion it does not implement, so this must be the first request of a session.',
-    params: Type.Object({ protocolVersion: Type.String({ minLength: 1 }) }, strict),
+    params: Type.Object(
+      {
+        protocolVersion: Type.String({ minLength: 1 }),
+        clientCapabilities: Type.Optional(
+          Type.Object(
+            {
+              /** The client answers ui/askpass requests. Without it the engine
+               * gives git no credential prompt, and anything git would ask
+               * for fails as it does without a terminal. */
+              askpass: Type.Optional(Type.Boolean()),
+            },
+            { additionalProperties: true },
+          ),
+        ),
+      },
+      strict,
+    ),
     result: Type.Object(
       {
         engineVersion: Type.String(),

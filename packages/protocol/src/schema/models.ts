@@ -407,3 +407,16 @@ export const GitErrorData = Type.Object(
       'error.data of a GitError (-32001), present when the engine could tell what the failure was about.',
   },
 );
+
+/** What a credential prompt asks for. */
+export const AskpassKind = Type.Union([
+  Type.Literal('username'),
+  Type.Literal('password'),
+  /** A key's passphrase or a security key PIN: ssh, ssh signing or gpg. */
+  Type.Literal('passphrase'),
+  /** Whether to trust an ssh host key seen for the first time; answer yes or no. */
+  Type.Literal('hostKey'),
+  /** A yes/no confirmation ssh asks for (SSH_ASKPASS_PROMPT=confirm). */
+  Type.Literal('confirm'),
+  Type.Literal('other'),
+]);
