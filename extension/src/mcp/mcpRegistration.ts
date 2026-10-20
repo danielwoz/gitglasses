@@ -122,6 +122,7 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
   const definitionsChanged = emitter<void>();
   const disposables: Disposable[] = [];
   let runtimeMissing = false;
+  let registrationFailed = false;
   let cursorRegistered = false;
 
   const gitRoots = (): string[] =>
@@ -161,6 +162,9 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
     }
     if (runtimeMissing) {
       return { state: 'unavailable', host: editor, reason: 'no Node.js runtime to start it with' };
+    }
+    if (registrationFailed) {
+      return { state: 'unavailable', host: editor, reason: 'the editor refused the registration' };
     }
     const folders = host.folders();
     if (folders.length === 0) return { state: 'noFolder', host: editor };
@@ -224,13 +228,21 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
       );
       host.log('MCP server: registered with the editor (VS Code MCP server definition provider)');
     } catch (error) {
+      registrationFailed = true;
       host.log(`MCP server: registration failed: ${String(error)}`);
     }
   } else if (editor === 'cursor') {
+    // One sync at a time, so changes in quick succession never register twice.
+    let syncing: Promise<void> = Promise.resolve();
     const sync = (): void => {
-      syncCursor()
+      syncing = syncing
+        .then(syncCursor)
         .then(() => statusChanged.fire(status()))
-        .catch((error) => host.log(`MCP server: Cursor registration failed: ${String(error)}`));
+        .catch((error) => {
+          registrationFailed = true;
+          host.log(`MCP server: Cursor registration failed: ${String(error)}`);
+          statusChanged.fire(status());
+        });
     };
     sync();
     disposables.push(host.onDidChangeWorkspace(() => sync()));

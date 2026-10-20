@@ -230,6 +230,39 @@ describe('Cursor registration', () => {
   });
 });
 
+describe('registration failures and bursts of changes', () => {
+  it('reports a registration the editor refuses', () => {
+    const api: McpApi = {
+      lm: {
+        registerMcpServerDefinitionProvider: () => {
+          throw new Error('provider gitglasses.mcp is not contributed');
+        },
+      },
+      McpStdioServerDefinition: Definition,
+    };
+    const { host, state } = setup(api);
+    expect(registerMcpServer(host).status()).toEqual({
+      state: 'unavailable',
+      host: 'vscode',
+      reason: 'the editor refused the registration',
+    });
+    expect(state.logs.join('\n')).toContain('not contributed');
+  });
+
+  it('keeps one Cursor registration however quickly the workspace changes', async () => {
+    const { api, calls } = cursorApi();
+    const { host, changeWorkspace } = setup(api);
+    registerMcpServer(host);
+    changeWorkspace();
+    changeWorkspace();
+    for (let i = 0; i < 5; i++) await settle();
+    let registered = 0;
+    for (const call of calls as unknown[][]) registered += call[0] === 'register' ? 1 : -1;
+    expect(registered).toBe(1);
+    expect((calls.at(-1) as unknown[])[0]).toBe('register');
+  });
+});
+
 describe('editors without an MCP registration API', () => {
   it('registers nothing and points at the commands instead', () => {
     const { host, state } = setup({ lm: {} });
