@@ -124,7 +124,7 @@ export function buildDiffContext(files: readonly DiffFile[], budgetTokens: numbe
 
   // Omit lowest-ranked files until the per-file cap gives everyone a useful
   // allocation within the budget (headers and markers reserved up front).
-  let included = [...ranked];
+  const included = [...ranked];
   let cap: number | undefined;
   for (; included.length > 0; included.pop()) {
     const overhead = included.reduce(

@@ -107,9 +107,7 @@ TEST(RevService, BlameOnUnbornHeadIsEmptyNotAGitError) {
   struct EmptyRepo {
     std::filesystem::path root;
     EmptyRepo() {
-      root = std::filesystem::temp_directory_path() / "gg-unborn-blame";
-      std::filesystem::remove_all(root);
-      std::filesystem::create_directories(root);
+      root = gg::testing::makeTempDir("gg-unborn-blame-");
       gg::testing::runGit(root, "git init -q -b main");
     }
     ~EmptyRepo() {

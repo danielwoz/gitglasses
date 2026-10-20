@@ -2,6 +2,7 @@ find_package(GTest CONFIG REQUIRED)
 
 add_executable(engine_tests
   unit/test_main.cpp
+  unit/test_harness_test.cpp
   unit/framing_test.cpp
   unit/dispatcher_test.cpp
   unit/registry_test.cpp

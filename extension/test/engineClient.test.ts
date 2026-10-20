@@ -18,8 +18,13 @@ const enginePath = ['release', 'debug']
   .map((p) => path.join(repoRoot, 'build', p, 'engine', engineExe))
   .find(existsSync);
 
+// Without an engine the suite is skipped, so TypeScript-only work can run the
+// rest of the tests; in CI a missing engine means the build broke, so it fails.
 if (!enginePath) {
-  throw new Error('engine binary not built; run: cmake --build --preset debug');
+  const message =
+    'engine binary not built; run `pnpm fetch-engine` or `cmake --build --preset debug`';
+  if (process.env.CI) throw new Error(message);
+  console.log(`${message}; skipping the engine client tests`);
 }
 
 function makeFixtureRepo(): string {
@@ -45,7 +50,7 @@ function makeFixtureRepo(): string {
   return root;
 }
 
-describe('EngineClient', () => {
+describe.skipIf(!enginePath)('EngineClient', () => {
   let client: EngineClient;
   let fixture: string;
 

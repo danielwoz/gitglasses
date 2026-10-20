@@ -15,8 +15,12 @@ const packageRoot = path.resolve(import.meta.dirname, '..');
 const enginePath = resolveEnginePath({ packageRoot });
 const cliPath = path.join(packageRoot, 'dist', 'cli.js');
 
+// Skipped locally without an engine; in CI a missing engine means the build
+// broke, so the suite fails instead of passing with nothing run.
 if (!enginePath) {
-  console.log('gitglasses-engine binary not found; skipping engine integration tests');
+  const message = 'gitglasses-engine binary not found';
+  if (process.env.CI) throw new Error(`${message}; CI must provide build/release/engine`);
+  console.log(`${message}; skipping engine integration tests`);
 }
 if (!existsSync(cliPath)) {
   console.log('dist/cli.js not built; skipping MCP stdio smoke test (run build first)');
@@ -265,6 +269,10 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
     repoDir = await mkdtemp(path.join(os.tmpdir(), 'gitglasses-mcp-empty-'));
     git(repoDir, 'init', '-b', 'main');
     git(repoDir, 'config', 'core.autocrlf', 'false');
+    // The last test commits; it must not depend on a global identity.
+    git(repoDir, 'config', 'user.name', 'Test Author');
+    git(repoDir, 'config', 'user.email', 'test@example.com');
+    git(repoDir, 'config', 'commit.gpgsign', 'false');
     client = createEngineClient({ enginePath });
     handlers = createToolHandlers({ client, env: {} });
   }, 30000);
@@ -325,11 +333,17 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
   });
 });
 
+// The fields of an MCP initialize response the smoke test inspects.
+interface InitializeResponse {
+  id?: number;
+  result?: { serverInfo?: { name?: string }; capabilities?: { tools?: unknown } };
+}
+
 describe.skipIf(!existsSync(cliPath))('MCP stdio smoke', () => {
   it('dist/cli.js answers an MCP initialize request over stdio', async () => {
     const child = spawn(process.execPath, [cliPath], { stdio: ['pipe', 'pipe', 'pipe'] });
     try {
-      const response = await new Promise<Record<string, any>>((resolve, reject) => {
+      const response = await new Promise<InitializeResponse>((resolve, reject) => {
         let buffer = '';
         const timer = setTimeout(() => reject(new Error('initialize timed out')), 10000);
         child.stdout.on('data', (chunk: Buffer) => {
@@ -337,7 +351,7 @@ describe.skipIf(!existsSync(cliPath))('MCP stdio smoke', () => {
           const newline = buffer.indexOf('\n');
           if (newline >= 0) {
             clearTimeout(timer);
-            resolve(JSON.parse(buffer.slice(0, newline)));
+            resolve(JSON.parse(buffer.slice(0, newline)) as InitializeResponse);
           }
         });
         child.on('error', reject);

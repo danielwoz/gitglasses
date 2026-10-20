@@ -11,6 +11,8 @@
 #include <sstream>
 #include <string>
 
+#include "test_fixtures.h"
+
 namespace gg::exec {
 namespace {
 
@@ -19,13 +21,7 @@ namespace fs = std::filesystem;
 
 class ShimFiles {
  public:
-  ShimFiles() {
-    dir_ = fs::temp_directory_path() /
-           ("gg-seq-editor-" +
-            std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "-" +
-            std::to_string(counter()++));
-    fs::create_directories(dir_);
-  }
+  ShimFiles() { dir_ = gg::testing::makeTempDir("gg-seq-editor-"); }
   ~ShimFiles() {
     std::error_code ec;
     fs::remove_all(dir_, ec);
@@ -47,10 +43,6 @@ class ShimFiles {
   }
 
  private:
-  static int& counter() {
-    static int value = 0;
-    return value;
-  }
   fs::path dir_;
 };
 

@@ -483,10 +483,7 @@ TEST(GraphService, UnbornHeadAndBadParams) {
   struct UnbornRepo {
     std::filesystem::path root;
     UnbornRepo() {
-      root = std::filesystem::temp_directory_path() /
-             ("gg-graph-unborn-" +
-              std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
-      std::filesystem::create_directories(root);
+      root = gg::testing::makeTempDir("gg-graph-unborn-");
       gg::testing::runGit(root, "git init -q -b main");
     }
     ~UnbornRepo() {
