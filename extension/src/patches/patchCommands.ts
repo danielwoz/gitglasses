@@ -22,7 +22,12 @@ import {
   patchFileName,
   snippetProviderHost,
 } from './patchLogic';
-import { decryptEnvelope, encryptEnvelope, isEncryptedEnvelope } from './envelopeCrypto';
+import {
+  EnvelopeFormatError,
+  decryptEnvelope,
+  encryptEnvelope,
+  isEncryptedEnvelope,
+} from './envelopeCrypto';
 
 type PatchSource = RequestParams<'patch/create'>['source'];
 
@@ -174,7 +179,10 @@ async function deliverPatch(
   if (destination.id === 'encrypted') {
     const passphrase = await promptNewPassphrase();
     if (passphrase === undefined) return;
-    json = encryptEnvelope(json, passphrase);
+    json = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'GitGlasses: encrypting patch…' },
+      () => encryptEnvelope(json, passphrase),
+    );
     if (snippetHost) {
       const how = await vscode.window.showQuickPick(
         [
@@ -350,6 +358,34 @@ class PatchDocuments implements vscode.TextDocumentContentProvider, vscode.Dispo
   }
 }
 
+/** Asks for the passphrase of an encrypted envelope, three attempts, and
+ *  returns the decrypted envelope text. Undefined when the user gives up. */
+async function decryptWithPrompt(text: string): Promise<string | undefined> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const passphrase = await vscode.window.showInputBox({
+      prompt:
+        attempt === 1
+          ? 'This patch is encrypted — enter its passphrase'
+          : `Wrong passphrase — try again (attempt ${attempt} of 3)`,
+      password: true,
+      ignoreFocusOut: true,
+    });
+    if (passphrase === undefined) return undefined;
+    try {
+      return await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'GitGlasses: decrypting patch…' },
+        () => decryptEnvelope(text, passphrase),
+      );
+    } catch (error) {
+      if (attempt === 3 || error instanceof EnvelopeFormatError) {
+        void vscode.window.showErrorMessage(`GitGlasses: ${errorMessage(error)}.`);
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
 async function applyPatch(
   engine: EngineClient,
   repos: RepositoryService,
@@ -370,28 +406,8 @@ async function applyPatch(
   }
   if (text === undefined) return;
 
-  // Encrypted envelopes: prompt for the passphrase, three attempts.
   if (isEncryptedEnvelope(text)) {
-    let decrypted: string | undefined;
-    for (let attempt = 1; attempt <= 3 && decrypted === undefined; attempt++) {
-      const passphrase = await vscode.window.showInputBox({
-        prompt:
-          attempt === 1
-            ? 'This patch is encrypted — enter its passphrase'
-            : `Wrong passphrase — try again (attempt ${attempt} of 3)`,
-        password: true,
-        ignoreFocusOut: true,
-      });
-      if (passphrase === undefined) return;
-      try {
-        decrypted = decryptEnvelope(text, passphrase);
-      } catch (error) {
-        if (attempt === 3) {
-          void vscode.window.showErrorMessage(`GitGlasses: ${errorMessage(error)}.`);
-          return;
-        }
-      }
-    }
+    const decrypted = await decryptWithPrompt(text);
     if (decrypted === undefined) return;
     text = decrypted;
   }
