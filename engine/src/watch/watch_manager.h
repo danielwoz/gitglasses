@@ -25,6 +25,12 @@ struct PollTiming {
   std::chrono::milliseconds idleAfter{5000};
   // Between full sweeps, which re-stat every loose ref file.
   std::chrono::milliseconds fullSweep{30000};
+  // A ref directory listed within this time of its last change is listed
+  // again on the next sweep: a filesystem that keeps coarse timestamps
+  // (whole seconds on HFS+, two seconds on FAT, the system timer's tick on
+  // NTFS) gives a second change in the same tick the same mtime. This is the
+  // rule git applies to racily clean index entries.
+  std::chrono::milliseconds racyWindow{2000};
 };
 
 // What the latest polling sweep of a repository cost.
@@ -54,9 +60,11 @@ struct SweepCost {
 // the directories under refs/ rather than every loose ref: git writes a ref
 // by renaming a lock file over it, which changes its directory's mtime, so
 // only directories whose mtime moved are listed again. Its cost therefore
-// follows the number of ref directories, not of refs. A full re-stat of every
-// loose ref runs on a slower cadence to catch tools that rewrite a ref in
-// place. The sweep interval backs off while nothing changes.
+// follows the number of ref directories, not of refs. A directory listed
+// moments after its last change is listed again until its mtime is older
+// (PollTiming::racyWindow). A full re-stat of every loose ref runs on a
+// slower cadence to catch tools that rewrite a ref in place. The sweep
+// interval backs off while nothing changes.
 class WatchManager {
  public:
   using Callback = std::function<void(const std::string& repoId, std::uint64_t generation,

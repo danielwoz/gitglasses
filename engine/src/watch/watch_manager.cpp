@@ -6,10 +6,14 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <set>
+#include <string>
 #include <thread>
 #include <utility>
+
+#include "exec/win_unicode.h"
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -31,6 +35,18 @@ constexpr auto kDebounce = std::chrono::milliseconds(50);
 
 bool startsWith(const std::string& value, const std::string& prefix) {
   return value.rfind(prefix, 0) == 0;
+}
+
+// Paths arrive as UTF-8, libgit2's encoding. std::filesystem reads and
+// writes a narrow string in the ANSI code page on Windows, so conversions go
+// through char8_t.
+fs::path fromUtf8(const std::string& text) {
+  return fs::path(std::u8string(text.begin(), text.end()));
+}
+
+std::string toUtf8(const fs::path& path) {
+  const std::u8string text = path.generic_u8string();
+  return std::string(text.begin(), text.end());
 }
 
 bool endsWith(const std::string& value, const std::string& suffix) {
@@ -390,14 +406,32 @@ class RepoWatch {
   }
 
  private:
-  // mtime and size of one entry. Directories record size 0, so only their
-  // mtime counts.
-  using Stamp = std::pair<std::int64_t, std::uint64_t>;
+  // What a sweep saw of one entry: its mtime and size (0 for a directory),
+  // and, for a small file stamped within the racy window of its mtime, a hash
+  // of its content. A second change in the same timestamp tick can keep both
+  // mtime and size (a loose ref is always 41 bytes); the hash still tells.
+  struct Stamp {
+    std::int64_t mtime = 0;
+    std::uint64_t size = 0;
+    std::optional<std::size_t> content;
+  };
   using Stamps = std::map<std::string, Stamp>;
+
+  // Files up to this size have their content hashed while racy: loose refs,
+  // HEAD and the sequencer's files. The index and packed-refs are left to
+  // their mtime and size; they can be large and git rewrites them often.
+  static constexpr std::uint64_t kMaxHashedSize = 4096;
+
+  static bool hashable(const fs::path& path, std::uint64_t size) {
+    if (size > kMaxHashedSize) return false;
+    const fs::path name = path.filename();
+    return name != "index" && name != "packed-refs";
+  }
 
   // One directory under refs/ and what its last listing held.
   struct RefDir {
     std::int64_t mtime = 0;
+    bool racy = false;           // listed within the racy window of `mtime`
     Stamps files;                // name -> stamp
     std::set<std::string> dirs;  // names of subdirectories
   };
@@ -414,12 +448,51 @@ class RepoWatch {
   // Counts the filesystem entries one sweep examines.
   struct Sweep {
     bool full = false;
+    // Entries whose mtime is this recent or later (filesystem clock, in mtime
+    // units) are racy: a directory is listed again next time, a small file's
+    // content is hashed.
+    std::int64_t racySince = 0;
     std::size_t entries = 0;
     std::set<std::string> pending;
   };
 
   static fs::path under(const std::string& base, const std::string& rel) {
-    return rel.empty() ? fs::path(base) : fs::path(base) / rel;
+    return rel.empty() ? fromUtf8(base) : fromUtf8(base) / fromUtf8(rel);
+  }
+
+  // A hash of a small file's content; empty when it cannot be read. On
+  // Windows the file is opened sharing delete access, so git can still
+  // rename a lock file over it meanwhile.
+  static std::optional<std::size_t> contentHash(const fs::path& path) {
+    std::string content(kMaxHashedSize + 1, '\0');
+#ifdef _WIN32
+    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return std::nullopt;
+    DWORD read = 0;
+    const BOOL ok =
+        ReadFile(file, content.data(), static_cast<DWORD>(content.size()), &read, nullptr);
+    CloseHandle(file);
+    if (!ok) return std::nullopt;
+    content.resize(read);
+#else
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return std::nullopt;
+    in.read(content.data(), static_cast<std::streamsize>(content.size()));
+    content.resize(static_cast<std::size_t>(in.gcount()));
+#endif
+    return std::hash<std::string>{}(content);
+  }
+
+  // Finishes a stamp: hashes the content of a small file that is racy.
+  static Stamp stamp(const fs::path& path, std::int64_t mtime, std::uint64_t size, bool file,
+                     const Sweep& sweep) {
+    Stamp stamp{mtime, size, std::nullopt};
+    if (file && mtime >= sweep.racySince && hashable(path, size)) {
+      stamp.content = contentHash(path);
+    }
+    return stamp;
   }
 
   static std::optional<Stamp> stampOf(const fs::path& path, Sweep& sweep) {
@@ -428,9 +501,10 @@ class RepoWatch {
     const auto mtime = fs::last_write_time(path, ec);
     if (ec) return std::nullopt;
     std::uint64_t size = 0;
-    if (fs::is_regular_file(path, ec)) size = fs::file_size(path, ec);
+    const bool file = fs::is_regular_file(path, ec);
+    if (file) size = fs::file_size(path, ec);
     if (ec) size = 0;
-    return Stamp{mtime.time_since_epoch().count(), size};
+    return stamp(path, mtime.time_since_epoch().count(), size, file, sweep);
   }
 
   // The same for an entry a directory listing produced, reusing what the
@@ -442,9 +516,23 @@ class RepoWatch {
     const auto mtime = entry.last_write_time(ec);
     if (ec) return std::nullopt;
     std::uint64_t size = 0;
-    if (entry.is_regular_file(ec)) size = entry.file_size(ec);
+    const bool file = entry.is_regular_file(ec);
+    if (file) size = entry.file_size(ec);
     if (ec) size = 0;
-    return Stamp{mtime.time_since_epoch().count(), size};
+    return stamp(entry.path(), mtime.time_since_epoch().count(), size, file, sweep);
+  }
+
+  // Whether the entry at `path`, stamped `now`, changed since it was stamped
+  // `before`. Equal mtimes and sizes are checked against the content hash
+  // `before` took while racy; `now` keeps a hash only while it is racy
+  // itself.
+  static bool changed(const Stamp& before, Stamp& now, const fs::path& path, const Sweep& sweep) {
+    if (before.mtime != now.mtime || before.size != now.size) return true;
+    if (!before.content) return false;
+    if (!now.content) now.content = contentHash(path);
+    const bool differs = now.content != before.content;
+    if (now.mtime < sweep.racySince) now.content.reset();
+    return differs;
   }
 
   static void report(const Root& root, const std::string& rel, Sweep& sweep) {
@@ -472,9 +560,9 @@ class RepoWatch {
     std::error_code ec;
     fs::recursive_directory_iterator it(top, fs::directory_options::skip_permission_denied, ec);
     const fs::recursive_directory_iterator end;
-    const std::string prefix = top.generic_string() + "/";
+    const std::string prefix = toUtf8(top) + "/";
     for (; !ec && it != end; it.increment(ec)) {
-      const std::string path = it->path().generic_string();
+      const std::string path = toUtf8(it->path());
       if (path.compare(0, prefix.size(), prefix) != 0) continue;
       sweepFile(root, rel + "/" + path.substr(prefix.size()), seen, sweep);
     }
@@ -486,13 +574,14 @@ class RepoWatch {
                                           std::int64_t mtime, Sweep& sweep) {
     RefDir dir;
     dir.mtime = mtime;
+    dir.racy = mtime >= sweep.racySince;
     std::error_code ec;
     fs::directory_iterator it(under(root.base, rel), fs::directory_options::skip_permission_denied,
                               ec);
     if (ec) return std::nullopt;
     for (const fs::directory_iterator end; it != end; it.increment(ec)) {
       if (ec) break;
-      const std::string name = it->path().filename().string();
+      const std::string name = toUtf8(it->path().filename());
       std::error_code typeEc;
       if (it->is_directory(typeEc)) {
         dir.dirs.insert(name);
@@ -509,7 +598,7 @@ class RepoWatch {
   static void addRefTree(Root& root, const std::string& rel, bool reportNew, Sweep& sweep) {
     const auto stamp = stampOf(under(root.base, rel), sweep);
     if (!stamp) return;
-    auto listed = listRefDir(root, rel, stamp->first, sweep);
+    auto listed = listRefDir(root, rel, stamp->mtime, sweep);
     if (!listed) return;
     if (reportNew) {
       report(root, rel, sweep);
@@ -532,8 +621,9 @@ class RepoWatch {
   }
 
   // Re-checks the refs directories: one stat per directory, and a new
-  // listing only for directories whose mtime moved (or all of them in a full
-  // sweep, which catches files rewritten in place).
+  // listing only for directories whose mtime moved or that were listed too
+  // soon after their last change (or all of them in a full sweep, which
+  // catches files rewritten in place).
   static void sweepRefs(Root& root, Sweep& sweep) {
     if (root.refs.empty()) {
       addRefTree(root, "refs", true, sweep);
@@ -550,16 +640,17 @@ class RepoWatch {
         dropRefTree(root, rel, sweep);
         continue;
       }
-      if (stamp->first == it->second.mtime && !sweep.full) continue;
-      auto listed = listRefDir(root, rel, stamp->first, sweep);
+      if (stamp->mtime == it->second.mtime && !it->second.racy && !sweep.full) continue;
+      auto listed = listRefDir(root, rel, stamp->mtime, sweep);
       if (!listed) {
         dropRefTree(root, rel, sweep);
         continue;
       }
       RefDir& previous = it->second;
-      for (const auto& [name, fileStamp] : listed->files) {
+      for (auto& [name, fileStamp] : listed->files) {
         const auto old = previous.files.find(name);
-        if (old == previous.files.end() || old->second != fileStamp) {
+        if (old == previous.files.end() ||
+            changed(old->second, fileStamp, under(root.base, join(rel, name)), sweep)) {
           report(root, join(rel, name), sweep);
         }
       }
@@ -580,11 +671,12 @@ class RepoWatch {
 
   // Adds the category of every path that appeared, changed or vanished
   // among the single files and small trees.
-  static void diffFiles(const Root& root, const Stamps& previous, const Stamps& current,
-                        Sweep& sweep) {
-    for (const auto& [rel, stamp] : current) {
+  static void diffFiles(const Root& root, const Stamps& previous, Stamps& current, Sweep& sweep) {
+    for (auto& [rel, stamp] : current) {
       const auto it = previous.find(rel);
-      if (it == previous.end() || it->second != stamp) report(root, rel, sweep);
+      if (it == previous.end() || changed(it->second, stamp, under(root.base, rel), sweep)) {
+        report(root, rel, sweep);
+      }
     }
     for (const auto& [rel, stamp] : previous) {
       if (current.find(rel) == current.end()) report(root, rel, sweep);
@@ -592,6 +684,10 @@ class RepoWatch {
   }
 
   void sweep(Sweep& sweep) {
+    const auto racySince =
+        fs::file_time_type::clock::now() -
+        std::chrono::duration_cast<fs::file_time_type::duration>(timing_.racyWindow);
+    sweep.racySince = racySince.time_since_epoch().count();
     Root& own = roots_[0];
     Stamps files;
     for (const char* rel : {"HEAD", "index", "packed-refs", "MERGE_HEAD", "CHERRY_PICK_HEAD"}) {
@@ -687,8 +783,9 @@ void WatchManager::watch(const std::string& repoId, const std::string& gitdir,
   std::string shared = commondir;
   if (!shared.empty()) {
     std::error_code ec;
-    const bool same = fs::equivalent(gitdir, shared, ec);
-    if (same || fs::path(gitdir).lexically_normal() == fs::path(shared).lexically_normal()) {
+    const fs::path own = fromUtf8(gitdir);
+    const fs::path common = fromUtf8(shared);
+    if (fs::equivalent(own, common, ec) || own.lexically_normal() == common.lexically_normal()) {
       shared.clear();
     }
   }
