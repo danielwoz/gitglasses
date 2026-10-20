@@ -141,6 +141,8 @@ jobs:
 
   engine-wasm:
     runs-on: ubuntu-22.04
+    outputs:
+      key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -166,6 +168,17 @@ jobs:
 
       - name: Wasm protocol harness
         run: node engine/wasm-test/run.mjs
+
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-engine-wasm-${{ steps.key.outputs.key }}
+          path: build/wasm/engine/gitglasses-engine-wasm.*
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   extension:
     needs: engine-linux
@@ -276,3 +289,48 @@ jobs:
 
       - name: E2E test
         run: xvfb-run -a pnpm --filter gitglasses run test:e2e
+
+  # The web extension (vscode.dev, github.dev) bundles the wasm engine; without
+  # it the build skips dist/web entirely. Runs the smoke suite in headless
+  # Chromium against a real fixture repository mirrored into MEMFS.
+  extension-web:
+    needs: engine-wasm
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-engine-wasm-${{ needs.engine-wasm.outputs.key }}
+          path: build/wasm/engine
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Check the web bundle was built
+        run: |
+          test -f extension/dist/web/extension.js || {
+            echo "::error::pnpm build did not produce extension/dist/web/extension.js"
+            exit 1
+          }
+
+      # The suite needs the Chromium build of the playwright that
+      # @vscode/test-web depends on, so install through that copy's own CLI
+      # (playwright is not a direct dependency, and `npx playwright` may run
+      # a different version).
+      - name: Install Chromium
+        working-directory: extension
+        run: |
+          playwright=$(node -p "require('path').join(require('path').dirname(require('module').createRequire(require.resolve('@vscode/test-web/package.json')).resolve('playwright/package.json')), 'cli.js')")
+          node "$playwright" install --with-deps chromium
+
+      - name: Web smoke test
+        run: pnpm --filter gitglasses run test:web
