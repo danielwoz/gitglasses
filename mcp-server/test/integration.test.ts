@@ -269,6 +269,10 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
     repoDir = await mkdtemp(path.join(os.tmpdir(), 'gitglasses-mcp-empty-'));
     git(repoDir, 'init', '-b', 'main');
     git(repoDir, 'config', 'core.autocrlf', 'false');
+    // The last test commits; it must not depend on a global identity.
+    git(repoDir, 'config', 'user.name', 'Test Author');
+    git(repoDir, 'config', 'user.email', 'test@example.com');
+    git(repoDir, 'config', 'commit.gpgsign', 'false');
     client = createEngineClient({ enginePath });
     handlers = createToolHandlers({ client, env: {} });
   }, 30000);
