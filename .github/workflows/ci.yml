@@ -4,6 +4,17 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets another workflow, such as a release, require these checks.
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A new push to a pull request supersedes the checks still running for the
+# previous one; runs for main always finish.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Each platform's release engine is built and tested once, then shared with
 # the jobs that need it as an artifact named after the engine source key
@@ -16,13 +27,14 @@ jobs:
   # the repository scripts.
   lint:
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The format check compares against the merge base.
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -50,6 +62,7 @@ jobs:
 
   engine:
     name: engine (${{ matrix.preset }})
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +74,7 @@ jobs:
             cxx: clang++
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/setup-vcpkg
         with:
@@ -81,10 +94,11 @@ jobs:
 
   engine-linux:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     outputs:
       key: ${{ steps.key.outputs.key }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/setup-vcpkg
         with:
@@ -103,7 +117,7 @@ jobs:
         id: key
         run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-engine-linux-x64-${{ steps.key.outputs.key }}
           path: build/release/engine/gitglasses-engine
@@ -112,14 +126,15 @@ jobs:
 
   engine-windows:
     runs-on: windows-2022
+    timeout-minutes: 60
     outputs:
       key: ${{ steps.key.outputs.key }}
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - uses: ./.github/actions/setup-vcpkg
         with:
@@ -140,7 +155,7 @@ jobs:
 
       # Only the executable: the build directory also holds the linker's
       # import library and debug symbols under similar names.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-engine-win32-x64-${{ steps.key.outputs.key }}
           path: build/release/engine/gitglasses-engine.exe
@@ -149,8 +164,9 @@ jobs:
 
   engine-macos:
     runs-on: macos-14
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/setup-vcpkg
         with:
@@ -169,7 +185,7 @@ jobs:
         id: key
         run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-engine-darwin-arm64-${{ steps.key.outputs.key }}
           path: build/release/engine/gitglasses-engine
@@ -178,14 +194,15 @@ jobs:
 
   engine-wasm:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     outputs:
       key: ${{ steps.key.outputs.key }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
           version: 6.0.3
 
@@ -210,7 +227,7 @@ jobs:
         id: key
         run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ci-engine-wasm-${{ steps.key.outputs.key }}
           path: build/wasm/engine/gitglasses-engine-wasm.*
@@ -220,16 +237,17 @@ jobs:
   extension:
     needs: engine-linux
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
       # The TS integration tests exercise the real engine binary.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ci-engine-linux-x64-${{ needs.engine-linux.outputs.key }}
           path: build/release/engine
@@ -263,20 +281,21 @@ jobs:
   extension-windows:
     needs: engine-windows
     runs-on: windows-2022
+    timeout-minutes: 40
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
       # The unit suite's engine-client tests and the whole e2e suite drive the
       # real binary.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ci-engine-win32-x64-${{ needs.engine-windows.outputs.key }}
           path: build/release/engine
@@ -302,16 +321,17 @@ jobs:
   extension-e2e:
     needs: engine-linux
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
       # The e2e suite launches real VS Code against the real engine binary.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ci-engine-linux-x64-${{ needs.engine-linux.outputs.key }}
           path: build/release/engine
@@ -333,15 +353,16 @@ jobs:
   extension-web:
     needs: engine-wasm
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ci-engine-wasm-${{ needs.engine-wasm.outputs.key }}
           path: build/wasm/engine
