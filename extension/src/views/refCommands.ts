@@ -30,6 +30,7 @@ import { ActiveRepo, requireRepo } from './viewBase';
 import { RefNode, SHOW_STASH_COMMAND, isRefNode, refLabel, refRevision } from './refsViews';
 import {
   CompareEntry,
+  canOfferPublish,
   compareEntries,
   confirmForcePush,
   confirmPublishUnderOwnName,
@@ -244,10 +245,12 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
       if (ref.kind !== 'branch') return;
       const tracked = ref.upstream && splitRemoteBranch(ref.upstream, await remoteNames(repo));
       if (!tracked) {
-        const choice = await vscode.window.showInformationMessage(
-          `GitGlasses: '${ref.name}' is not on a remote yet.`,
-          'Publish Branch',
-        );
+        const message = `GitGlasses: '${ref.name}' is not on a remote yet.`;
+        if (!canOfferPublish(vscode.workspace.isTrusted, engine.capabilities())) {
+          void vscode.window.showInformationMessage(message);
+          return;
+        }
+        const choice = await vscode.window.showInformationMessage(message, 'Publish Branch');
         if (choice) await vscode.commands.executeCommand('gitglasses.branch.push', node);
         return;
       }

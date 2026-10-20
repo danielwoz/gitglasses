@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canOfferPublish,
   compareEntries,
   confirmForcePush,
   confirmPublishUnderOwnName,
@@ -244,5 +245,18 @@ describe('confirmations', () => {
     expect(publish.message).toBe("'feature' tracks origin/main, which has a different name.");
     expect(publish.detail).toContain('git push -u origin feature\n');
     expect(publish.detail).toContain('does not update origin/main');
+  });
+});
+
+describe('canOfferPublish', () => {
+  const full = { gitCli: true, watch: true, threads: true };
+  it('offers publishing only where a push could run', () => {
+    expect(canOfferPublish(true, full)).toBe(true);
+    // Restricted Mode: the workspace is untrusted and the engine runs no git.
+    expect(canOfferPublish(false, full)).toBe(false);
+    expect(canOfferPublish(true, { ...full, restricted: true })).toBe(false);
+    expect(canOfferPublish(false, undefined)).toBe(false);
+    // No git CLI: the engine cannot push.
+    expect(canOfferPublish(true, { ...full, gitCli: false })).toBe(false);
   });
 });

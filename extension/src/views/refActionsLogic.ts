@@ -3,7 +3,9 @@
 // git failure reads in a notification, and the confirmation text. No vscode
 // imports, so vitest covers it.
 
+import type { EngineCapabilities } from '@gitglasses/protocol';
 import type { Confirmation } from '../commands/confirmations';
+import { isMethodAvailable } from '../engine/capabilityGate';
 
 /** What a Branches/Remotes/Tags/Stashes node stands for. */
 export type RefPayload =
@@ -77,6 +79,13 @@ export function planPush(upstream: string | undefined, remotes: readonly string[
     remotes: [...remotes],
     preferred: remotes.includes('origin') ? 'origin' : undefined,
   };
+}
+
+/** Whether a read-only action may offer to publish a branch: pushing needs
+ *  a trusted workspace and an engine that runs git. Commands run through
+ *  executeCommand skip their enablement, so the offer itself is gated. */
+export function canOfferPublish(trusted: boolean, caps: EngineCapabilities | undefined): boolean {
+  return trusted && isMethodAvailable(caps, 'branch/push');
 }
 
 /** `git branch -d` refused because the branch has commits no other branch
