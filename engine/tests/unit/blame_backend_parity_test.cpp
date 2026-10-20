@@ -301,5 +301,43 @@ TEST_F(BlameBackendParityTest, CrlfCheckoutIsNotUncommitted) {
   EXPECT_EQ(dirtyLg2.at(3), exec::kUncommittedSha);
 }
 
+// A line's previous revision is the parent the commit changed it from, when
+// the file was there. Lines from the commit that added the file, root commit
+// or not, have none: there is no earlier version to open or diff against.
+TEST_F(BlameBackendParityTest, PreviousRevisionMatchesTheCli) {
+  commitFile("one\ntwo\n", "root");
+  const std::string root = revSha("HEAD");
+  commitFile("one\ntwo changed\n", "change");
+  fixture.writeFile("added.txt", "new\n");
+  fixture.run("git add added.txt");
+  fixture.commit("add a file");
+
+  using Previous = std::map<std::uint32_t, std::optional<std::string>>;
+  const auto previousOf = [&](const std::string& path, BlameBackend backend) {
+    std::vector<exec::BlameHunk> hunks;
+    auto summary = blame({.path = path}, backend, &hunks);
+    EXPECT_TRUE(summary.ok()) << (summary.ok() ? "" : summary.error().message);
+    Previous lines;
+    for (const auto& h : hunks) {
+      EXPECT_EQ(h.previousSha.has_value(), h.previousPath.has_value());
+      if (h.previousPath) EXPECT_EQ(*h.previousPath, path);
+      for (std::uint32_t l = h.resultLine; l < h.resultLine + h.lineCount; ++l) {
+        lines[l] = h.previousSha;
+      }
+    }
+    return lines;
+  };
+
+  for (const BlameBackend backend : {BlameBackend::Cli, BlameBackend::LibGit2}) {
+    const Previous file = previousOf("file.txt", backend);
+    ASSERT_EQ(file.size(), 2u);
+    EXPECT_EQ(file.at(1), std::nullopt);  // the root commit's line
+    EXPECT_EQ(file.at(2), std::optional<std::string>(root));
+    const Previous added = previousOf("added.txt", backend);
+    ASSERT_EQ(added.size(), 1u);
+    EXPECT_EQ(added.at(1), std::nullopt);
+  }
+}
+
 }  // namespace
 }  // namespace gg::services

@@ -336,6 +336,28 @@ exec::BlameSignature mappedSignature(const git_signature* sig, const git_mailmap
   return out;
 }
 
+// The revision git reports as a hunk's `previous`: the first parent of
+// `commit` that has the file at `path`, which is where its lines were
+// compared from. None for a root commit or a commit that added the file.
+// A file the commit renamed has none here either, since libgit2 does not say
+// which path it had before.
+std::optional<std::string> previousRevision(const git_commit* commit, const std::string& path) {
+  const unsigned parents = git_commit_parentcount(commit);
+  for (unsigned i = 0; i < parents; ++i) {
+    git_commit* rawParent = nullptr;
+    if (git_commit_parent(&rawParent, commit, i) != 0) continue;
+    const core::CommitPtr parent(rawParent);
+    git_tree* rawTree = nullptr;
+    if (git_commit_tree(&rawTree, rawParent) != 0) continue;
+    const core::TreePtr tree(rawTree);
+    git_tree_entry* entry = nullptr;
+    if (git_tree_entry_bypath(&entry, rawTree, path.c_str()) != 0) continue;
+    git_tree_entry_free(entry);
+    return core::oidToHex(*git_commit_id(rawParent));
+  }
+  return std::nullopt;
+}
+
 struct BlameDeleter {
   void operator()(git_blame* blame) const { git_blame_free(blame); }
 };
@@ -464,8 +486,8 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithCli(
 //   - Weaker cross-file rename attribution: clean whole-file renames are
 //     followed, but similarity-based pairing can attribute rename+edit or
 //     copy cases to the renaming commit instead of the true origin.
-//   - No `previous` (blame-parent) hunk fields: libgit2 does not report the
-//     parent commit a hunk was passed from.
+//   - `previous` is the first parent holding the file at the same path, so a
+//     commit that renamed the file reports none.
 //   - ignore-revs files and move/copy detection (-M/-C) are not supported.
 // Names are mapped through the mailmap, as the CLI does.
 Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2(
@@ -530,6 +552,8 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2
   }
 
   auto result = std::make_shared<cache::BlameResult>();
+  // Each hunk's previous revision, by commit and path.
+  std::map<std::string, std::optional<std::string>> previousRevisions;
   const size_t hunkCount = git_blame_hunkcount(effective);
   for (size_t i = 0; i < hunkCount; ++i) {
     token.throwIfCancelled();
@@ -571,6 +595,21 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithLibGit2
       }
     }
     if (raw->boundary) commit.boundary = true;
+
+    if (!uncommitted) {
+      auto [previous, missing] = previousRevisions.try_emplace(hunk.sha + '\0' + hunk.path);
+      if (missing) {
+        git_commit* rawCommit = nullptr;
+        if (git_commit_lookup(&rawCommit, repo.raw(), &raw->final_commit_id) == 0) {
+          const core::CommitPtr commitGuard(rawCommit);
+          previous->second = previousRevision(rawCommit, hunk.path);
+        }
+      }
+      if (previous->second) {
+        hunk.previousSha = previous->second;
+        hunk.previousPath = hunk.path;
+      }
+    }
 
     result->hunks.push_back(hunk);
     emit(hunk);
