@@ -456,6 +456,92 @@ TEST(PatchService, ApplyFailureCarriesGitsReason) {
       << applied.dump();
 }
 
+Json dryRun(InteractiveSession& session, std::int64_t id, const std::string& repoId,
+            const std::string& patch) {
+  Json envelope = {
+      {"format", "gitglasses-patch"}, {"version", 1},   {"baseSha", std::string(40, '0')},
+      {"summary", "Fix typo"},        {"patch", patch}, {"createdAtIso", ""}};
+  return session.request(
+      req(id, "patch/apply", {{"repoId", repoId}, {"envelope", envelope}, {"dryRun", true}}));
+}
+
+Json patchFileFor(const Json& files, const std::string& path) {
+  for (const auto& file : files) {
+    if (file["path"] == path) return file;
+  }
+  ADD_FAILURE() << "no file " << path << " in " << files.dump();
+  return {};
+}
+
+// The confirmation before applying lists what git apply will change. A
+// plain diff without `diff --git` headers counts as much as a git one.
+TEST(PatchService, DryRunListsTheFilesGitApplyWouldChange) {
+  FixtureRepo fixture;
+  fixture.writeFile("a.txt", "one\ntwo\nthree\n");
+  fixture.run("git add a.txt");
+  commitTick(fixture.root(), "base", 1);
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  const std::string repoId = discoverRepo(session, 2, fixture.root());
+
+  const std::string plain =
+      "--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"
+      "--- /dev/null\n+++ b/.vscode/settings.json\n@@ -0,0 +1 @@\n+{}\n";
+  Json listed = dryRun(session, 10, repoId, plain);
+  ASSERT_TRUE(listed.contains("result")) << listed.dump();
+  EXPECT_FALSE(listed["result"]["applied"].get<bool>());
+  const Json& files = listed["result"]["files"];
+  ASSERT_EQ(files.size(), 2u) << listed.dump();
+  const Json settings = patchFileFor(files, ".vscode/settings.json");
+  EXPECT_EQ(settings.value("status", ""), "A");
+  EXPECT_EQ(settings.value("additions", -1), 1);
+  const Json edited = patchFileFor(files, "a.txt");
+  EXPECT_EQ(edited.value("status", ""), "M");
+  EXPECT_EQ(edited.value("additions", -1), 1);
+  EXPECT_EQ(edited.value("deletions", -1), 1);
+  // Nothing was applied.
+  EXPECT_EQ(gitOut(fixture.root(), "status --porcelain"), "");
+  EXPECT_FALSE(std::filesystem::exists(fixture.root() / ".vscode"));
+
+  // A git patch with a rename, a deletion, a binary file and a new
+  // executable.
+  fixture.writeFile("b.txt", "bee\n");
+  fixture.writeFile("img.bin", std::string("\x00\x01\x02", 3));
+  fixture.run("git add b.txt img.bin");
+  commitTick(fixture.root(), "more", 2);
+  std::filesystem::create_directories(fixture.root() / "docs");
+  fixture.run("git mv a.txt docs/renamed.txt");
+  fixture.run("git rm -q b.txt");
+  fixture.writeFile("img.bin", std::string("\x00\x09\x02", 3));
+  fixture.writeFile("run.sh", "echo hi\n");
+  // Executable both in the working tree and, where the filesystem has no
+  // executable bit (core.filemode false), in the index.
+  std::filesystem::permissions(fixture.root() / "run.sh", std::filesystem::perms::owner_exec,
+                               std::filesystem::perm_options::add);
+  fixture.run("git add img.bin run.sh");
+  fixture.run("git update-index --chmod=+x run.sh");
+  Json created = createPatch(session, 11, repoId, {{"kind", "wip"}});
+  fixture.run("git reset -q --hard");
+
+  Json described = dryRun(session, 12, repoId, created["patch"]);
+  ASSERT_TRUE(described.contains("result")) << described.dump();
+  const Json& changes = described["result"]["files"];
+  ASSERT_EQ(changes.size(), 4u) << described.dump();
+  const Json renamed = patchFileFor(changes, "docs/renamed.txt");
+  EXPECT_EQ(renamed.value("status", ""), "R");
+  EXPECT_EQ(renamed.value("origPath", ""), "a.txt");
+  EXPECT_EQ(patchFileFor(changes, "b.txt").value("status", ""), "D");
+  EXPECT_TRUE(patchFileFor(changes, "img.bin").value("binary", false));
+  const Json script = patchFileFor(changes, "run.sh");
+  EXPECT_EQ(script.value("status", ""), "A");
+  EXPECT_TRUE(script.value("executable", false)) << script.dump();
+
+  Json corrupt = dryRun(session, 13, repoId, "--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n-x\n");
+  ASSERT_TRUE(corrupt.contains("error")) << corrupt.dump();
+  EXPECT_EQ(corrupt["error"]["code"], -32001);
+}
+
 TEST(PatchService, InvalidParamsRejected) {
   FixtureRepo fixture;
   InteractiveSession session;

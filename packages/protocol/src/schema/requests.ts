@@ -14,6 +14,7 @@ import {
   GraphRow,
   HeadState,
   PatchEnvelope,
+  PatchFileChange,
   RebaseEntry,
   RepoInfo,
   SequencerState,
@@ -844,17 +845,33 @@ export const RequestSchemas = {
     result: Type.Object({ envelope: PatchEnvelope }, strict),
   },
   'patch/apply': {
-    description: 'Applies a patch envelope; 3-way when the base is missing.',
+    description:
+      "Applies a patch envelope with `git apply --3way`. With `dryRun`, changes nothing and lists the files git would change, read by git's own patch parser.",
     params: Type.Object(
-      { repoId: Type.String(), envelope: PatchEnvelope },
+      {
+        repoId: Type.String(),
+        envelope: PatchEnvelope,
+        dryRun: Type.Optional(
+          Type.Boolean({
+            description:
+              'Do not apply: return the files the patch would change in `files`. A patch git cannot read fails with GitError.',
+          }),
+        ),
+      },
       strict,
     ),
     result: Type.Object(
       {
+        /** Always false for a dry run. */
         applied: Type.Boolean(),
         conflicts: Type.Boolean(),
         /** True when the envelope's base commit exists in this repository. */
         baseFound: Type.Boolean(),
+        files: Type.Optional(
+          Type.Array(PatchFileChange, {
+            description: 'Dry runs only: every file the patch changes, in patch order.',
+          }),
+        ),
         message: Type.Optional(
           Type.String({ description: "git's explanation when the patch was not applied." }),
         ),

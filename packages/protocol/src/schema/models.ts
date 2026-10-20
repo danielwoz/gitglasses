@@ -362,3 +362,30 @@ export const PatchEnvelope = Type.Object(
   },
   strict,
 );
+
+/** One file a patch changes, as `git apply` reads the patch (patch/apply
+ *  with `dryRun`). */
+export const PatchFileChange = Type.Object(
+  {
+    path: Type.String({
+      description: 'Path after the patch; for a deletion, the deleted path.',
+    }),
+    status: Type.Union(
+      [Type.Literal('M'), Type.Literal('A'), Type.Literal('D'), Type.Literal('R'), Type.Literal('C')],
+      { description: 'Modified, added, deleted, renamed or copied.' },
+    ),
+    origPath: Type.Optional(
+      Type.String({ description: 'Path before the patch; renames and copies only.' }),
+    ),
+    /** 0 for binary files, whose lines are not counted. */
+    additions: Count,
+    deletions: Count,
+    binary: Type.Boolean(),
+    executable: Type.Optional(
+      Type.Literal(true, {
+        description: 'The patch creates the file executable or sets its executable bit.',
+      }),
+    ),
+  },
+  strict,
+);

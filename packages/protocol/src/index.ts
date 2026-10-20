@@ -95,6 +95,7 @@ export type GraphRow = Static<typeof models.GraphRow>;
 export type DiffHunk = Static<typeof models.DiffHunk>;
 export type RebaseEntry = Static<typeof models.RebaseEntry>;
 export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
+export type PatchFileChange = Static<typeof models.PatchFileChange>;
 export type SequencerState = Static<typeof models.SequencerState>;
 
 // --- Method map (derived from src/schema/requests.ts) -----------------------

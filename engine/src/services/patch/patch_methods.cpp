@@ -3,6 +3,7 @@
 #include <git2.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <limits>
 #include <memory>
@@ -261,6 +262,174 @@ util::TempFile makeTempPatchFile(const std::string& contents) {
   return std::move(file).value();
 }
 
+// One file a patch changes, as `git apply` reads the patch.
+struct PatchFile {
+  std::string path;      // after the patch; for a deletion, the deleted path
+  std::string origPath;  // the source of a rename or copy
+  char status = 'M';     // M A D R C
+  std::int64_t additions = 0;
+  std::int64_t deletions = 0;
+  bool binary = false;
+  bool executable = false;  // created executable, or its executable bit is set
+};
+
+// Undoes git's compact rename notation, "dir/{old => new}/file" (the part
+// outside the braces is shared), or the plain "old => new".
+std::optional<std::pair<std::string, std::string>> splitRename(const std::string& spec) {
+  const size_t open = spec.find('{');
+  const size_t close = spec.rfind('}');
+  if (open != std::string::npos && close != std::string::npos && open < close) {
+    const std::string inner = spec.substr(open + 1, close - open - 1);
+    const size_t arrow = inner.find(" => ");
+    if (arrow != std::string::npos) {
+      const std::string prefix = spec.substr(0, open);
+      const std::string suffix = spec.substr(close + 1);
+      // An empty side leaves the shared prefix's and suffix's separators
+      // back to back.
+      const auto joined = [&](const std::string& middle) {
+        if (middle.empty() && !prefix.empty() && prefix.back() == '/' && !suffix.empty() &&
+            suffix.front() == '/') {
+          return prefix + suffix.substr(1);
+        }
+        return prefix + middle + suffix;
+      };
+      return std::make_pair(joined(inner.substr(0, arrow)), joined(inner.substr(arrow + 4)));
+    }
+  }
+  const size_t arrow = spec.find(" => ");
+  if (arrow == std::string::npos) return std::nullopt;
+  return std::make_pair(spec.substr(0, arrow), spec.substr(arrow + 4));
+}
+
+// The files `git apply` would change with the patch in `patchFile`, read
+// with git's own parser, so plain `---`/`+++` diffs count as much as git
+// ones. Throws GitError with git's message when git cannot read the patch.
+std::vector<PatchFile> inspectPatch(const core::Repo& repo, const std::string& patchFile,
+                                    const CancelToken& token) {
+  const std::string numstat =
+      runGitRawOrThrow(repo,
+                       {"-c", "core.quotePath=false", "apply", "--numstat", "-z", "--", patchFile},
+                       token, "git apply --numstat")
+          .stdoutText;
+  std::vector<PatchFile> files;
+  std::vector<std::string> fields;
+  for (size_t pos = 0; pos < numstat.size();) {
+    size_t end = numstat.find('\0', pos);
+    if (end == std::string::npos) end = numstat.size();
+    fields.push_back(numstat.substr(pos, end - pos));
+    pos = end + 1;
+  }
+  for (size_t i = 0; i < fields.size(); ++i) {
+    const std::string& record = fields[i];
+    const size_t tab1 = record.find('\t');
+    const size_t tab2 = tab1 == std::string::npos ? tab1 : record.find('\t', tab1 + 1);
+    if (tab2 == std::string::npos) continue;
+    PatchFile file;
+    const std::string added = record.substr(0, tab1);
+    const std::string deleted = record.substr(tab1 + 1, tab2 - tab1 - 1);
+    file.binary = added == "-" || deleted == "-";
+    if (!file.binary) {
+      file.additions = std::strtoll(added.c_str(), nullptr, 10);
+      file.deletions = std::strtoll(deleted.c_str(), nullptr, 10);
+    }
+    file.path = record.substr(tab2 + 1);
+    if (file.path.empty() && i + 2 < fields.size()) {
+      // "<add>\t<del>\t\0<old>\0<new>": a rename or copy.
+      file.origPath = fields[i + 1];
+      file.path = fields[i + 2];
+      i += 2;
+    }
+    files.push_back(std::move(file));
+  }
+
+  // --summary has the creations, deletions, renames, copies and mode
+  // changes, one per line: " create mode 100755 path", " delete path",
+  // " rename a => b (90%)".
+  const std::string summary =
+      runGitRawOrThrow(repo, {"-c", "core.quotePath=false", "apply", "--summary", "--", patchFile},
+                       token, "git apply --summary")
+          .stdoutText;
+  const auto fileAt = [&files](const std::string& path) -> PatchFile* {
+    for (auto& file : files) {
+      if (file.path == path) return &file;
+    }
+    return nullptr;
+  };
+  const auto stripScore = [](std::string text) {
+    const size_t paren = text.rfind(" (");
+    if (paren != std::string::npos && !text.empty() && text.back() == ')') text.resize(paren);
+    return text;
+  };
+  size_t pos = 0;
+  while (pos < summary.size()) {
+    size_t end = summary.find('\n', pos);
+    if (end == std::string::npos) end = summary.size();
+    const std::string line = summary.substr(pos, end - pos);
+    pos = end + 1;
+    const auto rest = [&line](const char* prefix) -> std::optional<std::string> {
+      const std::string lead = std::string(" ") + prefix;
+      if (line.rfind(lead, 0) != 0) return std::nullopt;
+      return line.substr(lead.size());
+    };
+    // A git diff names the mode ("create mode 100644 path"); a plain diff
+    // has none ("create path").
+    const auto withoutMode = [](const std::string& text, std::string* mode) {
+      if (text.rfind("mode ", 0) != 0) return text;
+      const size_t space = text.find(' ', 5);
+      if (space == std::string::npos) return text;
+      if (mode) *mode = text.substr(5, space - 5);
+      return text.substr(space + 1);
+    };
+    if (auto created = rest("create ")) {
+      std::string mode;
+      if (PatchFile* file = fileAt(withoutMode(*created, &mode))) {
+        file->status = 'A';
+        file->executable = mode == "100755";
+      }
+    } else if (auto removed = rest("delete ")) {
+      if (PatchFile* file = fileAt(withoutMode(*removed, nullptr))) file->status = 'D';
+    } else if (auto modes = rest("mode change ")) {
+      // "<old> => <new> <path>"
+      const size_t arrow = modes->find(" => ");
+      const size_t space = arrow == std::string::npos ? arrow : modes->find(' ', arrow + 4);
+      if (space == std::string::npos) continue;
+      if (PatchFile* file = fileAt(modes->substr(space + 1))) {
+        file->executable = modes->substr(arrow + 4, space - arrow - 4) == "100755";
+      }
+    } else if (auto renamed = rest("rename ")) {
+      if (const auto names = splitRename(stripScore(*renamed))) {
+        if (PatchFile* file = fileAt(names->second)) {
+          file->status = 'R';
+          file->origPath = names->first;
+        }
+      }
+    } else if (auto copied = rest("copy ")) {
+      if (const auto names = splitRename(stripScore(*copied))) {
+        if (PatchFile* file = fileAt(names->second)) {
+          file->status = 'C';
+          file->origPath = names->first;
+        }
+      }
+    }
+  }
+  return files;
+}
+
+rpc::Json patchFilesJson(const std::vector<PatchFile>& files) {
+  rpc::Json list = rpc::Json::array();
+  for (const auto& file : files) {
+    rpc::Json entry = {{"path", file.path},
+                       {"status", std::string(1, file.status)},
+                       {"additions", file.additions},
+                       {"deletions", file.deletions},
+                       {"binary", file.binary}};
+    if (!file.origPath.empty()) entry["origPath"] = file.origPath;
+    if (file.executable) entry["executable"] = true;
+    list.push_back(std::move(entry));
+  }
+  return list;
+}
+
 }  // namespace
 
 void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
@@ -355,6 +524,12 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         }
 
         const util::TempFile file = makeTempPatchFile(patch);
+        if (params.value("dryRun", false)) {
+          return {{"applied", false},
+                  {"conflicts", false},
+                  {"baseFound", baseFound},
+                  {"files", patchFilesJson(inspectPatch(repo, file.path(), token))}};
+        }
         auto output = runGit(repo, {"apply", "--3way", file.path()}, token);
         if (!output) throw rpc::HandlerError{{output.error()}};
         if (output.value().exitCode == 0) {

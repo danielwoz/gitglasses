@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { PatchEnvelope } from '@gitglasses/protocol';
+import type { PatchEnvelope, PatchFileChange } from '@gitglasses/protocol';
 import {
+  CONFIRM_MAX_LISTED_FILES,
   classifySnippetUrl,
   confirmDetail,
+  confirmMessage,
   envelopeToJson,
-  extractDiffStat,
   parseEnvelope,
   patchFileName,
+  sensitivePathReason,
   snippetProviderHost,
 } from '../src/patches/patchLogic';
 
@@ -83,76 +85,6 @@ describe('envelopeToJson', () => {
   });
 });
 
-describe('extractDiffStat', () => {
-  it('counts additions and deletions per file across multiple files', () => {
-    const patch = [
-      'diff --git a/src/a.ts b/src/a.ts',
-      'index 111..222 100644',
-      '--- a/src/a.ts',
-      '+++ b/src/a.ts',
-      '@@ -1,3 +1,4 @@',
-      ' keep',
-      '-removed',
-      '+added one',
-      '+added two',
-      'diff --git a/src/b.ts b/src/b.ts',
-      '--- a/src/b.ts',
-      '+++ b/src/b.ts',
-      '@@ -5 +5 @@',
-      '-x',
-      '+y',
-      '',
-    ].join('\n');
-    expect(extractDiffStat(patch)).toEqual([
-      { path: 'src/a.ts', additions: 2, deletions: 1, binary: false },
-      { path: 'src/b.ts', additions: 1, deletions: 1, binary: false },
-    ]);
-  });
-
-  it('tracks renames via rename from/to headers', () => {
-    const patch = [
-      'diff --git a/old/name.ts b/new/name.ts',
-      'similarity index 96%',
-      'rename from old/name.ts',
-      'rename to new/name.ts',
-      '--- a/old/name.ts',
-      '+++ b/new/name.ts',
-      '@@ -1 +1 @@',
-      '-a',
-      '+b',
-    ].join('\n');
-    expect(extractDiffStat(patch)).toEqual([
-      { path: 'new/name.ts', additions: 1, deletions: 1, binary: false, renamedFrom: 'old/name.ts' },
-    ]);
-  });
-
-  it('flags binary files without counting lines', () => {
-    const patch = [
-      'diff --git a/logo.png b/logo.png',
-      'index 111..222 100644',
-      'Binary files a/logo.png and b/logo.png differ',
-    ].join('\n');
-    expect(extractDiffStat(patch)).toEqual([
-      { path: 'logo.png', additions: 0, deletions: 0, binary: true },
-    ]);
-  });
-
-  it('keeps the pre-image path for deletions (+++ /dev/null)', () => {
-    const patch = [
-      'diff --git a/gone.ts b/gone.ts',
-      'deleted file mode 100644',
-      '--- a/gone.ts',
-      '+++ /dev/null',
-      '@@ -1,2 +0,0 @@',
-      '-line one',
-      '-line two',
-    ].join('\n');
-    expect(extractDiffStat(patch)).toEqual([
-      { path: 'gone.ts', additions: 0, deletions: 2, binary: false },
-    ]);
-  });
-});
-
 describe('classifySnippetUrl', () => {
   it('classifies gist URLs by their gist. host prefix', () => {
     expect(classifySnippetUrl('https://gist.github.com/octocat/aa5a315d61ae9438b18d')).toEqual({
@@ -187,24 +119,91 @@ describe('classifySnippetUrl', () => {
   });
 });
 
+function file(overrides: Partial<PatchFileChange> & { path: string }): PatchFileChange {
+  return { status: 'M', additions: 0, deletions: 0, binary: false, ...overrides };
+}
+
 describe('confirmDetail', () => {
-  it('summarizes the envelope with base sha7, date, and diffstat totals', () => {
+  it('summarizes the envelope with base sha7, date, and the totals of the listed files', () => {
     const env = envelope({ branch: 'feat/x' });
-    const detail = confirmDetail(env, extractDiffStat(env.patch));
+    const detail = confirmDetail(env, [file({ path: 'x', additions: 1, deletions: 1 })]);
     expect(detail).toContain('Fix the widget');
     expect(detail).toContain(`Base: ${baseSha.slice(0, 7)} (branch feat/x)`);
     expect(detail).toContain('Created: 2026-07-22T10:00:00Z');
     expect(detail).toContain('1 file changed, +1 −1');
+    expect(detail).toContain('• x  +1 −1');
   });
 
   it('handles missing summary and pluralizes files', () => {
     const detail = confirmDetail(envelope({ summary: '', createdAtIso: '' }), [
-      { path: 'a', additions: 2, deletions: 0, binary: false },
-      { path: 'b', additions: 1, deletions: 3, binary: false },
+      file({ path: 'a', additions: 2 }),
+      file({ path: 'b', additions: 1, deletions: 3 }),
     ]);
     expect(detail).toContain('(no summary)');
     expect(detail).toContain('2 files changed, +3 −3');
     expect(detail).not.toContain('Created:');
+  });
+
+  it('names every file with what happens to it', () => {
+    const detail = confirmDetail(envelope(), [
+      file({ path: 'docs/new.md', status: 'R', origPath: 'old.md' }),
+      file({ path: 'gone.txt', status: 'D', deletions: 2 }),
+      file({ path: 'fresh.txt', status: 'A', additions: 4 }),
+      file({ path: 'logo.png', binary: true }),
+    ]);
+    expect(detail).toContain('• docs/new.md (renamed from old.md)  +0 −0');
+    expect(detail).toContain('• gone.txt (deleted)  +0 −2');
+    expect(detail).toContain('• fresh.txt (new)  +4 −0');
+    expect(detail).toContain('• logo.png (binary)');
+  });
+
+  it('marks files that can run code and lists them first, past the cap', () => {
+    const many = Array.from({ length: CONFIRM_MAX_LISTED_FILES + 5 }, (_, i) =>
+      file({ path: `src/file${i}.ts`, additions: 1 }),
+    );
+    const detail = confirmDetail(envelope(), [
+      ...many,
+      file({ path: '.vscode/settings.json', status: 'A', additions: 3 }),
+    ]);
+    const lines = detail.split('\n');
+    const firstFile = lines.findIndex((line) => line.startsWith('⚠') || line.startsWith('•'));
+    expect(lines[firstFile]).toBe(
+      '⚠ .vscode/settings.json (new)  +3 −0 — editor settings and tasks',
+    );
+    expect(detail).toContain('…and 6 more files');
+    expect(detail).toContain(`${CONFIRM_MAX_LISTED_FILES + 6} files changed`);
+  });
+});
+
+describe('sensitivePathReason', () => {
+  it('flags editor, CI, git, build and script files', () => {
+    expect(sensitivePathReason('.vscode/tasks.json')).toBe('editor settings and tasks');
+    expect(sensitivePathReason('.github/workflows/ci.yml')).toBe('CI configuration');
+    expect(sensitivePathReason('.gitlab-ci.yml')).toBe('CI configuration');
+    expect(sensitivePathReason('.gitattributes')).toContain('git attributes');
+    expect(sensitivePathReason('sub/.gitattributes')).toContain('git attributes');
+    expect(sensitivePathReason('.gitmodules')).toBe('submodules');
+    expect(sensitivePathReason('packages/app/package.json')).toBe('package scripts');
+    expect(sensitivePathReason('Makefile')).toBe('build script');
+    expect(sensitivePathReason('tools/setup.sh')).toBe('script');
+    expect(sensitivePathReason('.envrc')).toBe('configuration file');
+    expect(sensitivePathReason('bin/tool', true)).toBe('made executable');
+  });
+
+  it('leaves ordinary files alone', () => {
+    expect(sensitivePathReason('src/index.ts')).toBeUndefined();
+    expect(sensitivePathReason('README.md')).toBeUndefined();
+    expect(sensitivePathReason('.gitignore')).toBeUndefined();
+    expect(sensitivePathReason('docs/.prettierrc')).toBeUndefined();
+  });
+});
+
+describe('confirmMessage', () => {
+  it('asks plainly when nothing is flagged and warns otherwise', () => {
+    expect(confirmMessage([file({ path: 'a.txt' })])).toBe('Apply this patch to the repository?');
+    expect(
+      confirmMessage([file({ path: '.github/workflows/x.yml' }), file({ path: 'package.json' })]),
+    ).toContain('changes 2 files that can run code');
   });
 });
 
