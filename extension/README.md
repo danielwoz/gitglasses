@@ -56,7 +56,8 @@ Branches, merges, tags, stashes and uncommitted changes in one scrollable
 graph that loads more as you scroll. Open a commit to
 read its full message and the files it changed, and merge, rebase,
 cherry-pick, reset or revert from a commit's context menu, each behind a
-confirmation.
+confirmation. The graph button in the Source Control title bar opens it on
+that repository.
 
 *Limits:* changing the repository needs a trusted workspace and git; on the
 web the graph is read-only.
@@ -205,6 +206,12 @@ GitGlasses is an independent project; it is not affiliated with either.
   editor tab, with branches, tags, stashes and uncommitted changes, and commit
   actions in the context menu. Blame, history, search and rebase come in the
   same extension. Both extensions can stay installed side by side.
+  **GitGlasses: Coming from Git Graph?** carries your `git-graph.*` settings
+  over where GitGlasses has an equivalent and lists what it mapped.
+- **Keyboard shortcuts** are off by default, so none of the editor's own are
+  taken over. Turn on `gitglasses.keyboardShortcuts.enabled` for
+  `Ctrl+Alt+G` (`Cmd+Alt+G` on macOS) followed by a letter, such as `G` for
+  the Commit Graph.
 - **From GitLens:** inline blame, file annotations, the Commit Graph, file
   and line history, commit search, worktrees, Launchpad, Start Work,
   interactive rebase and AI commit messages all have a GitGlasses
