@@ -88,11 +88,45 @@ export async function confirmDestructive(confirmation: Confirmation): Promise<bo
   return choice === 'Proceed';
 }
 
-/** Warning shown when a mutation reports {conflicts: true}. */
+// Commands behind the conflict and failure notifications' buttons
+// (registered with the sync commands; absent where git cannot run).
+export const CONTINUE_OPERATION_COMMAND = 'gitglasses.continueOperation';
+export const ABORT_OPERATION_COMMAND = 'gitglasses.abortOperation';
+export const SKIP_OPERATION_COMMAND = '_gitglasses.skipOperation';
+export const OPEN_CONFLICTS_COMMAND = '_gitglasses.openConflicts';
+
+// Reports whose operation stays in progress until continued or aborted;
+// stash apply and patch apply leave nothing to continue.
+const CONTINUABLE = new Set(['Merge', 'Rebase', 'Cherry-pick', 'Revert', 'Pull']);
+
+/** Warning shown when a mutation reports {conflicts: true}, with buttons to
+ *  open the conflicted files and to continue or abort the operation. */
 export function showConflictGuidance(operation: string): void {
-  void vscode.window.showWarningMessage(
-    `${operation} stopped on conflicts. Resolve the conflicted files, stage them in Source Control, then continue or abort the operation.`,
-  );
+  const open = 'Open Conflicts';
+  const resume = 'Continue';
+  const abort = 'Abort';
+  const continuable = CONTINUABLE.has(operation);
+  const buttons = continuable ? [open, resume, abort] : [open];
+  void vscode.window
+    .showWarningMessage(
+      continuable
+        ? `${operation} stopped on conflicts. Resolve the conflicted files and stage them, then continue, or abort to go back.`
+        : `${operation} stopped on conflicts. Resolve the conflicted files and stage them in Source Control.`,
+      ...buttons,
+    )
+    .then((choice) => {
+      const command =
+        choice === open
+          ? OPEN_CONFLICTS_COMMAND
+          : choice === resume
+            ? CONTINUE_OPERATION_COMMAND
+            : choice === abort
+              ? ABORT_OPERATION_COMMAND
+              : undefined;
+      if (command) {
+        void vscode.commands.executeCommand(command).then(undefined, () => undefined);
+      }
+    });
 }
 
 export function setStatus(message: string): void {

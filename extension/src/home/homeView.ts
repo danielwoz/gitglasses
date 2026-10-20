@@ -12,6 +12,7 @@ import { relativeTime } from '../system/dates';
 import { BranchStatus, branchCardDescription, glimpsePrs, showGetStarted } from './homeLogic';
 import { conflictLabel } from '../model/conflictLogic';
 import { allowedDespiteConflicts } from '../commands/conflictGuard';
+import * as sync from '../sync/syncCommands';
 
 const REFRESH_DEBOUNCE_MS = 300;
 const RECENT_COMMITS = 5;
@@ -222,22 +223,10 @@ export function registerHomeCommands(
 
   return [
     vscode.commands.registerCommand('gitglasses.home.push', () =>
-      onRepo('push', async (repo) => {
-        const status = await engine.request('status/summary', { repoId: repo.repoId });
-        const setUpstream = !status.upstream;
-        await engine.request('mutate/push', { repoId: repo.repoId, setUpstream });
-        setStatus(`Pushed '${status.branch}'${setUpstream ? ' (set upstream)' : ''}`);
-      }),
+      onRepo('push', (repo) => sync.push(engine, repo)),
     ),
     vscode.commands.registerCommand('gitglasses.home.pull', () =>
-      onRepo(
-        'pull',
-        async (repo) => {
-          await engine.request('mutate/pull', { repoId: repo.repoId, autoStash: true });
-          setStatus('Pulled (auto-stash)');
-        },
-        { guardConflicts: true },
-      ),
+      onRepo('pull', (repo) => sync.pull(engine, repo), { guardConflicts: true }),
     ),
     vscode.commands.registerCommand('gitglasses.home.switchBranch', () =>
       onRepo(

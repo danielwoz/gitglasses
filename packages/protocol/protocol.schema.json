@@ -14,6 +14,15 @@
           "protocolVersion": {
             "minLength": 1,
             "type": "string"
+          },
+          "clientCapabilities": {
+            "additionalProperties": true,
+            "type": "object",
+            "properties": {
+              "askpass": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -2473,7 +2482,7 @@
       }
     },
     "mutate/pull": {
-      "description": "Pulls into the current branch using git's configured strategy.",
+      "description": "Pulls into the current branch. Without `strategy` git's configured one applies; when the branches diverged and nothing is configured the error carries data.kind 'divergent'. Conflicts are a result, not an error.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2486,17 +2495,43 @@
           },
           "autoStash": {
             "type": "boolean"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "const": "merge",
+                "type": "string"
+              },
+              {
+                "const": "rebase",
+                "type": "string"
+              },
+              {
+                "const": "ff-only",
+                "type": "string"
+              }
+            ]
+          },
+          "remember": {
+            "type": "boolean"
           }
         }
       },
       "result": {
         "additionalProperties": false,
         "type": "object",
-        "properties": {}
+        "required": [
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "mutate/push": {
-      "description": "Pushes the current branch.",
+      "description": "Pushes the current branch. With `setUpstream` it publishes the branch and sets its upstream: to `remote` when given, otherwise to the remote git's config names for it (branch.<name>.pushRemote, remote.pushDefault, branch.<name>.remote) or the repository's only remote. With several remotes and none of those set, the error carries data.kind 'noRemote' and the remotes to choose from.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2510,6 +2545,12 @@
           "setUpstream": {
             "type": "boolean"
           },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to publish to; only read with `setUpstream`.",
+            "type": "string"
+          },
           "force": {
             "const": "with-lease",
             "type": "string"
@@ -2519,7 +2560,85 @@
       "result": {
         "additionalProperties": false,
         "type": "object",
-        "properties": {}
+        "properties": {
+          "remote": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mutate/sequencer": {
+      "description": "Continues, skips or aborts the merge, rebase, cherry-pick or revert the repository is stopped in the middle of. Continuing while files are still conflicted changes nothing and reports conflicts.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "action"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "const": "continue",
+                "type": "string"
+              },
+              {
+                "const": "skip",
+                "type": "string"
+              },
+              {
+                "const": "abort",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operation",
+          "completed",
+          "conflicts"
+        ],
+        "properties": {
+          "operation": {
+            "description": "Multi-step operation the repository is stopped in the middle of, read from the sequencer state in the gitdir.",
+            "anyOf": [
+              {
+                "const": "none",
+                "type": "string"
+              },
+              {
+                "const": "rebase",
+                "type": "string"
+              },
+              {
+                "const": "merge",
+                "type": "string"
+              },
+              {
+                "const": "cherry-pick",
+                "type": "string"
+              },
+              {
+                "const": "revert",
+                "type": "string"
+              }
+            ]
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "stash/push": {
@@ -3493,6 +3612,238 @@
             }
           }
         }
+      }
+    },
+    "ui/askpassCancelled": {
+      "direction": "engine",
+      "description": "Withdraws a ui/askpass request: git stopped waiting for the answer (it exited, timed out, or its request was cancelled). The client closes the prompt; an answer sent afterwards is ignored.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "engineRequests": {
+    "ui/askpass": {
+      "description": "Asks the user for what git, ssh or gpg prompted for while running a request: a credential, a key passphrase or a host-key confirmation. Sent only to clients that declared clientCapabilities.askpass. The value never reaches a log. A ui/askpassCancelled notification withdraws the request when git stops waiting (it exited, timed out or was cancelled); the client then closes its prompt and its answer is ignored.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "prompt",
+          "secret",
+          "interactive"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "integer"
+          },
+          "method": {
+            "type": "string"
+          },
+          "repoId": {
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "const": "username",
+                "type": "string"
+              },
+              {
+                "const": "password",
+                "type": "string"
+              },
+              {
+                "const": "passphrase",
+                "type": "string"
+              },
+              {
+                "const": "hostKey",
+                "type": "string"
+              },
+              {
+                "const": "confirm",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "interactive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "cancelled"
+            ],
+            "properties": {
+              "cancelled": {
+                "const": true,
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "errorData": {
+    "additionalProperties": false,
+    "description": "error.data of a GitError (-32001), present when the engine could tell what the failure was about.",
+    "type": "object",
+    "required": [
+      "kind"
+    ],
+    "properties": {
+      "kind": {
+        "description": "What a git failure was about, read from git's output.",
+        "anyOf": [
+          {
+            "const": "auth",
+            "type": "string"
+          },
+          {
+            "const": "hostKey",
+            "type": "string"
+          },
+          {
+            "const": "publickey",
+            "type": "string"
+          },
+          {
+            "const": "signing",
+            "type": "string"
+          },
+          {
+            "const": "rejected",
+            "type": "string"
+          },
+          {
+            "const": "divergent",
+            "type": "string"
+          },
+          {
+            "const": "noRemote",
+            "type": "string"
+          },
+          {
+            "const": "noUpstream",
+            "type": "string"
+          },
+          {
+            "const": "emptyCommit",
+            "type": "string"
+          },
+          {
+            "const": "stopped",
+            "type": "string"
+          },
+          {
+            "const": "network",
+            "type": "string"
+          },
+          {
+            "const": "timeout",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "type": "string"
+          }
+        ]
+      },
+      "operation": {
+        "description": "Multi-step operation the repository is stopped in the middle of, read from the sequencer state in the gitdir.",
+        "anyOf": [
+          {
+            "const": "none",
+            "type": "string"
+          },
+          {
+            "const": "rebase",
+            "type": "string"
+          },
+          {
+            "const": "merge",
+            "type": "string"
+          },
+          {
+            "const": "cherry-pick",
+            "type": "string"
+          },
+          {
+            "const": "revert",
+            "type": "string"
+          }
+        ]
+      },
+      "remote": {
+        "type": "string"
+      },
+      "remotes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "host": {
+        "type": "string"
+      },
+      "partialClone": {
+        "type": "boolean"
+      },
+      "sshProgram": {
+        "const": "plink",
+        "type": "string"
       }
     }
   },

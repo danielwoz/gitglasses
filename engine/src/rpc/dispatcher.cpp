@@ -2,6 +2,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include "util/request_context.h"
+
 namespace gg::rpc {
 
 std::string dumpForWire(const Json& message) {
@@ -65,6 +67,28 @@ void Dispatcher::notification(const std::string& name, NotificationHandler handl
   notifications_[name] = {std::move(handler), mode};
 }
 
+void Dispatcher::setErrorData(ErrorDataFn errorData) { errorData_ = std::move(errorData); }
+
+void Dispatcher::onResponse(ResponseHandler handler) { responseHandler_ = std::move(handler); }
+
+void Dispatcher::cancelAll() {
+  std::lock_guard lock(inflightMutex_);
+  for (auto& [id, source] : inflight_) source.cancel();
+}
+
+bool Dispatcher::waitIdle(std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  std::unique_lock lock(inflightMutex_);
+  // Deferred parses register their request only once parsed, so the parse
+  // budget in use counts as work outstanding too. Its counter is not guarded
+  // by this mutex, hence the bounded waits.
+  for (;;) {
+    if (inflight_.empty() && deferredBytes_.load(std::memory_order_relaxed) == 0) return true;
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    idle_.wait_for(lock, std::chrono::milliseconds(20));
+  }
+}
+
 std::vector<std::string> Dispatcher::methodNames() const {
   std::vector<std::string> names;
   names.reserve(methods_.size());
@@ -125,6 +149,17 @@ void Dispatcher::route(const std::string& payload) {
 
   const auto methodIt = message.find("method");
   if (methodIt == message.end() || !methodIt->is_string()) {
+    // An answer to a request this process sent: it has an id and a result or
+    // an error, and no method.
+    if (methodIt == message.end() && message.contains("id") &&
+        (message.contains("result") || message.contains("error"))) {
+      if (responseHandler_) {
+        responseHandler_(message);
+      } else {
+        spdlog::debug("ignoring a response to no outstanding request");
+      }
+      return;
+    }
     sendError(message.value("id", Json()), {ErrorCode::InvalidRequest, "missing method"});
     return;
   }
@@ -181,7 +216,12 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
 
   const MethodEntry& entry = it->second;
   Strand* strand = entry.mode == Mode::Concurrent ? nullptr : &strandFor(entry.mode, params);
-  auto task = [this, id, numericId, handler = entry.handler, params = std::move(params)] {
+  RequestContext context{numericId, methodName, ""};
+  if (const auto repoIt = params.find("repoId"); repoIt != params.end() && repoIt->is_string()) {
+    context.repoId = repoIt->get<std::string>();
+  }
+  auto task = [this, id, numericId, handler = entry.handler, params = std::move(params),
+               context = std::move(context)] {
     CancelToken token;
     {
       std::lock_guard lock(inflightMutex_);
@@ -198,13 +238,16 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
     };
 
     try {
+      const ScopedRequestContext scope(context);
       Json result = handler(params, token, notify);
       token.throwIfCancelled();
       sendResult(id, result);
     } catch (const CancelledError&) {
       sendError(id, {ErrorCode::Cancelled, "request cancelled"});
     } catch (const HandlerError& e) {
-      sendError(id, e.error);
+      Json data = e.data;
+      if (data.is_null() && errorData_) data = errorData_(e.error);
+      sendError(id, e.error, data);
     } catch (const Json::type_error& e) {
       // nlohmann's value()/get<>() throw this on a param of the wrong JSON
       // type, which is the caller's mistake, so it maps to InvalidParams.
@@ -218,6 +261,7 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
 
     std::lock_guard lock(inflightMutex_);
     inflight_.erase(numericId);
+    if (inflight_.empty()) idle_.notify_all();
   };
 
   if (strand) {
@@ -246,10 +290,10 @@ void Dispatcher::sendResult(const Json& id, const Json& result) {
   send_({{"jsonrpc", "2.0"}, {"id", id}, {"result", result}});
 }
 
-void Dispatcher::sendError(const Json& id, const Error& error) {
-  send_({{"jsonrpc", "2.0"},
-         {"id", id},
-         {"error", {{"code", static_cast<int>(error.code)}, {"message", error.message}}}});
+void Dispatcher::sendError(const Json& id, const Error& error, const Json& data) {
+  Json body = {{"code", static_cast<int>(error.code)}, {"message", error.message}};
+  if (!data.is_null()) body["data"] = data;
+  send_({{"jsonrpc", "2.0"}, {"id", id}, {"error", std::move(body)}});
 }
 
 size_t Dispatcher::inflight() const {

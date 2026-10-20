@@ -89,7 +89,10 @@ const core::Repo& requireWorktree(const core::Repo& repo) {
 
 // Shared result mapping for rebase runs: exit 0 with no rebase state left is
 // completion (an 'edit' stop also exits 0 but leaves state); a nonzero exit
-// with rebase state on disk means git stopped on conflicts.
+// that leaves unmerged entries in the index means git stopped on conflicts.
+// Any other stop (a signing failure, a hook) is an error carrying git's
+// message, with error.data.operation 'rebase' when the rebase is still in
+// progress.
 rpc::Json rebaseRunResult(const core::Repo& repo, const Result<GitOutput>& output,
                           const std::string& what) {
   if (!output) throw rpc::HandlerError{{output.error()}};
@@ -97,10 +100,10 @@ rpc::Json rebaseRunResult(const core::Repo& repo, const Result<GitOutput>& outpu
   if (output.value().exitCode == 0) {
     return {{"completed", !inProgress}, {"conflicts", false}};
   }
-  if (inProgress) return {{"completed", false}, {"conflicts", true}};
-  throw rpc::HandlerError{{ErrorCode::GitError,
-                           what + " failed (" + std::to_string(output.value().exitCode) +
-                               "): " + output.value().stderrText}};
+  if (inProgress && mutate_detail::sequencerState(repo).conflicted) {
+    return {{"completed", false}, {"conflicts", true}};
+  }
+  mutate_detail::throwGitFailure(what, output.value(), inProgress ? "rebase" : "none");
 }
 
 }  // namespace

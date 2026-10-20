@@ -2,11 +2,11 @@
 // extension host exercises, minus VS Code.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EngineClient, EngineError } from '@gitglasses/rpc';
+import { EngineClient, EngineError, EngineRestartedError } from '@gitglasses/rpc';
 import { createProcessTransportFactory } from '@gitglasses/rpc/node';
 import { BlameModel } from '../src/model/blameModel';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
@@ -151,4 +151,71 @@ describe.skipIf(!enginePath)('EngineClient', () => {
     expect(state.head.branch).toBe('main');
     void info;
   });
+
+  // A remote whose upload-pack never answers: the fetch hangs until the git
+  // running it is stopped. Returns the pid of the hanging process.
+  async function startHungFetch(): Promise<{ fetching: Promise<unknown>; pid: number }> {
+    const remote = mkdtempSync(path.join(tmpdir(), 'gg-ts-remote-'));
+    remotes.push(remote);
+    execFileSync('git', ['clone', '-q', '--bare', fixture, path.join(remote, 'up.git')]);
+    const pidFile = path.join(remote, 'pid');
+    const uploadPack = path.join(remote, 'hang.sh');
+    writeFileSync(uploadPack, `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 60\n`);
+    chmodSync(uploadPack, 0o755);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: fixture });
+    git('remote', 'add', 'origin', path.join(remote, 'up.git'));
+    git('config', 'remote.origin.uploadpack', uploadPack);
+
+    const { repoId } = await client.request('repo/discover', { path: fixture });
+    const fetching = client.request('mutate/fetch', { repoId }).catch((error: unknown) => error);
+    const giveUp = Date.now() + 10_000;
+    while (!existsSync(pidFile) || readFileSync(pidFile, 'utf8').trim() === '') {
+      if (Date.now() > giveUp) throw new Error('the fetch never reached the remote');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return { fetching, pid: Number(readFileSync(pidFile, 'utf8').trim()) };
+  }
+
+  async function exitsWithin(pid: number, ms: number): Promise<boolean> {
+    const giveUp = Date.now() + ms;
+    for (;;) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return true;
+      }
+      if (Date.now() > giveUp) {
+        process.kill(pid, 'SIGKILL');
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  const remotes: string[] = [];
+  afterEach(() => {
+    for (const remote of remotes.splice(0)) rmSync(remote, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'restarting stops the git a request was running',
+    async () => {
+      const { fetching, pid } = await startHungFetch();
+      await client.restart();
+      expect(await fetching).toBeInstanceOf(EngineRestartedError);
+      expect(await exitsWithin(pid, 1500)).toBe(true);
+    },
+    15_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'disposing stops the git a request was running',
+    async () => {
+      const { fetching, pid } = await startHungFetch();
+      client.dispose();
+      expect(await fetching).toBeInstanceOf(EngineRestartedError);
+      expect(await exitsWithin(pid, 1500)).toBe(true);
+    },
+    15_000,
+  );
 });

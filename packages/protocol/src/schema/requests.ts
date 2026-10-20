@@ -16,6 +16,7 @@ import {
   PatchEnvelope,
   RebaseEntry,
   RepoInfo,
+  SequencerOperation,
   SequencerState,
   Sha,
   strict,
@@ -119,7 +120,23 @@ export const RequestSchemas = {
   initialize: {
     description:
       'Handshake. The engine rejects a protocolVersion it does not implement, so this must be the first request of a session.',
-    params: Type.Object({ protocolVersion: Type.String({ minLength: 1 }) }, strict),
+    params: Type.Object(
+      {
+        protocolVersion: Type.String({ minLength: 1 }),
+        clientCapabilities: Type.Optional(
+          Type.Object(
+            {
+              /** The client answers ui/askpass requests. Without it the engine
+               * gives git no credential prompt, and anything git would ask
+               * for fails as it does without a terminal. */
+              askpass: Type.Optional(Type.Boolean()),
+            },
+            { additionalProperties: true },
+          ),
+        ),
+      },
+      strict,
+    ),
     result: Type.Object(
       {
         engineVersion: Type.String(),
@@ -699,25 +716,71 @@ export const RequestSchemas = {
     result: EmptyObject,
   },
   'mutate/pull': {
-    description: "Pulls into the current branch using git's configured strategy.",
+    description:
+      "Pulls into the current branch. Without `strategy` git's configured one applies; when the branches diverged and nothing is configured the error carries data.kind 'divergent'. Conflicts are a result, not an error.",
     params: Type.Object(
-      { repoId: Type.String(), autoStash: Type.Optional(Type.Boolean()) },
+      {
+        repoId: Type.String(),
+        autoStash: Type.Optional(Type.Boolean()),
+        /** How to reconcile a branch that diverged from its upstream: merge
+         * (fast-forwarding when possible), rebase, or fast-forward only. */
+        strategy: Type.Optional(
+          Type.Union([Type.Literal('merge'), Type.Literal('rebase'), Type.Literal('ff-only')]),
+        ),
+        /** Also records `strategy` in the repository's config (pull.rebase,
+         * or pull.ff for ff-only), so later pulls use it without asking. */
+        remember: Type.Optional(Type.Boolean()),
+      },
       strict,
     ),
-    result: EmptyObject,
+    result: Type.Object({ conflicts: Type.Boolean() }, strict),
   },
   'mutate/push': {
-    description: 'Pushes the current branch.',
+    description:
+      "Pushes the current branch. With `setUpstream` it publishes the branch and sets its upstream: to `remote` when given, otherwise to the remote git's config names for it (branch.<name>.pushRemote, remote.pushDefault, branch.<name>.remote) or the repository's only remote. With several remotes and none of those set, the error carries data.kind 'noRemote' and the remotes to choose from.",
     params: Type.Object(
       {
         repoId: Type.String(),
         setUpstream: Type.Optional(Type.Boolean()),
+        remote: optionalPositional('Remote to publish to; only read with `setUpstream`.'),
         /** Only the lease-checked force is offered; a bare --force is not. */
         force: Type.Optional(Type.Literal('with-lease')),
       },
       strict,
     ),
-    result: EmptyObject,
+    result: Type.Object(
+      {
+        /** Remote the branch was published to; set with `setUpstream`. */
+        remote: Type.Optional(Type.String()),
+      },
+      strict,
+    ),
+  },
+  'mutate/sequencer': {
+    description:
+      'Continues, skips or aborts the merge, rebase, cherry-pick or revert the repository is stopped in the middle of. Continuing while files are still conflicted changes nothing and reports conflicts.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        action: Type.Union([
+          Type.Literal('continue'),
+          Type.Literal('skip'),
+          Type.Literal('abort'),
+        ]),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        /** The operation acted on. */
+        operation: SequencerOperation,
+        /** Nothing is left in progress. */
+        completed: Type.Boolean(),
+        /** The operation stopped again on conflicts. */
+        conflicts: Type.Boolean(),
+      },
+      strict,
+    ),
   },
   'stash/push': {
     description: 'Stashes the working tree.',

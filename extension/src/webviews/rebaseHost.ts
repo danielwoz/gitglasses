@@ -11,6 +11,7 @@ import { activeWorkspaceRepo } from '../views/viewBase';
 import { renderWebviewHtml } from './webviewHtml';
 import { confirmRebase } from '../commands/confirmations';
 import { confirmDestructive, errorMessage, setStatus } from '../commands/ui';
+import { reportIfStopped } from '../sync/syncCommands';
 
 type HostToWebviewMessage =
   | { type: 'init'; upstream: string; entries: { sha: string; summary: string }[] }
@@ -164,7 +165,9 @@ export class RebaseWebviewHost implements vscode.Disposable {
       });
       await this.settle(result);
     } catch (error) {
-      void vscode.window.showErrorMessage(`GitGlasses: rebase failed: ${errorMessage(error)}`);
+      if (!reportIfStopped(error)) {
+        void vscode.window.showErrorMessage(`GitGlasses: rebase failed: ${errorMessage(error)}`);
+      }
     } finally {
       this.running = false;
       await this.post({ type: 'busy', busy: false });

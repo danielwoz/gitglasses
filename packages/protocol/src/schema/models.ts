@@ -350,3 +350,76 @@ export const PatchEnvelope = Type.Object(
   },
   strict,
 );
+
+/** What a git failure was about, as far as git's own output tells. Carried in
+ *  a GitError's `error.data.kind`, so a client can offer the next step
+ *  instead of showing git's text alone. */
+export const GitErrorKind = Type.Union(
+  [
+    /** The remote wanted credentials that were missing, refused or not given. */
+    Type.Literal('auth'),
+    /** An ssh host key is unknown, or differs from the one on record. */
+    Type.Literal('hostKey'),
+    /** The ssh server accepted none of the keys offered. */
+    Type.Literal('publickey'),
+    /** A commit could not be signed (gpg or ssh signing). */
+    Type.Literal('signing'),
+    /** The remote refused the push: the branch moved on there. */
+    Type.Literal('rejected'),
+    /** Local and remote branches diverged and git needs a merge or rebase choice. */
+    Type.Literal('divergent'),
+    /** No remote to publish to, or several and none chosen; see `remotes`. */
+    Type.Literal('noRemote'),
+    /** The branch tracks no upstream to pull from. */
+    Type.Literal('noUpstream'),
+    /** A cherry-pick or revert stopped because the commit became empty. */
+    Type.Literal('emptyCommit'),
+    /** A multi-step operation stopped without conflicts (a hook, a signing
+     *  failure, an edit step); `operation` names it. */
+    Type.Literal('stopped'),
+    /** The remote could not be reached. */
+    Type.Literal('network'),
+    /** git ran past its time limit and was stopped. */
+    Type.Literal('timeout'),
+    /** A credential or confirmation prompt was dismissed. */
+    Type.Literal('cancelled'),
+  ],
+  { description: "What a git failure was about, read from git's output." },
+);
+
+export const GitErrorData = Type.Object(
+  {
+    kind: GitErrorKind,
+    /** Multi-step operation the failure left the repository in, if any. */
+    operation: Type.Optional(SequencerOperation),
+    /** Remote the command talked to, when known. */
+    remote: Type.Optional(Type.String()),
+    /** Configured remotes, for a `noRemote` failure to choose from. */
+    remotes: Type.Optional(Type.Array(Type.String())),
+    /** Host the command talked to, when git named it. */
+    host: Type.Optional(Type.String()),
+    /** The failure came from fetching objects a partial clone left out. */
+    partialClone: Type.Optional(Type.Boolean()),
+    /** git reaches ssh remotes through PuTTY's plink, which cannot show
+     *  prompts through the client (it ignores SSH_ASKPASS). */
+    sshProgram: Type.Optional(Type.Literal('plink')),
+  },
+  {
+    ...strict,
+    description:
+      'error.data of a GitError (-32001), present when the engine could tell what the failure was about.',
+  },
+);
+
+/** What a credential prompt asks for. */
+export const AskpassKind = Type.Union([
+  Type.Literal('username'),
+  Type.Literal('password'),
+  /** A key's passphrase or a security key PIN: ssh, ssh signing or gpg. */
+  Type.Literal('passphrase'),
+  /** Whether to trust an ssh host key seen for the first time; answer yes or no. */
+  Type.Literal('hostKey'),
+  /** A yes/no confirmation ssh asks for (SSH_ASKPASS_PROMPT=confirm). */
+  Type.Literal('confirm'),
+  Type.Literal('other'),
+]);

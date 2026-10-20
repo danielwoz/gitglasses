@@ -5,12 +5,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EngineCapabilities, ErrorCodes, PROTOCOL_VERSION } from '@gitglasses/protocol';
 import {
+  CRASH_WINDOW_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   EngineClient,
   EngineClientOptions,
   EngineError,
   EngineRestartedError,
   LONG_REQUEST_TIMEOUT_MS,
+  MAX_CRASHES_IN_WINDOW,
 } from '../src/engineClient.js';
 import { EngineTransport } from '../src/transport.js';
 
@@ -19,7 +21,13 @@ const CAPS_FULL: EngineCapabilities = { gitCli: true, watch: true, threads: true
 type Responder = (msg: { id: number; method: string; params: unknown }) => void;
 
 class FakeTransport implements EngineTransport {
-  sent: { id?: number; method: string; params: unknown }[] = [];
+  sent: {
+    id?: number | string;
+    method: string;
+    params: unknown;
+    result?: unknown;
+    error?: { code: number; message: string };
+  }[] = [];
   killed = false;
   started = false;
   private messageHandler: ((payload: string) => void) | undefined;
@@ -56,7 +64,7 @@ class FakeTransport implements EngineTransport {
   send(payload: string): void {
     const msg = JSON.parse(payload) as { id?: number; method: string; params: unknown };
     this.sent.push(msg);
-    if (msg.id !== undefined) {
+    if (msg.id !== undefined && msg.method !== undefined) {
       this.responders.get(msg.method)?.(msg as { id: number; method: string; params: unknown });
     }
   }
@@ -69,8 +77,18 @@ class FakeTransport implements EngineTransport {
     this.deliver(JSON.stringify({ jsonrpc: '2.0', id, result }));
   }
 
-  respondError(id: number, code: number, message: string): void {
-    this.deliver(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }));
+  respondError(id: number, code: number, message: string, data?: unknown): void {
+    this.deliver(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message, data } }));
+  }
+
+  /** A request from the engine to the client. */
+  requestClient(id: string, method: string, params: unknown): void {
+    this.deliver(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+  }
+
+  /** The client's answer to the engine request `id`, once sent. */
+  answerTo(id: string) {
+    return this.sent.find((m) => m.id === id && m.method === undefined);
   }
 
   notifyClient(method: string, params: unknown): void {
@@ -448,5 +466,226 @@ describe('EngineClient over a fake transport', () => {
     });
     expect(transports).toHaveLength(2);
     client.dispose();
+  });
+});
+
+describe('EngineClient crash handling', () => {
+  it('stops respawning an engine that keeps crashing, and says so once', async () => {
+    const gaveUp: Error[] = [];
+    const { client, transports } = makeClient({ onGiveUp: (error) => gaveUp.push(error) });
+    await client.start();
+    // Each engine finishes its handshake and then dies, as one that crashes
+    // on the first real request does.
+    for (let crash = 0; crash <= MAX_CRASHES_IN_WINDOW; crash++) {
+      transports[transports.length - 1].crash(1);
+      await sleep(crash < MAX_CRASHES_IN_WINDOW ? 250 * 2 ** crash + 100 : 50);
+    }
+    expect(transports).toHaveLength(MAX_CRASHES_IN_WINDOW + 1);
+    expect(gaveUp).toHaveLength(1);
+    expect(client.hasGivenUp()).toBe(true);
+    await sleep(300);
+    expect(transports).toHaveLength(MAX_CRASHES_IN_WINDOW + 1);
+
+    // Restart Engine brings it back.
+    await client.restart();
+    expect(client.hasGivenUp()).toBe(false);
+    expect(transports).toHaveLength(MAX_CRASHES_IN_WINDOW + 2);
+    client.dispose();
+  });
+
+  it('forgets crashes older than the window', async () => {
+    vi.useFakeTimers();
+    try {
+      const gaveUp: Error[] = [];
+      const { client, transports } = makeClient({ onGiveUp: (error) => gaveUp.push(error) });
+      await client.start();
+      for (let crash = 0; crash < MAX_CRASHES_IN_WINDOW * 3; crash++) {
+        transports[transports.length - 1].crash(1);
+        await vi.advanceTimersByTimeAsync(CRASH_WINDOW_MS / MAX_CRASHES_IN_WINDOW + 1000);
+      }
+      expect(gaveUp).toHaveLength(0);
+      expect(transports.length).toBeGreaterThan(MAX_CRASHES_IN_WINDOW * 3);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a restart while a respawn is pending leaves one engine, not two', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    transports[0].crash(1);
+    await client.restart(); // before the 250 ms respawn fires
+    await sleep(400);
+    expect(transports).toHaveLength(2);
+    client.dispose();
+    expect(transports[1].killed).toBe(true);
+  });
+
+  it('a restart that overtakes another one still resolves', async () => {
+    let hang = true;
+    const { client, transports } = makeClient({}, () => {
+      const transport = new FakeTransport();
+      // The second engine never answers initialize, like one wedged at start.
+      if (hang && transports.length === 1) transport.responders.delete('initialize');
+      return transport;
+    });
+    await client.start();
+    const first = client.restart();
+    await sleep(10);
+    hang = false;
+    await client.restart();
+    await expect(first).resolves.toBeUndefined();
+    expect(transports[1].killed).toBe(true);
+    transports[2].responders.set('repo/list', (msg) => transports[2].respond(msg.id, { repos: [] }));
+    await expect(client.request('repo/list', {})).resolves.toEqual({ repos: [] });
+    client.dispose();
+  });
+
+  it('a timed-out request is cancelled in the engine too', async () => {
+    const { client, transports } = makeClient({ requestTimeoutMs: 30 });
+    await client.start();
+    await expect(client.request('repo/list', {})).rejects.toThrow(/timed out/);
+    const request = transports[0].sent.find((m) => m.method === 'repo/list');
+    const cancel = transports[0].sent.find((m) => m.method === '$/cancelRequest');
+    expect(cancel?.params).toEqual({ id: request?.id });
+    client.dispose();
+  });
+
+  it('restart and dispose cancel the requests in flight in the engine before closing it', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    const beforeRestart = client.request('repo/list', {});
+    await client.restart();
+    await expect(beforeRestart).rejects.toBeInstanceOf(EngineRestartedError);
+    const first = transports[0].sent.find((m) => m.method === 'repo/list');
+    expect(transports[0].sent.at(-1)).toMatchObject({
+      method: '$/cancelRequest',
+      params: { id: first?.id },
+    });
+
+    const beforeDispose = client.request('repo/list', {});
+    client.dispose();
+    await expect(beforeDispose).rejects.toBeInstanceOf(EngineRestartedError);
+    const second = transports[1].sent.find((m) => m.method === 'repo/list');
+    expect(transports[1].sent.at(-1)).toMatchObject({
+      method: '$/cancelRequest',
+      params: { id: second?.id },
+    });
+    expect(transports[1].killed).toBe(true);
+  });
+
+  it('carries the error data the engine sends', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    transports[0].responders.set('mutate/push', (msg) =>
+      transports[0].respondError(msg.id, ErrorCodes.GitError, 'git push failed', {
+        kind: 'rejected',
+      }),
+    );
+    await expect(client.request('mutate/push', { repoId: 'r' })).rejects.toSatisfy(
+      (e: unknown) =>
+        e instanceof EngineError && (e.data as { kind?: string } | undefined)?.kind === 'rejected',
+    );
+    client.dispose();
+  });
+});
+
+describe('EngineClient answering the engine', () => {
+  const prompt = (requestId?: number) => ({
+    kind: 'password',
+    prompt: "Password for 'https://example.com': ",
+    secret: true,
+    interactive: true,
+    ...(requestId !== undefined ? { requestId } : {}),
+  });
+
+  it('declares what it can answer in initialize', async () => {
+    const { client, transports } = makeClient({ clientCapabilities: { askpass: true } });
+    await client.start();
+    expect(transports[0].sent[0].params).toMatchObject({ clientCapabilities: { askpass: true } });
+    client.dispose();
+  });
+
+  it('answers an engine request with the registered handler', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    const seen: unknown[] = [];
+    client.onRequest('ui/askpass', async (params) => {
+      seen.push(params);
+      return { value: 's3cret' };
+    });
+    transports[0].requestClient('e1', 'ui/askpass', prompt());
+    await sleep(0);
+    await sleep(0);
+    expect(seen).toEqual([prompt()]);
+    expect(transports[0].answerTo('e1')).toMatchObject({ result: { value: 's3cret' } });
+    client.dispose();
+  });
+
+  it('refuses a request it has no handler for', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    transports[0].requestClient('e2', 'ui/askpass', prompt());
+    await sleep(0);
+    expect(transports[0].answerTo('e2')?.error?.code).toBe(ErrorCodes.MethodNotFound);
+    client.dispose();
+  });
+
+  it('withdraws the handler when the engine cancels the request', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    let withdrawn = false;
+    client.onRequest(
+      'ui/askpass',
+      (_params, token) =>
+        new Promise((resolve) => {
+          token.onCancellationRequested(() => {
+            withdrawn = true;
+            resolve({ cancelled: true });
+          });
+        }),
+    );
+    transports[0].requestClient('e3', 'ui/askpass', prompt());
+    await sleep(0);
+    transports[0].notifyClient('ui/askpassCancelled', { id: 'e3' });
+    await sleep(0);
+    await sleep(0);
+    expect(withdrawn).toBe(true);
+    client.dispose();
+  });
+
+  // The user may take minutes to type a password; the push waiting on it must
+  // not time out in the meantime.
+  it('stops the deadline of the request a prompt belongs to while it is open', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, transports } = makeClient({ requestTimeoutMs: 1000 });
+      await client.start();
+      let answer: (value: { value: string }) => void = () => undefined;
+      client.onRequest(
+        'ui/askpass',
+        () => new Promise((resolve) => (answer = resolve as typeof answer)),
+      );
+      let settled: unknown;
+      const push = client
+        .request('repo/list', {})
+        .then((value) => (settled = value))
+        .catch((error: Error) => (settled = error));
+      const id = transports[0].sent.find((m) => m.method === 'repo/list')!.id as number;
+      // The prompt arrives at once, with the whole second still to run.
+      transports[0].requestClient('e4', 'ui/askpass', prompt(id));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBeUndefined();
+      answer({ value: 'pw' });
+      await vi.advanceTimersByTimeAsync(900);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(String(settled)).toMatch(/timed out/);
+      await push;
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

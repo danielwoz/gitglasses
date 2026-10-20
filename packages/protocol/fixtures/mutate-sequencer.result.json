@@ -1,0 +1,9 @@
+{
+  "method": "mutate/sequencer",
+  "kind": "result",
+  "payload": {
+    "operation": "cherry-pick",
+    "completed": false,
+    "conflicts": true
+  }
+}

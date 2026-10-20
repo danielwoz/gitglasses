@@ -21,6 +21,8 @@ struct GitOutput {
   int exitCode = -1;
   std::vector<std::string> lines;  // stdout split on newlines
   std::string stderrText;
+  // The user dismissed a credential or passphrase prompt git raised.
+  bool promptDeclined = false;
 };
 
 // Rejects a value that git's option parser would read as a flag (see
@@ -46,18 +48,29 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
                                 const std::vector<std::pair<std::string, std::string>>& extraEnv,
                                 const CancelToken& token);
 
-// Runs `git <args>` and throws HandlerError(GitError) with git's stderr
-// unless it exited 0. Remote-facing callers raise `timeout` to the network
-// ceiling.
+// Throws HandlerError(GitError) for a run that failed: "<what> failed
+// (<code>): " and git's stderr, or its stdout when stderr is empty (some
+// commands explain themselves there). error.data describes the failure
+// (see git_errors.h): kind 'cancelled' when the user dismissed a prompt, and
+// `operation` when the repository was left in the middle of one.
+[[noreturn]] void throwGitFailure(const std::string& what, const GitOutput& output,
+                                  const std::string& operation = "none");
+
+// Runs `git <args>` and throws as throwGitFailure describes unless it exited
+// 0. Remote-facing callers raise `timeout` to the network ceiling.
 GitOutput runGitOrThrow(const core::Repo& repo, std::vector<std::string> args,
                         const CancelToken& token, const std::string& what,
                         std::chrono::milliseconds timeout = exec::kDefaultGitTimeout);
 
-// Runs a merge-like command whose failure may mean "stopped on conflicts":
-// exit 0 -> {conflicts:false}; nonzero with conflict state -> {conflicts:true};
-// any other failure throws GitError.
+// Runs a merge-like command whose failure may mean "stopped on conflicts".
+// Conflicts are reported only when the index really holds unmerged entries:
+// {conflicts:true} then, whatever git's exit code. Any other failure throws
+// GitError carrying git's message, with error.data.operation naming what
+// the repository was left in the middle of (a signing failure or a hook can
+// stop a merge or cherry-pick without a single conflict).
 rpc::Json runConflictAware(const core::Repo& repo, std::vector<std::string> args,
-                           const CancelToken& token, const std::string& what);
+                           const CancelToken& token, const std::string& what,
+                           std::chrono::milliseconds timeout = exec::kDefaultGitTimeout);
 
 // True when an interactive or am-style rebase is in progress.
 bool rebaseInProgress(const core::Repo& repo);
@@ -75,14 +88,17 @@ struct SequencerState {
   std::optional<std::int64_t> total;
 };
 
-// Reads the repository's sequencer state. An idle repository reports
-// operation "none" with no conflicts.
+// Reads the repository's sequencer state as it is on disk now, including
+// changes git made after `repo` first loaded its index. An idle repository
+// reports operation "none" with no conflicts.
 SequencerState sequencerState(const core::Repo& repo);
 
-// True when the repository is mid-conflict: sequencer heads present
-// (MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase dirs) or conflict
-// entries in the index.
-bool inConflictState(const core::Repo& repo);
+// The repository's effective value for a config key (every config file git
+// reads, the most specific winning), or empty when unset.
+std::string configString(const core::Repo& repo, const std::string& key);
+
+// Names of the repository's configured remotes, sorted.
+std::vector<std::string> remoteNames(const core::Repo& repo);
 
 // Opens the repo for params["repoId"], throwing HandlerError on failure.
 core::Repo openRepo(ServiceContext& context, const rpc::Json& params);

@@ -7,6 +7,7 @@
 #include <io.h>
 #endif
 
+#include "exec/askpass.h"
 #include "exec/cli_detect.h"
 #include "exec/sequence_editor.h"
 #include "server.h"
@@ -37,6 +38,12 @@ int main(int argc, char** argv) {
   // Editor-shim modes: git re-invokes this binary as GIT_SEQUENCE_EDITOR /
   // GIT_EDITOR during an engine-driven interactive rebase.
   if (const auto shimExit = gg::exec::maybeRunEditorShim(argc, argv)) return *shimExit;
+  // Credential and signing shims: git and ssh run this binary as GIT_ASKPASS
+  // / SSH_ASKPASS, and git as gpg.program, while the engine runs them.
+  if (const auto shimExit = gg::exec::maybeRunAskpassShim(argc, argv)) return *shimExit;
+  if (const auto shimExit = gg::exec::maybeRunGpgShim(argc, argv)) return *shimExit;
+  // A server never answers prompts through a broker it inherited.
+  gg::exec::clearAskpassEnvironment();
 
   bool stdio = false;
   std::string logLevel = "warn";

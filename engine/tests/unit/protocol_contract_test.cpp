@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <regex>
 #include <string>
@@ -552,6 +553,12 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
           {"plan", Json::array({{{"action", "pick"}, {"sha", ""}, {"summary", "x"}}})}},
          "rebase step without a sha");
 
+  // Sync options outside their enumerations.
+  reject("mutate/pull", {{"repoId", repoId}, {"strategy", "octopus"}}, "unknown pull strategy");
+  reject("mutate/push", {{"repoId", repoId}, {"setUpstream", true}, {"remote", "--mirror"}},
+         "option-like publish remote");
+  reject("mutate/sequencer", {{"repoId", repoId}, {"action", "jump"}}, "unknown sequencer action");
+
   // Payload caps are bounded on both sides.
   reject("rev/fileAtRev",
          {{"repoId", repoId}, {"path", "src/main.txt"}, {"rev", "HEAD"}, {"maxBytes", 0}},
@@ -562,6 +569,64 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
           {"rev", "HEAD"},
           {"maxBytes", 64 * 1024 * 1024}},
          "maxBytes above the ceiling");
+}
+
+// Sync results, the data a GitError carries, and the prompts the engine
+// sends the client all match the artifact.
+TEST(ProtocolContract, SyncResultsErrorDataAndPromptsMatchSchemas) {
+  FixtureRepo fixture;
+  fixture.run("git clone --bare -q . first.git");
+  fixture.run("git clone --bare -q . second.git");
+  fixture.run("git remote add first first.git");
+  fixture.run("git remote add second second.git");
+  fixture.run("git switch -q -c topic");
+
+  InteractiveSession session;
+  session.onEngineRequest = [](const Json&) -> Json { return {{"cancelled", true}}; };
+  checkedRequest(session, 1, "initialize",
+                 {{"protocolVersion", schemaDoc().value("protocolVersion", "")},
+                  {"clientCapabilities", {{"askpass", true}}}});
+  Json discovered =
+      checkedRequest(session, 2, "repo/discover", {{"path", fixture.root().string()}});
+  const std::string repoId = discovered.value("repoId", "");
+
+  // Two remotes and no default: the error names them.
+  const Json ambiguous =
+      session.request(req(3, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}}));
+  ASSERT_TRUE(ambiguous.contains("error")) << ambiguous.dump();
+  ASSERT_TRUE(ambiguous["error"].contains("data")) << ambiguous.dump();
+  expectValid(schemaDoc()["errorData"], ambiguous["error"]["data"], "errorData");
+
+  checkedRequest(session, 4, "mutate/push",
+                 {{"repoId", repoId}, {"setUpstream", true}, {"remote", "second"}});
+  checkedRequest(session, 5, "mutate/pull", {{"repoId", repoId}, {"strategy", "ff-only"}});
+
+#ifndef _WIN32
+  // A remote reached through an ssh stand-in that asks for a passphrase.
+  fixture.writeFile("fake-ssh",
+                    "#!/bin/sh\n\"$SSH_ASKPASS\" \"Enter passphrase for key '/k': \" >/dev/null "
+                    "|| { echo 'Permission denied (publickey).' >&2; exit 255; }\n"
+                    "shift\nexec sh -c \"$1\"\n");
+  std::filesystem::permissions(fixture.root() / "fake-ssh", std::filesystem::perms::owner_all);
+  fixture.run("git remote set-url first \"fakehost:" + (fixture.root() / "first.git").string() +
+              "\"");
+  const gg::testing::ScopedEnv sshCommand("GIT_SSH_COMMAND",
+                                          (fixture.root() / "fake-ssh").string());
+  const gg::testing::ScopedEnv variant("GIT_SSH_VARIANT", "simple");
+  const Json fetch =
+      session.request(req(6, "mutate/fetch", {{"repoId", repoId}, {"remote", "first"}}));
+  ASSERT_TRUE(fetch.contains("error")) << fetch.dump();
+  expectValid(schemaDoc()["errorData"], fetch["error"]["data"], "errorData");
+  ASSERT_FALSE(session.engineRequests.empty());
+  for (const auto& request : session.engineRequests) {
+    const std::string method = request.value("method", "");
+    ASSERT_TRUE(schemaDoc()["engineRequests"].contains(method)) << method;
+    expectValid(schemaDoc()["engineRequests"][method]["params"], request["params"],
+                method + ".params");
+    expectValid(schemaDoc()["engineRequests"][method]["result"], Json{{"cancelled", true}},
+                method + ".result");
+  }
+#endif
 }
 
 // The artifact's restrictedModeMethods is what clients gate on; a restricted

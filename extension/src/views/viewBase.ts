@@ -3,8 +3,8 @@ import { CommitSummaryInfo } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, discoverWorkspaceRepos } from '../model/activeRepo';
-import { errorMessage } from '../commands/ui';
 import { DiffSpec } from './viewLogic';
+import { reportFailure } from '../sync/syncCommands';
 
 export type { ActiveRepo };
 
@@ -41,7 +41,7 @@ export async function requireRepo(repos: RepositoryService): Promise<ActiveRepo 
 }
 
 /** Runs `action` against the workspace repo, reporting a missing repo and
- *  surfacing a failure as "<label> failed". */
+ *  surfacing a failure as "<label> failed" with the next steps that fit it. */
 export async function withRepo(
   repos: RepositoryService,
   label: string,
@@ -52,7 +52,7 @@ export async function withRepo(
   try {
     await action(repo);
   } catch (error) {
-    void vscode.window.showErrorMessage(`GitGlasses: ${label} failed: ${errorMessage(error)}`);
+    void reportFailure(label.charAt(0).toUpperCase() + label.slice(1), error);
   }
 }
 

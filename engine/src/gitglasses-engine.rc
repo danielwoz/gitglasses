@@ -1,0 +1,4 @@
+// Embeds the application manifest for toolchains that link resources rather
+// than manifests (mingw-w64). 1 is CREATEPROCESS_MANIFEST_RESOURCE_ID and 24
+// RT_MANIFEST.
+1 24 "gitglasses-engine.manifest"

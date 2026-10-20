@@ -3,6 +3,8 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
@@ -58,7 +60,17 @@ using NotificationHandler = std::function<void(Json params)>;
 
 struct HandlerError {
   Error error;
+  // Sent as the error's `data` member when not null.
+  Json data = nullptr;
 };
+
+// Supplies `data` for an error a handler threw without any, or null for
+// none. Lets a layer that understands an error (git's output, say) describe
+// it once for every method.
+using ErrorDataFn = std::function<Json(const Error& error)>;
+
+// Receives a response to a request this process sent to the client.
+using ResponseHandler = std::function<void(const Json& message)>;
 
 // Where a handler runs.
 //
@@ -104,6 +116,22 @@ class Dispatcher {
   // Names of every registered request method, in sorted order.
   std::vector<std::string> methodNames() const;
 
+  // Installs the hook that describes errors thrown without data.
+  void setErrorData(ErrorDataFn errorData);
+
+  // Routes messages that carry an id and a result or error but no method,
+  // which answer requests this process sent to the client.
+  void onResponse(ResponseHandler handler);
+
+  // Cancels every request in flight, as if the client had cancelled each
+  // one. Used when the client is gone, so nothing keeps git running for an
+  // answer no one will read.
+  void cancelAll();
+
+  // Waits until no request is in flight or waiting to be parsed, or until
+  // `timeout` passes. Returns true when idle.
+  bool waitIdle(std::chrono::milliseconds timeout);
+
   // Entry point for every inbound payload. Never throws; protocol-level
   // failures produce JSON-RPC error responses. Payloads over
   // kInlineParseLimit are parsed and routed on a worker, keeping arrival
@@ -122,7 +150,7 @@ class Dispatcher {
   void runRequest(const Json& id, const std::string& methodName, Json params);
   void cancelRequest(const Json& params);
   void sendResult(const Json& id, const Json& result);
-  void sendError(const Json& id, const Error& error);
+  void sendError(const Json& id, const Error& error, const Json& data = nullptr);
 
   // The strand for one (lane, repository) pair, created on first use.
   Strand& strandFor(Mode mode, const Json& params);
@@ -142,6 +170,8 @@ class Dispatcher {
   SendFn send_;
   std::map<std::string, MethodEntry> methods_;
   std::map<std::string, NotificationEntry> notifications_;
+  ErrorDataFn errorData_;
+  ResponseHandler responseHandler_;
 
   std::mutex strandsMutex_;
   std::map<std::string, std::unique_ptr<Strand>> strands_;
@@ -151,6 +181,7 @@ class Dispatcher {
   std::atomic<size_t> deferredBytes_{0};
 
   mutable std::mutex inflightMutex_;
+  std::condition_variable idle_;
   std::map<std::int64_t, CancelSource> inflight_;
   // Ids cancelled before their request reached the inflight map, which a
   // deferred parse makes possible. Bounded so a client cannot grow it by

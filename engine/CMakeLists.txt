@@ -37,6 +37,7 @@ if(EMSCRIPTEN)
     src/services/commit/commit_methods.cpp
     src/services/graph/graph_methods.cpp
     src/services/history/history_methods.cpp
+    src/services/mutate/git_errors.cpp
     src/services/mutate/mutate_common.cpp
     src/services/mutate/mutate_methods.cpp
     src/services/mutate/rebase_methods.cpp
@@ -132,9 +133,11 @@ else()
 endif()
 
 add_library(gg_exec STATIC
+  src/exec/askpass.cpp
   src/exec/cli_detect.cpp
   ${GG_GIT_PROCESS_SOURCE}
   src/exec/git_runner.cpp
+  src/exec/gpg_shim.cpp
   src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp
   src/exec/sequence_editor.cpp
@@ -160,6 +163,7 @@ add_library(gg_services STATIC
   src/services/commit/commit_methods.cpp
   src/services/graph/graph_methods.cpp
   src/services/history/history_methods.cpp
+  src/services/mutate/git_errors.cpp
   src/services/mutate/mutate_common.cpp
   src/services/mutate/mutate_methods.cpp
   src/services/mutate/rebase_methods.cpp
@@ -192,6 +196,16 @@ add_executable(gitglasses-engine
   src/server.cpp
 )
 target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_version gg_warnings)
+# The manifest makes the process code page UTF-8, so narrow Win32 and CRT
+# calls see paths and arguments as UTF-8. MSVC merges .manifest sources into
+# the one its linker writes; mingw-w64 links it as a resource.
+if(WIN32)
+  if(MSVC)
+    target_sources(gitglasses-engine PRIVATE src/gitglasses-engine.manifest)
+  else()
+    target_sources(gitglasses-engine PRIVATE src/gitglasses-engine.rc)
+  endif()
+endif()
 
 if(GG_STATIC_RUNTIME AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(gitglasses-engine PRIVATE -static-libstdc++ -static-libgcc)

@@ -24,6 +24,7 @@ import {
   showConflictGuidance,
 } from '../commands/ui';
 import { allowedDespiteConflicts } from '../commands/conflictGuard';
+import { reportIfStopped } from '../sync/syncCommands';
 import { graphPageSize } from '../system/settings';
 
 const REFRESH_DEBOUNCE_MS = 300;
@@ -274,6 +275,7 @@ export class GraphWebviewHost implements vscode.Disposable {
           break;
       }
     } catch (error) {
+      if (reportIfStopped(error)) return;
       void vscode.window.showErrorMessage(
         `GitGlasses: ${ACTION_LABELS[action]} failed: ${errorMessage(error)}`,
       );
