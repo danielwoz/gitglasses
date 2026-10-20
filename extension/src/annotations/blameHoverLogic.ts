@@ -8,6 +8,7 @@ import { shortSha } from '@gitglasses/protocol/sha';
 import { codeSpan, escapeMarkdown, markdownLinkDestination } from '../system/markdown';
 import { relativeTime } from '../system/dates';
 import { formatDateTime, originalLineOf } from './blameFormat';
+import { LINE_STORY_COMMAND, type LineStoryArgs } from '../lineStory/lineStoryLogic';
 
 export const OPEN_CHANGES_COMMAND = 'gitglasses.blame.openChanges';
 export const PREVIOUS_REVISION_COMMAND = 'gitglasses.blame.previousRevision';
@@ -19,6 +20,7 @@ export const DIFF_WITH_HEAD_COMMAND = 'gitglasses.diffWithHead';
 /** Commands the hover's links may run; MarkdownString trusts exactly these. */
 export const BLAME_HOVER_COMMANDS: readonly string[] = [
   SHOW_COMMIT_DETAILS_COMMAND,
+  LINE_STORY_COMMAND,
   OPEN_CHANGES_COMMAND,
   PREVIOUS_REVISION_COMMAND,
   COPY_SHA_COMMAND,
@@ -167,6 +169,8 @@ export interface CommitHoverInput {
   pullRequest?: { number: number; url: string };
   /** The forge's web routes are known, so Open on Remote has somewhere to go. */
   remote: boolean;
+  /** The hovered document, as a URI string; offers "Why this line?". */
+  documentUri?: string;
   nowUnixSeconds?: number;
   locale?: string;
 }
@@ -200,6 +204,17 @@ export function renderCommitHover(input: CommitHoverInput): string {
   parts.push(facts.join(' · '));
 
   const links: string[] = [];
+  if (input.documentUri) {
+    const args: LineStoryArgs = { uri: input.documentUri, line: input.line };
+    links.push(
+      commandLink(
+        '$(question) Why this line?',
+        LINE_STORY_COMMAND,
+        args,
+        "The line's commit, pull request, linked issues and earlier versions",
+      ),
+    );
+  }
   if (target.repoPath !== '') {
     links.push(
       commandLink(

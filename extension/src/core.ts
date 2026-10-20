@@ -65,6 +65,7 @@ import { HomeViewProvider, registerHomeCommands } from './home/homeView';
 import { ModeController } from './modes/modeController';
 import { registerSuggestChange } from './reviews/suggestCommands';
 import { registerCommitDetails } from './commitDetails/commitDetails';
+import { registerLineStory } from './lineStory/lineStory';
 import { WalkthroughOpener } from './home/walkthrough';
 import { registerGitGraphMigration } from './onboarding/gitGraphMigration';
 
@@ -405,6 +406,13 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     vscode.languages.registerCodeLensProvider(deps.documentSelector, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
     ...registerCommitDetails(context, engine, repos, deps.log),
+    ...registerLineStory({
+      context,
+      engine,
+      blame: documentBlame,
+      integrations,
+      log: deps.log,
+    }),
     vscode.commands.registerCommand('gitglasses.diffWithHead', async (arg?: unknown) => {
       const target = diffWithHeadTarget(arg);
       const located = target ? await locateFile(target) : await locateActiveFile();

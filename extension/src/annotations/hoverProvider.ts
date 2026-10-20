@@ -118,6 +118,7 @@ export class BlameHoverRenderer {
       stats: details?.stats,
       pullRequest: prUrl && number !== undefined ? { number, url: prUrl } : undefined,
       remote: hosting !== undefined && supportsRemoteUrls(hosting.providerId),
+      documentUri: target.documentUri,
     });
     markdown.appendMarkdown(notice ? `${notice}\n\n${body}` : body);
     return markdown;

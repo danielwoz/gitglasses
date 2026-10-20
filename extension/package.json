@@ -90,7 +90,8 @@
     "onStartupFinished",
     "onWebviewPanel:gitglasses.graph",
     "onWebviewPanel:gitglasses.timeline",
-    "onWebviewPanel:gitglasses.commitDetails"
+    "onWebviewPanel:gitglasses.commitDetails",
+    "onWebviewPanel:gitglasses.lineStory"
   ],
   "main": "./dist/extension.js",
   "browser": "./dist/web/extension.js",
@@ -168,6 +169,12 @@
         "command": "gitglasses.showCommitDetails",
         "title": "Show Commit Details",
         "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.showLineStory",
+        "title": "Why This Line?",
+        "category": "GitGlasses",
+        "icon": "$(question)"
       },
       {
         "command": "gitglasses.blame.openChanges",
@@ -980,6 +987,11 @@
       ],
       "editor/context": [
         {
+          "command": "gitglasses.showLineStory",
+          "when": "gitglasses.hasRepository && resourceScheme == file",
+          "group": "gitglasses@0"
+        },
+        {
           "command": "gitglasses.suggestChange",
           "when": "editorHasSelection && resourceScheme == file && isWorkspaceTrusted",
           "group": "gitglasses@1"
@@ -1258,6 +1270,10 @@
         {
           "command": "gitglasses.showCommitDetails",
           "when": "false"
+        },
+        {
+          "command": "gitglasses.showLineStory",
+          "when": "gitglasses.hasRepository && (resourceScheme == file || resourceScheme == gitglasses || isWeb)"
         },
         {
           "command": "gitglasses.showGraph",

@@ -414,6 +414,7 @@ in Restricted Mode.
 | --- | --- | --- |
 | GitGlasses: Restart Engine | `gitglasses.restartEngine` |  |
 | GitGlasses: Refresh Views | `gitglasses.refreshViews` |  |
+| GitGlasses: Why This Line? | `gitglasses.showLineStory` |  |
 | GitGlasses: Create Repo Group from Workspace | `gitglasses.groups.create` |  |
 | GitGlasses: Open Repo Group in New Window | `gitglasses.groups.open` |  |
 | GitGlasses: Delete Repo Group | `gitglasses.groups.delete` |  |
