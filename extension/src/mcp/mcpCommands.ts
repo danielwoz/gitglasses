@@ -244,11 +244,16 @@ export function registerMcpCommands(options: McpCommandOptions): vscode.Disposab
         preview: true,
       },
     );
+    const linked = plan.target !== file;
     const confirmed = await vscode.window.showWarningMessage(
       `Write the GitGlasses MCP server to ${shown}?`,
       {
         modal: true,
         detail:
+          (linked
+            ? `${shown} is a link; the change is written to ${displayPath(plan.target)}, ` +
+              'and the link stays.\n'
+            : '') +
           `${plan.replaced ? 'The existing gitglasses table is replaced' : 'A gitglasses table is added'}; ` +
           `nothing else in the file changes.\n\n${shortened(plan.diff)}`,
       },
@@ -258,14 +263,21 @@ export function registerMcpCommands(options: McpCommandOptions): vscode.Disposab
     try {
       writeCodexConfig(plan);
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A link into a read-only tree, as home-manager makes them.
+      const readOnlyLink = linked && (code === 'EACCES' || code === 'EPERM' || code === 'EROFS');
       const message =
         error instanceof ConfigChangedError
           ? `${shown} changed while you were looking; run the command again.`
-          : `could not write ${shown}: ${String(error)}`;
+          : readOnlyLink
+            ? `${shown} links to ${displayPath(plan.target)}, which cannot be written ` +
+              '(a dotfile manager may own it). Add the table shown where you manage that file.'
+            : `could not write ${shown}: ${String(error)}`;
       void vscode.window.showErrorMessage(`GitGlasses: ${message}`);
+      if (readOnlyLink) await openUntitled(codexServerToml(launch), 'toml');
       return;
     }
-    log(`MCP server: wrote ${file}`);
+    log(`MCP server: wrote ${plan.target}`);
     void vscode.window.showInformationMessage(
       `GitGlasses: added to Codex in ${shown}. New Codex sessions load it.`,
     );

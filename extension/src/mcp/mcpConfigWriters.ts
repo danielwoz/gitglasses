@@ -23,6 +23,11 @@ export function codexConfigPath(env: Record<string, string | undefined>, home: s
 /** What writing the server into Codex's configuration would change. */
 export interface CodexPlan {
   file: string;
+  /**
+   * The file written: `file` itself, or where a symbolic link at `file`
+   * leads, so a link a dotfile manager put there stays a link.
+   */
+  target: string;
   /** The file as read, '' when it does not exist. */
   before: string;
   existed: boolean;
@@ -32,12 +37,41 @@ export interface CodexPlan {
   diff: string;
 }
 
+/** Links followed before giving up, as the system's own limit does. */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * The file `file` names once symbolic links are followed, including a link
+ * to a file that does not exist yet: that file is the one to create.
+ */
+export function linkTarget(file: string): string {
+  try {
+    return fs.realpathSync(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  let current = file;
+  for (let hops = 0; hops < MAX_LINK_HOPS; hops++) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return current;
+      throw error;
+    }
+    if (!stat.isSymbolicLink()) return current;
+    current = path.resolve(path.dirname(current), fs.readlinkSync(current));
+  }
+  throw new Error(`${file}: too many levels of symbolic links`);
+}
+
 /** Reads the file and plans the change; throws CodexConfigConflict. */
 export function planCodexWrite(file: string, launch: McpLaunch, label = file): CodexPlan {
+  const target = linkTarget(file);
   let before = '';
   let existed = false;
   try {
-    before = fs.readFileSync(file, 'utf8');
+    before = fs.readFileSync(target, 'utf8');
     existed = true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -45,6 +79,7 @@ export function planCodexWrite(file: string, launch: McpLaunch, label = file): C
   const { content, replaced } = mergeCodexConfig(before, launch);
   return {
     file,
+    target,
     before,
     existed,
     after: content,
@@ -58,24 +93,28 @@ export class ConfigChangedError extends Error {}
 
 /**
  * Applies a plan the user confirmed: the file must still read as planned,
- * and it is replaced in one rename so Codex never reads half of it. A new
- * file is private to the user, as it may come to hold tokens.
+ * and it is replaced in one rename so Codex never reads half of it. The
+ * rename happens where a symbolic link leads, never over the link itself. A
+ * new file is private to the user, as it may come to hold tokens.
  */
 export function writeCodexConfig(plan: CodexPlan): void {
+  if (linkTarget(plan.file) !== plan.target) {
+    throw new ConfigChangedError(`${plan.file} now leads to another file`);
+  }
   let current = '';
   try {
-    current = fs.readFileSync(plan.file, 'utf8');
+    current = fs.readFileSync(plan.target, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     if (plan.existed) throw new ConfigChangedError(`${plan.file} was removed`);
   }
   if (current !== plan.before) throw new ConfigChangedError(`${plan.file} changed meanwhile`);
-  fs.mkdirSync(path.dirname(plan.file), { recursive: true });
-  const mode = plan.existed ? fs.statSync(plan.file).mode & 0o777 : 0o600;
-  const temporary = `${plan.file}.gitglasses-${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(plan.target), { recursive: true });
+  const mode = plan.existed ? fs.statSync(plan.target).mode & 0o777 : 0o600;
+  const temporary = `${plan.target}.gitglasses-${process.pid}.tmp`;
   try {
     fs.writeFileSync(temporary, plan.after, { mode });
-    fs.renameSync(temporary, plan.file);
+    fs.renameSync(temporary, plan.target);
   } catch (error) {
     fs.rmSync(temporary, { force: true });
     throw error;

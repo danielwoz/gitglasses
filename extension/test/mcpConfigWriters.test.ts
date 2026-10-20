@@ -84,6 +84,92 @@ describe('Codex config.toml', () => {
     if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777).toBe(0o640);
   });
 
+  // Dotfile managers (GNU stow, home-manager, yadm) link config.toml into a
+  // repository of their own; the link must stay, and the change land there.
+  it.skipIf(process.platform === 'win32')(
+    'writes through a symlinked config.toml, keeping the link',
+    () => {
+      const file = codexConfigPath({}, home);
+      const dotfiles = path.join(home, 'dotfiles', 'codex');
+      const real = path.join(dotfiles, 'config.toml');
+      fs.mkdirSync(dotfiles, { recursive: true });
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(real, 'model = "o3"\n', { mode: 0o644 });
+      fs.chmodSync(real, 0o644);
+      fs.symlinkSync(path.relative(path.dirname(file), real), file);
+
+      const plan = planCodexWrite(file, launch, '~/.codex/config.toml');
+      expect(plan).toMatchObject({ file, target: real, existed: true, before: 'model = "o3"\n' });
+      writeCodexConfig(plan);
+
+      expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(real, 'utf8')).toBe(`model = "o3"\n\n${codexServerToml(launch)}`);
+      expect(fs.statSync(real).mode & 0o777).toBe(0o644);
+      expect(fs.readdirSync(path.dirname(file))).toEqual(['config.toml']);
+      expect(fs.readdirSync(dotfiles)).toEqual(['config.toml']);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'creates the file a dangling config.toml link points at',
+    () => {
+      const file = codexConfigPath({}, home);
+      const real = path.join(home, 'dotfiles', 'config.toml');
+      fs.mkdirSync(path.dirname(real), { recursive: true });
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.symlinkSync(real, file);
+
+      const plan = planCodexWrite(file, launch);
+      expect(plan).toMatchObject({ target: real, existed: false });
+      writeCodexConfig(plan);
+      expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(real, 'utf8')).toBe(codexServerToml(launch));
+    },
+  );
+
+  // home-manager links config.toml into the read-only Nix store.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'leaves a link into a read-only directory alone when the write fails',
+    () => {
+      const file = codexConfigPath({}, home);
+      const store = path.join(home, 'store');
+      const real = path.join(store, 'config.toml');
+      fs.mkdirSync(store);
+      fs.writeFileSync(real, 'model = "o3"\n');
+      fs.chmodSync(store, 0o555);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.symlinkSync(real, file);
+      try {
+        const plan = planCodexWrite(file, launch);
+        expect(() => writeCodexConfig(plan)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+        expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+        expect(fs.readFileSync(real, 'utf8')).toBe('model = "o3"\n');
+        expect(fs.readdirSync(path.dirname(file))).toEqual(['config.toml']);
+      } finally {
+        fs.chmodSync(store, 0o755);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses when config.toml was relinked after the user saw the diff',
+    () => {
+      const file = codexConfigPath({}, home);
+      const first = path.join(home, 'one.toml');
+      const second = path.join(home, 'two.toml');
+      fs.writeFileSync(first, 'model = "o3"\n');
+      fs.writeFileSync(second, 'model = "o3"\n');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.symlinkSync(first, file);
+      const plan = planCodexWrite(file, launch);
+      fs.rmSync(file);
+      fs.symlinkSync(second, file);
+      expect(() => writeCodexConfig(plan)).toThrow(ConfigChangedError);
+      expect(fs.readFileSync(first, 'utf8')).toBe('model = "o3"\n');
+      expect(fs.readFileSync(second, 'utf8')).toBe('model = "o3"\n');
+    },
+  );
+
   it('refuses to write over a file that changed after the user saw the diff', () => {
     const file = codexConfigPath({}, home);
     fs.mkdirSync(path.dirname(file), { recursive: true });
