@@ -63,11 +63,11 @@ constexpr bool kThreadsCapability = true;
 // Mirrors RESTRICTED_MODE_METHODS in packages/protocol; the protocol contract
 // test checks the two agree.
 constexpr std::array<std::string_view, 25> kRestrictedModeMethods = {
-    "initialize",    "shutdown",        "repo/discover",  "repo/close",     "repo/list",
-    "repo/state",    "blame/file",      "log/commits",    "search/commits", "rev/fileAtRev",
-    "refs/list",     "stash/list",      "status/summary", "graph/rows",     "graph/find",
-    "diff/commit",   "diff/refs",       "diff/fileHunks", "remote/list",    "commit/details",
-    "log/compare",   "worktree/list",   "worktree/status", "notes/read",    "commit/provenance",
+    "initialize",  "shutdown",      "repo/discover",   "repo/close",     "repo/list",
+    "repo/state",  "blame/file",    "log/commits",     "search/commits", "rev/fileAtRev",
+    "refs/list",   "stash/list",    "status/summary",  "graph/rows",     "graph/find",
+    "diff/commit", "diff/refs",     "diff/fileHunks",  "remote/list",    "commit/details",
+    "log/compare", "worktree/list", "worktree/status", "notes/read",     "commit/provenance",
 };
 
 // Replaces the handler of every method Restricted Mode does not serve.
