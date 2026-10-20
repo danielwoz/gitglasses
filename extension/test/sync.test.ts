@@ -294,6 +294,18 @@ describe('conflict guidance', () => {
     ]);
   });
 
+  it('offers to retry a commit that could not be signed', async () => {
+    let attempts = 0;
+    ui.messageChoices.push('Retry');
+    await reportFailure(
+      'Commit',
+      gitError('git commit failed (128): error: gpg failed to sign the data', { kind: 'signing' }),
+      { retry: async () => void (attempts += 1) },
+    );
+    expect(ui.messages[0].buttons).toEqual(['Retry', 'Show Log']);
+    expect(attempts).toBe(1);
+  });
+
   it('reports a failure without retry when the caller cannot retry', async () => {
     await reportFailure('Commit', gitError('git commit failed (1): nothing to commit'));
     expect(ui.messages[0].buttons).toEqual(['Show Log']);

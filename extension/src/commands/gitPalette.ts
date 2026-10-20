@@ -155,11 +155,20 @@ async function commitFlow(ctx: PaletteContext): Promise<FlowStatus> {
     },
   ]);
   if (flow.status !== 'completed') return flow.status;
-  const { sha } = await engine.request('mutate/commit', {
-    repoId: repo.repoId,
-    message: flow.state.message,
-  });
-  setStatus(`Committed ${shortSha(sha)}`);
+  // A commit that could not be signed (a dismissed or mistyped passphrase)
+  // can be tried again with the same message.
+  const commit = async (): Promise<void> => {
+    try {
+      const { sha } = await engine.request('mutate/commit', {
+        repoId: repo.repoId,
+        message: flow.state.message,
+      });
+      setStatus(`Committed ${shortSha(sha)}`);
+    } catch (error) {
+      await sync.reportFailure('Commit', error, { retry: commit });
+    }
+  };
+  await commit();
   return 'completed';
 }
 
