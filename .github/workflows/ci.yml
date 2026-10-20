@@ -11,6 +11,43 @@ on:
 # available for a month, which is what `pnpm fetch-engine` downloads for
 # TypeScript-only work.
 jobs:
+  # ESLint, the formatting of what the change touches (Prettier for TypeScript
+  # and JavaScript, clang-format for the changed C++ lines), and the tests of
+  # the repository scripts.
+  lint:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The format check compares against the merge base.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install clang-format
+        run: pipx install "clang-format==$(node scripts/check-format.mjs --clang-format-version)"
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      # The type-aware rules read the workspace packages' declarations.
+      - name: Build packages
+        run: pnpm build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Check the formatting of the changed files
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: node scripts/check-format.mjs --base "$BASE"
+
+      - name: Test the repository scripts
+        run: pnpm test:scripts
+
   engine:
     name: engine (${{ matrix.preset }})
     strategy:
