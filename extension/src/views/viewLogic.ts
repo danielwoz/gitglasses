@@ -132,6 +132,22 @@ export function aggregateContributors(
   );
 }
 
+/**
+ * The window the contributor counts cover: the most recent commits on HEAD,
+ * or all of them once the whole history fits. Counts over a window are not
+ * totals, so the view says which it shows.
+ */
+export function contributorWindowLabel(sampled: number, complete: boolean): string {
+  if (complete) return `All ${sampled} commit${sampled === 1 ? '' : 's'}`;
+  return `Last ${sampled} commit${sampled === 1 ? '' : 's'}`;
+}
+
+/** A contributor's share of the window, for the tooltip. */
+export function contributorShare(count: number, sampled: number, complete: boolean): string {
+  const commits = `${count} commit${count === 1 ? '' : 's'}`;
+  return complete ? `${commits} of ${sampled}` : `${commits} in the last ${sampled}`;
+}
+
 // --- Terminal sha detection -------------------------------------------------
 
 const SHA_PATTERN = /\b[0-9a-f]{7,40}\b/g;
