@@ -95,10 +95,13 @@ interface PaletteRepo extends ActiveRepo {
   name: string;
 }
 
+/** Opens the interactive rebase editor on `repo`. */
+export type OpenRebase = (upstream: string, repo: ActiveRepo) => void | Promise<void>;
+
 interface PaletteContext {
   engine: EngineClient;
   repo: PaletteRepo;
-  openRebase: (upstream?: string) => void | Promise<void>;
+  openRebase: OpenRebase;
 }
 
 /** A step's title, naming the repository the flow acts on. */
@@ -306,7 +309,7 @@ async function rebaseFlow(ctx: PaletteContext): Promise<FlowStatus> {
   });
   if (picked === 'back') return 'backedOut';
   if (picked === undefined) return 'cancelled';
-  await ctx.openRebase(picked.name);
+  await ctx.openRebase(picked.name, ctx.repo);
   return 'completed';
 }
 
@@ -583,7 +586,7 @@ async function pickOtherRepo(
 export function registerGitPalette(
   engine: EngineClient,
   repos: RepositoryService,
-  openRebase: (upstream?: string) => void | Promise<void>,
+  openRebase: OpenRebase,
   options: GitPaletteOptions,
 ): vscode.Disposable {
   return vscode.commands.registerCommand('gitglasses.gitCommands', async () => {

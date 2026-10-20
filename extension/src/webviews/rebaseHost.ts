@@ -6,10 +6,10 @@ import * as vscode from 'vscode';
 import { RebaseEntry } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
-import { RepositoryService } from '../model/repositoryService';
-import { activeWorkspaceRepo } from '../views/viewBase';
+import { RepositoryService, repoName } from '../model/repositoryService';
+import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
 import { renderWebviewHtml } from './webviewHtml';
-import { confirmRebase } from '../commands/confirmations';
+import { confirmRebase, inRepository } from '../commands/confirmations';
 import { confirmDestructive, errorMessage, setStatus } from '../commands/ui';
 
 type HostToWebviewMessage =
@@ -25,6 +25,8 @@ export class RebaseWebviewHost implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private panelDisposables: vscode.Disposable[] = [];
   private repoId: string | undefined;
+  /** The repository the confirmation names. */
+  private repo: { name: string; rootPath: string } | undefined;
   private upstream: string | undefined;
   private pendingInit: { upstream: string; entries: { sha: string; summary: string }[] } | undefined;
   private running = false;
@@ -35,8 +37,10 @@ export class RebaseWebviewHost implements vscode.Disposable {
     private readonly repos: RepositoryService,
   ) {}
 
-  /** Opens the editor for `upstream`, prompting for one when not given. */
-  async open(upstream?: string): Promise<void> {
+  /** Opens the editor for `upstream`, prompting for one when not given. It
+   *  acts on `target` when given (the Git Commands palette passes the
+   *  repository it names), else on the repository the views follow. */
+  async open(upstream?: string, target?: ActiveRepo): Promise<void> {
     const caps = this.engine.capabilities();
     if (!isMethodAvailable(caps, 'rebase/start')) {
       void vscode.window.showWarningMessage(
@@ -44,17 +48,20 @@ export class RebaseWebviewHost implements vscode.Disposable {
       );
       return;
     }
-    let repo;
-    try {
-      repo = await activeWorkspaceRepo(this.repos);
-    } catch {
-      repo = undefined;
+    let repo = target;
+    if (!repo) {
+      try {
+        repo = await activeWorkspaceRepo(this.repos);
+      } catch {
+        repo = undefined;
+      }
     }
     if (!repo) {
       void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
       return;
     }
     this.repoId = repo.repoId;
+    this.repo = { name: repoName(repo.workspacePath ?? repo.rootPath), rootPath: repo.rootPath };
 
     if (!upstream) {
       const entered = await vscode.window.showInputBox({
@@ -152,7 +159,10 @@ export class RebaseWebviewHost implements vscode.Disposable {
     } catch {
       // Branch name is presentational only; the confirmation still shows.
     }
-    if (!(await confirmDestructive(confirmRebase(branch, this.upstream)))) return;
+    const confirmation = confirmRebase(branch, this.upstream);
+    if (!(await confirmDestructive(this.repo ? inRepository(confirmation, this.repo) : confirmation))) {
+      return;
+    }
 
     this.running = true;
     await this.post({ type: 'busy', busy: true });

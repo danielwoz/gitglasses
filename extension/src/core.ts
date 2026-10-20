@@ -495,7 +495,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     ...rebase.disposables,
     ...registerGraphWebview(context, engine, repos, (upstream) => rebase.host.open(upstream)),
     ...registerTimelineWebview(context, engine, repos),
-    registerGitPalette(engine, repos, (upstream) => rebase.host.open(upstream), {
+    registerGitPalette(engine, repos, (upstream, repo) => rebase.host.open(upstream, repo), {
       listRepos: () => activeRepo.all(),
       activeEditorUri: () => deps.activeEditor()?.document.uri,
     }),
