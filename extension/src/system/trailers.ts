@@ -1,6 +1,7 @@
 // The trailer paragraph that closes a commit message body: the `Key: value`
 // lines commit/details parses into `trailers`. Views that list the trailers
-// on their own show the body without them.
+// on their own show the body without them; the blame hover keeps them, one
+// per line.
 
 /** One trailer, as commit/details reports it. */
 export interface Trailer {

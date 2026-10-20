@@ -7,6 +7,7 @@ import type { BlameCommit, BlameHunk } from '@gitglasses/protocol';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { codeSpan, escapeMarkdown, markdownLinkDestination } from '../system/markdown';
 import { relativeTime } from '../system/dates';
+import { bodyLines, trailerBlock, type Trailer } from '../system/trailers';
 import { formatDateTime, originalLineOf } from './blameFormat';
 import { LINE_STORY_COMMAND, type LineStoryArgs } from '../lineStory/lineStoryLogic';
 
@@ -104,6 +105,9 @@ export interface MessageBlock {
   text: string;
   /** A list item ("- x", "* x", "1. x"), kept on a line of its own. */
   listItem: boolean;
+  /** A line of the closing trailer paragraph ("Signed-off-by: …"), kept on
+   *  a line of its own. */
+  trailer?: boolean;
 }
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
@@ -111,19 +115,32 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
 /**
  * The message body split into paragraphs and list items, at most `maxLines`
  * lines of it. Wrapped lines of one paragraph are joined, the way git's own
- * tools reflow them.
+ * tools reflow them. The lines of the paragraph `trailers` were parsed from
+ * stay one per block.
  */
 export function messageBlocks(
   body: string,
   maxLines: number = MAX_BODY_LINES,
+  trailers: readonly Trailer[] = [],
 ): { blocks: MessageBlock[]; truncated: boolean } {
-  const lines = body.replace(/\r\n?/g, '\n').split('\n');
+  const lines = bodyLines(body);
   const truncated = lines.length > maxLines;
+  const trailersStart = trailerBlock(body, trailers)?.start ?? lines.length;
   const blocks: MessageBlock[] = [];
   let current: MessageBlock | undefined;
-  for (const line of lines.slice(0, maxLines)) {
+  for (const [index, line] of lines.slice(0, maxLines).entries()) {
     if (line.trim() === '') {
       current = undefined;
+      continue;
+    }
+    if (index >= trailersStart) {
+      // A line starting with a space continues the trailer before it.
+      if (current && line.startsWith(' ')) {
+        current.text += ` ${line.trim()}`;
+      } else {
+        current = { text: line.trim(), listItem: false, trailer: true };
+        blocks.push(current);
+      }
       continue;
     }
     if (LIST_ITEM.test(line)) {
@@ -141,12 +158,21 @@ export function messageBlocks(
   return { blocks, truncated };
 }
 
-/** Rendered blocks joined: list items on consecutive lines, paragraphs
- *  apart. */
-export function joinBlocks(rendered: { markdown: string; listItem: boolean }[]): string {
+/** Rendered blocks joined: list items on consecutive lines, trailers on
+ *  consecutive lines, paragraphs apart. */
+export function joinBlocks(
+  rendered: { markdown: string; listItem: boolean; trailer?: boolean }[],
+): string {
   let out = '';
   rendered.forEach((block, i) => {
-    if (i > 0) out += block.listItem && rendered[i - 1].listItem ? '  \n' : '\n\n';
+    if (i > 0) {
+      const previous = rendered[i - 1];
+      const sameRun =
+        (block.listItem && previous.listItem) ||
+        (block.trailer === true && previous.trailer === true);
+      // Two trailing spaces end a line without ending the paragraph.
+      out += sameRun ? '  \n' : '\n\n';
+    }
     out += block.markdown;
   });
   return out;
