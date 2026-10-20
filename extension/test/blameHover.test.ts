@@ -94,6 +94,19 @@ describe('blame hover message', () => {
     expect(links).toContain('command:gitglasses.showLineStory?');
   });
 
+  it('keeps a line of = among the trailers from making them a heading', async () => {
+    // git reads this closing paragraph as trailers: one of its two lines
+    // starts with Signed-off-by.
+    const message = (
+      await hover({
+        ...DETAILS,
+        body: 'Fix the parser.\n\nSigned-off-by: Ada Lovelace <ada@example.com>\n====',
+        trailers: [{ key: 'Signed-off-by', value: 'Ada Lovelace <ada@example.com>' }],
+      })
+    ).split('\n\n')[3];
+    expect(message).toBe('Signed\\-off\\-by: Ada Lovelace \\<ada@example\\.com\\>  \n\\=\\=\\=\\=');
+  });
+
   it('reflows a closing paragraph that is not the trailers', async () => {
     const message = (
       await hover({ ...DETAILS, body: 'First line\nSigned-off-by: someone', trailers: [] })
