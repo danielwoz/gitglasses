@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CommitSummaryInfo, RequestResult } from '@gitglasses/protocol';
 import type { EngineClient } from '@gitglasses/rpc';
@@ -213,6 +214,51 @@ describe.skipIf(!enginePath)('git_compare against the engine', () => {
     expect(text).toContain('HEAD is 2 commits ahead of main and 1 behind');
     expect(text).toContain('A  feature.txt (+1 -0)');
     expect(text).toContain('(diff omitted: git_compare needs git for rendering the diff');
+  });
+
+  // A blobless clone of the repository: where git may run it downloads the
+  // contents from the clone's remote (here a local path), as git does; read
+  // without git, the counts are reported as unknown rather than as zero.
+  it('counts lines in a partial clone by downloading, or says they are unknown', async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), 'gitglasses-mcp-partial-'));
+    try {
+      git(repoDir, 'config', 'uploadpack.allowFilter', 'true');
+      const clone = path.join(parent, 'clone');
+      // A plain path would copy the objects and ignore the filter.
+      const url = pathToFileURL(repoDir).href;
+      git(parent, 'clone', '--quiet', '--filter=blob:none', '--no-checkout', url, clone);
+      const promisorPacks = (): number =>
+        git(clone, 'count-objects', '-v')
+          .split('\n')
+          .filter((line) => line.startsWith('packs:'))
+          .map((line) => Number(line.split(' ')[1]))[0];
+
+      const withoutGit = createToolHandlers({
+        client: full,
+        restrictedClient: restricted,
+        read: [clone],
+        env: {},
+      });
+      const unknown = await withoutGit.git_compare({
+        repoPath: clone,
+        base: 'origin/main',
+        head: 'origin/feature',
+      });
+      expect(unknown).toContain('A  feature.txt (+? -?: contents not in this partial clone)');
+      const before = promisorPacks();
+
+      const withGit = createToolHandlers({ client: full, allow: [clone], env: {} });
+      const counted = await withGit.git_compare({
+        repoPath: clone,
+        base: 'origin/main',
+        head: 'origin/feature',
+      });
+      expect(counted).toContain('A  feature.txt (+1 -0)');
+      expect(counted).toContain('M  app.txt (+2 -1)');
+      expect(promisorPacks()).toBeGreaterThan(before);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
   });
 
   it('names an unknown revision and where to find a valid one', async () => {

@@ -44,12 +44,15 @@ export interface ChangeLineOptions {
 
 /**
  * One changed file: status, path (with the pre-rename path when there is one)
- * and line counts.
+ * and line counts. A partial clone may lack the file's contents, and the
+ * engine reading it without git cannot download them: its counts are then
+ * unknown, not zero.
  */
 export function changeLine(change: FileChange, options: ChangeLineOptions = {}): string {
   const rename = change.origPath ? `${change.origPath} -> ` : '';
   const path = `${change.status}  ${rename}${change.path}`;
   if (options.binary) return `${path} (binary)`;
+  if (change.statsUnavailable) return `${path} (+? -?: contents not in this partial clone)`;
   if (options.omitZeroCounts && change.additions === 0 && change.deletions === 0) return path;
   return `${path} (+${change.additions} -${change.deletions})`;
 }

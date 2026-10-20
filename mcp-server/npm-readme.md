@@ -131,6 +131,11 @@ whose repositories you trust.
 `repoPath` names, so it needs an allowed repository. The other tools only
 read.
 
+In a partial (blobless or treeless) clone, a tool that needs file contents the
+clone lacks has git download them from the clone's own remote, but only in
+an allowed repository; read without git, those line counts are reported as
+unknown. `list_my_prs` is the only tool that calls a hosting service's API.
+
 The GitHub host is deliberately **not** a tool argument. A token and the host
 it authenticates to are inseparable, so both come from the environment; if the
 agent could name the host, a prompt injection would be enough to have the

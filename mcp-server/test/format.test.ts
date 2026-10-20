@@ -406,6 +406,28 @@ describe('formatCommits / formatHistory / formatCommitShow', () => {
     ]);
   });
 
+  // A blobless clone read without git: the engine cannot download the
+  // contents, so the counts it sends (0) are unknown, not "no change".
+  it('says when a partial clone lacks the contents to count lines', () => {
+    const text = formatCommitShow(
+      {
+        sha: 'a'.repeat(40),
+        parents: ['b'.repeat(40)],
+        author: sig('Alice', T),
+        committer: sig('Alice', T),
+        summary: 'Add data',
+      },
+      [
+        { path: 'data.txt', status: 'A', additions: 0, deletions: 0, statsUnavailable: true },
+        { path: 'empty.txt', status: 'A', additions: 0, deletions: 0 },
+      ],
+    );
+    expect(text.split('\n').slice(-2)).toEqual([
+      '  A  data.txt (+? -?: contents not in this partial clone)',
+      '  A  empty.txt (+0 -0)',
+    ]);
+  });
+
   it('renders commit metadata and changed files with +/- counts', () => {
     const text = formatCommitShow(
       {

@@ -273,8 +273,13 @@ everything that can reach the network, and when:
 - **Open on Remote** opens a link in your browser; **Copy Remote URL** only
   copies it.
 - **The MCP server** runs only when an agent starts it, on your machine, and
-  reads repositories through the same engine; it contacts no service unless
-  an agent calls `list_my_prs` with a GitHub token in its environment.
+  reads repositories through the same engine, so the partial clone exception
+  above applies to it too: where it may run git, a tool that needs contents
+  the clone lacks (blame, file history, the changes of a commit or a branch
+  comparison) has git download them from your own remote. Read without git,
+  it reports those line counts as unknown instead. Otherwise it contacts no
+  service unless an agent calls `list_my_prs` with a GitHub token in its
+  environment.
 
 In Restricted Mode no git runs at all, so nothing a repository configures
 (hooks, filters, credential helpers, ssh commands) can either.

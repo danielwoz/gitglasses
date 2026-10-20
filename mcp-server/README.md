@@ -193,6 +193,15 @@ directories whose repositories you trust.
 `repoPath` names, so it needs an allowed repository. The other tools only
 read.
 
+**Network.** The tools read repositories on disk. A partial (blobless or
+treeless) clone lacks some file contents by design; in an allowed repository,
+a tool that needs them (blame, file history, the files and diff of a commit
+or a comparison) has git download them from the clone's own remote with your
+git credentials, as `git blame` or `git diff` would there. The engine that
+runs no git cannot download them, so it reports those files' line counts as
+unknown. Code searches (`content`) never download. `list_my_prs` is the only
+tool that calls a hosting service's API.
+
 The GitHub host is deliberately **not** a tool argument. A token and the host
 it authenticates to are inseparable, so both come from the environment; if the
 agent could name the host, a prompt injection would be enough to have the
