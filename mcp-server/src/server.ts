@@ -1006,8 +1006,8 @@ const repoPath = z
   .string()
   .describe(
     "Absolute path to (or inside) the git repository. Only repositories inside the client's " +
-      'workspace roots, or inside the directories the server was started with (--allow, ' +
-      'GITGLASSES_ALLOWED_ROOTS), are served; other paths are rejected.',
+      'workspace roots, or inside the directories the server was started with (--read, ' +
+      '--allow, GITGLASSES_ALLOWED_ROOTS), are served; other paths are rejected.',
   );
 
 const maxChars = z

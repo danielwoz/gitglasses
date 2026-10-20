@@ -56,7 +56,10 @@ describe('tool registration', () => {
   it('says where repoPath may point', () => {
     for (const tool of tools.values()) {
       const repoPath = tool.inputSchema.properties?.repoPath;
-      if (repoPath) expect(repoPath.description, tool.name).toContain('GITGLASSES_ALLOWED_ROOTS');
+      if (repoPath) {
+        expect(repoPath.description, tool.name).toContain('GITGLASSES_ALLOWED_ROOTS');
+        expect(repoPath.description, tool.name).toContain('--read');
+      }
     }
   });
 
