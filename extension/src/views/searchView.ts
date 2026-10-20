@@ -6,8 +6,8 @@ import { isFullOrAbbreviatedSha } from './viewLogic';
 
 const SEARCH_LIMIT = 200;
 
-// Holds the last search's results; the viewsWelcome contribution shows the
-// "Search Commits…" button while the tree is empty.
+// Holds the last search's results. While the tree is empty the view shows
+// its state lines (viewStateContent.ts), which offer "Search Commits…".
 export class SearchViewProvider extends ViewBase {
   private lastQuery: string | undefined;
   /** Display label overriding the raw query text (e.g. NL-search phrasing). */
@@ -17,7 +17,7 @@ export class SearchViewProvider extends ViewBase {
   private streamCounter = 0;
 
   override async getChildren(node?: ViewNode): Promise<ViewNode[]> {
-    // Before any search: an empty tree lets the welcome content show.
+    // Before any search: an empty tree shows the view's state lines.
     if (!node && this.lastQuery === undefined) return [];
     return super.getChildren(node);
   }

@@ -36,7 +36,7 @@ export class WorktreesViewProvider extends ViewBase {
 
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
     const { worktrees } = await this.engine.request('worktree/list', { repoId: repo.repoId });
-    // An empty list lets the view's welcome content explain worktrees.
+    // An empty list shows the view's state lines, which explain worktrees.
     if (worktrees.length === 0) return [];
     return worktrees.map((worktree) => {
       const current = isSameWorktreePath(worktree.path, repo.rootPath);
