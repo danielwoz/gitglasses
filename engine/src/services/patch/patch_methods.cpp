@@ -532,10 +532,13 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
 
         const util::TempFile file = makeTempPatchFile(patch);
         if (params.value("dryRun", false)) {
+          // Listed before the result is built: GCC before 13 leaks the
+          // elements of a braced initializer list when a later one throws.
+          rpc::Json files = patchFilesJson(inspectPatch(repo, file.path(), token));
           return {{"applied", false},
                   {"conflicts", false},
                   {"baseFound", baseFound},
-                  {"files", patchFilesJson(inspectPatch(repo, file.path(), token))}};
+                  {"files", std::move(files)}};
         }
         auto output = runGit(repo, {"apply", "--3way", file.path()}, token);
         if (!output) throw rpc::HandlerError{{output.error()}};
