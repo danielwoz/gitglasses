@@ -78,6 +78,17 @@ and moved-line detection. The status bar item steps aside when VS Code's own
 blame item is showing, so a line is never described twice. Inline and status
 bar text, date style and delay are configurable (see [Settings](#settings)).
 
+**Why this line?**, the first link in the hover (also in the editor's context
+menu and the Command Palette), opens a Line Story beside the editor: the
+line's blame, its commit in full, the pull request that merged it with its
+state, merge date, comment counts and the start of its description, the
+issues they name, and the line's earlier versions, each with its diff.
+Pull requests come from GitHub, GitHub Enterprise Server or GitLab once that
+integration is connected; until then the story offers to connect and still
+links the pull request the commit message names. Earlier versions come from
+`git log -L`. In Restricted Mode, where GitGlasses runs no git and asks no
+forge, the story is the blame and the commit.
+
 *Limits:* without git (or in Restricted Mode) blame comes from the engine's
 built-in reader instead of `git blame`. Files tracked with Git LFS show where
 their content last changed instead of line blame, since git only stores a
@@ -351,6 +362,7 @@ in Restricted Mode.
 | GitGlasses: Open Changes with HEAD | `gitglasses.diffWithHead` |  |
 | GitGlasses: Open File at Revision | `gitglasses.openFileAtRevision` |  |
 | GitGlasses: Show Line History for Selection | `gitglasses.showLineHistory` | trusted workspace |
+| GitGlasses: Why This Line? | `gitglasses.showLineStory` |  |
 | GitGlasses: Show Commit Graph | `gitglasses.showGraph` |  |
 | GitGlasses: Show Visual File History | `gitglasses.showFileHistory` | trusted workspace |
 
@@ -414,7 +426,6 @@ in Restricted Mode.
 | --- | --- | --- |
 | GitGlasses: Restart Engine | `gitglasses.restartEngine` |  |
 | GitGlasses: Refresh Views | `gitglasses.refreshViews` |  |
-| GitGlasses: Why This Line? | `gitglasses.showLineStory` |  |
 | GitGlasses: Create Repo Group from Workspace | `gitglasses.groups.create` |  |
 | GitGlasses: Open Repo Group in New Window | `gitglasses.groups.open` |  |
 | GitGlasses: Delete Repo Group | `gitglasses.groups.delete` |  |
