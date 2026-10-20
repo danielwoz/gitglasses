@@ -75,6 +75,27 @@ class Collector {
   std::vector<Event> events_;
 };
 
+// Waits until the repository's polling watch has run `count` more sweeps.
+void awaitSweeps(const WatchManager& manager, const std::string& repoId, std::uint64_t count) {
+  const auto start = manager.lastSweepCost(repoId);
+  const std::uint64_t target = (start ? start->sweeps : 0) + count;
+  for (int i = 0; i < 500; ++i) {
+    const auto cost = manager.lastSweepCost(repoId);
+    if (cost && cost->sweeps >= target) return;
+    std::this_thread::sleep_for(10ms);
+  }
+  ADD_FAILURE() << "the polling watch stopped sweeping";
+}
+
+// Starts watching a repository and returns once a change made from then on is
+// reported. A polling watch records the starting state in its first sweep, on
+// its own thread; a change made before that sweep would count as part of it.
+void watchSettled(WatchManager& manager, const std::string& repoId, const std::string& gitdir,
+                  const std::string& commondir = {}) {
+  manager.watch(repoId, gitdir, commondir);
+  if (!manager.nativeBackendActive()) awaitSweeps(manager, repoId, 1);
+}
+
 class WatchManagerTest : public ::testing::TestWithParam<WatchManager::Backend> {};
 
 TEST_P(WatchManagerTest, ReportsIndexAndCommitChangesWithIncreasingGenerations) {
@@ -86,7 +107,7 @@ TEST_P(WatchManagerTest, ReportsIndexAndCommitChangesWithIncreasingGenerations) 
   WatchManager manager(collector.callback(), GetParam());
 
   const std::string gitdir = (fixture.root() / ".git").string();
-  manager.watch("r1", gitdir);
+  watchSettled(manager, "r1", gitdir);
   manager.watch("r1", gitdir);  // idempotent: must not spawn a second watch
   EXPECT_TRUE(manager.isWatching("r1"));
   EXPECT_FALSE(manager.isWatching("r2"));
@@ -123,7 +144,7 @@ TEST_P(WatchManagerTest, ReportsWorktreeChanges) {
   gg::testing::FixtureRepo fixture;
   Collector collector;
   WatchManager manager(collector.callback(), GetParam());
-  manager.watch("r1", (fixture.root() / ".git").string());
+  watchSettled(manager, "r1", (fixture.root() / ".git").string());
 
   const std::filesystem::path linked =
       fixture.root().parent_path() / (fixture.root().filename().string() + "-wt");
@@ -187,7 +208,7 @@ TEST_P(WatchManagerTest, ReportsSharedRefChangesForALinkedWorktree) {
   ASSERT_NE(linked.gitdir().find("worktrees"), std::string::npos) << linked.gitdir();
   Collector collector;
   WatchManager manager(collector.callback(), GetParam());
-  manager.watch("r2", linked.gitdir(), linked.commondir());
+  watchSettled(manager, "r2", linked.gitdir(), linked.commondir());
 
   fixture.run("git branch from-main");
   ASSERT_TRUE(collector.waitFor({"refs"}, 0, "r2").has_value())
@@ -220,7 +241,7 @@ TEST_P(WatchManagerTest, DoesNotReportTheMainCheckoutsIndexForALinkedWorktree) {
   LinkedWorktree linked(fixture, "wt-index");
   Collector collector;
   WatchManager manager(collector.callback(), GetParam());
-  manager.watch("r2", linked.gitdir(), linked.commondir());
+  watchSettled(manager, "r2", linked.gitdir(), linked.commondir());
 
   fixture.writeFile("main-only.txt", "main\n");
   fixture.run("git add main-only.txt");
@@ -246,8 +267,8 @@ TEST_P(WatchManagerTest, KeepsSharedDirectoriesWatchedForEveryRepository) {
   LinkedWorktree linked(fixture, "wt-both");
   Collector collector;
   WatchManager manager(collector.callback(), GetParam());
-  manager.watch("r1", linked.commondir());
-  manager.watch("r2", linked.gitdir(), linked.commondir());
+  watchSettled(manager, "r1", linked.commondir());
+  watchSettled(manager, "r2", linked.gitdir(), linked.commondir());
 
   fixture.run("git branch seen-by-both");
   ASSERT_TRUE(collector.waitFor({"refs"}, 0, "r1").has_value()) << "main checkout missed it";
@@ -260,18 +281,6 @@ TEST_P(WatchManagerTest, KeepsSharedDirectoriesWatchedForEveryRepository) {
   ASSERT_TRUE(collector.waitFor({"refs"}, from, "r1").has_value())
       << "unwatching the linked worktree stopped the main checkout's notifications";
 #endif
-}
-
-// Waits until the repository's polling watch has run `count` more sweeps.
-void awaitSweeps(const WatchManager& manager, const std::string& repoId, std::uint64_t count) {
-  const auto start = manager.lastSweepCost(repoId);
-  const std::uint64_t target = (start ? start->sweeps : 0) + count;
-  for (int i = 0; i < 500; ++i) {
-    const auto cost = manager.lastSweepCost(repoId);
-    if (cost && cost->sweeps >= target) return;
-    std::this_thread::sleep_for(10ms);
-  }
-  ADD_FAILURE() << "the polling watch stopped sweeping";
 }
 
 // A sweep stats the directories under refs/, not every loose ref, so its
@@ -496,8 +505,8 @@ TEST(PollingWatch, BacksOffWhileNothingChanges) {
   Collector collector;
   WatchManager::PollTiming timing;
   timing.active = 25ms;
-  timing.idle = 400ms;
-  timing.idleAfter = 150ms;
+  timing.idle = 1000ms;
+  timing.idleAfter = 400ms;
   timing.fullSweep = std::chrono::hours(1);
   WatchManager manager(collector.callback(), WatchManager::Backend::kPolling, timing);
   manager.watch("r1", (fixture.root() / ".git").string());
@@ -505,17 +514,26 @@ TEST(PollingWatch, BacksOffWhileNothingChanges) {
   std::this_thread::sleep_for(1500ms);
   const auto quiet = manager.lastSweepCost("r1");
   ASSERT_TRUE(quiet.has_value());
-  // About 6 sweeps at the active pace, then one per 400 ms; without the
-  // back-off it would be about 60.
+  // At most about 16 sweeps at the active pace, then one per second; without
+  // the back-off it would be about 60.
   EXPECT_LE(quiet->sweeps, 20u);
 
-  // A change is still reported, and the pace picks up again.
+  // A change is still reported, and the pace picks up again: two more sweeps
+  // follow well within one idle interval, which the idle pace could not do.
+  // A slow machine (a sweep taking far longer than the active interval) still
+  // fits both in the active window that follows the change.
   fixture.run("git branch wake-up");
   ASSERT_TRUE(collector.waitFor({"refs"}, 0).has_value());
   const auto woken = manager.lastSweepCost("r1");
-  std::this_thread::sleep_for(100ms);
-  const auto after = manager.lastSweepCost("r1");
-  ASSERT_TRUE(woken.has_value() && after.has_value());
+  ASSERT_TRUE(woken.has_value());
+  const auto deadline = std::chrono::steady_clock::now() + timing.idle * 9 / 10;
+  auto after = woken;
+  while (after && after->sweeps < woken->sweeps + 2 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(5ms);
+    after = manager.lastSweepCost("r1");
+  }
+  ASSERT_TRUE(after.has_value());
   EXPECT_GE(after->sweeps, woken->sweeps + 2) << "no faster sweeps after a change";
 #endif
 }

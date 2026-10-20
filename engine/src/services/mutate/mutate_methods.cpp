@@ -86,10 +86,10 @@ bool sshIsPlink(const core::Repo& repo) {
   if (variant == "plink" || variant == "putty" || variant == "tortoiseplink") return true;
   // The program git runs, in git's order of precedence.
   std::string command;
-  if (const char* env = std::getenv("GIT_SSH_COMMAND"); env && *env) {
-    command = env;
+  if (const char* sshCommand = std::getenv("GIT_SSH_COMMAND"); sshCommand && *sshCommand) {
+    command = sshCommand;
   } else if (command = configString(repo, "core.sshCommand"); command.empty()) {
-    if (const char* env = std::getenv("GIT_SSH"); env && *env) command = env;
+    if (const char* ssh = std::getenv("GIT_SSH"); ssh && *ssh) command = ssh;
   }
   std::transform(command.begin(), command.end(), command.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });

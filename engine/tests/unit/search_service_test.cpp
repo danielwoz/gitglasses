@@ -75,12 +75,14 @@ void buildHistory(FixtureRepo& fixture) {
   }
 }
 
+// A repository holding buildHistory's commits, made as it is constructed.
+struct HistoryRepo : FixtureRepo {
+  HistoryRepo() { buildHistory(*this); }
+};
+
 class SearchLogTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    buildHistory(fixture);
-    repoId = discoverRepo(session, fixture.root());
-  }
+  void SetUp() override { repoId = discoverRepo(session, fixture.root()); }
 
   // Runs one search/log and returns its result, asserting it succeeded.
   Json search(const std::string& streamId, Json query, int limit = 50) {
@@ -91,7 +93,9 @@ class SearchLogTest : public ::testing::Test {
     return response.value("result", Json::object());
   }
 
-  FixtureRepo fixture;
+  // Built before the session starts: making the commits sets environment
+  // variables, which the engine reads on its own thread.
+  HistoryRepo fixture;
   InteractiveSession session;
   std::string repoId;
   std::int64_t id = 10;

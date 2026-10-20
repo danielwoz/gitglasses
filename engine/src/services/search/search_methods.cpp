@@ -134,8 +134,13 @@ void registerSearchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         exec::RunOpts opts;
         // In a partial clone the pickaxe would download every blob it
         // compares; reading only what is already local keeps a search from
-        // turning into a fetch of the whole history.
-        if (!content.empty()) opts.extraEnv.push_back("GIT_NO_LAZY_FETCH=1");
+        // turning into a fetch of the whole history. Git before 2.44 (unless
+        // patched) ignores GIT_NO_LAZY_FETCH, so its lazy fetch is refused
+        // by allowing it no transport.
+        if (!content.empty()) {
+          opts.extraEnv.push_back("GIT_NO_LAZY_FETCH=1");
+          opts.extraEnv.push_back("GIT_ALLOW_PROTOCOL=none");
+        }
 
         std::int64_t total = 0;
         bool truncated = false;
@@ -171,8 +176,15 @@ void registerSearchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           throw rpc::HandlerError{{core::gitError("lookup commit " + lookupFailure)}};
         }
         if (status.value().exitCode != 0) {
-          if (!content.empty() &&
-              status.value().stderrText.find("promisor remote") != std::string::npos) {
+          // A blob that is not on disk: git 2.44 and later say they could
+          // not fetch it from the promisor remote; older ones, patched or
+          // not, that lazy fetching is disabled or the transport not allowed.
+          const std::string& stderrText = status.value().stderrText;
+          const bool missingBlob = stderrText.find("promisor remote") != std::string::npos ||
+                                   stderrText.find("lazy fetching disabled") != std::string::npos ||
+                                   (stderrText.find("transport '") != std::string::npos &&
+                                    stderrText.find("' not allowed") != std::string::npos);
+          if (!content.empty() && missingBlob) {
             throw rpc::HandlerError{
                 {ErrorCode::GitError,
                  "this repository is a partial clone without all of its file contents on disk, "

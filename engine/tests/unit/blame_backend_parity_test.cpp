@@ -320,7 +320,9 @@ TEST_F(BlameBackendParityTest, PreviousRevisionMatchesTheCli) {
     Previous lines;
     for (const auto& h : hunks) {
       EXPECT_EQ(h.previousSha.has_value(), h.previousPath.has_value());
-      if (h.previousPath) EXPECT_EQ(*h.previousPath, path);
+      if (h.previousPath) {
+        EXPECT_EQ(*h.previousPath, path);
+      }
       for (std::uint32_t l = h.resultLine; l < h.resultLine + h.lineCount; ++l) {
         lines[l] = h.previousSha;
       }

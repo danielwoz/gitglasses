@@ -3,7 +3,7 @@
 **The maintained, open git lens for VS Code and Open VSX: free on private
 repos, no account, available to your agents over MCP.**
 
-![The Commit Graph, with a commit's message, files and stats beside it](extension/media/screenshots/hero-graph.png)
+![The Commit Graph, with a commit's message, files and stats below it](extension/media/screenshots/hero-graph.png)
 
 GitGlasses is an MIT-licensed git extension for VS Code and the editors that
 install from [Open VSX](https://open-vsx.org): VSCodium, Cursor, Windsurf,

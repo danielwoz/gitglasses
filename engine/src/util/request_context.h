@@ -19,19 +19,25 @@ struct RequestContext {
 };
 
 namespace detail {
-inline thread_local RequestContext currentRequestContext;
+// A function-local thread_local rather than an inline variable: mingw-w64's
+// GCC emits the TLS init function of an inline thread_local into every
+// object file that uses it, and the link then fails on the duplicates.
+inline RequestContext& currentRequestContext() {
+  thread_local RequestContext context;
+  return context;
+}
 }  // namespace detail
 
 // The request the calling thread is serving, or an empty context.
-inline const RequestContext& currentRequest() { return detail::currentRequestContext; }
+inline const RequestContext& currentRequest() { return detail::currentRequestContext(); }
 
 // Makes `context` the calling thread's current request for its lifetime and
 // restores the previous one afterwards.
 class ScopedRequestContext {
  public:
   explicit ScopedRequestContext(RequestContext context)
-      : previous_(std::exchange(detail::currentRequestContext, std::move(context))) {}
-  ~ScopedRequestContext() { detail::currentRequestContext = std::move(previous_); }
+      : previous_(std::exchange(detail::currentRequestContext(), std::move(context))) {}
+  ~ScopedRequestContext() { detail::currentRequestContext() = std::move(previous_); }
   ScopedRequestContext(const ScopedRequestContext&) = delete;
   ScopedRequestContext& operator=(const ScopedRequestContext&) = delete;
 

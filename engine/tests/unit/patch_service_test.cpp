@@ -298,7 +298,8 @@ TEST(PatchService, StashSourceEnvelope) {
   EXPECT_EQ(envelope["summary"], "On main: stash work");
   const std::string patchText = envelope["patch"];
   EXPECT_NE(patchText.find("+working"), std::string::npos);
-  EXPECT_NE(patchText.find("b/loose.txt"), std::string::npos);
+  EXPECT_NE(patchText.find("diff --git a/s.txt b/s.txt"), std::string::npos) << patchText;
+  EXPECT_NE(patchText.find("diff --git a/loose.txt b/loose.txt"), std::string::npos) << patchText;
 
   // The worktree is clean after the stash push, so the envelope re-applies
   // in place.
@@ -396,6 +397,8 @@ TEST(PatchService, PatchesIgnoreConfigThatChangesDiffOutput) {
 
   fixture.run("git config diff.noprefix true");
   fixture.run("git config diff.mnemonicPrefix true");
+  fixture.run("git config diff.srcPrefix src/");
+  fixture.run("git config diff.dstPrefix dst/");
   fixture.run("git config color.ui always");
   fixture.run("git config color.diff always");
   fixture.run("git config diff.external gg-no-such-diff-tool");
@@ -440,6 +443,8 @@ TEST(PatchService, PatchesIgnoreConfigThatChangesDiffOutput) {
   fixture.writeFile("img.bin", binary1);
   fixture.run("git stash push -q -m \"binary stash\"");
   Json fromStash = createPatch(session, 14, repoA, {{"kind", "stash"}, {"index", 0}});
+  const std::string stashText = fromStash["patch"];
+  EXPECT_NE(stashText.find("diff --git a/img.bin b/img.bin"), std::string::npos) << stashText;
   Json appliedStash = applyPatch(session, 15, repoA, fromStash);
   EXPECT_TRUE(appliedStash["applied"].get<bool>()) << appliedStash.dump();
   EXPECT_EQ(slurp(fixture.root() / "img.bin"), binary1);

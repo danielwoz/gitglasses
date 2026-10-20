@@ -36,7 +36,9 @@ std::string trimmed(std::string text) {
 
 // The commit `spec` names, or empty when it names none.
 std::string rev(const std::filesystem::path& root, const std::string& spec) {
-  return trimmed(gg::testing::gitCapture(root, "rev-parse --verify -q " + spec, /*quiet=*/true));
+  // Quoted: cmd.exe drops a caret outside quotes (HEAD^2 would reach git as HEAD2).
+  return trimmed(
+      gg::testing::gitCapture(root, "rev-parse --verify -q \"" + spec + "\"", /*quiet=*/true));
 }
 
 std::string config(const std::filesystem::path& root, const std::string& key) {

@@ -19,6 +19,7 @@ namespace gg::services::mutate_detail {
 
 namespace {
 
+#ifndef _WIN32
 // The subcommand of a git argv: the first word after the global options (-c
 // and -C take their value as the next word).
 std::string_view subcommandOf(const std::vector<std::string>& args) {
@@ -28,6 +29,7 @@ std::string_view subcommandOf(const std::vector<std::string>& args) {
   }
   return i < args.size() ? std::string_view(args[i]) : std::string_view();
 }
+#endif
 
 // Value of a string config entry, with the level it was found at.
 struct ConfigValue {

@@ -176,15 +176,6 @@ std::string logOrderKey(const core::Repo& repo, const git_oid& tip) {
   return key;
 }
 
-// Holds a sequence's lock, waiting in slices so a cancelled request stops
-// waiting for another request's walk.
-std::unique_lock<std::timed_mutex> lockOrder(history_detail::LogOrder& order,
-                                             const CancelToken& token) {
-  std::unique_lock lock(order.mutex, std::defer_lock);
-  while (!lock.try_lock_for(std::chrono::milliseconds(50))) token.throwIfCancelled();
-  return lock;
-}
-
 // Extends the forced run (see LogOrder) until it holds `want` commits, reaches
 // a root (the run is then the whole history), or ends at a merge.
 void extendRun(const core::Repo& repo, const git_oid& tip, history_detail::LogOrder& order,
@@ -363,7 +354,7 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
         bool hasMore = false;
         std::size_t start = position ? position->offset : 0;
         {
-          auto lock = lockOrder(*order, token);
+          const history_detail::OrderHold hold(*order, token);
           if (!cursor.empty() && !position) {
             // Legacy cursor: the sha of the next commit under the current tip.
             git_oid next;

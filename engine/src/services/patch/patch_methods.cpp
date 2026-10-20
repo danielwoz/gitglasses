@@ -67,19 +67,25 @@ RawGitOutput runGitRawOrThrow(const core::Repo& repo, std::vector<std::string> a
 
 // `git <command> <rest>` for a command that prints a patch, with the options
 // that make the patch one `git apply` reads back whatever the user's config
-// says: no colour, a/ and b/ prefixes (diff.noprefix and
-// diff.mnemonicPrefix would change them), binary content with full blob ids
-// instead of "Binary files differ", no external diff (diff.external,
-// GIT_EXTERNAL_DIFF) or textconv driver, submodules as commit lines rather
-// than diff.submodule's log or diff formats, and three lines of context
-// (git apply refuses the context-free hunks diff.context=0 makes).
+// says: no colour, a/ and b/ prefixes (diff.noprefix, diff.mnemonicPrefix,
+// diff.srcPrefix and diff.dstPrefix would change them), binary content with
+// full blob ids instead of "Binary files differ", no external diff
+// (diff.external, GIT_EXTERNAL_DIFF) or textconv driver, submodules as commit
+// lines rather than diff.submodule's log or diff formats, and three lines of
+// context (git apply refuses the context-free hunks diff.context=0 makes).
+// The prefixes are pinned through config rather than --src-prefix and
+// --dst-prefix: git 2.52 to 2.55 free those option strings before
+// `git stash show` writes its diff, which then carries garbage prefixes.
 std::vector<std::string> patchCommand(std::vector<std::string> command,
                                       const std::vector<std::string>& rest) {
-  std::vector<std::string> args = {"-c", "color.ui=never",           "-c", "diff.noprefix=false",
-                                   "-c", "diff.mnemonicPrefix=false"};
+  std::vector<std::string> args;
+  for (const char* setting : {"color.ui=never", "diff.noprefix=false", "diff.mnemonicPrefix=false",
+                              "diff.srcPrefix=a/", "diff.dstPrefix=b/"}) {
+    args.insert(args.end(), {"-c", setting});
+  }
   args.insert(args.end(), command.begin(), command.end());
-  for (const char* option : {"--binary", "--no-ext-diff", "--no-textconv", "--no-color",
-                             "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short", "-U3"}) {
+  for (const char* option :
+       {"--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--submodule=short", "-U3"}) {
     args.emplace_back(option);
   }
   args.insert(args.end(), rest.begin(), rest.end());
@@ -526,10 +532,13 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
 
         const util::TempFile file = makeTempPatchFile(patch);
         if (params.value("dryRun", false)) {
+          // Listed before the result is built: GCC before 13 leaks the
+          // elements of a braced initializer list when a later one throws.
+          rpc::Json files = patchFilesJson(inspectPatch(repo, file.path(), token));
           return {{"applied", false},
                   {"conflicts", false},
                   {"baseFound", baseFound},
-                  {"files", patchFilesJson(inspectPatch(repo, file.path(), token))}};
+                  {"files", std::move(files)}};
         }
         auto output = runGit(repo, {"apply", "--3way", file.path()}, token);
         if (!output) throw rpc::HandlerError{{output.error()}};

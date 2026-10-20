@@ -3,7 +3,7 @@
 **The maintained, open git lens for VS Code and Open VSX: free on private
 repos, no account, available to your agents over MCP.**
 
-![The Commit Graph, with a commit's message, files and stats beside it](https://raw.githubusercontent.com/danielwoz/gitglasses/main/extension/media/screenshots/hero-graph.png)
+![The Commit Graph, with a commit's message, files and stats below it](https://raw.githubusercontent.com/danielwoz/gitglasses/main/extension/media/screenshots/hero-graph.png)
 
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gitglasses.gitglasses) ·
 [Open VSX](https://open-vsx.org/extension/gitglasses/gitglasses) ·
