@@ -4,7 +4,15 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <filesystem>
+#include <map>
+#include <sstream>
+#include <string>
 #include <thread>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include "test_fixtures.h"
 
@@ -137,6 +145,97 @@ TEST(GitProcess, SpawnFailsInMissingDirectory) {
     EXPECT_NE(process.value().wait(token), 0);
   }
 }
+
+#ifndef _WIN32
+
+// Runs `git <args>` in `dir` to completion and returns its stdout.
+std::string runToEnd(const std::filesystem::path& dir, std::vector<std::string> args) {
+  auto process = GitProcess::spawn(dir.string(), std::move(args));
+  EXPECT_TRUE(process.ok()) << process.error().message;
+  if (!process.ok()) return {};
+  CancelToken token;
+  std::string out = process.value().readAll(token);
+  EXPECT_EQ(process.value().wait(token), 0) << process.value().stderrOutput();
+  return out;
+}
+
+// A helper that a hook or alias leaves running in the background must not
+// keep the request open: once git exits, stdout reaches EOF even though the
+// helper lives on, because the helper holds no copy of the output pipes.
+TEST(GitProcess, BackgroundedDescendantDoesNotHoldOutputOpen) {
+  gg::testing::FixtureRepo fixture;
+  const auto start = std::chrono::steady_clock::now();
+  runToEnd(fixture.root(), {"-c", "alias.bg=!(exec </dev/null >/dev/null 2>&1; sleep 5) &", "bg"});
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+  EXPECT_LT(elapsed.count(), 3000) << "the backgrounded helper held the output pipe open";
+}
+
+TEST(GitProcess, HookHelperLeftRunningDoesNotDelayACommit) {
+  gg::testing::FixtureRepo fixture;
+  const std::filesystem::path hook = fixture.root() / ".git" / "hooks" / "pre-commit";
+  std::filesystem::create_directories(hook.parent_path());
+  fixture.writeFile(".git/hooks/pre-commit",
+                    "#!/bin/sh\n(exec </dev/null >/dev/null 2>&1; sleep 5) &\nexit 0\n");
+  std::filesystem::permissions(hook, std::filesystem::perms::owner_all);
+
+  CancelToken token;
+  const auto start = std::chrono::steady_clock::now();
+  auto status = runGit(fixture.root().string(), {"commit", "-q", "--allow-empty", "-m", "hooked"},
+                       {}, token, [](std::string) {});
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+  ASSERT_TRUE(status.ok()) << status.error().message;
+  EXPECT_EQ(status.value().exitCode, 0) << status.value().stderrText;
+  EXPECT_LT(elapsed.count(), 3000) << "the hook's helper held the output pipe open";
+}
+
+#endif  // !_WIN32
+
+#ifdef __linux__
+
+// The open descriptors of a shell git starts, mapped to their link targets
+// ("pipe:[inode]" for a pipe). The listing's own command substitution shows up
+// as one more pipe, distinct from the output pipes.
+std::map<int, std::string> childDescriptors(const std::filesystem::path& dir) {
+  const std::string listing = runToEnd(
+      dir, {"-c", "alias.fds=!for f in /proc/$$/fd/*; do echo \"${f##*/} $(readlink $f)\"; done",
+            "fds"});
+  std::map<int, std::string> fds;
+  std::istringstream lines(listing);
+  int fd = -1;
+  std::string target;
+  while (lines >> fd >> target) fds[fd] = target;
+  return fds;
+}
+
+TEST(GitProcess, ChildHoldsNoExtraCopyOfItsOutputPipes) {
+  gg::testing::FixtureRepo fixture;
+  const std::map<int, std::string> fds = childDescriptors(fixture.root());
+  ASSERT_TRUE(fds.count(1) && fds.count(2)) << "listing failed";
+  for (const auto& [fd, target] : fds) {
+    if (fd <= 2) continue;
+    EXPECT_NE(target, fds.at(1)) << "fd " << fd << " is another copy of stdout";
+    EXPECT_NE(target, fds.at(2)) << "fd " << fd << " is another copy of stderr";
+  }
+}
+
+// A child in its own session has no controlling terminal, so ssh and similar
+// prompts fail at once instead of stopping on SIGTTIN.
+TEST(GitProcess, ChildRunsInItsOwnSessionWithoutATerminal) {
+  gg::testing::FixtureRepo fixture;
+  const std::string stat = runToEnd(fixture.root(), {"-c", "alias.st=!cat /proc/$$/stat", "st"});
+  const size_t close = stat.rfind(')');
+  ASSERT_NE(close, std::string::npos) << stat;
+  std::istringstream fields(stat.substr(close + 1));
+  std::string state;
+  long ppid = 0, pgrp = 0, session = 0, ttyNr = -1;
+  fields >> state >> ppid >> pgrp >> session >> ttyNr;
+  EXPECT_NE(session, static_cast<long>(getsid(0))) << stat;
+  EXPECT_EQ(ttyNr, 0) << stat;
+}
+
+#endif  // __linux__
 
 }  // namespace
 }  // namespace gg::exec

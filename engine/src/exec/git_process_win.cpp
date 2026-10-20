@@ -125,6 +125,33 @@ struct HandleCloser {
   HANDLE release() { return std::exchange(handle, nullptr); }
 };
 
+// A process-thread attribute list naming the only handles a child inherits.
+// Without it, CreateProcessW with bInheritHandles=TRUE hands the child every
+// inheritable handle in the engine, including the pipe write ends of other
+// requests' children spawned concurrently, whose readers then wait for this
+// child and anything it leaves running before they see EOF.
+class InheritedHandleList {
+ public:
+  bool init(HANDLE* handles, size_t count) {
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    storage_.resize(size);
+    auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage_.data());
+    if (!InitializeProcThreadAttributeList(list, 1, 0, &size)) return false;
+    list_ = list;
+    return UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+                                     count * sizeof(HANDLE), nullptr, nullptr) != 0;
+  }
+  ~InheritedHandleList() {
+    if (list_) DeleteProcThreadAttributeList(list_);
+  }
+  LPPROC_THREAD_ATTRIBUTE_LIST get() const { return list_; }
+
+ private:
+  std::vector<unsigned char> storage_;
+  LPPROC_THREAD_ATTRIBUTE_LIST list_ = nullptr;
+};
+
 }  // namespace
 
 Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args,
@@ -137,12 +164,7 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   for (auto& a : args) fullArgs.push_back(std::move(a));
   std::wstring commandLine = buildCommandLine(fullArgs);
 
-  // Scrubbed additions applied on top of the inherited environment (see the
-  // POSIX implementation); caller entries come last so they win.
-  std::vector<std::string> overrides = {"GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
-                                        "LC_ALL=C"};
-  overrides.insert(overrides.end(), opts.extraEnv.begin(), opts.extraEnv.end());
-  std::vector<wchar_t> environment = buildEnvironmentBlock(overrides);
+  std::vector<wchar_t> environment = buildEnvironmentBlock(childEnvOverrides(opts));
 
   SECURITY_ATTRIBUTES inheritable{};
   inheritable.nLength = sizeof(inheritable);
@@ -174,20 +196,31 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   SetInformationJobObject(job.handle, JobObjectExtendedLimitInformation, &limits,
                           sizeof(limits));
 
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  startup.dwFlags = STARTF_USESTDHANDLES;
-  startup.hStdInput = stdinNul.handle;
-  startup.hStdOutput = stdoutWrite.handle;
-  startup.hStdError = stderrWrite.handle;
+  // The three child-side handles stay inheritable, as the list requires, and
+  // are the only ones the child receives.
+  HANDLE inherited[] = {stdinNul.handle, stdoutWrite.handle, stderrWrite.handle};
+  InheritedHandleList handleList;
+  if (!handleList.init(inherited, sizeof(inherited) / sizeof(inherited[0]))) {
+    return Error{ErrorCode::Internal,
+                 "cannot build the inherited handle list: error " + std::to_string(GetLastError())};
+  }
+
+  STARTUPINFOEXW startup{};
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = stdinNul.handle;
+  startup.StartupInfo.hStdOutput = stdoutWrite.handle;
+  startup.StartupInfo.hStdError = stderrWrite.handle;
+  startup.lpAttributeList = handleList.get();
 
   PROCESS_INFORMATION info{};
   // lpApplicationName stays null so CreateProcessW resolves git.exe through
   // the standard search order (PATH included). Suspended start lets the
   // process join the job before it can spawn children of its own.
   if (!CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE,
-                      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-                      environment.data(), nullptr, &startup, &info)) {
+                      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW |
+                          EXTENDED_STARTUPINFO_PRESENT,
+                      environment.data(), nullptr, &startup.StartupInfo, &info)) {
     return Error{ErrorCode::Internal,
                  "failed to spawn git: CreateProcessW error " + std::to_string(GetLastError())};
   }
