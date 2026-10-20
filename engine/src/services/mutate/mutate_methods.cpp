@@ -1,11 +1,15 @@
 #include "services/mutate/mutate_methods.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "exec/git_process.h"
 
+#include "services/mutate/git_errors.h"
 #include "services/mutate/mutate_common.h"
 #include "services/params.h"
 
@@ -69,6 +73,42 @@ void rememberPullStrategy(const core::Repo& repo, const std::string& strategy,
     if (configString(repo, "pull.ff") == "only") set("pull.ff", "true");
   } else {
     set("pull.ff", "only");
+  }
+}
+
+// True when git reaches ssh remotes through PuTTY's plink or TortoisePlink,
+// which never run SSH_ASKPASS: whatever they need to ask fails, so the
+// failure says so instead of offering prompts that cannot appear.
+bool sshIsPlink(const core::Repo& repo) {
+  std::string variant = configString(repo, "ssh.variant");
+  std::transform(variant.begin(), variant.end(), variant.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (variant == "plink" || variant == "putty" || variant == "tortoiseplink") return true;
+  // The program git runs, in git's order of precedence.
+  std::string command;
+  if (const char* env = std::getenv("GIT_SSH_COMMAND"); env && *env) {
+    command = env;
+  } else if (command = configString(repo, "core.sshCommand"); command.empty()) {
+    if (const char* env = std::getenv("GIT_SSH"); env && *env) command = env;
+  }
+  std::transform(command.begin(), command.end(), command.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return command.find("plink") != std::string::npos;
+}
+
+// Runs a remote-facing git invocation, marking a failure that went through
+// plink with data.sshProgram 'plink'.
+template <typename Run>
+auto throughSsh(const core::Repo& repo, Run&& run) -> decltype(run()) {
+  try {
+    return run();
+  } catch (rpc::HandlerError& error) {
+    if (error.error.code == ErrorCode::GitError && sshIsPlink(repo)) {
+      if (error.data.is_null()) error.data = describeGitFailure(error.error.message);
+      if (error.data.is_null()) error.data = {{"kind", "auth"}};
+      error.data["sshProgram"] = "plink";
+    }
+    throw;
   }
 }
 
@@ -222,7 +262,9 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           args.push_back("--");
           args.push_back(remote);
         }
-        runGitOrThrow(repo, std::move(args), token, "git fetch", exec::kNetworkGitTimeout);
+        throughSsh(repo, [&] {
+          return runGitOrThrow(repo, std::move(args), token, "git fetch", exec::kNetworkGitTimeout);
+        });
         return rpc::Json::object();
       },
       rpc::Mode::SerialNetwork);
@@ -256,7 +298,10 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           args.push_back("--ff-only");
         }
         if (params.value("autoStash", false)) args.push_back("--autostash");
-        return runConflictAware(repo, std::move(args), token, "git pull", exec::kNetworkGitTimeout);
+        return throughSsh(repo, [&] {
+          return runConflictAware(repo, std::move(args), token, "git pull",
+                                  exec::kNetworkGitTimeout);
+        });
       },
       rpc::Mode::SerialNetwork);
 
@@ -292,7 +337,9 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           args.push_back("HEAD");
           result["remote"] = remote;
         }
-        runGitOrThrow(repo, std::move(args), token, "git push", exec::kNetworkGitTimeout);
+        throughSsh(repo, [&] {
+          return runGitOrThrow(repo, std::move(args), token, "git push", exec::kNetworkGitTimeout);
+        });
         return result;
       },
       rpc::Mode::SerialNetwork);

@@ -3746,6 +3746,10 @@
       },
       "partialClone": {
         "type": "boolean"
+      },
+      "sshProgram": {
+        "const": "plink",
+        "type": "string"
       }
     }
   },

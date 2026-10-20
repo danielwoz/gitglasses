@@ -156,6 +156,25 @@ TEST(Publish, NoRemoteAtAllSaysSo) {
   EXPECT_EQ(push["error"]["data"]["remotes"], Json::array());
 }
 
+// PuTTY's plink never runs SSH_ASKPASS; a failure through it says so.
+TEST(Publish, AFailureThroughPlinkSaysSo) {
+  FixtureRepo fixture;
+  withRemotes(fixture, {});
+  fixture.run("git remote add origin \"fakehost:/nowhere.git\"");
+  fixture.run("git config core.sshCommand \"" + (fixture.root() / "PLINK.EXE").string() + "\"");
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+  const Json fetch = session.request(req(3, "mutate/fetch", {{"repoId", repoId}}));
+  ASSERT_TRUE(fetch.contains("error")) << fetch.dump();
+  EXPECT_EQ(fetch["error"]["data"]["sshProgram"], "plink") << fetch.dump();
+
+  fixture.run("git config --unset core.sshCommand");
+  const Json plain = session.request(req(4, "mutate/fetch", {{"repoId", repoId}}));
+  ASSERT_TRUE(plain.contains("error")) << plain.dump();
+  EXPECT_FALSE(plain["error"].contains("data") && plain["error"]["data"].contains("sshProgram"))
+      << plain.dump();
+}
+
 // --- Pulling a diverged branch -------------------------------------------------------
 
 // main has one commit the remote lacks and the remote one main lacks.

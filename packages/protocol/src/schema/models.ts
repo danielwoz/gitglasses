@@ -400,6 +400,9 @@ export const GitErrorData = Type.Object(
     host: Type.Optional(Type.String()),
     /** The failure came from fetching objects a partial clone left out. */
     partialClone: Type.Optional(Type.Boolean()),
+    /** git reaches ssh remotes through PuTTY's plink, which cannot show
+     *  prompts through the client (it ignores SSH_ASKPASS). */
+    sshProgram: Type.Optional(Type.Literal('plink')),
   },
   {
     ...strict,

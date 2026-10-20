@@ -89,6 +89,13 @@ export function describeFailure(
     actions: FailurePresentation['actions'],
   ): FailurePresentation => ({ message, actions, silent: false });
 
+  if (data?.sshProgram === 'plink' && data.kind !== 'cancelled') {
+    return present(
+      `${label} failed: git uses PuTTY's plink for ssh, and plink cannot ask for passwords or ` +
+        'passphrases here. Load your key into Pageant, or let git use OpenSSH.',
+      [...retry, SHOW_LOG],
+    );
+  }
   switch (data?.kind) {
     case 'cancelled':
       return { message: `${label} cancelled.`, actions: [], silent: true };

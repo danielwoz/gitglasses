@@ -116,6 +116,9 @@ describe('failure presentation', () => {
     );
     expect(stopped.message).toBe('Revert stopped: error: hook declined');
     expect(operationActions('none')).toEqual([]);
+    expect(
+      describeFailure('Fetch', gitError('', { kind: 'auth', sshProgram: 'plink' })).message,
+    ).toContain('Pageant');
   });
 
   it('offers merge or rebase, once or for good, for a diverged branch', () => {
