@@ -412,6 +412,11 @@
         "title": "Git Commands… (Keyboard Shortcut)",
         "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "gitglasses.comingFromGitGraph",
+        "title": "Coming from Git Graph?",
+        "category": "GitGlasses"
       }
     ],
     "viewsContainers": {
@@ -488,7 +493,7 @@
           {
             "id": "graph",
             "title": "Read your history in the Commit Graph",
-            "description": "The graph shows branches, merges and authorship together, on public and private repositories alike.\n[Show Commit Graph](command:gitglasses.showGraph)",
+            "description": "The graph shows branches, merges and authorship together, on public and private repositories alike.\n[Show Commit Graph](command:gitglasses.showGraph)\nComing from Git Graph? [Carry your settings over](command:gitglasses.comingFromGitGraph).",
             "media": {
               "markdown": "media/walkthrough/graph.md"
             },
@@ -645,6 +650,13 @@
         {
           "command": "gitglasses.showFileHistory",
           "when": "view == gitglasses.views.fileHistory && isWorkspaceTrusted",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "gitglasses.showGraph",
+          "when": "scmProvider == git || scmProvider == gitglasses",
           "group": "navigation"
         }
       ],

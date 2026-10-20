@@ -61,6 +61,7 @@ import { ModeController } from './modes/modeController';
 import { registerSuggestChange } from './reviews/suggestCommands';
 import { registerCommitDetails } from './commitDetails/commitDetails';
 import { openWalkthrough } from './home/walkthrough';
+import { registerGitGraphMigration } from './onboarding/gitGraphMigration';
 
 /** Views whose contents follow HEAD and the ref graph. */
 export const HISTORY_VIEWS = [
@@ -418,6 +419,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     vscode.commands.registerCommand('gitglasses.selectRepository', () => activeRepo.pick()),
     ...registerKeyboardShortcuts(),
     vscode.commands.registerCommand('gitglasses.openWalkthrough', () => openWalkthrough(deps.log)),
+    ...registerGitGraphMigration(context),
     vscode.commands.registerCommand('gitglasses.loadMore', (loadMore: unknown) => {
       if (typeof loadMore === 'function') (loadMore as () => void)();
     }),

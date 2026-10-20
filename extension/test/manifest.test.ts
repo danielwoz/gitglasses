@@ -1,6 +1,7 @@
 // What the manifest promises the user before any code runs: palette entries
 // only where a command can act, one category for every command, a focused
-// default sidebar, and view states the extension renders itself.
+// default sidebar, view states the extension renders itself, and the
+// Commit Graph one click from Source Control.
 
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
@@ -48,6 +49,7 @@ const ALWAYS_AVAILABLE = new Set([
   'gitglasses.ai.clearApiKey',
   'gitglasses.switchMode',
   'gitglasses.openWalkthrough',
+  'gitglasses.comingFromGitGraph',
 ]);
 
 describe('command palette', () => {
@@ -122,5 +124,29 @@ describe('sidebar', () => {
 
   it('contributes no welcome content, which some hosts show in place of the tree', () => {
     expect(manifest.contributes.viewsWelcome).toBeUndefined();
+  });
+});
+
+describe('Source Control', () => {
+  it('adds a Commit Graph button to the title bar of git repositories', () => {
+    const item = (menus['scm/title'] ?? []).find(
+      (entry) => entry.command === 'gitglasses.showGraph',
+    );
+    expect(item?.group).toBe('navigation');
+    expect(item?.when).toMatch(/\bscmProvider == git\b/);
+  });
+});
+
+describe('walkthrough', () => {
+  it('links only commands the extension contributes', () => {
+    const contributed = new Set(commands.map((command) => command.command));
+    for (const step of walkthroughs[0].steps) {
+      for (const match of step.description.matchAll(/\(command:([\w.]+)\)/g)) {
+        expect(contributed.has(match[1]), match[1]).toBe(true);
+      }
+      for (const event of step.completionEvents ?? []) {
+        expect(contributed.has(event.replace(/^onCommand:/, '')), event).toBe(true);
+      }
+    }
   });
 });
