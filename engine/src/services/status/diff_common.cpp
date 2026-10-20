@@ -11,6 +11,7 @@
 
 #include "exec/git_runner.h"
 #include "rpc/dispatcher.h"
+#include "util/utf8_path.h"
 
 namespace gg::services::status_detail {
 
@@ -45,13 +46,9 @@ bool isRegularFileMode(std::uint32_t mode) {
   return mode == GIT_FILEMODE_BLOB || mode == GIT_FILEMODE_BLOB_EXECUTABLE;
 }
 
-// A filesystem path from UTF-8 text. On Windows a path built from a narrow
-// string goes through the ANSI code page and misreads non-ASCII names.
-std::filesystem::path pathFromUtf8(const std::string& text) {
-  std::u8string utf8;
-  utf8.reserve(text.size());
-  for (const char c : text) utf8.push_back(static_cast<char8_t>(c));
-  return std::filesystem::path(utf8);
+// A filesystem path from UTF-8 text (see util::pathFromUtf8).
+inline std::filesystem::path pathFromUtf8(const std::string& text) {
+  return util::pathFromUtf8(text);
 }
 
 std::string lowercase(std::string text) {

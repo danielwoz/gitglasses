@@ -402,6 +402,18 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   EXPECT_FALSE(details.value("files", Json::array()).empty());
   checkedRequest(session, 23, "commit/details",
                  {{"repoId", repoId}, {"sha", log["commits"].back()["sha"]}});
+
+  checkedRequest(session, 24, "tag/create",
+                 {{"repoId", repoId}, {"name", "v2.0"}, {"message", "annotated"}});
+  checkedRequest(session, 25, "tag/delete", {{"repoId", repoId}, {"name", "v2.0"}});
+  checkedRequest(session, 26, "branch/rename",
+                 {{"repoId", repoId}, {"name", "feature"}, {"newName", "feature-2"}});
+  checkedRequest(session, 27, "branch/setUpstream", {{"repoId", repoId}, {"name", "feature-2"}});
+  // A dry run resolves the destination without contacting the remote.
+  fixture.run("git remote add origin https://example.invalid/contract.git");
+  Json pushTarget = checkedRequest(session, 28, "branch/push",
+                                   {{"repoId", repoId}, {"name", "feature-2"}, {"dryRun", true}});
+  EXPECT_EQ(pushTarget.value("branch", ""), "feature-2");
 }
 
 // search/log answers and refuses as its schema says, and its streamed matches
@@ -527,6 +539,14 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
          "option-like createBranch");
   reject("commit/details", {{"repoId", repoId}, {"sha", "--output=/dev/null"}},
          "option-like commit/details sha");
+  reject("branch/rename", {{"repoId", repoId}, {"name", "main"}, {"newName", "--force"}},
+         "option-like new branch name");
+  reject("branch/push", {{"repoId", repoId}, {"name", "main"}, {"remote", "--exec=x"}},
+         "option-like push remote");
+  reject("tag/push", {{"repoId", repoId}, {"name", "v1"}, {"remote", "--mirror"}},
+         "option-like tag remote");
+  reject("remote/add", {{"repoId", repoId}, {"name", "x"}, {"url", "--upload-pack=x"}},
+         "option-like remote url");
 
   // Empty strings never stand in for an omitted value.
   reject("mutate/fetch", {{"repoId", repoId}, {"remote", ""}}, "empty remote");
@@ -576,6 +596,8 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
           {"upstream", "HEAD"},
           {"plan", Json::array({{{"action", "pick"}, {"sha", ""}, {"summary", "x"}}})}},
          "rebase step without a sha");
+  reject("rebase/start", {{"repoId", repoId}, {"upstream", "HEAD"}, {"plan", Json::array()}},
+         "empty rebase plan");
 
   // Sync options outside their enumerations.
   reject("mutate/pull", {{"repoId", repoId}, {"strategy", "octopus"}}, "unknown pull strategy");

@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PLAN_ACTIONS,
+  actionForKey,
+  autosquash,
+  hasAutosquashCandidates,
+  isStalePlanRefusal,
+  mergePlan,
   move,
   planFromPreview,
   setAction,
   setMessage,
+  showsMessage,
   toRebaseEntries,
   validate,
 } from '../webviews-src/rebase/rebaseLogic';
@@ -27,6 +34,17 @@ describe('planFromPreview', () => {
       { sha: B, summary: 'second', action: 'pick', message: '' },
       { sha: C, summary: 'third', action: 'pick', message: '' },
     ]);
+  });
+});
+
+describe('planFromPreview with actions', () => {
+  it('keeps the actions a prepared todo already has', () => {
+    expect(
+      planFromPreview([
+        { sha: A, summary: 'first' },
+        { sha: B, summary: 'fixup! first', action: 'fixup' },
+      ]).map((entry) => entry.action),
+    ).toEqual(['pick', 'fixup']);
   });
 });
 
@@ -101,6 +119,23 @@ describe('validate', () => {
     expect(validate(setAction(plan(), 1, 'squash'))).toEqual([]);
   });
 
+  it('rejects a reword without a message, which would silently do nothing', () => {
+    const p = setAction(plan(), 1, 'reword');
+    expect(validate(p)).toEqual([
+      'Enter the new message for bbbbbbb, or pick instead of reword.',
+    ]);
+    expect(validate(setMessage(p, 1, '   '))).toHaveLength(1);
+    expect(validate(setMessage(p, 1, 'second, reworded'))).toEqual([]);
+  });
+
+  it('leaves reword messages to git for a todo handed back to it', () => {
+    expect(validate(setAction(plan(), 1, 'reword'), { messages: false })).toEqual([]);
+  });
+
+  it('accepts a squash without a message: git combines the messages', () => {
+    expect(validate(setAction(plan(), 1, 'squash'))).toEqual([]);
+  });
+
   it('rejects a plan where every entry is dropped', () => {
     let p = plan();
     for (let i = 0; i < p.length; i++) p = setAction(p, i, 'drop');
@@ -140,5 +175,161 @@ describe('toRebaseEntries', () => {
     let p = setAction(plan(), 0, 'reword');
     p = setMessage(p, 0, '   ');
     expect(toRebaseEntries(p)[0].message).toBeUndefined();
+  });
+});
+
+describe('edit and keyboard actions', () => {
+  it('offers edit, which stops the rebase after the commit', () => {
+    expect(PLAN_ACTIONS).toContain('edit');
+    expect(toRebaseEntries(setAction(plan(), 1, 'edit'))[1]).toEqual({
+      action: 'edit',
+      sha: B,
+      summary: 'second',
+    });
+  });
+
+  it("maps git's todo letters to actions", () => {
+    expect(actionForKey('p')).toBe('pick');
+    expect(actionForKey('R')).toBe('reword');
+    expect(actionForKey('e')).toBe('edit');
+    expect(actionForKey('s')).toBe('squash');
+    expect(actionForKey('f')).toBe('fixup');
+    expect(actionForKey('d')).toBe('drop');
+    expect(actionForKey('x')).toBeUndefined();
+  });
+});
+
+describe('mergePlan', () => {
+  it('keeps choices for commits still on the branch and appends new ones', () => {
+    let edited = move(plan(), 2, 0);
+    edited = setAction(edited, 0, 'reword');
+    edited = setMessage(edited, 0, 'third, reworded');
+    edited = setAction(edited, 2, 'drop');
+    const D = 'd'.repeat(40);
+    const merged = mergePlan(edited, [
+      { sha: A, summary: 'first' },
+      { sha: C, summary: 'third (amended)' },
+      { sha: D, summary: 'fourth' },
+    ]);
+    expect(merged).toEqual([
+      { sha: C, summary: 'third (amended)', action: 'reword', message: 'third, reworded' },
+      { sha: A, summary: 'first', action: 'pick', message: '' },
+      { sha: D, summary: 'fourth', action: 'pick', message: '' },
+    ]);
+  });
+});
+
+describe('autosquash', () => {
+  const D = 'd'.repeat(40);
+  const E = 'e'.repeat(40);
+  function withFixups() {
+    return planFromPreview([
+      { sha: A, summary: 'add parser' },
+      { sha: B, summary: 'add lexer' },
+      { sha: C, summary: 'fixup! add parser' },
+      { sha: D, summary: 'squash! add lexer' },
+      { sha: E, summary: 'fixup! fixup! add parser' },
+    ]);
+  }
+
+  it('moves fixup!/squash! commits under the commit they name', () => {
+    expect(hasAutosquashCandidates(withFixups())).toBe(true);
+    expect(hasAutosquashCandidates(autosquash(withFixups()))).toBe(false);
+    expect(autosquash(withFixups()).map((entry) => [entry.summary, entry.action])).toEqual([
+      ['add parser', 'pick'],
+      ['fixup! add parser', 'fixup'],
+      ['fixup! fixup! add parser', 'fixup'],
+      ['add lexer', 'pick'],
+      ['squash! add lexer', 'squash'],
+    ]);
+  });
+
+  it('matches a sha prefix or a subject prefix the way git does', () => {
+    const p = planFromPreview([
+      { sha: A, summary: 'add parser for frames' },
+      { sha: B, summary: 'fixup! aaaaaaa' },
+      { sha: C, summary: 'fixup! add parser' },
+    ]);
+    expect(autosquash(p).map((entry) => entry.sha)).toEqual([A, B, C]);
+    expect(autosquash(p).map((entry) => entry.action)).toEqual(['pick', 'fixup', 'fixup']);
+  });
+
+  it('leaves commits whose target is not in the plan alone', () => {
+    const p = planFromPreview([
+      { sha: A, summary: 'fixup! something upstream' },
+      { sha: B, summary: 'second' },
+    ]);
+    expect(hasAutosquashCandidates(p)).toBe(false);
+    expect(autosquash(p)).toEqual(p);
+  });
+});
+
+describe('isStalePlanRefusal', () => {
+  it("recognises each of the engine's out-of-date plan refusals", () => {
+    for (const message of [
+      'the branch moved since the rebase plan was made (HEAD was 1111111, is now 2222222); reload the plan',
+      "'origin/main' moved since the rebase plan was made (it was 1111111, is now 2222222); reload the plan",
+      "rebase not started: the branch has 3333333 'late work', which the plan does not list; it was probably committed after the plan was made. Reload the plan so it is not lost.",
+      "rebase not started: the plan lists 4444444 'merge', which git will not replay: it is a merge commit or its change is already upstream. Reload the plan.",
+    ]) {
+      expect(isStalePlanRefusal(message)).toBe(true);
+    }
+  });
+
+  it('leaves other failures alone', () => {
+    expect(
+      isStalePlanRefusal('git rebase failed (1): error: cannot rebase: You have unstaged changes.'),
+    ).toBe(false);
+  });
+});
+
+describe('squash chain messages', () => {
+  const D = 'd'.repeat(40);
+  function four() {
+    return planFromPreview([
+      { sha: A, summary: 'first' },
+      { sha: B, summary: 'second' },
+      { sha: C, summary: 'third' },
+      { sha: D, summary: 'fourth' },
+    ]);
+  }
+
+  it('offers one message box per chain, on its last squash', () => {
+    // pick A, squash B, squash C, fixup D: git asks once, for A+B+C+D.
+    let p = setAction(four(), 1, 'squash');
+    p = setAction(p, 2, 'squash');
+    p = setAction(p, 3, 'fixup');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, false, true, false]);
+  });
+
+  it('keeps a box where a message was already typed, and rewords always have one', () => {
+    let p = setAction(four(), 1, 'squash');
+    p = setMessage(p, 1, 'combined');
+    p = setAction(p, 2, 'squash');
+    p = setAction(p, 3, 'reword');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, true, true, true]);
+  });
+
+  it('treats chains separated by a pick, but not by a drop, as separate', () => {
+    // pick A, squash B, pick C, squash D: two chains, two boxes.
+    let p = setAction(four(), 1, 'squash');
+    p = setAction(p, 3, 'squash');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, true, false, true]);
+    // pick A, squash B, drop C, squash D: one chain, git never sees C there.
+    p = setAction(p, 2, 'drop');
+    expect(p.map((_, index) => showsMessage(p, index))).toEqual([false, false, false, true]);
+  });
+
+  it('rejects two messages for the same combined commit', () => {
+    let p = setAction(four(), 1, 'squash');
+    p = setAction(p, 2, 'squash');
+    p = setMessage(p, 1, 'MSG FROM B');
+    p = setMessage(p, 2, 'MSG FROM C');
+    expect(validate(p).join(' ')).toContain('bbbbbbb and ccccccc are squashed into the same commit');
+    expect(validate(setMessage(p, 1, ''))).toEqual([]);
+    // A todo handed back to git takes no messages from the editor.
+    expect(validate(p, { messages: false })).toEqual([]);
+    // Separate chains each take their own message.
+    expect(validate(setAction(p, 2, 'pick'))).toEqual([]);
   });
 });

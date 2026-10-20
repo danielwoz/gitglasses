@@ -37,6 +37,8 @@ import { ShaTerminalLinkProvider } from './terminal/linkProvider';
 import { RepoGroupsManager } from './groups/repoGroups';
 import { registerGraphWebview } from './webviews/graphHost';
 import { registerRebaseWebview } from './webviews/rebaseHost';
+import { registerRefCommands } from './views/refCommands';
+import { registerRebaseTodoEditor } from './webviews/rebaseTodoEditor';
 import { registerTimelineWebview } from './webviews/timelineHost';
 import { registerGitPalette } from './commands/gitPalette';
 import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
@@ -377,7 +379,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       vscode.window.setStatusBarMessage(`Copied ${shortSha(node.sha)}`, 3000);
     }),
     vscode.commands.registerCommand('gitglasses.openCommitDiff', (node?: ViewNode) =>
-      openCommitDiff(node),
+      openCommitDiff(node, repos),
     ),
     vscode.commands.registerCommand('gitglasses.searchCommits', () => searchView.searchCommits()),
     vscode.commands.registerCommand('gitglasses.showLineHistory', async () => {
@@ -443,9 +445,18 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     registerSuggestChange(engine, repos, integrations),
   );
 
-  const rebase = registerRebaseWebview(context, engine, repos);
+  const rebase = registerRebaseWebview(context, engine, repos, deps.log);
   disposables.push(
     ...rebase.disposables,
+    ...registerRebaseTodoEditor(context, deps.log),
+    ...registerRefCommands({
+      engine,
+      repos,
+      integrations,
+      log: deps.log,
+      refresh: () => refreshViews(),
+      openRebase: (upstream) => rebase.host.open(upstream),
+    }),
     ...registerGraphWebview(context, engine, repos, (upstream) => rebase.host.open(upstream)),
     ...registerTimelineWebview(context, engine, repos),
     registerGitPalette(engine, repos, (upstream) => rebase.host.open(upstream)),

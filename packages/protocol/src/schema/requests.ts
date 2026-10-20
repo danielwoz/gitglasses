@@ -29,6 +29,23 @@ export const EmptyObject = Type.Object({}, strict);
 
 const StageAction = Type.Union([Type.Literal('stage'), Type.Literal('unstage')]);
 
+/** Where a rebase/start, rebase/continue or rebase/skip run left the rebase. */
+const RebaseRunResult = Type.Object(
+  {
+    /** git stopped on conflicts; the rebase is paused. */
+    conflicts: Type.Boolean(),
+    /** The rebase finished. False with no conflicts means a planned stop
+     *  (edit), also paused. */
+    completed: Type.Boolean(),
+    /** Present (true) when the rebase finished but git could not re-apply
+     *  the uncommitted changes it stashed first (autostash): they are kept
+     *  as stash@{0}, and the working tree may hold the conflicts of the
+     *  attempt. */
+    autoStashKept: Type.Optional(Type.Boolean()),
+  },
+  strict,
+);
+
 /** Page size the engine serves when a paged read omits `limit`. */
 export const DEFAULT_LIMIT = 100;
 
@@ -886,7 +903,8 @@ export const RequestSchemas = {
     result: EmptyObject,
   },
   'rebase/preview': {
-    description: 'Commits upstream..HEAD, oldest first — the editable rebase plan.',
+    description:
+      'The commits `git rebase -i <upstream>` will replay, in its order, oldest first: the editable rebase plan. Merges are left out (git flattens them) and so are commits whose change the upstream already has.',
     params: Type.Object(
       { repoId: Type.String(), upstream: positional('Revision to rebase onto.') },
       strict,
@@ -894,39 +912,171 @@ export const RequestSchemas = {
     result: Type.Object(
       {
         entries: Type.Array(Type.Object({ sha: Sha, summary: Type.String() }, strict)),
+        /** HEAD when the plan was made; pass it back as rebase/start's expectedHead. */
+        headSha: Sha,
+        /** The commit `upstream` named; pass it back as expectedUpstream. */
+        upstreamSha: Sha,
+        /** Merge commits in upstream..HEAD, which the rebase flattens. */
+        mergeCount: Type.Integer({ minimum: 0 }),
       },
       strict,
     ),
   },
   'rebase/start': {
     description:
-      'Executes an interactive rebase with the given plan via sequence-editor interception. Conflicts pause the rebase; repo/state then reports the sequencer step.',
+      'Executes an interactive rebase with the given plan via sequence-editor interception. A plan that no longer matches the commits git would replay is refused before anything changes. Conflicts and edit steps pause the rebase; repo/state then reports the sequencer step, and rebase/continue, rebase/skip and rebase/abort resume or end it.',
     params: Type.Object(
       {
         repoId: Type.String(),
         upstream: positional('Revision to rebase onto.'),
         plan: Type.Array(RebaseEntry, {
-          description: 'Steps in execution order. An empty plan rebases nothing.',
+          minItems: 1,
+          description:
+            'Every commit rebase/preview returned, in execution order. A commit to remove is listed with action drop: one left out means the plan is stale, and the rebase is refused.',
         }),
+        expectedHead: Type.Optional(
+          Type.String({
+            pattern: '^[0-9a-f]{40}$',
+            description: "rebase/preview's headSha. The rebase is refused when HEAD moved since.",
+          }),
+        ),
+        expectedUpstream: Type.Optional(
+          Type.String({
+            pattern: '^[0-9a-f]{40}$',
+            description:
+              "rebase/preview's upstreamSha. The rebase is refused when `upstream` moved since.",
+          }),
+        ),
+        /** Stashes uncommitted changes first and restores them afterwards (--autostash). */
+        autoStash: Type.Optional(Type.Boolean()),
+        /** Moves branches that point into the rebased range (--update-refs /
+         *  --no-update-refs). Omitted follows rebase.updateRefs. */
+        updateRefs: Type.Optional(Type.Boolean()),
       },
       strict,
     ),
-    result: Type.Object(
-      { conflicts: Type.Boolean(), completed: Type.Boolean() },
-      strict,
-    ),
+    result: RebaseRunResult,
   },
   'rebase/continue': {
-    description: 'Resumes a paused rebase once the conflicts are staged.',
+    description:
+      'Resumes a paused rebase once the conflicts are staged. A rebase rebase/start began keeps applying its plan\'s messages.',
     params: Type.Object({ repoId: Type.String() }, strict),
-    result: Type.Object(
-      { conflicts: Type.Boolean(), completed: Type.Boolean() },
-      strict,
-    ),
+    result: RebaseRunResult,
+  },
+  'rebase/skip': {
+    description: 'Resumes a paused rebase without the commit it stopped at (--skip).',
+    params: Type.Object({ repoId: Type.String() }, strict),
+    result: RebaseRunResult,
   },
   'rebase/abort': {
     description: 'Restores the pre-rebase state.',
     params: Type.Object({ repoId: Type.String() }, strict),
+    result: EmptyObject,
+  },
+  'branch/rename': {
+    description: 'Renames a local branch (git branch -m).',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Branch to rename.'),
+        newName: positional('Its new name.'),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'branch/setUpstream': {
+    description: "Sets or clears the remote-tracking branch a local branch follows.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Local branch.'),
+        upstream: optionalPositional(
+          'Remote-tracking branch to follow, e.g. origin/main. Omitted clears the upstream.',
+        ),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'branch/push': {
+    description:
+      "Pushes a local branch, checked out or not, to the remote branch of the same name. Pushing to the remote the branch tracks follows push.default: with upstream (or tracking) it updates the tracked branch, and with simple (git's default) a tracked branch of another name refuses the push rather than updating it. Publishing (setUpstream) always uses the branch's own name.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Local branch to push.'),
+        remote: optionalPositional(
+          "Remote to push to. Omitted uses the branch's pushRemote, remote.pushDefault, the remote it tracks, or the only remote; with several and none configured the push is refused.",
+        ),
+        /** Makes the pushed branch the local branch's upstream (-u). */
+        setUpstream: Type.Optional(Type.Boolean()),
+        /** Only the lease-checked force is offered; a bare --force is not. */
+        force: Type.Optional(Type.Literal('with-lease')),
+        /** Resolves the remote and branch the push would update, refusing as
+         *  the push would, without contacting the remote or pushing. */
+        dryRun: Type.Optional(Type.Boolean()),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        remote: Type.String({ description: 'The remote pushed to.' }),
+        branch: Type.String({
+          description:
+            'The branch on that remote the push updates (a full ref when it is not a branch).',
+        }),
+      },
+      strict,
+    ),
+  },
+  'tag/create': {
+    description: 'Creates a tag: annotated when a message is given, lightweight otherwise.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Tag to create.'),
+        ref: optionalPositional('Revision to tag. Omitted means HEAD.'),
+        message: Type.Optional(Type.String({ minLength: 1, description: 'Annotation message.' })),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'tag/delete': {
+    description: 'Deletes a local tag.',
+    params: Type.Object({ repoId: Type.String(), name: positional('Tag to delete.') }, strict),
+    result: EmptyObject,
+  },
+  'tag/push': {
+    description: 'Pushes a tag to a remote, or deletes it there.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Tag to push.'),
+        remote: positional('Remote to push to.'),
+        /** Deletes the tag on the remote instead; the local tag stays. */
+        delete: Type.Optional(Type.Boolean()),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'remote/add': {
+    description: 'Adds a remote.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Remote name.'),
+        url: positional('Fetch URL.'),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'remote/remove': {
+    description: 'Removes a remote and its remote-tracking branches.',
+    params: Type.Object({ repoId: Type.String(), name: positional('Remote to remove.') }, strict),
     result: EmptyObject,
   },
 

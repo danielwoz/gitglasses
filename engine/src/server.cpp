@@ -21,6 +21,7 @@
 #include "services/mutate/git_errors.h"
 #include "services/mutate/mutate_methods.h"
 #include "services/mutate/rebase_methods.h"
+#include "services/mutate/ref_methods.h"
 #include "services/mutate/stash_worktree_methods.h"
 #include "services/patch/patch_methods.h"
 #include "services/refs/refs_methods.h"
@@ -146,6 +147,7 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
   services::registerMutateMethods(dispatcher, context);
   services::registerStashWorktreeMethods(dispatcher, context);
   services::registerRebaseMethods(dispatcher, context);
+  services::registerRefMutateMethods(dispatcher, context);
   services::registerPatchMethods(dispatcher, context);
 
   // A GitError thrown without data gets it from git's output, whichever

@@ -115,10 +115,19 @@ missing file contents, and say so.
 
 ### Interactive rebase, branches and worktrees
 
-Reorder, squash, reword and drop commits in the rebase editor. Create,
-switch, merge, push and pull from the Home view and **GitGlasses: Git
-Commands…**, keep several branches checked out at once with worktrees, and
-stage or unstage single hunks from the editor.
+Reorder commits by drag and drop or Alt+↑/↓, and pick, reword, edit,
+squash, fixup, drop or autosquash them in the rebase editor. It checks the
+working tree first (offering to stash), refuses a plan the branch has moved
+past, and pauses on conflicts with Continue, Skip and Abort while you fix the
+files. With `gitglasses.rebaseEditor.enabled` it also edits the list of a
+`git rebase -i` started in a terminal.
+
+Act from the sidebar: switch, create, rename, delete, merge, rebase, push and
+compare branches; create, push and delete tags; apply, pop, drop and show
+stashes; fetch, prune, add and remove remotes. Create, switch, merge, push
+and pull from the Home view and **GitGlasses: Git Commands…** too, keep
+several branches checked out at once with worktrees, and stage or unstage
+single hunks from the editor.
 
 *Limits:* everything that changes the repository needs git and a trusted
 workspace, and none of it is available on the web.

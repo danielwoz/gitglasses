@@ -15,4 +15,17 @@ inline std::filesystem::path pathFromUtf8(const std::string& text) {
   return std::filesystem::path(utf8);
 }
 
+// The UTF-8 text of a path, with forward slashes: the form git's `sh -c`
+// accepts on every platform (Git for Windows included).
+inline std::string genericUtf8(const std::filesystem::path& path) {
+  const std::u8string utf8 = path.generic_u8string();
+  return std::string(utf8.begin(), utf8.end());
+}
+
+// The UTF-8 text of a path in its native form.
+inline std::string utf8FromPath(const std::filesystem::path& path) {
+  const std::u8string utf8 = path.u8string();
+  return std::string(utf8.begin(), utf8.end());
+}
+
 }  // namespace gg::util

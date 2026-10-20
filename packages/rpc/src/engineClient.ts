@@ -120,6 +120,8 @@ export const LONG_REQUEST_TIMEOUT_MS: Partial<Record<RequestMethod, number>> = {
   'mutate/fetch': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'mutate/pull': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'mutate/push': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'branch/push': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'tag/push': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'mutate/commit': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'search/log': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'mutate/merge': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
@@ -128,6 +130,7 @@ export const LONG_REQUEST_TIMEOUT_MS: Partial<Record<RequestMethod, number>> = {
   'mutate/sequencer': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'rebase/start': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'rebase/continue': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'rebase/skip': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
 };
 
 /** Notifications that withdraw an engine request, keyed by its params.id. */
