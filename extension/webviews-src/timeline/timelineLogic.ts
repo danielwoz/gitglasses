@@ -246,13 +246,16 @@ export function laneForEntry(assignment: LaneAssignment, entry: TimelineEntryLik
 
 export const ELLIPSIS = '…';
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
 /** `text` as it fits in `maxWidth`: whole when it fits, otherwise its longest
  *  prefix that fits with an ellipsis after it, or empty when not even the
  *  ellipsis does. `measure` gives the drawn width of a string. */
 export function fitText(text: string, maxWidth: number, measure: (text: string) => number): string {
   if (measure(text) <= maxWidth) return text;
-  // Code points, so a surrogate pair is never cut in half.
-  const chars = Array.from(text);
+  // Characters as they are drawn, so a surrogate pair, an accent or a joined
+  // emoji is never cut from the letter it belongs to.
+  const chars = Array.from(graphemes.segment(text), ({ segment }) => segment);
   let low = 0;
   let high = chars.length - 1;
   let best = measure(ELLIPSIS) <= maxWidth ? ELLIPSIS : '';

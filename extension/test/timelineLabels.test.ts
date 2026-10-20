@@ -32,6 +32,18 @@ describe('fitText', () => {
     expect(fitText('😀😀😀😀😀', 21, measure)).toBe('😀😀…');
   });
 
+  it('never splits a character drawn from several code points', () => {
+    // Measured per code point, the longest prefix that fits ends inside each
+    // of these characters; the cut falls before them instead.
+    // A combining accent stays with its letter.
+    expect(fitText('Rene\u0301 Descartes', 35, measure)).toBe('Ren…');
+    // A Devanagari vowel sign stays with its consonant.
+    expect(fitText('प्रशांत कुमार', 35, measure)).toBe('प्र…');
+    // A family emoji joined with zero-width joiners stays whole, or goes.
+    expect(fitText('👩\u200d👩\u200d👧 Family', 42, measure)).toBe('👩\u200d👩\u200d👧…');
+    expect(fitText('👩\u200d👩\u200d👧 Family', 35, measure)).toBe('…');
+  });
+
   it('gives up on a width too narrow for the ellipsis', () => {
     expect(fitText('Ada', 10, measure)).toBe('…');
     expect(fitText('Ada', 5, measure)).toBe('');
