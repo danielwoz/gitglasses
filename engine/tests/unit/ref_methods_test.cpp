@@ -27,7 +27,8 @@ std::string gitOut(const std::filesystem::path& root, const std::string& args) {
 }
 
 std::string rev(const std::filesystem::path& root, const std::string& spec) {
-  std::string sha = gg::testing::gitCapture(root, "rev-parse " + spec, /*quiet=*/true);
+  // Quoted: cmd.exe drops a caret outside quotes (HEAD^2 would reach git as HEAD2).
+  std::string sha = gg::testing::gitCapture(root, "rev-parse \"" + spec + "\"", /*quiet=*/true);
   while (!sha.empty() && sha.back() == '\n') sha.pop_back();
   return sha;
 }
