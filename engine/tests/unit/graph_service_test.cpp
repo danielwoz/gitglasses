@@ -577,7 +577,9 @@ void expectContinuous(const Json& rows) {
     // A row's top edges all end in its dot or pass through; its own lane
     // is never also a pass-through.
     for (const auto& e : row["laneEdges"]) {
-      if (e["kind"] == "line") EXPECT_NE(e["fromLane"], row["lane"]) << row.dump();
+      if (e["kind"] == "line") {
+        EXPECT_NE(e["fromLane"], row["lane"]) << row.dump();
+      }
     }
   }
 }
@@ -713,7 +715,9 @@ TEST(GraphService, RefsFilterWalksOnlyTheNamedBranches) {
   bool sawMainAtBase = false;
   for (const auto& row : feature["rows"]) {
     for (const auto& ref : row["refs"]) {
-      if (ref["name"] == "feature") EXPECT_EQ(row["sha"], rev(fixture, "feature"));
+      if (ref["name"] == "feature") {
+        EXPECT_EQ(row["sha"], rev(fixture, "feature"));
+      }
     }
     if (row["sha"] == rev(fixture, "main~1")) sawMainAtBase = true;
   }
@@ -818,7 +822,9 @@ std::vector<std::string> matchedShas(const Json& found, const Json& rows) {
   for (const auto& match : found["matches"]) {
     const std::size_t index = match["index"].get<std::size_t>();
     EXPECT_LT(index, rows.size()) << found.dump();
-    if (index < rows.size()) EXPECT_EQ(rows[index]["sha"], match["sha"]) << found.dump();
+    if (index < rows.size()) {
+      EXPECT_EQ(rows[index]["sha"], match["sha"]) << found.dump();
+    }
     shas.push_back(match["sha"]);
   }
   return shas;
