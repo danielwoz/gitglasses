@@ -17,7 +17,7 @@ import { FileAnnotationsController } from './annotations/fileAnnotations';
 import { BlameHoverProvider } from './annotations/hoverProvider';
 import { BlameCodeLensProvider } from './codelens/blameCodeLens';
 import { RevisionContentProvider, encodeRevisionUri } from './scm/revisionContentProvider';
-import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
+import { QuickDiffSources, hasBuiltinGit } from './scm/quickDiffSources';
 import { ViewBase, ViewNode, setActiveRepoResolver } from './views/viewBase';
 import { CommitsViewProvider } from './views/commitsView';
 import {
@@ -150,9 +150,6 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const codeLens = new BlameCodeLensProvider(blame, repos);
   const revisionContent = new RevisionContentProvider(engine);
 
-  const scm = vscode.scm.createSourceControl('gitglasses', 'GitGlasses');
-  scm.quickDiffProvider = new GitGlassesQuickDiffProvider(repos);
-
   const auth = new AuthManager(context.secrets);
   const integrations = new IntegrationService(auth);
   const launchpad = new LaunchpadService(integrations, context.globalState);
@@ -246,13 +243,29 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     lineBlame,
     fileAnnotations,
     codeLens,
-    scm,
     auth,
     integrations,
     activeRepo,
     conflicts,
     engine.onDidChangeCapabilities(() => updateCapabilityContext()),
   ];
+
+  // Quick diff comes from VS Code's Git extension where it runs; GitGlasses
+  // registers its own only where that extension is absent (see
+  // QuickDiffSources for why it never adds a second source control).
+  const builtinGit = hasBuiltinGit();
+  if (!builtinGit) {
+    const quickDiff = new QuickDiffSources(
+      repos,
+      () => activeRepo.all(),
+      activeRepo.onDidChange,
+      deps.log,
+    );
+    disposables.push(
+      quickDiff,
+      engine.onDidChangeCapabilities(() => void quickDiff.sync()),
+    );
+  }
 
   const treeViews: vscode.TreeView<ViewNode>[] = [];
   for (const [viewId, provider] of Object.entries(views)) {
