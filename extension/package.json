@@ -116,6 +116,11 @@
         "title": "Open Commit"
       },
       {
+        "command": "gitglasses.showCommitDetails",
+        "title": "Show Commit Details",
+        "category": "GitGlasses"
+      },
+      {
         "command": "gitglasses.showGraph",
         "title": "GitGlasses: Show Commit Graph",
         "icon": "$(git-branch)"
@@ -815,6 +820,10 @@
         },
         {
           "command": "gitglasses.openCommitDiff",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.showCommitDetails",
           "when": "false"
         },
         {

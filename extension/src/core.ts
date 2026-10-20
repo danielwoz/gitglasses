@@ -48,6 +48,7 @@ import { registerAiFeatures } from './ai/features';
 import { HomeViewProvider, registerHomeCommands } from './home/homeView';
 import { ModeController } from './modes/modeController';
 import { registerSuggestChange } from './reviews/suggestCommands';
+import { registerCommitDetails } from './commitDetails/commitDetails';
 
 /** Views whose contents follow HEAD and the ref graph. */
 export const HISTORY_VIEWS = [
@@ -300,6 +301,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     ),
     vscode.languages.registerCodeLensProvider(deps.documentSelector, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
+    ...registerCommitDetails(engine, repos),
     vscode.commands.registerCommand('gitglasses.diffWithHead', async () => {
       const editor = deps.activeEditor();
       if (!editor) return;

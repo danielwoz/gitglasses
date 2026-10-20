@@ -3,13 +3,13 @@
 // executes the context-menu mutation actions.
 
 import * as vscode from 'vscode';
-import { CommitSummaryInfo, GraphRow } from '@gitglasses/protocol';
+import { GraphRow } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
-import { openCommitDoc } from '../views/nodes';
-import { shortSha } from '@gitglasses/protocol/sha';
+import { SHOW_COMMIT_DETAILS_COMMAND, ShowCommitDetailsArgs } from '../commitDetails/commitDetails';
+import { UNCOMMITTED_SHA, shortSha } from '@gitglasses/protocol/sha';
 import { renderWebviewHtml } from './webviewHtml';
 import {
   confirmCherryPick,
@@ -86,10 +86,10 @@ type WebviewToHostMessage =
 export class GraphWebviewHost implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private panelDisposables: vscode.Disposable[] = [];
-  /** Fields the openCommit action needs, keyed by sha. The webview keeps the
-   *  full rows, so lanes, edges, refs and dates are not retained here. */
-  private commitsBySha = new Map<string, CommitSummaryInfo>();
   private repoId: string | undefined;
+  /** The graphed repository's root, which gitglasses.showCommitDetails
+   *  takes; the editor's spelling where it differs from the engine's. */
+  private repoPath: string | undefined;
   private refetchTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
@@ -122,7 +122,7 @@ export class GraphWebviewHost implements vscode.Disposable {
         );
         return;
       }
-      this.repoId = repo.repoId;
+      this.setRepo(repo);
     }
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webviews');
     const panel = vscode.window.createWebviewPanel(
@@ -165,7 +165,6 @@ export class GraphWebviewHost implements vscode.Disposable {
     for (const disposable of this.panelDisposables) disposable.dispose();
     this.panelDisposables = [];
     this.panel = undefined;
-    this.commitsBySha.clear();
   }
 
   dispose(): void {
@@ -185,11 +184,9 @@ export class GraphWebviewHost implements vscode.Disposable {
       case 'loadMore':
         await this.fetchAndPost(message.cursor);
         break;
-      case 'openCommit': {
-        const commit = this.commitsBySha.get(message.sha);
-        if (commit) await openCommitDoc(commit);
+      case 'openCommit':
+        await this.openCommit(message.sha);
         break;
-      }
       case 'copySha':
         await vscode.env.clipboard.writeText(message.sha);
         vscode.window.setStatusBarMessage(`Copied ${shortSha(message.sha)}`, 3000);
@@ -200,6 +197,18 @@ export class GraphWebviewHost implements vscode.Disposable {
         await this.handleAction(message.action, message.shas);
         break;
     }
+  }
+
+  private setRepo(repo: ActiveRepo): void {
+    this.repoId = repo.repoId;
+    this.repoPath = repo.workspacePath ?? repo.rootPath;
+  }
+
+  private async openCommit(sha: string): Promise<void> {
+    // The uncommitted-changes row has no commit to show.
+    if (!this.repoPath || sha === UNCOMMITTED_SHA) return;
+    const args: ShowCommitDetailsArgs = { repoPath: this.repoPath, sha };
+    await vscode.commands.executeCommand(SHOW_COMMIT_DETAILS_COMMAND, args);
   }
 
   private async handleAction(action: GraphActionId, shas: string[]): Promise<void> {
@@ -320,7 +329,8 @@ export class GraphWebviewHost implements vscode.Disposable {
   private async fetchAndPost(cursor?: string): Promise<void> {
     if (!this.panel) return;
     try {
-      if (!this.repoId) {
+      let repoId = this.repoId;
+      if (!repoId) {
         const repo = await activeWorkspaceRepo(this.repos);
         if (!repo) {
           await this.post({
@@ -329,23 +339,15 @@ export class GraphWebviewHost implements vscode.Disposable {
           });
           return;
         }
-        this.repoId = repo.repoId;
+        this.setRepo(repo);
+        repoId = repo.repoId;
       }
       const result = await this.engine.request('graph/rows', {
-        repoId: this.repoId,
+        repoId,
         cursor,
         limit: graphPageSize(),
         include: { stashes: true, wip: true },
       });
-      for (const row of result.rows) {
-        this.commitsBySha.set(row.sha, {
-          sha: row.sha,
-          parents: row.parents,
-          author: row.author,
-          committer: row.author,
-          summary: row.summary,
-        });
-      }
       await this.post({ type: 'rows', rows: result.rows, nextCursor: result.nextCursor });
     } catch (error) {
       // The panel shows why it is empty; the next repo change refetches.
@@ -360,7 +362,6 @@ export class GraphWebviewHost implements vscode.Disposable {
     if (this.refetchTimer !== undefined) clearTimeout(this.refetchTimer);
     this.refetchTimer = setTimeout(() => {
       this.refetchTimer = undefined;
-      this.commitsBySha.clear();
       void this.post({ type: 'reset' }).then(() => this.fetchAndPost());
     }, REFRESH_DEBOUNCE_MS);
   }
