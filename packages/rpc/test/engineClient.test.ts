@@ -2,13 +2,15 @@
 // request/response, notification, respawn, and cancellation coverage that
 // previously only the real-binary integration tests exercised.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EngineCapabilities, ErrorCodes, PROTOCOL_VERSION } from '@gitglasses/protocol';
 import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
   EngineClient,
   EngineClientOptions,
   EngineError,
   EngineRestartedError,
+  LONG_REQUEST_TIMEOUT_MS,
 } from '../src/engineClient.js';
 import { EngineTransport } from '../src/transport.js';
 
@@ -344,6 +346,62 @@ describe('EngineClient over a fake transport', () => {
       /engine request 'repo\/list' timed out after 30ms/,
     );
     client.dispose();
+  });
+
+  // A commit stuck on a signing passphrase runs until the engine's own git
+  // timeout, whose error says what git was likely waiting for; the client must
+  // still be listening when it arrives.
+  it("waits past the engine's git timeout for a method whose git may wait for input", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, transports } = makeClient();
+      await client.start();
+      const engineMessage =
+        'git timed out after 120000ms; it may have been waiting for input GitGlasses cannot show';
+      transports[0].responders.set('mutate/commit', (msg) => {
+        setTimeout(
+          () => transports[0].respondError(msg.id, ErrorCodes.GitError, engineMessage),
+          120_000,
+        );
+      });
+
+      const commit = client.request('mutate/commit', { repoId: 'r', message: 'm' });
+      const outcome = commit.then(
+        () => 'resolved',
+        (error: Error) => error,
+      );
+      await vi.advanceTimersByTimeAsync(DEFAULT_REQUEST_TIMEOUT_MS + 1);
+      await vi.advanceTimersByTimeAsync(120_000 - DEFAULT_REQUEST_TIMEOUT_MS);
+      const error = await outcome;
+      expect(error).toBeInstanceOf(EngineError);
+      expect((error as EngineError).message).toBe(engineMessage);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up on a long-running method only past its own deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client } = makeClient();
+      await client.start();
+      const deadline = LONG_REQUEST_TIMEOUT_MS['mutate/fetch'] ?? 0;
+      expect(deadline).toBeGreaterThan(300_000);
+
+      let settled: unknown;
+      const fetch = client.request('mutate/fetch', { repoId: 'r' }).catch((e: Error) => e);
+      void fetch.then((value) => (settled = value));
+      await vi.advanceTimersByTimeAsync(deadline - 1);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(String(await fetch)).toMatch(
+        new RegExp(`engine request 'mutate/fetch' timed out after ${deadline}ms`),
+      );
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a reply before the deadline clears the timer and drops the pending entry', async () => {
