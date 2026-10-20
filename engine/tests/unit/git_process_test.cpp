@@ -250,6 +250,42 @@ TEST(GitProcess, HookHelperLeftRunningDoesNotDelayACommit) {
   EXPECT_LT(elapsed.count(), 3000) << "the hook's helper held the output pipe open";
 }
 
+// A commit can stop for a signing passphrase no one can enter; when it runs
+// out of time, the error says what git was likely waiting for.
+TEST(GitProcess, CommitTimeoutSaysGitMayHaveBeenWaitingForInput) {
+  gg::testing::FixtureRepo fixture;
+  const std::filesystem::path hooks = fixture.root() / "stalling-hooks";
+  std::filesystem::create_directories(hooks);
+  fixture.writeFile("stalling-hooks/pre-commit", "#!/bin/sh\nsleep 5\n");
+  std::filesystem::permissions(hooks / "pre-commit", std::filesystem::perms::owner_all);
+
+  RunOpts opts;
+  opts.timeout = std::chrono::milliseconds(300);
+  CancelToken token;
+  auto status = runGit(fixture.root().string(),
+                       {"-c", "core.hooksPath=" + hooks.string(), "commit", "-q", "--allow-empty",
+                        "-m", "stalled"},
+                       opts, token, [](std::string) {});
+  ASSERT_FALSE(status.ok());
+  EXPECT_EQ(status.error().code, ErrorCode::GitError);
+  EXPECT_NE(status.error().message.find("timed out"), std::string::npos) << status.error().message;
+  EXPECT_NE(status.error().message.find("waiting for input"), std::string::npos)
+      << status.error().message;
+}
+
+TEST(GitProcess, LocalTimeoutCarriesNoInputHint) {
+  gg::testing::FixtureRepo fixture;
+  RunOpts opts;
+  opts.timeout = std::chrono::milliseconds(300);
+  CancelToken token;
+  auto status = runGit(fixture.root().string(), {"-c", "alias.slow=!sleep 5", "slow"}, opts,
+                       token, [](std::string) {});
+  ASSERT_FALSE(status.ok());
+  EXPECT_NE(status.error().message.find("timed out"), std::string::npos) << status.error().message;
+  EXPECT_EQ(status.error().message.find("waiting for input"), std::string::npos)
+      << status.error().message;
+}
+
 #endif  // !_WIN32
 
 #ifdef __linux__
