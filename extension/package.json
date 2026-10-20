@@ -1378,9 +1378,27 @@
         }
       ]
     },
+    "customEditors": [
+      {
+        "viewType": "gitglasses.rebaseTodo",
+        "displayName": "GitGlasses Interactive Rebase",
+        "selector": [
+          {
+            "filenamePattern": "git-rebase-todo"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
     "configuration": {
       "title": "GitGlasses",
       "properties": {
+        "gitglasses.rebaseEditor.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": false,
+          "markdownDescription": "Open the todo list of an interactive rebase started outside GitGlasses, such as `git rebase -i` in a terminal, in the GitGlasses rebase editor. Git must use VS Code as its editor, for example `git config --global sequence.editor \"code --wait\"`. The editor is always available through **Reopen Editor With…**."
+        },
         "gitglasses.mode": {
           "type": "string",
           "scope": "window",

@@ -3,14 +3,17 @@
 // bundle carries no runtime code from the protocol package.
 
 import type { RebaseEntry } from '@gitglasses/protocol';
+import type { PlanAction } from './rebaseLogic';
 
 export type { RebaseEntry };
 
-/** The plan to edit, from rebase/preview. */
+/** The plan to edit: from rebase/preview, or (mode 'todo') from the todo
+ *  list of a `git rebase -i` that is waiting for its editor. */
 export interface RebaseInit {
+  mode?: 'plan' | 'todo';
   upstream: string;
   branch: string;
-  entries: { sha: string; summary: string }[];
+  entries: { sha: string; summary: string; action?: PlanAction }[];
   /** Merge commits in the range, which the rebase flattens. */
   mergeCount: number;
   /** Uncommitted changes will be stashed and restored around the rebase. */

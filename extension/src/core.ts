@@ -36,6 +36,7 @@ import { RepoGroupsManager } from './groups/repoGroups';
 import { registerGraphWebview } from './webviews/graphHost';
 import { registerRebaseWebview } from './webviews/rebaseHost';
 import { registerRefCommands } from './views/refCommands';
+import { registerRebaseTodoEditor } from './webviews/rebaseTodoEditor';
 import { registerTimelineWebview } from './webviews/timelineHost';
 import { registerGitPalette } from './commands/gitPalette';
 import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
@@ -431,6 +432,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const rebase = registerRebaseWebview(context, engine, repos, deps.log);
   disposables.push(
     ...rebase.disposables,
+    ...registerRebaseTodoEditor(context, deps.log),
     ...registerRefCommands({
       engine,
       repos,

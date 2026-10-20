@@ -46,14 +46,15 @@ export interface PlanEntry {
   message: string;
 }
 
-/** Initial plan from rebase/preview entries (oldest first): everything picked. */
+/** Initial plan from rebase/preview entries (oldest first): everything
+ *  picked, unless an entry says otherwise (a todo git already prepared). */
 export function planFromPreview(
-  entries: readonly { sha: string; summary: string }[],
+  entries: readonly { sha: string; summary: string; action?: PlanAction }[],
 ): PlanEntry[] {
   return entries.map((entry) => ({
     sha: entry.sha,
     summary: entry.summary,
-    action: 'pick' as const,
+    action: entry.action ?? 'pick',
     message: '',
   }));
 }
@@ -100,8 +101,13 @@ export function setMessage(
   return plan.map((entry, i) => (i === index ? { ...entry, message } : entry));
 }
 
-/** Human-readable problems; an empty array means the plan can start. */
-export function validate(plan: readonly PlanEntry[]): string[] {
+/** Human-readable problems; an empty array means the plan can start.
+ *  `messages: false` is for a todo handed back to git, which asks for
+ *  reword messages itself. */
+export function validate(
+  plan: readonly PlanEntry[],
+  { messages = true }: { messages?: boolean } = {},
+): string[] {
   const errors: string[] = [];
   const kept = plan.filter((entry) => entry.action !== 'drop');
   if (kept.length === 0) {
@@ -115,7 +121,7 @@ export function validate(plan: readonly PlanEntry[]): string[] {
     );
   }
   const unworded = plan.filter((entry) => entry.action === 'reword' && entry.message.trim() === '');
-  if (unworded.length > 0) {
+  if (messages && unworded.length > 0) {
     errors.push(
       `Enter the new message for ${unworded.map((entry) => entry.sha.slice(0, 7)).join(', ')}, or pick instead of reword.`,
     );

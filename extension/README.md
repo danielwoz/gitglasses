@@ -12,9 +12,16 @@ leave your machine.
 - Blame that understands **unsaved edits** (dirty buffers blame correctly)
 - **Commit Graph**: virtualized canvas, ref chips, drag-free mutation actions
   (merge, rebase, cherry-pick, reset, revert) behind explicit confirmations
-- **Interactive Rebase Editor**: drag-drop reorder, squash, reword, drop
+- **Interactive Rebase Editor**: reorder by drag-drop or Alt+↑/↓; pick,
+  reword, edit, squash, fixup, drop and autosquash. It checks the working tree
+  first (offering to stash), refuses a plan the branch has moved past, and
+  pauses on conflicts with Continue, Skip and Abort while you fix the files.
+  It can also edit the list of a `git rebase -i` run in a terminal
 - **Sidebar suite**: Commits, Branches (with PR chips), Remotes, Stashes,
-  Tags, File & Line History, Contributors, Search & Compare, Worktrees
+  Tags, File & Line History, Contributors, Search & Compare, Worktrees. Act
+  from the tree: switch, create, rename, delete, merge, rebase, push and
+  compare branches; create, push and delete tags; apply, pop, drop and show
+  stashes; fetch, prune, add and remove remotes
 - **Visual File History**: bubble-chart timeline of a file's evolution
 - **Launchpad**: your PRs across GitHub, GitLab, Bitbucket, Azure DevOps,
   triaged by actionability; **Start Work** from Jira Cloud, Linear or GitHub
@@ -40,3 +47,6 @@ your platform.
 - `gitglasses.codeLens.enabled` — CodeLens on/off
 - `gitglasses.engine.path` — override the bundled engine binary
 - `gitglasses.engine.logLevel` — engine logging to the GitGlasses output channel
+- `gitglasses.rebaseEditor.enabled` — open the todo of a `git rebase -i` started
+  outside GitGlasses in the rebase editor (git must use VS Code as its editor,
+  e.g. `git config --global sequence.editor "code --wait"`); off by default

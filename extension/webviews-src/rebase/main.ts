@@ -66,8 +66,12 @@ const startBtn = document.getElementById('start') as HTMLButtonElement;
 const cancelBtn = document.getElementById('cancel') as HTMLButtonElement;
 const autosquashBtn = document.getElementById('autosquash') as HTMLButtonElement;
 const liveEl = document.getElementById('live') as HTMLDivElement;
+const hintEl = document.getElementById('hint') as HTMLSpanElement;
 
 let plan: PlanEntry[] = [];
+/** 'todo': the list of a `git rebase -i` waiting for its editor; git asks for
+ *  reword and squash messages itself afterwards. */
+let mode: 'plan' | 'todo' = 'plan';
 let busy = false;
 let stale = false;
 let paused: RebasePaused | undefined;
@@ -88,7 +92,7 @@ function announce(text: string): void {
 }
 
 function renderValidation(): void {
-  const errors = plan.length > 0 ? validate(plan) : [];
+  const errors = plan.length > 0 ? validate(plan, { messages: mode === 'plan' }) : [];
   validationEl.textContent = errors.join(' ');
   startBtn.disabled = busy || stale || plan.length === 0 || errors.length > 0;
   cancelBtn.disabled = busy;
@@ -129,7 +133,7 @@ function rowLabel(entry: PlanEntry, index: number): string {
 function changeAction(index: number, action: PlanAction): void {
   plan = setAction(plan, index, action);
   // A reword starts from the commit's current message.
-  if (action === 'reword' && plan[index].message === '') {
+  if (mode === 'plan' && action === 'reword' && plan[index].message === '') {
     post({ type: 'fetchMessage', sha: plan[index].sha });
   }
   render();
@@ -188,7 +192,7 @@ function renderRow(entry: PlanEntry, index: number): HTMLElement {
 
   row.append(handle, shaEl, select, summary);
 
-  if (entry.action === 'reword' || entry.action === 'squash') {
+  if (mode === 'plan' && (entry.action === 'reword' || entry.action === 'squash')) {
     const textarea = document.createElement('textarea');
     textarea.placeholder =
       entry.action === 'reword'
@@ -396,7 +400,9 @@ listEl.addEventListener('drop', (event) => {
 });
 
 startBtn.addEventListener('click', () => {
-  if (validate(plan).length > 0 || plan.length === 0 || stale) return;
+  if (validate(plan, { messages: mode === 'plan' }).length > 0 || plan.length === 0 || stale) {
+    return;
+  }
   post({ type: 'start', plan: toRebaseEntries(plan) });
 });
 
@@ -412,12 +418,22 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
   const message = event.data;
   switch (message.type) {
     case 'init': {
+      mode = message.mode ?? 'plan';
       upstreamEl.replaceChildren();
-      const branch = document.createElement('code');
-      branch.textContent = message.branch;
       const upstream = document.createElement('code');
       upstream.textContent = message.upstream;
-      upstreamEl.append('Rebasing ', branch, ' onto ', upstream);
+      if (mode === 'todo') {
+        upstreamEl.append('git rebase -i is waiting for this list: ', upstream);
+        startBtn.textContent = 'Save and Continue';
+        cancelBtn.textContent = 'Cancel Rebase';
+        cancelBtn.title = 'Hand git an empty list: the rebase stops before anything changes';
+        hintEl.textContent =
+          'Older commits apply first (top to bottom). Drag rows, or focus one and press Alt+↑/↓ to move it; P R E S F D set its action. git asks for reword and squash messages afterwards. Closing this tab runs the list as git wrote it.';
+      } else {
+        const branch = document.createElement('code');
+        branch.textContent = message.branch;
+        upstreamEl.append('Rebasing ', branch, ' onto ', upstream);
+      }
       renderNotices(message.mergeCount, message.autoStash);
       plan = message.keepPlan ? mergePlan(plan, message.entries) : planFromPreview(message.entries);
       stale = false;

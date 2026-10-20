@@ -35,6 +35,17 @@ describe('planFromPreview', () => {
   });
 });
 
+describe('planFromPreview with actions', () => {
+  it('keeps the actions a prepared todo already has', () => {
+    expect(
+      planFromPreview([
+        { sha: A, summary: 'first' },
+        { sha: B, summary: 'fixup! first', action: 'fixup' },
+      ]).map((entry) => entry.action),
+    ).toEqual(['pick', 'fixup']);
+  });
+});
+
 describe('move', () => {
   it('moves an entry down', () => {
     expect(move(plan(), 0, 2).map((e) => e.sha)).toEqual([B, C, A]);
@@ -113,6 +124,10 @@ describe('validate', () => {
     ]);
     expect(validate(setMessage(p, 1, '   '))).toHaveLength(1);
     expect(validate(setMessage(p, 1, 'second, reworded'))).toEqual([]);
+  });
+
+  it('leaves reword messages to git for a todo handed back to it', () => {
+    expect(validate(setAction(plan(), 1, 'reword'), { messages: false })).toEqual([]);
   });
 
   it('accepts a squash without a message: git combines the messages', () => {

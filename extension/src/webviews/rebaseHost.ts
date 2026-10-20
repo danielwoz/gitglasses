@@ -135,6 +135,7 @@ export class RebaseWebviewHost implements vscode.Disposable {
       this.overlay = undefined;
       this.ensurePanel();
       this.setInit({
+        mode: 'plan',
         upstream: target,
         branch,
         entries: preview.entries,
