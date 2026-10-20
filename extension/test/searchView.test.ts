@@ -113,6 +113,8 @@ function scriptedEngine() {
   const handlers = new Set<(params: { streamId: string; matches: CommitSummaryInfo[] }) => void>();
   const pending: Pending[] = [];
   const engine = {
+    // The handshake is done, so the view renders without waiting for it.
+    capabilities: () => ({ gitCli: true, watch: true }),
     onNotification: (_method: string, handler: (params: never) => void) => {
       handlers.add(handler);
       return { dispose: () => handlers.delete(handler) };
