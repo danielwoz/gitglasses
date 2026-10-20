@@ -52,7 +52,11 @@ export interface EngineClientOptions {
    *  (-32003); receives the engine's message verbatim, so the UI can surface
    *  it even where the call site swallows the rejection. */
   onMethodNotSupported?: (method: string, message: string) => void;
-  /** Per-request ceiling; defaults to DEFAULT_REQUEST_TIMEOUT_MS. */
+  /** Called when a Restricted Mode engine refuses a request with Restricted
+   *  (-32004), with the engine's message verbatim. */
+  onRestricted?: (method: string, message: string) => void;
+  /** Per-request ceiling; defaults to DEFAULT_REQUEST_TIMEOUT_MS. Methods in
+   *  LONG_REQUEST_TIMEOUT_MS wait at least as long as listed there. */
   requestTimeoutMs?: number;
   /** Spawns the engine on the first request, so callers need not call start()
    *  themselves. Off by default: requests before start() reject instead. */
@@ -65,6 +69,32 @@ const MAX_RESPAWNS = 5;
 
 /** Default ceiling on a single engine request. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+// The engine's own ceilings on the git it runs (kDefaultGitTimeout and
+// kNetworkGitTimeout in engine/src/exec/git_process.h), and how long past them
+// the client still waits for the engine's answer.
+const ENGINE_GIT_TIMEOUT_MS = 120_000;
+const ENGINE_NETWORK_GIT_TIMEOUT_MS = 300_000;
+const ENGINE_TIMEOUT_MARGIN_MS = 15_000;
+
+/**
+ * Deadlines for methods whose git may legitimately outlast
+ * DEFAULT_REQUEST_TIMEOUT_MS: a fetch over a slow link, or a commit waiting on
+ * a signing passphrase. The engine bounds these itself and its error says what
+ * git was likely waiting for, so the client waits until just past the
+ * engine's bound rather than giving up first with a bare timeout.
+ */
+export const LONG_REQUEST_TIMEOUT_MS: Partial<Record<RequestMethod, number>> = {
+  'mutate/fetch': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'mutate/pull': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'mutate/push': ENGINE_NETWORK_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'mutate/commit': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'mutate/merge': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'mutate/cherryPick': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'mutate/revert': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'rebase/start': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'rebase/continue': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+};
 
 // Typed JSON-RPC client over a pluggable engine transport. Crash-safe:
 // pending requests reject with EngineRestartedError on respawn (a generation
@@ -212,6 +242,8 @@ export class EngineClient {
     if (message.error) {
       if (message.error.code === ErrorCodes.MethodNotSupported) {
         this.options.onMethodNotSupported?.(pending.method, message.error.message);
+      } else if (message.error.code === ErrorCodes.Restricted) {
+        this.options.onRestricted?.(pending.method, message.error.message);
       }
       pending.reject(new EngineError(message.error.code, message.error.message));
     } else {
@@ -240,6 +272,8 @@ export class EngineClient {
     const id = this.nextId++;
     const generation = this.generation;
 
+    const timeoutMs = Math.max(this.requestTimeoutMs, LONG_REQUEST_TIMEOUT_MS[method] ?? 0);
+
     return new Promise<RequestResult<M>>((resolve, reject) => {
       // The rejection path for an engine that wedges without ever exiting;
       // the others are transport exit, cancellation and dispose().
@@ -248,10 +282,8 @@ export class EngineClient {
         if (!entry) return;
         this.pending.delete(id);
         entry.cancelSub?.dispose();
-        reject(
-          new Error(`engine request '${method}' timed out after ${this.requestTimeoutMs}ms`),
-        );
-      }, this.requestTimeoutMs);
+        reject(new Error(`engine request '${method}' timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       // Unref'd so a pending deadline never holds the host process alive; the
       // optional call covers runtimes whose setTimeout returns a plain number.
       (timer as { unref?: () => void }).unref?.();

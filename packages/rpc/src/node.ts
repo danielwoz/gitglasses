@@ -14,7 +14,22 @@ export interface ProcessTransportOptions {
   enginePath: string;
   /** Passed through as `--log-level`; omitted from argv when undefined. */
   logLevel?: string;
+  /** Starts the engine with `--restricted`, for a repository that is not
+   *  trusted: it then runs no git process and changes nothing. A function is
+   *  read at each spawn, so a restart after trust is granted starts a full
+   *  engine. */
+  restricted?: boolean | (() => boolean);
   onLog?: (line: string) => void;
+}
+
+/** The engine's argv for these options. */
+export function engineArgs(options: ProcessTransportOptions): string[] {
+  const args = ['--stdio'];
+  const restricted =
+    typeof options.restricted === 'function' ? options.restricted() : options.restricted;
+  if (restricted === true) args.push('--restricted');
+  if (options.logLevel !== undefined) args.push('--log-level', options.logLevel);
+  return args;
 }
 
 /** Resolves the engine binary path: an explicitly configured path is trusted
@@ -53,9 +68,9 @@ export class ProcessTransport implements EngineTransport {
   }
 
   start(): Promise<void> {
-    const args = ['--stdio'];
-    if (this.options.logLevel !== undefined) args.push('--log-level', this.options.logLevel);
-    const child = spawn(this.options.enginePath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(this.options.enginePath, engineArgs(this.options), {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     this.process = child;
     child.stdout.on('data', (chunk: Buffer) => {
       for (const payload of this.parser.push(chunk)) this.messageHandler?.(payload);

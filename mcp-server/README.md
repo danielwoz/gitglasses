@@ -26,6 +26,9 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 
 Every tool but `apply_patch` is read-only, and each declares that through MCP
 tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
+`git_file_history`, `create_patch`, `apply_patch` and the diff of
+`git_commit_show` need git, so they work only in repositories you allow (see
+[Trust model](#trust-model)).
 
 Tools that render a whole commit, diff, status, ref list or patch take a
 `maxChars` argument and truncate with a footer naming the limit; `git_blame`
@@ -73,6 +76,10 @@ with the engine.
 claude mcp add gitglasses \
   -e GITGLASSES_ENGINE=/path/to/gitglasses-engine \
   -- node /path/to/gitglasses/mcp-server/dist/cli.js
+# Also let git run in the repositories under ~/code (file history, patches):
+claude mcp add gitglasses \
+  -e GITGLASSES_ENGINE=/path/to/gitglasses-engine \
+  -- node /path/to/gitglasses/mcp-server/dist/cli.js --allow ~/code
 ```
 
 ### VS Code (`.vscode/mcp.json`)
@@ -105,23 +112,45 @@ claude mcp add gitglasses \
 | `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
 | `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
-| `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server may read and, via `apply_patch`, write. Unset means **any repository the process can reach**. |
+| `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server reads and, via `apply_patch`, writes, with git allowed to run there. Same as passing each with `--allow`; `*` allows every path. Unset means the client's workspace roots, read without git (see [Trust model](#trust-model)). |
 
-## Security model
+## Trust model
 
 The server runs with the privileges of whoever starts it, and every tool takes
-an absolute `repoPath`. Read that literally: by default, an agent can name any
-path on the machine and read the history, diffs, status and blame of whatever
-repository contains it — not just the project under discussion. `repo/discover`
-walks *upwards*, so a path inside a repository grants that repository.
+an absolute `repoPath`. Two questions decide what a call may do: which
+repositories it may touch, and whether git may run in them.
 
-`apply_patch` writes: it applies a patch to the working tree of whatever
-repository `repoPath` names. The other ten tools only read.
+**Which repositories.** By default the server serves only repositories inside
+the client's MCP roots, the workspace folders the client shares with it,
+re-read whenever the client reports a change. A client that offers no roots
+gets the server's working directory instead, unless that is the filesystem
+root, your home directory or a directory that holds it (such as `/home`),
+which would cover every repository you have.
+Starting the server with `--allow <dir>` (repeatable) or setting
+`GITGLASSES_ALLOWED_ROOTS` replaces those defaults with the directories you
+name; `--allow '*'` admits every path. A path outside them is rejected before
+it reaches the engine, including via `..` traversal and via a symlink that
+leaves a root, since both sides of the comparison are canonicalised. A path
+whose repository extends outside them, such as a subfolder of a larger
+repository, is rejected too, because `repo/discover` walks *upwards*.
 
-`GITGLASSES_ALLOWED_ROOTS` is what bounds where either can happen. Set it to
-the directories this server may touch; paths outside are rejected before
-reaching the engine, including via `..` traversal and via a symlink that
-leaves a root — both sides of the comparison are canonicalised.
+**Whether git runs.** git runs programs that a repository's own configuration,
+attributes and hooks name: `core.fsmonitor`, clean and smudge filters,
+textconv drivers, hooks, `core.sshCommand`. A repository that arrived as an
+archive or a shared folder can carry any of them, and a prompt-injected agent
+can name its path. So repositories served from the client's roots are read by
+an engine started with `--restricted`, which runs no git at all: blame, log,
+search, status, diffs, refs and the commit graph come straight from the
+repository through libgit2. `git_file_history`, `create_patch` and
+`apply_patch` are refused there with a message saying how to enable them, and
+`git_commit_show` leaves out the diff with a note. Repositories inside the
+directories you allow are read by a full engine, where git runs with the
+repository's own configuration exactly as it does in your shell; allow only
+directories whose repositories you trust.
+
+`apply_patch` writes: it applies a patch to the working tree of the repository
+`repoPath` names, so it needs an allowed repository. The other tools only
+read.
 
 The GitHub host is deliberately **not** a tool argument. A token and the host
 it authenticates to are inseparable, so both come from the environment; if the

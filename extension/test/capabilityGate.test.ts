@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { EngineCapabilities } from '@gitglasses/protocol';
 import {
+  CLI_UNAVAILABLE_MESSAGE,
   HeadChangeTracker,
+  RESTRICTED_MESSAGE,
   isMethodAvailable,
   requiresGitCli,
+  unavailableMessage,
 } from '../src/engine/capabilityGate';
 
 const caps = (gitCli: boolean): EngineCapabilities => ({
@@ -94,6 +97,45 @@ describe('isMethodAvailable', () => {
     expect(isMethodAvailable(caps(false), 'stash/push')).toBe(false);
     expect(isMethodAvailable(caps(false), 'worktree/list')).toBe(true);
     expect(isMethodAvailable(caps(false), 'worktree/add')).toBe(false);
+  });
+});
+
+// A Restricted Mode engine runs no git and changes nothing, so it serves the
+// libgit2 reads alone, whatever its gitCli flag says.
+describe('isMethodAvailable in Restricted Mode', () => {
+  const restricted: EngineCapabilities = { ...caps(false), restricted: true };
+
+  it('refuses every method that needs git or changes the repository', () => {
+    for (const method of [...CLI_METHODS, 'stage/files', 'stage/hunks', 'worktree/list']) {
+      expect(isMethodAvailable(restricted, method), method).toBe(false);
+    }
+  });
+
+  it('serves blame and the libgit2 reads', () => {
+    for (const method of [
+      'blame/file',
+      'log/commits',
+      'search/commits',
+      'status/summary',
+      'graph/rows',
+      'diff/fileHunks',
+      'rev/fileAtRev',
+      'refs/list',
+    ]) {
+      expect(isMethodAvailable(restricted, method), method).toBe(true);
+    }
+  });
+
+  it('refuses a method it does not know, rather than assuming it is safe', () => {
+    expect(isMethodAvailable(restricted, 'mutate/somethingNew')).toBe(false);
+  });
+
+  it('explains a refusal by its cause', () => {
+    expect(unavailableMessage(restricted)).toBe(RESTRICTED_MESSAGE);
+    expect(unavailableMessage(caps(false))).toBe(CLI_UNAVAILABLE_MESSAGE);
+    expect(unavailableMessage({ ...caps(true), restricted: false })).toBe(
+      CLI_UNAVAILABLE_MESSAGE,
+    );
   });
 });
 

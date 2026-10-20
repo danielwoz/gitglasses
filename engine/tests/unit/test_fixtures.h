@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "exec/cli_detect.h"
 #include "util/temp_file.h"
 
 namespace gg::testing {
@@ -71,6 +72,17 @@ inline std::filesystem::path makeTempDir(const std::string& prefix) {
   }
   throw std::runtime_error("could not create a unique temp directory for " + prefix);
 }
+
+// Turns the engine's Restricted Mode on for the current scope. Declared before
+// a session, so the session's context is built in the mode and the mode is
+// cleared only after the session has shut down.
+class ScopedRestrictedMode {
+ public:
+  ScopedRestrictedMode() { exec::setRestrictedMode(true); }
+  ~ScopedRestrictedMode() { exec::setRestrictedMode(false); }
+  ScopedRestrictedMode(const ScopedRestrictedMode&) = delete;
+  ScopedRestrictedMode& operator=(const ScopedRestrictedMode&) = delete;
+};
 
 // Platform null device for discarding command output.
 inline const char* nullDevice() {

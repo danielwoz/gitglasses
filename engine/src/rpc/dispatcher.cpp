@@ -61,6 +61,13 @@ void Dispatcher::notification(const std::string& name, NotificationHandler handl
   notifications_[name] = {std::move(handler), mode};
 }
 
+std::vector<std::string> Dispatcher::methodNames() const {
+  std::vector<std::string> names;
+  names.reserve(methods_.size());
+  for (const auto& entry : methods_) names.push_back(entry.first);
+  return names;
+}
+
 Strand& Dispatcher::strandFor(Mode mode, const Json& params) {
   std::string key = mode == Mode::SerialNetwork ? "net:" : "idx:";
   if (const auto it = params.find("repoId"); it != params.end() && it->is_string()) {

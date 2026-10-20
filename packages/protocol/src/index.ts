@@ -19,6 +19,7 @@ export { PROTOCOL_VERSION } from './version.js';
 // The TypeBox schemas themselves, so consumers can validate at runtime.
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
+export { RESTRICTED_MODE_METHODS } from './schema/requests.js';
 
 // Sha helpers also have their own lean entry point: @gitglasses/protocol/sha.
 export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
@@ -63,6 +64,9 @@ export const ErrorCodes = {
   GitError: -32001,
   /** Method requires a capability this engine build lacks (e.g. gitCli). */
   MethodNotSupported: -32003,
+  /** The engine runs in Restricted Mode (capabilities.restricted) and the
+   *  method would run git or change the repository. */
+  Restricted: -32004,
 } as const;
 
 // --- Models (derived from src/schema/models.ts) -----------------------------
@@ -94,6 +98,8 @@ type Empty = Record<string, never>;
 /** Typed engine capability flags (open bag: engines may add more). */
 export interface EngineCapabilities {
   gitCli: boolean;
+  /** Restricted Mode: only RESTRICTED_MODE_METHODS are served. */
+  restricted?: boolean;
   watch: boolean;
   threads: boolean;
   [key: string]: unknown;

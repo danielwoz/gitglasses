@@ -10,6 +10,8 @@
 #include <cerrno>
 #include <cstring>
 
+#include "exec/cli_detect.h"
+
 extern char** environ;
 
 namespace gg::exec {
@@ -32,26 +34,63 @@ struct SpawnAttr {
 
 }  // namespace
 
+bool makeCloexecPipe(int fds[2]) {
+#ifdef __APPLE__
+  // No pipe2(). The gap before FD_CLOEXEC is set is covered by
+  // POSIX_SPAWN_CLOEXEC_DEFAULT on every spawn this engine makes.
+  if (pipe(fds) != 0) return false;
+  fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+  fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+  return true;
+#else
+  return pipe2(fds, O_CLOEXEC) == 0;
+#endif
+}
+
 Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args,
                                      const SpawnOpts& opts) {
+  if (restrictedMode()) return Error{ErrorCode::Restricted, kRestrictedModeMessage};
+
   int outPipe[2], errPipe[2];
-  if (pipe(outPipe) != 0) return Error{ErrorCode::Internal, "pipe() failed"};
-  if (pipe(errPipe) != 0) {
+  if (!makeCloexecPipe(outPipe)) return Error{ErrorCode::Internal, "pipe() failed"};
+  if (!makeCloexecPipe(errPipe)) {
     close(outPipe[0]);
     close(outPipe[1]);
     return Error{ErrorCode::Internal, "pipe() failed"};
   }
 
+  // The child gets exactly three descriptors: stdin from /dev/null, since no
+  // invocation feeds git input, and the write ends of the two pipes. The read
+  // ends close on exec.
   SpawnActions fileActions;
   posix_spawn_file_actions_addopen(&fileActions.actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
   posix_spawn_file_actions_adddup2(&fileActions.actions, outPipe[1], STDOUT_FILENO);
   posix_spawn_file_actions_adddup2(&fileActions.actions, errPipe[1], STDERR_FILENO);
-  posix_spawn_file_actions_addclose(&fileActions.actions, outPipe[0]);
-  posix_spawn_file_actions_addclose(&fileActions.actions, errPipe[0]);
-  // Own process group so cancellation can kill git and any children it forks.
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
+  // Also closes anything else in this process that was opened without
+  // O_CLOEXEC, which would otherwise reach git and every helper it starts.
+  posix_spawn_file_actions_addclosefrom_np(&fileActions.actions, STDERR_FILENO + 1);
+#endif
+
   SpawnAttr attr;
-  posix_spawnattr_setflags(&attr.attr, POSIX_SPAWN_SETPGROUP);
+  short flags = 0;
+#ifdef POSIX_SPAWN_SETSID
+  // A new session: git and its children have no controlling terminal, so an
+  // ssh host-key or passphrase prompt fails at once instead of stopping the
+  // process on SIGTTIN until the timeout. The session leader also leads its
+  // own process group, which killGroup() relies on. This replaces
+  // POSIX_SPAWN_SETPGROUP: setpgid() on a session leader fails.
+  flags |= POSIX_SPAWN_SETSID;
+#else
+  // Own process group so cancellation can kill git and any children it forks.
+  flags |= POSIX_SPAWN_SETPGROUP;
   posix_spawnattr_setpgroup(&attr.attr, 0);
+#endif
+#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+  // Only the descriptors the file actions set up are inherited.
+  flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+#endif
+  posix_spawnattr_setflags(&attr.attr, flags);
 
   std::vector<std::string> fullArgs;
   fullArgs.reserve(args.size() + 1);
@@ -66,15 +105,9 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   for (auto& a : fullArgs) argv.push_back(a.data());
   argv.push_back(nullptr);
 
-  // Scrubbed additions applied on top of the inherited environment: stable
-  // parse output, no lock contention with the user's own git commands, and
-  // never a hung child waiting for a credential prompt. Caller-provided
-  // entries come last so they can override the scrub as well. Each override
-  // replaces any inherited variable of the same name: with duplicates in
-  // envp, which copy wins is unspecified.
-  std::vector<std::string> overrides = {"GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
-                                        "LC_ALL=C"};
-  overrides.insert(overrides.end(), opts.extraEnv.begin(), opts.extraEnv.end());
+  // Each override replaces any inherited variable of the same name: with
+  // duplicates in envp, which copy wins is unspecified.
+  const std::vector<std::string> overrides = childEnvOverrides(opts);
   const auto nameLen = [](const std::string& entry) { return entry.find('='); };
   const auto sameName = [&nameLen](const std::string& a, const char* b) {
     const size_t n = nameLen(a);
@@ -92,7 +125,7 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
     if (!overridden) envStrings.emplace_back(*e);
   }
   // Later overrides win over earlier ones of the same name (extraEnv over
-  // the scrub defaults).
+  // the defaults).
   for (size_t i = 0; i < overrides.size(); ++i) {
     bool shadowed = false;
     for (size_t j = i + 1; j < overrides.size(); ++j) {

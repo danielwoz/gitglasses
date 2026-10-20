@@ -148,6 +148,7 @@ check('initialize reports wasm capabilities', () => {
   // has no watcher at all.
   assert.deepEqual(init.capabilities, {
     gitCli: false,
+    restricted: false,
     watch: false,
     watchBackend: 'none',
     threads: false,

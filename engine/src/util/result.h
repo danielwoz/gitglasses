@@ -18,6 +18,9 @@ enum class ErrorCode {
   GitError = -32001,
   NotInitialized = -32002,
   MethodNotSupported = -32003,
+  // The engine runs in Restricted Mode and the method would run git or change
+  // the repository.
+  Restricted = -32004,
 };
 
 struct Error {

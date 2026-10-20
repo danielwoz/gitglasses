@@ -9,10 +9,10 @@ import {
   ClientNotificationSchemas,
   EngineNotificationSchemas,
 } from './notifications.js';
-import { RequestSchemas } from './requests.js';
+import { RESTRICTED_MODE_METHODS, RequestSchemas } from './requests.js';
 
 export * from './models.js';
-export { EmptyObject, RequestSchemas } from './requests.js';
+export { EmptyObject, RESTRICTED_MODE_METHODS, RequestSchemas } from './requests.js';
 export { ClientNotificationSchemas, EngineNotificationSchemas } from './notifications.js';
 
 /** Drops TypeBox's symbol bookkeeping, leaving pure JSON Schema. */
@@ -28,6 +28,8 @@ export interface SchemaArtifact {
     string,
     { direction: 'client' | 'engine'; description: string; params: unknown }
   >;
+  /** Methods an engine in Restricted Mode serves; it refuses the rest. */
+  restrictedModeMethods: string[];
 }
 
 /** Builds the exact contents of protocol.schema.json. */
@@ -61,6 +63,7 @@ export function buildSchemaArtifact(): SchemaArtifact {
     protocolVersion: PROTOCOL_VERSION,
     methods,
     notifications,
+    restrictedModeMethods: [...RESTRICTED_MODE_METHODS],
   };
 }
 

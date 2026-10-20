@@ -3,7 +3,7 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -48,7 +48,7 @@ describe.skipIf(!enginePath)('engine integration', () => {
     await writeFile(path.join(repoDir, 'untracked.txt'), 'later\n');
 
     client = createEngineClient({ enginePath });
-    handlers = createToolHandlers({ client, env: {} });
+    handlers = createToolHandlers({ client, allow: [repoDir], env: {} });
   }, 30000);
 
   afterAll(async () => {
@@ -112,9 +112,11 @@ describe.skipIf(!enginePath)('engine integration', () => {
   });
 
   it('surfaces engine errors as plain messages', async () => {
-    await expect(
-      handlers.git_status({ repoPath: path.join(os.tmpdir(), 'definitely-not-a-repo') }),
-    ).rejects.toThrow(/no git repository at or above/);
+    const missing = path.join(os.tmpdir(), 'definitely-not-a-repo');
+    const anywhere = createToolHandlers({ client, allow: [missing], env: {} });
+    await expect(anywhere.git_status({ repoPath: missing })).rejects.toThrow(
+      /no git repository at or above/,
+    );
   });
 
   it('git_diff renders unstaged hunks and separates them from staged ones', async () => {
@@ -274,7 +276,7 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
     git(repoDir, 'config', 'user.email', 'test@example.com');
     git(repoDir, 'config', 'commit.gpgsign', 'false');
     client = createEngineClient({ enginePath });
-    handlers = createToolHandlers({ client, env: {} });
+    handlers = createToolHandlers({ client, allow: [repoDir], env: {} });
   }, 30000);
 
   afterAll(async () => {
@@ -338,6 +340,126 @@ interface InitializeResponse {
   id?: number;
   result?: { serverInfo?: { name?: string }; capabilities?: { tools?: unknown } };
 }
+
+// A repository that names a command everywhere git looks for one: a
+// core.fsmonitor command, a clean/smudge filter and a textconv driver on every
+// path, and hooks. Each drops a marker file when it runs. Served from the
+// client's roots it is read by the restricted engine, which runs none of
+// them; allow-listed, git runs and so do they.
+describe.skipIf(!enginePath || process.platform === 'win32')('untrusted repository', () => {
+  let repoDir: string;
+  let markers: string;
+  let full: EngineClient;
+  let restricted: EngineClient;
+  let handlers: ToolHandlers;
+  const ran = async (): Promise<string[]> => (await readdir(markers)).sort();
+
+  beforeAll(async () => {
+    repoDir = await mkdtemp(path.join(os.tmpdir(), 'gitglasses-mcp-planted-'));
+    markers = await mkdtemp(path.join(os.tmpdir(), 'gitglasses-mcp-markers-'));
+    git(repoDir, 'init', '-b', 'main');
+    git(repoDir, 'config', 'user.name', 'Test Author');
+    git(repoDir, 'config', 'user.email', 'test@example.com');
+    git(repoDir, 'config', 'core.autocrlf', 'false');
+    await writeFile(path.join(repoDir, 'a.txt'), 'one\ntwo\n');
+    git(repoDir, 'add', '.');
+    git(repoDir, 'commit', '-m', 'Initial commit');
+    await writeFile(path.join(repoDir, 'a.txt'), 'one\ntwo\nthree\n');
+    await appendFile(
+      path.join(repoDir, '.git', 'config'),
+      [
+        '[core]',
+        `\tfsmonitor = "touch ${markers}/fsmonitor; false #"`,
+        '[filter "planted"]',
+        `\tclean = "touch ${markers}/clean; cat"`,
+        `\tsmudge = "touch ${markers}/smudge; cat"`,
+        '[diff "planted"]',
+        `\ttextconv = "touch ${markers}/textconv; cat"`,
+        '',
+      ].join('\n'),
+    );
+    await writeFile(path.join(repoDir, '.gitattributes'), '* filter=planted diff=planted\n');
+    for (const hook of ['pre-commit', 'post-checkout', 'post-merge']) {
+      const script = `#!/bin/sh\ntouch ${markers}/${hook}\n`;
+      await writeFile(path.join(repoDir, '.git', 'hooks', hook), script, { mode: 0o755 });
+    }
+
+    full = createEngineClient({ enginePath });
+    restricted = createEngineClient({ enginePath, restricted: true });
+    handlers = createToolHandlers({
+      client: full,
+      restrictedClient: restricted,
+      clientRoots: async () => [repoDir],
+      env: {},
+    });
+  }, 30000);
+
+  afterAll(async () => {
+    full?.dispose();
+    restricted?.dispose();
+    for (const dir of [repoDir, markers]) if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('serves blame, status, diff and log without running anything the repository names', async () => {
+    expect(await handlers.git_blame({ repoPath: repoDir, file: 'a.txt' })).toContain('Test Author');
+    expect(await handlers.git_status({ repoPath: repoDir })).toContain('a.txt');
+    expect(await handlers.git_diff({ repoPath: repoDir })).toContain('+three');
+    expect(await handlers.git_log_search({ repoPath: repoDir, limit: 5 })).toContain(
+      'Initial commit',
+    );
+    expect(await ran()).toEqual([]);
+  });
+
+  it('shows a commit and says why its diff is left out', async () => {
+    const shown = await handlers.git_commit_show({
+      repoPath: repoDir,
+      sha: 'HEAD',
+      includeDiff: true,
+    });
+    expect(shown).toContain('A  a.txt');
+    expect(shown).toContain('(diff omitted: git_commit_show needs git');
+    expect(await ran()).toEqual([]);
+  });
+
+  for (const [name, call] of [
+    [
+      'git_file_history',
+      (h: ToolHandlers, p: string) => h.git_file_history({ repoPath: p, file: 'a.txt', limit: 5 }),
+    ],
+    [
+      'create_patch',
+      (h: ToolHandlers, p: string) => h.create_patch({ repoPath: p, source: 'wip' }),
+    ],
+    [
+      'apply_patch',
+      (h: ToolHandlers, p: string) =>
+        h.apply_patch({
+          repoPath: p,
+          envelopeJson: JSON.stringify({
+            format: 'gitglasses-patch',
+            version: 1,
+            baseSha: '0'.repeat(40),
+            summary: 'x',
+            patch: 'diff --git a/a.txt b/a.txt\n',
+            createdAtIso: '2026-01-01T00:00:00Z',
+          }),
+        }),
+    ],
+  ] as const) {
+    it(`${name} is refused with a way to enable it, and runs nothing`, async () => {
+      await expect(call(handlers, repoDir)).rejects.toThrow(/needs git .*--allow/);
+      expect(await ran()).toEqual([]);
+    });
+  }
+
+  // The control: the same repository allow-listed is read by the full engine,
+  // and an ordinary blame then runs the planted commands.
+  it('runs the planted commands once the repository is allow-listed', async () => {
+    const allowed = createToolHandlers({ client: full, allow: [repoDir], env: {} });
+    await allowed.git_blame({ repoPath: repoDir, file: 'a.txt' });
+    expect(await ran()).toEqual(expect.arrayContaining(['clean', 'textconv']));
+  });
+});
 
 describe.skipIf(!existsSync(cliPath))('MCP stdio smoke', () => {
   it('dist/cli.js answers an MCP initialize request over stdio', async () => {

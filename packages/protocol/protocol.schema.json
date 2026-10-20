@@ -44,6 +44,9 @@
               "gitCli": {
                 "type": "boolean"
               },
+              "restricted": {
+                "type": "boolean"
+              },
               "watch": {
                 "type": "boolean"
               },
@@ -3136,5 +3139,25 @@
         }
       }
     }
-  }
+  },
+  "restrictedModeMethods": [
+    "initialize",
+    "shutdown",
+    "repo/discover",
+    "repo/close",
+    "repo/list",
+    "repo/state",
+    "blame/file",
+    "log/commits",
+    "search/commits",
+    "rev/fileAtRev",
+    "refs/list",
+    "stash/list",
+    "status/summary",
+    "graph/rows",
+    "diff/commit",
+    "diff/refs",
+    "diff/fileHunks",
+    "remote/list"
+  ]
 }

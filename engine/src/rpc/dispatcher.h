@@ -9,6 +9,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "rpc/framing.h"
 #include "util/cancel.h"
@@ -99,6 +100,9 @@ class Dispatcher {
               Priority priority = Priority::Interactive);
   void notification(const std::string& name, NotificationHandler handler,
                     NotificationMode mode = NotificationMode::Inline);
+
+  // Names of every registered request method, in sorted order.
+  std::vector<std::string> methodNames() const;
 
   // Entry point for every inbound payload. Never throws; protocol-level
   // failures produce JSON-RPC error responses. Payloads over
