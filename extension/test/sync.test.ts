@@ -22,10 +22,12 @@ import {
   publish,
   pull,
   push,
+  registerSyncCommands,
   reportFailure,
   reportIfStopped,
 } from '../src/sync/syncCommands';
 import { showConflictGuidance } from '../src/commands/ui';
+import { setActiveRepoResolver } from '../src/views/viewBase';
 
 const repo = { repoId: 'r1', rootPath: '/work/repo' };
 
@@ -286,6 +288,61 @@ describe('pull', () => {
     await push(fake as never, repo);
     expect(ui.messages[0].text).toContain('was rejected');
     expect(ui.executed.map((call) => call.command)).toContain('gitglasses.home.pull');
+  });
+});
+
+describe('next steps after a failure', () => {
+  // The views follow `active`; the failed action ran on `other`, as when the
+  // Git Commands palette acts on the repository of the file being edited.
+  const active = { repoId: 'r1', rootPath: '/work/app' };
+  const other = { repoId: 'r2', rootPath: '/work/lib' };
+
+  it('pass the repository the failed action ran on', async () => {
+    const fake = engine({
+      'status/summary': status('origin/topic'),
+      'mutate/push': () => {
+        throw gitError(' ! [rejected] topic -> topic (fetch first)', { kind: 'rejected' });
+      },
+    });
+    ui.messageChoices.push('Pull');
+    await push(fake as never, other);
+    expect(ui.executed).toContainEqual({ command: 'gitglasses.home.pull', args: [other] });
+
+    ui.reset();
+    const stopped = gitError('git merge failed (128): error: gpg failed to sign the data', {
+      kind: 'signing',
+      operation: 'merge',
+    });
+    ui.messageChoices.push('Abort Merge');
+    await reportFailure('Merge', stopped, { repo: other });
+    expect(ui.executed).toContainEqual({ command: 'gitglasses.abortOperation', args: [other] });
+  });
+
+  it('run on that repository rather than the active one', async () => {
+    setActiveRepoResolver(async () => active);
+    const fake = engine({
+      'repo/state': () => ({ sequencer: { operation: 'merge' } }),
+      'mutate/sequencer': () => ({ completed: true, conflicts: false }),
+    });
+    const disposables = registerSyncCommands(
+      Object.assign(fake, {
+        onDidChangeCapabilities: () => ({ dispose: () => undefined }),
+        onNotification: () => ({ dispose: () => undefined }),
+      }) as never,
+      {} as never,
+    );
+    try {
+      await ui.commands.get('gitglasses.abortOperation')!(other);
+      await ui.commands.get('gitglasses.continueOperation')!();
+      const sequenced = fake.calls.filter((call) => call.method === 'mutate/sequencer');
+      expect(sequenced.map((call) => [call.params.action, call.params.repoId])).toEqual([
+        ['abort', other.repoId],
+        ['continue', active.repoId],
+      ]);
+    } finally {
+      for (const disposable of disposables) disposable.dispose();
+      setActiveRepoResolver(undefined);
+    }
   });
 });
 

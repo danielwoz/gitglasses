@@ -50,6 +50,15 @@ export function configureSync(next: SyncHost): void {
 
 type Repo = ActiveRepo;
 
+/** A repository passed as a command argument, as a failure report's next
+ *  steps pass the repository the failed action ran on. */
+export function repoArgument(value: unknown): Repo | undefined {
+  const repo = value as Partial<Repo> | undefined;
+  return typeof repo?.repoId === 'string' && typeof repo.rootPath === 'string'
+    ? (repo as Repo)
+    : undefined;
+}
+
 /** Runs `run` under a notification with a Cancel button; cancelling stops
  *  the engine's git. */
 function withProgress<T>(title: string, run: (token: CancellationLike) => Promise<T>): Thenable<T> {
@@ -69,13 +78,15 @@ function cancelledByUser(error: unknown): boolean {
 
 /**
  * Reports a failed action with the next steps that fit it. `retry` re-runs
- * the action. When a credential prompt was answered from an integration and
- * the remote refused it, the action is retried once asking the user instead.
+ * the action, and the other steps act on `repo`, the repository the action
+ * ran on (the active one when not given). When a credential prompt was
+ * answered from an integration and the remote refused it, the action is
+ * retried once asking the user instead.
  */
 export async function reportFailure(
   label: string,
   error: unknown,
-  context: { retry?: () => Promise<unknown>; started?: number } = {},
+  context: { retry?: () => Promise<unknown>; started?: number; repo?: Repo } = {},
 ): Promise<void> {
   if (cancelledByUser(error)) {
     setStatus(`${label} cancelled`);
@@ -105,7 +116,7 @@ export async function reportFailure(
     ...presentation.actions.map((action) => action.label),
   );
   const action = presentation.actions.find((candidate) => candidate.label === choice)?.action;
-  if (action) await runFailureAction(action, context.retry);
+  if (action) await runFailureAction(action, context.retry, context.repo);
 }
 
 /**
@@ -114,15 +125,15 @@ export async function reportFailure(
  * the steps that finish or abandon it, and returns true. Any other error is
  * left to the caller.
  */
-export function reportIfStopped(error: unknown): boolean {
+export function reportIfStopped(error: unknown, repo?: Repo): boolean {
   const label = operationLabel(gitErrorData(error)?.operation);
   if (!label) return false;
-  void reportFailure(label, error);
+  void reportFailure(label, error, { repo });
   return true;
 }
 
-// The next steps run as commands on the active repository, which is the one
-// the failed action ran on.
+// The next steps run as commands, given the repository the failed action ran
+// on when the report names one; without it they act on the active one.
 const FAILURE_COMMANDS: Partial<Record<FailureAction, string>> = {
   pull: 'gitglasses.home.pull',
   // Push publishes a branch that tracks nothing.
@@ -136,6 +147,7 @@ const FAILURE_COMMANDS: Partial<Record<FailureAction, string>> = {
 async function runFailureAction(
   action: FailureAction,
   retry: (() => Promise<unknown>) | undefined,
+  repo: Repo | undefined,
 ): Promise<void> {
   if (action === 'retry') {
     await retry?.();
@@ -146,7 +158,7 @@ async function runFailureAction(
     return;
   }
   const command = FAILURE_COMMANDS[action];
-  if (command) await vscode.commands.executeCommand(command);
+  if (command) await vscode.commands.executeCommand(command, ...(repo ? [repo] : []));
 }
 
 /** Pushes the current branch, publishing it first when it tracks nothing. */
@@ -163,7 +175,7 @@ export async function push(engine: EngineClient, repo: Repo): Promise<void> {
     );
     setStatus(`Pushed '${status.branch}'`);
   } catch (error) {
-    await reportFailure('Push', error, { started, retry: () => push(engine, repo) });
+    await reportFailure('Push', error, { started, repo, retry: () => push(engine, repo) });
   }
 }
 
@@ -191,6 +203,7 @@ export async function publish(
     }
     await reportFailure('Publish', error, {
       started,
+      repo,
       retry: () => publish(engine, repo, name, remote),
     });
   }
@@ -258,6 +271,7 @@ export async function pull(
     }
     await reportFailure('Pull', error, {
       started,
+      repo,
       retry: () => pull(engine, repo, choice),
     });
   }
@@ -274,6 +288,7 @@ export async function fetch(engine: EngineClient, repo: Repo, prune: boolean): P
   } catch (error) {
     await reportFailure('Fetch', error, {
       started,
+      repo,
       retry: () => fetch(engine, repo, prune),
     });
   }
@@ -310,7 +325,7 @@ export async function runSequencer(
     else if (result.completed) setStatus(`${label} completed`);
     else setStatus(`${label} continued`);
   } catch (error) {
-    await reportFailure(label, error);
+    await reportFailure(label, error, { repo });
   }
 }
 
@@ -393,10 +408,14 @@ export function registerSyncCommands(
   engine: EngineClient,
   repos: RepositoryService,
 ): vscode.Disposable[] {
-  const onRepo = (run: (repo: ActiveRepo) => Promise<void>) => async (): Promise<void> => {
-    const repo = await requireRepo(repos);
-    if (repo) await run(repo);
-  };
+  // A failure report passes the repository its action ran on; run from the
+  // palette or a button, the commands act on the active repository.
+  const onRepo =
+    (run: (repo: ActiveRepo) => Promise<void>) =>
+    async (target?: unknown): Promise<void> => {
+      const repo = repoArgument(target) ?? (await requireRepo(repos));
+      if (repo) await run(repo);
+    };
   const state = new OperationState(engine, repos);
   state.schedule();
   return [

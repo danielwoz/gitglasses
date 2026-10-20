@@ -222,28 +222,35 @@ export function registerHomeCommands(
 ): vscode.Disposable[] {
   // The shared repo action, plus the card refresh every home action ends with.
   // Actions git refuses mid-conflict confirm first; push is not one of them.
+  // A failure report's next step passes the repository the failed action
+  // ran on (`target`); otherwise the action runs on the active repository.
   const onRepo = (
     label: string,
     action: (repo: ActiveRepo) => Promise<void>,
-    options: { guardConflicts?: boolean } = {},
+    options: { guardConflicts?: boolean; target?: unknown } = {},
   ): Promise<void> =>
-    withRepo(repos, label, async (repo) => {
-      if (
-        options.guardConflicts &&
-        !(await allowedDespiteConflicts(engine, repo.repoId, label))
-      ) {
-        return;
-      }
-      await action(repo);
-      view.refresh();
-    });
+    withRepo(
+      repos,
+      label,
+      async (repo) => {
+        if (
+          options.guardConflicts &&
+          !(await allowedDespiteConflicts(engine, repo.repoId, label))
+        ) {
+          return;
+        }
+        await action(repo);
+        view.refresh();
+      },
+      sync.repoArgument(options.target),
+    );
 
   return [
-    vscode.commands.registerCommand('gitglasses.home.push', () =>
-      onRepo('push', (repo) => sync.push(engine, repo)),
+    vscode.commands.registerCommand('gitglasses.home.push', (target?: unknown) =>
+      onRepo('push', (repo) => sync.push(engine, repo), { target }),
     ),
-    vscode.commands.registerCommand('gitglasses.home.pull', () =>
-      onRepo('pull', (repo) => sync.pull(engine, repo), { guardConflicts: true }),
+    vscode.commands.registerCommand('gitglasses.home.pull', (target?: unknown) =>
+      onRepo('pull', (repo) => sync.pull(engine, repo), { guardConflicts: true, target }),
     ),
     vscode.commands.registerCommand('gitglasses.home.switchBranch', () =>
       onRepo(

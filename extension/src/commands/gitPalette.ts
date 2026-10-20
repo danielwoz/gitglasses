@@ -195,7 +195,7 @@ async function commitFlow(ctx: PaletteContext): Promise<FlowStatus> {
       });
       report(ctx, `Committed ${shortSha(sha)}`);
     } catch (error) {
-      await sync.reportFailure(`Commit in ${repo.name}`, error, { retry: commit });
+      await sync.reportFailure(`Commit in ${repo.name}`, error, { retry: commit, repo });
     }
   };
   await commit();
@@ -651,6 +651,7 @@ export function registerGitPalette(
         void sync.reportFailure(
           `${root.label.replace(/^\$\([^)]*\)\s*/, '')} in ${repo.name}`,
           error,
+          { repo },
         );
         return;
       }

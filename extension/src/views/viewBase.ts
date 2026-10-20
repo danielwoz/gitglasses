@@ -42,19 +42,21 @@ export async function requireRepo(repos: RepositoryService): Promise<ActiveRepo 
   return repo;
 }
 
-/** Runs `action` against the workspace repo, reporting a missing repo and
- *  surfacing a failure as "<label> failed" with the next steps that fit it. */
+/** Runs `action` against `target`, or else the workspace repo, reporting a
+ *  missing repo and surfacing a failure as "<label> failed" with the next
+ *  steps that fit it. */
 export async function withRepo(
   repos: RepositoryService,
   label: string,
   action: (repo: ActiveRepo) => Promise<void>,
+  target?: ActiveRepo,
 ): Promise<void> {
-  const repo = await requireRepo(repos);
+  const repo = target ?? (await requireRepo(repos));
   if (!repo) return;
   try {
     await action(repo);
   } catch (error) {
-    void reportFailure(label.charAt(0).toUpperCase() + label.slice(1), error);
+    void reportFailure(label.charAt(0).toUpperCase() + label.slice(1), error, { repo });
   }
 }
 
