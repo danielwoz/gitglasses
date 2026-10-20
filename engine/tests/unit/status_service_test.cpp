@@ -671,13 +671,16 @@ TEST(StatusService, StageFilesSkipsPathsThatMatchNothing) {
 // `git add` finish instead of locking the repository for every git tool.
 TEST(StatusService, CancelledStageFilesLeavesNoIndexLock) {
   FixtureRepo fixture;
-  fixture.writeFile(".git/slow-clean.sh", "sleep 1\ncat\n");
-  fixture.run("git config filter.slow.clean \"sh .git/slow-clean.sh\"");
-  fixture.run("git config filter.slow.smudge cat");
-  fixture.writeFile(".gitattributes", "*.bin filter=slow\n");
+  fixture.writeFile(".gitattributes", "*.bin filter=held\n");
   fixture.writeFile("a.bin", "one\n");
-  fixture.run("git -c filter.slow.clean=cat add .gitattributes a.bin");
+  fixture.run("git add .gitattributes a.bin");
   commitTick(fixture, "seed", 1);
+  // From here the clean filter holds `git add` until .git/release exists.
+  fixture.writeFile(".git/held-clean.sh",
+                    "while [ ! -f .git/release ]; do :; done\n"
+                    "cat\n");
+  fixture.run("git config filter.held.clean \"sh .git/held-clean.sh\"");
+  fixture.run("git config filter.held.smudge cat");
   fixture.writeFile("a.bin", "two\n");
 
   InteractiveSession session;
@@ -691,6 +694,9 @@ TEST(StatusService, CancelledStageFilesLeavesNoIndexLock) {
     }
     sawLock = std::filesystem::exists(lock);
     session.notify({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 10}}}});
+    // Time for the cancellation to land while git is still held.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    fixture.writeFile(".git/release", "");
   });
   Json stage = stageFiles(session, 10, repoId, {"a.bin"}, "stage");
   canceller.join();
