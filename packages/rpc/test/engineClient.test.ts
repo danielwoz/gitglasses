@@ -168,7 +168,9 @@ describe('EngineClient over a fake transport', () => {
 
     await expect(client.request('repo/state', { repoId: 'r9' })).rejects.toSatisfy(
       (e: unknown) =>
-        e instanceof EngineError && e.code === ErrorCodes.RepoNotFound && e.message === 'no such repo',
+        e instanceof EngineError &&
+        e.code === ErrorCodes.RepoNotFound &&
+        e.message === 'no such repo',
     );
     client.dispose();
   });
@@ -187,9 +189,7 @@ describe('EngineClient over a fake transport', () => {
       ),
     );
 
-    await expect(
-      client.request('mutate/commit', { repoId: 'r1', message: 'x' }),
-    ).rejects.toSatisfy(
+    await expect(client.request('mutate/commit', { repoId: 'r1', message: 'x' })).rejects.toSatisfy(
       (e: unknown) => e instanceof EngineError && e.code === ErrorCodes.MethodNotSupported,
     );
     expect(seen).toEqual([
@@ -269,7 +269,9 @@ describe('EngineClient over a fake transport', () => {
     const { client, transports } = makeClient(
       { onLog: () => undefined },
       (spawnIndex) =>
-        new FakeTransport(spawnIndex === 0 ? CAPS_FULL : { gitCli: false, watch: false, threads: false }),
+        new FakeTransport(
+          spawnIndex === 0 ? CAPS_FULL : { gitCli: false, watch: false, threads: false },
+        ),
     );
     client.onDidChangeCapabilities(() => (changes += 1));
     await client.start();
@@ -537,7 +539,9 @@ describe('EngineClient crash handling', () => {
     await client.restart();
     await expect(first).resolves.toBeUndefined();
     expect(transports[1].killed).toBe(true);
-    transports[2].responders.set('repo/list', (msg) => transports[2].respond(msg.id, { repos: [] }));
+    transports[2].responders.set('repo/list', (msg) =>
+      transports[2].respond(msg.id, { repos: [] }),
+    );
     await expect(client.request('repo/list', {})).resolves.toEqual({ repos: [] });
     client.dispose();
   });
