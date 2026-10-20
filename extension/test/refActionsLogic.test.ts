@@ -9,12 +9,16 @@ import {
   isNotFullyMerged,
   isPushRejected,
   planPush,
+  rebaseTargets,
   refLabel,
   refRevision,
   splitRemoteBranch,
   summarizeGitError,
   workingTreeCompareEntries,
 } from '../src/views/refActionsLogic';
+
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
 
 describe('refRevision / refLabel', () => {
   it('names each kind of ref the way git and the user read it', () => {
@@ -176,6 +180,33 @@ describe('workingTreeCompareEntries', () => {
       { path: 'new.txt', left: 'new.txt', right: 'new.txt' },
       { path: 'only-on-branch.txt', left: 'only-on-branch.txt' },
       { path: 'staged.txt', left: 'staged.txt', right: 'staged.txt' },
+    ]);
+  });
+});
+
+describe('rebaseTargets', () => {
+  it("offers the current branch's upstream first, then branches, remote branches and tags", () => {
+    const targets = rebaseTargets({
+      branches: [
+        { name: 'feature', sha: SHA_A, current: true, upstream: 'origin/feature' },
+        { name: 'main', sha: SHA_B, current: false, upstream: 'origin/main' },
+      ],
+      remotes: [
+        {
+          name: 'origin',
+          branches: [
+            { name: 'main', sha: SHA_B },
+            { name: 'feature', sha: SHA_A },
+          ],
+        },
+      ],
+      tags: [{ name: 'v1', sha: SHA_B }],
+    });
+    expect(targets.map((target) => [target.kind, target.value])).toEqual([
+      ['upstream', 'origin/feature'],
+      ['branch', 'main'],
+      ['remoteBranch', 'origin/main'],
+      ['tag', 'v1'],
     ]);
   });
 });

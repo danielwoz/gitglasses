@@ -215,3 +215,37 @@ export function confirmForcePush(branch: string, remote: string): Confirmation {
     detail: `git push --force-with-lease ${remote} ${branch}\n\nThe remote has commits that are not in '${branch}'. Force pushing replaces them, unless someone pushed since you last fetched.`,
   };
 }
+
+/** A revision offered as a rebase target. */
+export interface RefTarget {
+  /** What git is given. */
+  value: string;
+  kind: 'upstream' | 'branch' | 'remoteBranch' | 'tag';
+  sha: string;
+}
+
+interface RefsListing {
+  branches: readonly { name: string; sha: string; current: boolean; upstream?: string }[];
+  remotes: readonly { name: string; branches: readonly { name: string; sha: string }[] }[];
+  tags: readonly { name: string; sha: string }[];
+}
+
+/** Revisions to rebase the current branch onto: its upstream first (the
+ *  usual choice), then the other local branches, remote branches and tags. */
+export function rebaseTargets(refs: RefsListing): RefTarget[] {
+  const current = refs.branches.find((branch) => branch.current);
+  const remoteBranches = refs.remotes.flatMap((remote) =>
+    remote.branches.map((branch) => ({ value: `${remote.name}/${branch.name}`, sha: branch.sha })),
+  );
+  const targets: RefTarget[] = [];
+  const upstream = current?.upstream && remoteBranches.find((b) => b.value === current.upstream);
+  if (upstream) targets.push({ ...upstream, kind: 'upstream' });
+  for (const branch of refs.branches) {
+    if (!branch.current) targets.push({ value: branch.name, kind: 'branch', sha: branch.sha });
+  }
+  for (const branch of remoteBranches) {
+    if (branch.value !== current?.upstream) targets.push({ ...branch, kind: 'remoteBranch' });
+  }
+  for (const tag of refs.tags) targets.push({ value: tag.name, kind: 'tag', sha: tag.sha });
+  return targets;
+}

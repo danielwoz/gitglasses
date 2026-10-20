@@ -428,7 +428,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     registerSuggestChange(engine, repos, integrations),
   );
 
-  const rebase = registerRebaseWebview(context, engine, repos);
+  const rebase = registerRebaseWebview(context, engine, repos, deps.log);
   disposables.push(
     ...rebase.disposables,
     ...registerRefCommands({

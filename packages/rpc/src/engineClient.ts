@@ -96,6 +96,7 @@ export const LONG_REQUEST_TIMEOUT_MS: Partial<Record<RequestMethod, number>> = {
   'mutate/revert': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'rebase/start': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'rebase/continue': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'rebase/skip': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
 };
 
 // Typed JSON-RPC client over a pluggable engine transport. Crash-safe:

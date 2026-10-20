@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PLAN_ACTIONS,
+  actionForKey,
+  autosquash,
+  hasAutosquashCandidates,
+  mergePlan,
   move,
   planFromPreview,
   setAction,
@@ -101,6 +106,19 @@ describe('validate', () => {
     expect(validate(setAction(plan(), 1, 'squash'))).toEqual([]);
   });
 
+  it('rejects a reword without a message, which would silently do nothing', () => {
+    const p = setAction(plan(), 1, 'reword');
+    expect(validate(p)).toEqual([
+      'Enter the new message for bbbbbbb, or pick instead of reword.',
+    ]);
+    expect(validate(setMessage(p, 1, '   '))).toHaveLength(1);
+    expect(validate(setMessage(p, 1, 'second, reworded'))).toEqual([]);
+  });
+
+  it('accepts a squash without a message: git combines the messages', () => {
+    expect(validate(setAction(plan(), 1, 'squash'))).toEqual([]);
+  });
+
   it('rejects a plan where every entry is dropped', () => {
     let p = plan();
     for (let i = 0; i < p.length; i++) p = setAction(p, i, 'drop');
@@ -140,5 +158,91 @@ describe('toRebaseEntries', () => {
     let p = setAction(plan(), 0, 'reword');
     p = setMessage(p, 0, '   ');
     expect(toRebaseEntries(p)[0].message).toBeUndefined();
+  });
+});
+
+describe('edit and keyboard actions', () => {
+  it('offers edit, which stops the rebase after the commit', () => {
+    expect(PLAN_ACTIONS).toContain('edit');
+    expect(toRebaseEntries(setAction(plan(), 1, 'edit'))[1]).toEqual({
+      action: 'edit',
+      sha: B,
+      summary: 'second',
+    });
+  });
+
+  it("maps git's todo letters to actions", () => {
+    expect(actionForKey('p')).toBe('pick');
+    expect(actionForKey('R')).toBe('reword');
+    expect(actionForKey('e')).toBe('edit');
+    expect(actionForKey('s')).toBe('squash');
+    expect(actionForKey('f')).toBe('fixup');
+    expect(actionForKey('d')).toBe('drop');
+    expect(actionForKey('x')).toBeUndefined();
+  });
+});
+
+describe('mergePlan', () => {
+  it('keeps choices for commits still on the branch and appends new ones', () => {
+    let edited = move(plan(), 2, 0);
+    edited = setAction(edited, 0, 'reword');
+    edited = setMessage(edited, 0, 'third, reworded');
+    edited = setAction(edited, 2, 'drop');
+    const D = 'd'.repeat(40);
+    const merged = mergePlan(edited, [
+      { sha: A, summary: 'first' },
+      { sha: C, summary: 'third (amended)' },
+      { sha: D, summary: 'fourth' },
+    ]);
+    expect(merged).toEqual([
+      { sha: C, summary: 'third (amended)', action: 'reword', message: 'third, reworded' },
+      { sha: A, summary: 'first', action: 'pick', message: '' },
+      { sha: D, summary: 'fourth', action: 'pick', message: '' },
+    ]);
+  });
+});
+
+describe('autosquash', () => {
+  const D = 'd'.repeat(40);
+  const E = 'e'.repeat(40);
+  function withFixups() {
+    return planFromPreview([
+      { sha: A, summary: 'add parser' },
+      { sha: B, summary: 'add lexer' },
+      { sha: C, summary: 'fixup! add parser' },
+      { sha: D, summary: 'squash! add lexer' },
+      { sha: E, summary: 'fixup! fixup! add parser' },
+    ]);
+  }
+
+  it('moves fixup!/squash! commits under the commit they name', () => {
+    expect(hasAutosquashCandidates(withFixups())).toBe(true);
+    expect(hasAutosquashCandidates(autosquash(withFixups()))).toBe(false);
+    expect(autosquash(withFixups()).map((entry) => [entry.summary, entry.action])).toEqual([
+      ['add parser', 'pick'],
+      ['fixup! add parser', 'fixup'],
+      ['fixup! fixup! add parser', 'fixup'],
+      ['add lexer', 'pick'],
+      ['squash! add lexer', 'squash'],
+    ]);
+  });
+
+  it('matches a sha prefix or a subject prefix the way git does', () => {
+    const p = planFromPreview([
+      { sha: A, summary: 'add parser for frames' },
+      { sha: B, summary: 'fixup! aaaaaaa' },
+      { sha: C, summary: 'fixup! add parser' },
+    ]);
+    expect(autosquash(p).map((entry) => entry.sha)).toEqual([A, B, C]);
+    expect(autosquash(p).map((entry) => entry.action)).toEqual(['pick', 'fixup', 'fixup']);
+  });
+
+  it('leaves commits whose target is not in the plan alone', () => {
+    const p = planFromPreview([
+      { sha: A, summary: 'fixup! something upstream' },
+      { sha: B, summary: 'second' },
+    ]);
+    expect(hasAutosquashCandidates(p)).toBe(false);
+    expect(autosquash(p)).toEqual(p);
   });
 });

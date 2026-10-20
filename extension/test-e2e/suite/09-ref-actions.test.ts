@@ -9,8 +9,9 @@ import {
   workspaceRoot,
 } from './helpers';
 
-// The actions on the Branches, Remotes, Tags and Stashes views, driven the
-// way the tree's context menus drive them.
+// The actions on the Branches, Remotes, Tags and Stashes views, and the
+// rebase commands that reach a paused rebase, driven the way the tree's
+// context menus drive them.
 
 const COMMANDS = [
   'gitglasses.branch.checkout',
@@ -39,6 +40,10 @@ const COMMANDS = [
   'gitglasses.remote.add',
   'gitglasses.remote.remove',
   'gitglasses.remote.openOnHost',
+  'gitglasses.rebase.show',
+  'gitglasses.rebase.continue',
+  'gitglasses.rebase.skip',
+  'gitglasses.rebase.abort',
 ];
 
 function activeTabLabel(): string | undefined {
@@ -46,7 +51,7 @@ function activeTabLabel(): string | undefined {
 }
 
 describe('ref view actions', () => {
-  it('registers the view commands', async () => {
+  it('registers the view and rebase commands', async () => {
     await activateExtension();
     const all = await vscode.commands.getCommands(true);
     for (const command of COMMANDS) assert.ok(all.includes(command), `${command} is missing`);
@@ -72,5 +77,12 @@ describe('ref view actions', () => {
     }, `the comparison never opened (active tab: ${activeTabLabel()})`);
     assert.ok(label.startsWith('HEAD ↔ HEAD~2'), label);
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+  });
+
+  it('reports that no rebase is paused instead of failing', async () => {
+    await activateExtension();
+    await assert.doesNotReject(
+      Promise.resolve(vscode.commands.executeCommand('gitglasses.rebase.show')),
+    );
   });
 });

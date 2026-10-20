@@ -498,6 +498,29 @@
         "title": "Open Remote in Browser",
         "category": "GitGlasses",
         "icon": "$(globe)"
+      },
+      {
+        "command": "gitglasses.rebase.show",
+        "title": "Show Paused Rebase",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.rebase.continue",
+        "title": "Continue Rebase",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.rebase.skip",
+        "title": "Skip Commit and Continue Rebase",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.rebase.abort",
+        "title": "Abort Rebase",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       }
     ],
     "viewsContainers": {
@@ -1336,6 +1359,22 @@
         {
           "command": "gitglasses.remote.add",
           "when": "!gitglasses.noRepository"
+        },
+        {
+          "command": "gitglasses.rebase.show",
+          "when": "gitglasses.rebaseInProgress"
+        },
+        {
+          "command": "gitglasses.rebase.continue",
+          "when": "gitglasses.rebaseInProgress"
+        },
+        {
+          "command": "gitglasses.rebase.skip",
+          "when": "gitglasses.rebaseInProgress"
+        },
+        {
+          "command": "gitglasses.rebase.abort",
+          "when": "gitglasses.rebaseInProgress"
         }
       ]
     },
