@@ -397,6 +397,19 @@ describe.skipIf(!enginePath)('git_line_story', () => {
     }
   });
 
+  it('asks GitHub once for the lines of one commit, call after call', async () => {
+    requests.length = 0;
+    const served = handlers({ GITHUB_TOKEN: 'secret-token' }, 'allowed');
+    for (let call = 0; call < 3; call += 1) {
+      const text = await served.git_line_story({ repoPath: repoDir, file: 'parser.ts', line: 2 });
+      expect(text).toContain('### #7 (merged)');
+    }
+    const asked = (suffix: string) => requests.filter((r) => r.url.endsWith(suffix)).length;
+    expect(asked(`/commits/${fixSha}/pulls?per_page=5`)).toBe(1);
+    expect(asked('/pulls/7')).toBe(1);
+    expect(asked('/issues/12')).toBe(1);
+  });
+
   it('asks GitHub nothing without a token, and names the variables to set', async () => {
     requests.length = 0;
     const text = await handlers({}, 'allowed').git_line_story({

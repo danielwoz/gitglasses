@@ -45,7 +45,12 @@ import {
   type DiffFileEntry,
 } from './format.js';
 import { SERVER_VERSION } from './version.js';
-import { gitLineStory, registerLineStoryTool, type LineStoryArgs } from './tools/lineStory.js';
+import {
+  gitHubProviders,
+  gitLineStory,
+  registerLineStoryTool,
+  type LineStoryArgs,
+} from './tools/lineStory.js';
 
 /**
  * A bare hostname, optionally with a port: letters, digits, hyphens and dots.
@@ -242,6 +247,7 @@ export function createToolHandlers(context: ToolContext) {
   const MAX_REPO_IDS = 64;
 
   const allowedRoots = parseAllowedRoots(env.GITGLASSES_ALLOWED_ROOTS, context.allow);
+  const lineStoryProviders = gitHubProviders(context.fetchFn);
 
   /**
    * The directories served without the operator naming them: the client's
@@ -858,7 +864,7 @@ export function createToolHandlers(context: ToolContext) {
           },
           env,
           githubHost: () => configuredGitHubHost(env),
-          fetchFn: context.fetchFn,
+          gitHubProvider: lineStoryProviders,
         },
         args,
       );

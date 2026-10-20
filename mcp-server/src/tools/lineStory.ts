@@ -69,7 +69,30 @@ export interface LineStoryDeps {
   env: Record<string, string | undefined>;
   /** The operator's GitHub Enterprise host, or undefined for github.com. */
   githubHost(): string | undefined;
-  fetchFn?: FetchLike;
+  /** The provider for `host` (undefined: github.com); see gitHubProviders. */
+  gitHubProvider(host: string | undefined): HostingProvider;
+}
+
+/**
+ * GitHub providers made once per host. A provider holds the response cache
+ * (a commit's pull requests for ten minutes, issue titles for one), so the
+ * calls an agent makes for the lines of one change ask GitHub once.
+ */
+export function gitHubProviders(
+  fetchFn?: FetchLike,
+): (host: string | undefined) => HostingProvider {
+  const providers = new Map<string, HostingProvider>();
+  return (host) => {
+    const key = host ?? '';
+    let provider = providers.get(key);
+    if (!provider) {
+      provider = host
+        ? createGitHubEnterpriseProvider(host, fetchFn)
+        : new GitHubProvider({ fetchFn });
+      providers.set(key, provider);
+    }
+    return provider;
+  };
 }
 
 /** An error written for the caller. */
@@ -160,9 +183,7 @@ async function gitHubForge(
   repo: ServedLineStoryRepo,
 ): Promise<{ forge: StoryForge; repo?: RepoDescriptor }> {
   const host = deps.githubHost();
-  const provider: HostingProvider = host
-    ? createGitHubEnterpriseProvider(host, deps.fetchFn)
-    : new GitHubProvider({ fetchFn: deps.fetchFn });
+  const provider = deps.gitHubProvider(host);
   let urls: string[] = [];
   try {
     urls = await remoteUrls(repo);
