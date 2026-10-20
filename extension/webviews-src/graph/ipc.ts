@@ -10,8 +10,9 @@ import type {
   GraphRef,
   GraphRow,
 } from '@gitglasses/protocol';
+import type { BranchOption, RefMenuAction, RowMenuAction } from './graphLogic';
 
-export type { CommitDetails, CommitFileChange, FileChange, GraphRef, GraphRow };
+export type { BranchOption, CommitDetails, CommitFileChange, FileChange, GraphRef, GraphRow };
 
 // --- Details --------------------------------------------------------------
 
@@ -67,24 +68,89 @@ export type DetailsToHostMessage =
 
 // --- Graph ----------------------------------------------------------------
 
+/** What the graph webview keeps across reloads (vscode.setState), and what
+ *  the panel serializer restores. */
+export interface GraphViewState {
+  /** The repository the state belongs to. */
+  repoRoot?: string;
+  /** The commit at the top of the viewport. */
+  topSha?: string;
+  selected?: string[];
+  /** Full ref names the graph is filtered to; absent for every branch. */
+  filter?: string[];
+  detailsOpen?: boolean;
+  /** Share of the panel height the details pane takes. */
+  detailsShare?: number;
+  query?: string;
+}
+
 export type HostToWebviewMessage =
-  | { type: 'reset' }
-  | { type: 'rows'; rows: GraphRow[]; nextCursor?: string }
+  /** A (possibly different) repository: drop every row and start over. */
+  | {
+      type: 'reset';
+      generation: number;
+      repoName: string;
+      repoRoot: string;
+      /** False in Restricted Mode: menus leave out what changes the repository. */
+      canMutate: boolean;
+      maxLanes: number;
+      filter?: string[];
+    }
+  /** A page of rows. `replace` swaps out every loaded row (a refresh) and
+   *  keeps the selection and scroll position on the same commits. */
+  | {
+      type: 'rows';
+      generation: number;
+      rows: GraphRow[];
+      nextCursor?: string;
+      replace: boolean;
+    }
+  | { type: 'branches'; branches: BranchOption[] }
+  | { type: 'details'; requestId: number; view: DetailsView }
+  | { type: 'findResults'; query: string; shas: string[]; truncated: boolean }
+  /** The working tree changed: a shown WIP details view is out of date. */
+  | { type: 'wipChanged' }
+  | { type: 'settings'; maxLanes: number; canMutate: boolean }
   | { type: 'theme' }
   /** Why the graph is empty: no repository, or a failed graph/rows. */
   | { type: 'error'; message: string };
 
 /** Graph mutation actions the context menu can request from the host. */
-export type GraphActionId =
-  'createBranch' | 'switchDetached' | 'cherryPick' | 'revert' | 'reset' | 'merge' | 'rebase';
+export type GraphActionId = Extract<
+  RowMenuAction,
+  | 'createBranch'
+  | 'createTag'
+  | 'switchDetached'
+  | 'cherryPick'
+  | 'revert'
+  | 'reset'
+  | 'merge'
+  | 'rebase'
+  | 'stashChanges'
+  | 'stashApply'
+  | 'stashPop'
+  | 'stashDrop'
+  | 'openScm'
+>;
 
 export type WebviewToHostMessage =
-  | { type: 'ready' }
-  | { type: 'loadMore'; cursor: string }
-  | { type: 'select'; shas: string[] }
-  | { type: 'openCommit'; sha: string }
-  | { type: 'copySha'; sha: string }
-  | { type: 'action'; action: GraphActionId; shas: string[] };
+  | DetailsToHostMessage
+  | { type: 'ready'; state?: GraphViewState }
+  | { type: 'loadMore'; generation: number; cursor: string }
+  | { type: 'refresh' }
+  /** The repository name was clicked: offer Select Repository. */
+  | { type: 'selectRepository' }
+  | { type: 'details'; requestId: number; target: DetailsTarget }
+  | { type: 'find'; query: string }
+  | { type: 'setFilter'; refs?: string[] }
+  | { type: 'action'; generation: number; action: GraphActionId; shas: string[] }
+  | {
+      type: 'refAction';
+      generation: number;
+      action: Exclude<RefMenuAction, 'copyName'>;
+      ref: GraphRef;
+      sha: string;
+    };
 
 // --- Commit Details panel ---------------------------------------------------
 

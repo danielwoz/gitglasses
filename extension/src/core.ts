@@ -216,6 +216,8 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     refreshViews();
     conflicts.schedule();
   };
+  // Fires once repositories are registered again after an engine respawn.
+  const reloaded = new vscode.EventEmitter<void>();
   const reload = async (): Promise<void> => {
     await repos.rediscoverAll();
     // Repo ids are fresh after a respawn, so the workspace repos are looked
@@ -223,6 +225,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     activeRepo.reset();
     docSync.resync();
     refreshAll();
+    reloaded.fire();
   };
   const handleEngineRestarted = (): void => {
     void reload().catch((error) => deps.log(`reload after engine restart failed: ${error}`));
@@ -430,7 +433,16 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const rebase = registerRebaseWebview(context, engine, repos);
   disposables.push(
     ...rebase.disposables,
-    ...registerGraphWebview(context, engine, repos, (upstream) => rebase.host.open(upstream)),
+    reloaded,
+    ...registerGraphWebview({
+      context,
+      engine,
+      repos,
+      onDidChangeActiveRepo: activeRepo.onDidChange,
+      onDidReload: reloaded.event,
+      openRebase: (upstream) => rebase.host.open(upstream),
+      log: deps.log,
+    }),
     ...registerTimelineWebview(context, engine, repos),
     registerGitPalette(engine, repos, (upstream) => rebase.host.open(upstream)),
     ...registerWorktreeCommands(engine, repos, worktreesView),

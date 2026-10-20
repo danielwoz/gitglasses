@@ -7,7 +7,7 @@
 import './details.css';
 import { shortSha } from '@gitglasses/protocol/sha';
 import type { CommitFileChange, DetailsToHostMessage, DetailsView, FileChange } from './ipc';
-import { relativeTime } from './renderer';
+import { relativeTime } from './graphLogic';
 import {
   ChangeSummary,
   FileEntry,

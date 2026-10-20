@@ -1,7 +1,8 @@
 import * as assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { activateExtension, poll, workspaceRoot } from './helpers';
+import { activateExtension, listRepositories, poll, workspaceRoot } from './helpers';
 
 /** Open webview tabs of one of the extension's panel types. */
 function webviewTabs(viewType: string): vscode.Tab[] {
@@ -12,22 +13,61 @@ function webviewTabs(viewType: string): vscode.Tab[] {
     );
 }
 
+function tabLabel(viewType: string): Promise<string> {
+  return poll(async () => webviewTabs(viewType)[0]?.label, `no ${viewType} tab opened`);
+}
+
 async function closeEditors(): Promise<void> {
   await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+}
+
+/** Picks the `index`th entry of Select Repository's quick pick. */
+async function selectRepository(index: number): Promise<void> {
+  const picked = vscode.commands.executeCommand('gitglasses.selectRepository');
+  // The quick pick opens once the repository list resolves.
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  for (let i = 0; i < index; i++) {
+    await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+  }
+  await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+  await picked;
 }
 
 describe('graph webview', () => {
   after(closeEditors);
 
-  // The webview DOM is not reachable from the extension test host, so the
-  // deepest observable signal is that the command that creates the panel and
-  // starts streaming graph rows resolves instead of rejecting.
-  it('executes showGraph without rejecting', async () => {
+  // The webview DOM is not reachable from the extension test host; the tabs
+  // and their titles are what the panels show of their state.
+  it('opens the graph in a tab named after the repository', async () => {
     await activateExtension();
-    await assert.doesNotReject(
-      Promise.resolve(vscode.commands.executeCommand('gitglasses.showGraph')),
-      'gitglasses.showGraph rejected',
-    );
+    await vscode.commands.executeCommand('gitglasses.showGraph');
+    const label = await tabLabel('gitglasses.graph');
+    assert.strictEqual(label, `Commit Graph — ${path.basename(workspaceRoot().fsPath)}`);
+  });
+
+  it('follows Select Repository to another repository', async function () {
+    const repos = await listRepositories();
+    if (repos.length < 2) this.skip();
+    await vscode.commands.executeCommand('gitglasses.showGraph');
+    const before = await tabLabel('gitglasses.graph');
+    try {
+      await selectRepository(1);
+      const after = await poll(async () => {
+        const label = webviewTabs('gitglasses.graph')[0]?.label;
+        return label && label !== before ? label : undefined;
+      }, 'the graph kept its repository after Select Repository');
+      assert.ok(
+        repos.slice(1).some((repo) => after === `Commit Graph — ${repo.name}`),
+        `unexpected graph title ${after}`,
+      );
+    } finally {
+      // The later suites expect the workspace folder's repository.
+      await selectRepository(0);
+      await poll(async () => {
+        const label = webviewTabs('gitglasses.graph')[0]?.label;
+        return label === before ? label : undefined;
+      }, 'the graph did not return to the first repository');
+    }
   });
 
   it('shows a commit in the Commit Details panel and leaves the clipboard alone', async () => {
