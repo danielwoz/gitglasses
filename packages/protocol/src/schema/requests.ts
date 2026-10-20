@@ -117,7 +117,18 @@ export const RequestSchemas = {
   'repo/discover': {
     description:
       'Registers the repository containing `path`, walking up like `git rev-parse --git-dir`, and starts watching it. The returned repoId addresses it for the rest of the session.',
-    params: Type.Object({ path: Path('Any path inside the repository.') }, strict),
+    params: Type.Object(
+      {
+        path: Path('Any path inside the repository.'),
+        watch: Type.Optional(
+          Type.Boolean({
+            description:
+              'false registers the repository without watching it, for one a client only lists. A later repo/discover without it starts the watch; it never stops one already running. Default true.',
+          }),
+        ),
+      },
+      strict,
+    ),
     result: RepoInfo,
   },
   'repo/close': {
