@@ -4,11 +4,13 @@
 
 import type { FileHistoryEntry } from './ipc';
 import {
+  LabelHit,
   LaneAssignment,
   Rgb,
   TimeDomain,
   TimeScale,
   bubbleRadius,
+  fitText,
   generateTicks,
   laneForEntry,
   mixBubbleColor,
@@ -17,6 +19,8 @@ import {
 } from './timelineLogic';
 
 export const LANE_LABEL_WIDTH = 120;
+/** Where lane labels start, and the gap kept before the plot. */
+export const LABEL_PADDING = 8;
 export const AXIS_HEIGHT = 28;
 export const TOP_MARGIN = 10;
 export const RIGHT_MARGIN = 12;
@@ -79,6 +83,8 @@ export function plotScale(domain: TimeDomain, viewportW: number): TimeScale {
 export class TimelineRenderer {
   /** Bubbles from the last paint, in CSS-pixel viewport coordinates. */
   bubbles: BubblePoint[] = [];
+  /** Lane labels from the last paint, for the full-name tooltip. */
+  labels: LabelHit[] = [];
 
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -97,6 +103,7 @@ export class TimelineRenderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, viewportW, viewportH);
     this.bubbles = [];
+    this.labels = [];
 
     const scale = plotScale(domain, viewportW);
     const plotLeft = scale.rangeStart;
@@ -107,9 +114,12 @@ export class TimelineRenderer {
     const laneHeight = (plotBottom - plotTop) / laneCount;
     const textFont = `${theme.fontSize} ${theme.fontFamily}`;
 
-    // Lane separators and author labels.
+    // Lane separators and author labels; a name too long for the column is
+    // cut short with an ellipsis.
     ctx.font = textFont;
     ctx.textBaseline = 'middle';
+    const labelWidth = LANE_LABEL_WIDTH - 2 * LABEL_PADDING;
+    const measure = (text: string): number => ctx.measureText(text).width;
     for (let i = 0; i < assignment.lanes.length; i++) {
       const laneTop = plotTop + i * laneHeight;
       const centerY = laneTop + laneHeight / 2;
@@ -122,13 +132,22 @@ export class TimelineRenderer {
       ctx.stroke();
       ctx.globalAlpha = 1;
 
+      const label = assignment.lanes[i].label;
+      const shown = fitText(label, labelWidth, measure);
       ctx.fillStyle = assignment.lanes[i].others ? theme.mutedForeground : theme.foreground;
       ctx.save();
       ctx.beginPath();
-      ctx.rect(0, laneTop, LANE_LABEL_WIDTH - 8, laneHeight);
+      ctx.rect(0, laneTop, LANE_LABEL_WIDTH - LABEL_PADDING, laneHeight);
       ctx.clip();
-      ctx.fillText(assignment.lanes[i].label, 8, centerY);
+      ctx.fillText(shown, LABEL_PADDING, centerY);
       ctx.restore();
+      this.labels.push({
+        top: laneTop,
+        bottom: laneTop + laneHeight,
+        right: LANE_LABEL_WIDTH,
+        text: label,
+        truncated: shown !== label,
+      });
     }
 
     // Time axis: baseline, tick gridlines, tick labels.
