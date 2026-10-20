@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "format": "node scripts/check-format.mjs --fix",
     "format:check": "node scripts/check-format.mjs",
+    "fetch-engine": "node scripts/fetch-engine.mjs",
     "test:scripts": "node --test \"scripts/test/*.test.mjs\""
   },
   "devDependencies": {
