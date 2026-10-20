@@ -37,8 +37,9 @@ everything including the C++ engine.
 
 ### Prerequisites
 
-- Node.js 22 (`.nvmrc`; 20.19 or newer also works) and pnpm 11. `corepack enable`
-  provides the pnpm version that `package.json` pins.
+- Node.js 22 (22.13 or newer) or 24 and later, as pnpm 11 and ESLint require;
+  `.nvmrc` selects 22.
+- pnpm 11. `corepack enable` provides the version that `package.json` pins.
 - git 2.32 or newer.
 - For the engine: CMake 3.25 or newer, Ninja, a C++20 compiler (GCC 11+,
   Clang 14+, Xcode 15, or Visual Studio 2022), and a clone of
