@@ -83,6 +83,17 @@ async function waitForLineBlame(
   });
 }
 
+/** Polls until current-line blame shows nowhere, failing with what it last saw. */
+async function waitForNoLineBlame(what: string): Promise<void> {
+  let last: LineBlameState | undefined;
+  await poll(async () => {
+    last = await lineBlameState();
+    return last === undefined ? true : undefined;
+  }, what).catch((error: Error) => {
+    throw new Error(`${error.message}; last: ${JSON.stringify(last)}`);
+  });
+}
+
 async function openBlameFile(): Promise<vscode.TextEditor> {
   const uri = vscode.Uri.joinPath(workspaceRoot(), FIXTURE.blameFile);
   const document = await vscode.workspace.openTextDocument(uri);
@@ -255,17 +266,25 @@ describe('blame pipeline', () => {
   it('turns inline blame off and on through its setting', async () => {
     const editor = await openBlameFile();
     editor.selection = new vscode.Selection(0, 0, 0, 0);
-    await waitForLineBlame((s) => s.line === 0, 'line 0');
+    await waitForLineBlame((s) => s.line === 0 && s.inlineVisible, 'line 0 inline');
+    // The status bar item follows its own setting. By default it steps aside
+    // for VS Code's own status bar blame, and a VS Code without one keeps it
+    // after inline blame is off.
+    const statusBarStays = !builtinStatusBarBlameOn();
     await vscode.commands.executeCommand('gitglasses.toggleLineBlame');
     try {
       assert.strictEqual(
         vscode.workspace.getConfiguration('gitglasses').get('currentLine.enabled'),
         false,
       );
-      await poll(
-        async () => ((await lineBlameState()) === undefined ? true : undefined),
-        'inline blame stayed on after the toggle',
-      );
+      if (statusBarStays) {
+        await waitForLineBlame(
+          (s) => s.line === 0 && !s.inlineVisible && s.statusBarVisible,
+          'the status bar item alone after the toggle',
+        );
+      } else {
+        await waitForNoLineBlame('inline blame stayed on after the toggle');
+      }
     } finally {
       await vscode.commands.executeCommand('gitglasses.toggleLineBlame');
     }
@@ -273,7 +292,10 @@ describe('blame pipeline', () => {
       vscode.workspace.getConfiguration('gitglasses').get('currentLine.enabled'),
       true,
     );
-    await waitForLineBlame((s) => s.line === 0, 'line 0 after turning it back on');
+    await waitForLineBlame(
+      (s) => s.line === 0 && s.inlineVisible,
+      'line 0 inline after turning it back on',
+    );
     // Leave the setting as the fixture had it: unset.
     const inspected = vscode.workspace
       .getConfiguration('gitglasses')
