@@ -188,8 +188,11 @@ export function confirmWorktreeAndBranchRemove(
   const lines = [`Worktree: ${worktree.path}`];
   if (branch) {
     const base = status?.base;
-    const unmerged =
-      base && base.ahead > 0
+    // The branch is deleted with -D, so say what that can lose; without a
+    // base nothing was compared, and that is said too.
+    const unmerged = !base
+      ? ' (not compared with a base branch: commits on no other branch will be lost)'
+      : base.ahead > 0
         ? ` (${plural(base.ahead, 'commit')} not on ${base.ref} will be lost)`
         : '';
     lines.push(`Branch: ${branch}${unmerged}`);

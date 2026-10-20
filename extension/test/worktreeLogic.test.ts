@@ -226,6 +226,13 @@ describe('remove worktree and branch confirmations', () => {
     expect(detached.detail).not.toContain('git branch');
   });
 
+  it('warns that commits may be lost when there is no base to compare with', () => {
+    const confirmation = confirmWorktreeAndBranchRemove(entry(), status({ base: undefined }));
+    expect(confirmation.detail).toContain(
+      'Branch: feature (not compared with a base branch: commits on no other branch will be lost)',
+    );
+  });
+
   it('asks again before discarding uncommitted work', () => {
     const confirmation = confirmDiscardWorktreeChanges(entry(), 1);
     expect(confirmation.message).toBe("Discard 1 uncommitted change in 'app-agent'?");
