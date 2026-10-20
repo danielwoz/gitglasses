@@ -394,6 +394,54 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
                  {{"repoId", repoId}, {"sha", log["commits"].back()["sha"]}});
 }
 
+// search/log answers and refuses as its schema says, and its streamed matches
+// fit the search/matches notification.
+TEST(ProtocolContract, SearchLogMatchesSchema) {
+  FixtureRepo fixture;
+  fixture.writeFile("src/main.txt", "needle\n");
+  fixture.run("git add src/main.txt");
+  fixture.commit("add main");
+
+  InteractiveSession session;
+  checkedRequest(session, 1, "initialize",
+                 {{"protocolVersion", schemaDoc().value("protocolVersion", "")}});
+  Json discovered =
+      checkedRequest(session, 2, "repo/discover", {{"path", fixture.root().string()}});
+  const std::string repoId = discovered.value("repoId", "");
+
+  Json search = checkedRequest(session, 3, "search/log",
+                               {{"repoId", repoId},
+                                {"streamId", "contract-log"},
+                                {"query",
+                                 {{"text", "MAIN"},
+                                  {"content", "needle"},
+                                  {"contentMode", "string"},
+                                  {"path", "src"},
+                                  {"since", "2025-12-31"},
+                                  {"until", "2026-01-02T00:00:00Z"}}}});
+  EXPECT_EQ(search.value("total", 0), 1);
+  bool sawMatches = false;
+  for (const auto& notification : session.notifications) {
+    if (notification.value("method", "") != "search/matches") continue;
+    sawMatches = true;
+    expectValid(notificationSchema("search/matches"), notification["params"],
+                "search/matches.params");
+  }
+  EXPECT_TRUE(sawMatches);
+
+  rejectedRequest(session, 4, "search/log",
+                  {{"repoId", repoId}, {"streamId", "s"}, {"query", {{"since", "yesterday"}}}},
+                  "free-form since");
+  rejectedRequest(session, 5, "search/log",
+                  {{"repoId", repoId},
+                   {"streamId", "s"},
+                   {"query", {{"content", "x"}, {"contentMode", "fuzzy"}}}},
+                  "unknown contentMode");
+  rejectedRequest(session, 6, "search/log",
+                  {{"repoId", repoId}, {"streamId", "s"}, {"query", {{"content", ""}}}},
+                  "empty content");
+}
+
 // The engine must refuse what the schema forbids. Every case here is params
 // the validator above rejects; the engine has to reject them too, or the
 // constraint exists only on paper.

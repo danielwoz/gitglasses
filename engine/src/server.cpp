@@ -22,6 +22,7 @@
 #include "services/refs/refs_methods.h"
 #include "services/repo_methods.h"
 #include "services/rev_methods.h"
+#include "services/search/search_methods.h"
 #include "services/status/diff_methods.h"
 #include "services/status/stage_methods.h"
 #include "services/status/status_methods.h"
@@ -123,6 +124,7 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
   services::registerBlameMethods(dispatcher, context);
   services::registerRevMethods(dispatcher, context);
   services::registerHistoryMethods(dispatcher, context);
+  services::registerSearchMethods(dispatcher, context);
   services::registerCommitMethods(dispatcher, context);
   services::registerRefsMethods(dispatcher, context);
   services::registerGraphMethods(dispatcher, context);

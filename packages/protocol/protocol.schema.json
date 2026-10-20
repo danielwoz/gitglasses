@@ -1040,6 +1040,100 @@
         }
       }
     },
+    "search/log": {
+      "description": "Commit search over HEAD history through `git log`, adding what search/commits cannot answer from libgit2 alone: changes to the code (pickaxe), a path and a commit-date window. Matches stream as search/matches notifications tagged with `streamId`, newest first. Needs the git CLI, so a Restricted Mode or CLI-less engine refuses it.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "streamId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "streamId": {
+            "minLength": 1,
+            "description": "Correlates the search/matches notifications of this request.",
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
+          },
+          "query": {
+            "additionalProperties": false,
+            "default": {},
+            "description": "Criteria, ANDed together. An absent or empty query matches every commit, so the page is bounded only by `limit`.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "author": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "content": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "contentMode": {
+                "default": "string",
+                "anyOf": [
+                  {
+                    "const": "string",
+                    "type": "string"
+                  },
+                  {
+                    "const": "regex",
+                    "type": "string"
+                  }
+                ]
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "since": {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})?)?$",
+                "type": "string"
+              },
+              "until": {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})?)?$",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "streamId",
+          "total",
+          "truncated"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "rev/fileAtRev": {
       "description": "Contents of a file at a revision, passed through the repository's checkout filters so it compares byte-for-byte against an editor buffer. Binary blobs are reported, not returned.",
       "params": {
@@ -3258,7 +3352,7 @@
     },
     "search/matches": {
       "direction": "engine",
-      "description": "A batch of matches for the search/commits request carrying this streamId.",
+      "description": "A batch of matches for the search/commits or search/log request carrying this streamId.",
       "params": {
         "additionalProperties": false,
         "type": "object",

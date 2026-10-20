@@ -53,6 +53,13 @@ const Limit = Type.Optional(
   }),
 );
 
+/** An ISO 8601 date, or a date and time with an optional UTC offset. A bare
+ *  date, or a time without an offset, is read in the engine's local time zone;
+ *  a bare date means the start of that day. */
+const IsoDate = Type.String({
+  pattern: '^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})?)?$',
+});
+
 /** Continuation token, copied verbatim from the previous page's `nextCursor`.
  *  The encoding is the engine's and differs per method, so clients neither
  *  parse it nor construct one. */
@@ -301,6 +308,61 @@ export const RequestSchemas = {
         streamId: Type.String(),
         total: Type.Integer({ minimum: 0 }),
         /** True when the walk stopped at `limit` with matches left unseen. */
+        truncated: Type.Boolean(),
+      },
+      strict,
+    ),
+  },
+  'search/log': {
+    description:
+      "Commit search over HEAD history through `git log`, adding what search/commits cannot answer from libgit2 alone: changes to the code (pickaxe), a path and a commit-date window. Matches stream as search/matches notifications tagged with `streamId`, newest first. Needs the git CLI, so a Restricted Mode or CLI-less engine refuses it.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        streamId: Type.String({
+          minLength: 1,
+          description: 'Correlates the search/matches notifications of this request.',
+        }),
+        limit: Limit,
+        query: Type.Optional(
+          Type.Object(
+            {
+              /** Case-insensitive substring of the commit message. */
+              text: Type.Optional(Type.String({ minLength: 1 })),
+              /** Case-insensitive substring of the author name or email. */
+              author: Type.Optional(Type.String({ minLength: 1 })),
+              /** Code the commit adds or removes: an exact string (`git log -S`)
+               *  or, with contentMode 'regex', an extended regular expression
+               *  matched against added and removed lines (`git log -G`). */
+              content: Type.Optional(Type.String({ minLength: 1 })),
+              contentMode: Type.Optional(
+                Type.Union([Type.Literal('string'), Type.Literal('regex')], {
+                  default: 'string',
+                }),
+              ),
+              /** Pathspec relative to the repository root; git's glob rules apply. */
+              path: Type.Optional(Type.String({ minLength: 1 })),
+              /** Commits committed at or after this moment. */
+              since: Type.Optional(IsoDate),
+              /** Commits committed before this moment. */
+              until: Type.Optional(IsoDate),
+            },
+            {
+              ...strict,
+              default: {},
+              description:
+                'Criteria, ANDed together. An absent or empty query matches every commit, so the page is bounded only by `limit`.',
+            },
+          ),
+        ),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        streamId: Type.String(),
+        total: Type.Integer({ minimum: 0 }),
+        /** True when the search stopped at `limit` with matches left unseen. */
         truncated: Type.Boolean(),
       },
       strict,
