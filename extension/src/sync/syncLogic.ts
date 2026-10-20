@@ -98,6 +98,17 @@ export function describeFailure(
   }
   switch (data?.kind) {
     case 'cancelled':
+      // Dismissing a prompt is the user's own choice, so there is nothing to
+      // report, unless git stopped half-way because of it: the operation is
+      // still in progress and waits to be finished or abandoned.
+      if (stoppedIn) {
+        return present(
+          `${stoppedIn} stopped before its commit was made: a prompt it needed, such as a ` +
+            `signing passphrase, was dismissed. Continue to be asked again, or abort the ` +
+            `${stoppedIn.toLowerCase()}.`,
+          [...operationActions(data.operation), SHOW_LOG],
+        );
+      }
       return { message: `${label} cancelled.`, actions: [], silent: true };
     case 'auth':
       return present(

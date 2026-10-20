@@ -93,6 +93,20 @@ describe('failure presentation', () => {
       ),
     ).toEqual(['Retry', 'Show Log']);
     expect(describeFailure('Push', gitError('', { kind: 'cancelled' })).silent).toBe(true);
+    // A dismissed signing prompt leaves the merge or rebase half done.
+    const dismissed = describeFailure(
+      'Merge',
+      gitError('git merge failed (128): error: unable to read askpass response', {
+        kind: 'cancelled',
+        operation: 'merge',
+      }),
+    );
+    expect(dismissed.silent).toBe(false);
+    expect(dismissed.message).toMatch(/^Merge stopped before its commit was made/);
+    expect(labels(dismissed)).toEqual(['Continue', 'Abort Merge', 'Show Log']);
+    expect(
+      labels(describeFailure('Rebase', gitError('', { kind: 'cancelled', operation: 'rebase' }))),
+    ).toEqual(['Continue', 'Skip Commit', 'Abort Rebase', 'Show Log']);
     const signing = describeFailure(
       'Merge',
       gitError('git merge failed (128): error: gpg failed to sign the data', {
@@ -304,6 +318,19 @@ describe('conflict guidance', () => {
     );
     expect(ui.messages[0].buttons).toEqual(['Retry', 'Show Log']);
     expect(attempts).toBe(1);
+  });
+
+  it('reports a dismissed prompt that left an operation in progress', async () => {
+    await reportFailure(
+      'Merge',
+      gitError('git merge failed (128): error: unable to read askpass response', {
+        kind: 'cancelled',
+        operation: 'merge',
+      }),
+    );
+    expect(ui.status).toHaveLength(0);
+    expect(ui.messages[0].level).toBe('error');
+    expect(ui.messages[0].buttons).toEqual(['Continue', 'Abort Merge', 'Show Log']);
   });
 
   it('reports a failure without retry when the caller cannot retry', async () => {

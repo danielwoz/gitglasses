@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -299,6 +300,46 @@ TEST(Signing, SshKeyPassphraseIsAskedForAndTheCommitIsSigned) {
       session.request(req(3, "mutate/commit", {{"repoId", repoId}, {"message", "signed"}}));
   ASSERT_TRUE(commit.contains("result")) << commit.dump();
   EXPECT_EQ(promptKinds(session), (std::vector<std::string>{"passphrase"}));
+  EXPECT_NE(gg::testing::gitCapture(fixture.root(), "cat-file -p HEAD").find("BEGIN SSH SIGNATURE"),
+            std::string::npos);
+}
+
+// Dismissing the passphrase prompt stops a merge before its commit; the
+// error names the merge left in progress, and continuing it asks again.
+TEST(Signing, ADismissedPassphraseLeavesTheMergeToContinue) {
+  if (!onPath("ssh-keygen")) GTEST_SKIP() << "ssh-keygen is not installed";
+  FixtureRepo fixture;
+  fixture.run("git switch -q -c side");
+  fixture.writeFile("side.txt", "side\n");
+  fixture.run("git add side.txt");
+  fixture.commit("side work");
+  fixture.run("git switch -q main");
+  const std::string key = (fixture.root() / ".git" / "signing_key").string();
+  sh("ssh-keygen -q -t ed25519 -N signpass -f '" + key + "'");
+  fixture.run("git config gpg.format ssh");
+  fixture.run("git config user.signingkey \"" + key + ".pub\"");
+  fixture.run("git config commit.gpgsign true");
+  const ScopedUnset agent("SSH_AUTH_SOCK");
+
+  InteractiveSession session;
+  std::atomic<bool> answer{false};
+  session.onEngineRequest = [&answer](const Json&) -> Json {
+    if (!answer) return {{"cancelled", true}};
+    return {{"value", "signpass"}};
+  };
+  const std::string repoId = discover(session, fixture.root());
+  const Json merge = session.request(
+      req(3, "mutate/merge", {{"repoId", repoId}, {"ref", "side"}, {"noFf", true}}));
+  ASSERT_TRUE(merge.contains("error")) << merge.dump();
+  EXPECT_EQ(merge["error"]["data"]["kind"], "cancelled") << merge.dump();
+  EXPECT_EQ(merge["error"]["data"]["operation"], "merge") << merge.dump();
+  EXPECT_TRUE(std::filesystem::exists(fixture.root() / ".git" / "MERGE_HEAD"));
+
+  answer = true;
+  const Json resumed =
+      session.request(req(4, "mutate/sequencer", {{"repoId", repoId}, {"action", "continue"}}));
+  ASSERT_TRUE(resumed.contains("result")) << resumed.dump();
+  EXPECT_TRUE(resumed["result"]["completed"].get<bool>()) << resumed.dump();
   EXPECT_NE(gg::testing::gitCapture(fixture.root(), "cat-file -p HEAD").find("BEGIN SSH SIGNATURE"),
             std::string::npos);
 }
