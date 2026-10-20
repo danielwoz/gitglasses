@@ -7,8 +7,8 @@ in this directory describes running the server from a clone.
 
 MCP (Model Context Protocol) server exposing GitGlasses repository insight as
 tools: blame, log search, file history, commit show, diffs, refs, graph
-summary, status, patch envelopes, and a Launchpad-classified pull request
-list.
+summary, status, patch envelopes, a Launchpad-classified pull request
+list, and the AI provenance commits declare.
 
 The server speaks MCP over stdio and drives a `gitglasses-engine` process
 (spawned lazily on the first repository tool call).

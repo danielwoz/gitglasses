@@ -65,10 +65,11 @@ release is in [the changelog](extension/CHANGELOG.md).
 `gitglasses-mcp` (in [`mcp-server/`](mcp-server/)) is a stdio
 [Model Context Protocol](https://modelcontextprotocol.io) server that gives
 AI agents the same engine: blame, commit search, file history, commit
-details, diffs, refs, a text rendering of the graph, status, patches and a
-pull request list, eleven tools in all. Every tool except `apply_patch` is
-marked read-only, and by default the server reads only the folders the
-client shares with it, without running git.
+details, diffs, refs, a text rendering of the graph, status, patches, a
+pull request list and the AI provenance commits declare, twelve tools in
+all. Every tool except `apply_patch` is marked read-only, and by default the
+server reads only the folders the client shares with it, without running
+git.
 
 Register it with Claude Code, Cursor, VS Code agent mode or any other MCP
 client, pointing it at the engine the extension installed. From 0.3,
