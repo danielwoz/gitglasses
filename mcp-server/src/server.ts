@@ -78,15 +78,16 @@ export function configuredGitHubHost(
 
 /**
  * The working directory as the workspace root of a client that offers no MCP
- * roots. A filesystem root or the home directory would admit every repository
- * the user has, so neither counts.
+ * roots. A filesystem root, the home directory or any directory that holds it
+ * (such as /home, /Users or C:\Users) would admit every repository the user
+ * has, so none of them counts.
  */
 export function workingDirectoryRoot(
   cwd: string = process.cwd(),
   home: string = os.homedir(),
 ): string[] {
   const resolved = canonicalPath(cwd);
-  if (path.parse(resolved).root === resolved || resolved === canonicalPath(home)) return [];
+  if (path.parse(resolved).root === resolved || isWithinAllowedRoots(home, [resolved])) return [];
   return [resolved];
 }
 

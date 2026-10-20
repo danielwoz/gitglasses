@@ -152,6 +152,16 @@ describe('default containment: the client roots, read without git', () => {
     expect(workingDirectoryRoot(path.parse(base).root, home)).toEqual([]);
   });
 
+  it('never takes a directory that holds the home directory as the working directory root', () => {
+    const home = path.join(base, 'users', 'me');
+    mkdirSync(home, { recursive: true });
+    expect(workingDirectoryRoot(path.join(base, 'users'), home)).toEqual([]);
+    expect(workingDirectoryRoot(base, home)).toEqual([]);
+    expect(workingDirectoryRoot(path.join(home, 'project'), home)).toEqual([
+      canonicalPath(path.join(home, 'project')),
+    ]);
+  });
+
   it('explains how to enable a tool the restricted engine refuses', async () => {
     const handlers = createToolHandlers({
       client: fakeEngine('trusted') as never,

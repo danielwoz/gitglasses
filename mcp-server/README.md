@@ -78,7 +78,8 @@ repositories it may touch, and whether git may run in them.
 the client's MCP roots, the workspace folders the client shares with it,
 re-read whenever the client reports a change. A client that offers no roots
 gets the server's working directory instead, unless that is the filesystem
-root or your home directory, which would cover every repository you have.
+root, your home directory or a directory that holds it (such as `/home`),
+which would cover every repository you have.
 Starting the server with `--allow <dir>` (repeatable) or setting
 `GITGLASSES_ALLOWED_ROOTS` replaces those defaults with the directories you
 name; `--allow '*'` admits every path. A path outside them is rejected before
