@@ -8,7 +8,7 @@ import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { BlameModel, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES } from './model/blameModel';
-import { RepositoryService, repoName } from './model/repositoryService';
+import { LocatedFile, RepositoryService, repoName } from './model/repositoryService';
 import { ActiveRepoManager } from './model/activeRepo';
 import { RefsModel } from './model/refsModel';
 import { ConflictWatcher } from './model/conflictWatcher';
@@ -291,7 +291,8 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   }
 
   // Which repository the views describe, shown next to each view's title. A
-  // single-repo workspace needs no such label.
+  // single-repo workspace needs no such label. The context keys let the
+  // command palette offer repository commands only where there is one.
   const updateRepoLabels = async (): Promise<void> => {
     const all = await activeRepo.all().catch(() => []);
     const active = all.length > 1 ? await activeRepo.resolve() : undefined;
@@ -302,6 +303,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       'gitglasses.multiRepoWorkspace',
       all.length > 1,
     );
+    void vscode.commands.executeCommand('setContext', 'gitglasses.hasRepository', all.length > 0);
   };
   void updateRepoLabels();
   disposables.push(
@@ -312,6 +314,25 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     // The handshake is the first moment repositories can be discovered.
     engine.onDidChangeCapabilities(() => void updateRepoLabels()),
   );
+
+  // The file the editor commands act on, telling the user when there is none.
+  const locateActiveFile = async (): Promise<
+    (LocatedFile & { editor: vscode.TextEditor }) | undefined
+  > => {
+    const editor = deps.activeEditor();
+    if (!editor) {
+      void vscode.window.showInformationMessage('GitGlasses: open a file first.');
+      return undefined;
+    }
+    const located = await repos.locateOrDiscover(editor.document.uri);
+    if (!located) {
+      void vscode.window.showInformationMessage(
+        'GitGlasses: this file is not inside a repository.',
+      );
+      return undefined;
+    }
+    return { ...located, editor };
+  };
 
   // Revision documents follow the refs and the index, which change without
   // HEAD moving: a commit on the current branch moves a ref, staging
@@ -345,10 +366,9 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
     ...registerCommitDetails(engine, repos),
     vscode.commands.registerCommand('gitglasses.diffWithHead', async () => {
-      const editor = deps.activeEditor();
-      if (!editor) return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
+      const located = await locateActiveFile();
       if (!located) return;
+      const editor = located.editor;
       const original = encodeRevisionUri(located.repoId, located.relativePath, 'HEAD');
       await vscode.commands.executeCommand(
         'vscode.diff',
@@ -358,9 +378,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       );
     }),
     vscode.commands.registerCommand('gitglasses.openFileAtRevision', async () => {
-      const editor = deps.activeEditor();
-      if (!editor) return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
+      const located = await locateActiveFile();
       if (!located) return;
       const rev = await vscode.window.showInputBox({
         prompt: 'Revision (sha, branch, tag, HEAD~n…)',
@@ -407,14 +425,9 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     ),
     vscode.commands.registerCommand('gitglasses.searchCommits', () => searchView.searchCommits()),
     vscode.commands.registerCommand('gitglasses.showLineHistory', async () => {
-      const editor = deps.activeEditor();
-      if (!editor) return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
-      if (!located) {
-        void vscode.window.showWarningMessage('GitGlasses: file is not in a git repository.');
-        return;
-      }
-      const selection = editor.selection;
+      const located = await locateActiveFile();
+      if (!located) return;
+      const selection = located.editor.selection;
       let entries;
       try {
         ({ entries } = await engine.request('history/line', {
