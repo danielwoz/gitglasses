@@ -181,7 +181,9 @@ TEST(StatusService, SummaryUnbornHead) {
   const std::string repoId = discoverRepo(session, unborn.root);
   Json summary = statusSummary(session, 10, repoId);
 
-  EXPECT_EQ(summary["branch"], "");
+  // The branch the first commit creates, so callers need not mistake an
+  // empty repository for a detached HEAD.
+  EXPECT_EQ(summary["branch"], "main");
   EXPECT_FALSE(summary.contains("upstream"));
   EXPECT_EQ(summary["ahead"], 0);
   EXPECT_EQ(summary["behind"], 0);
