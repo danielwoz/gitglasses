@@ -43,6 +43,10 @@ const BASE_KEY_PREFIX = 'gitglasses.worktrees.base:';
  *  worktree) settle into one reload. */
 const REFRESH_SETTLE_MS = 1000;
 
+/** One file a comparison opened: the label URI and the left and right
+ *  sides (undefined where the file does not exist). */
+export type ComparedFile = [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
+
 /** What one row shows, for the e2e suite. */
 export interface WorktreeRow {
   label: string;
@@ -355,16 +359,17 @@ async function removeWorktreeAndBranch(
 
 /** Opens what a worktree changed since it left the base: the merge base
  *  against its HEAD, plus its uncommitted work when it has any, in one
- *  multi-file diff editor. */
+ *  multi-file diff editor. Resolves to the files it compared. */
 async function compareWithBase(
   engine: EngineClient,
   repos: RepositoryService,
   view: WorktreesViewProvider,
   log: (line: string) => void,
   node?: WorktreeNode,
-): Promise<void> {
+): Promise<ComparedFile[] | undefined> {
   const worktree = node?.worktree;
-  if (!worktree || worktree.bare || hasNoCheckout(worktree)) return;
+  if (!worktree || worktree.bare || hasNoCheckout(worktree)) return undefined;
+  let compared: ComparedFile[] | undefined;
   await withRepo(
     repos,
     'compare with base',
@@ -404,7 +409,7 @@ async function compareWithBase(
           log(`compare with base: ${worktree.path} did not resolve; comparing commits only`);
         }
       }
-      await openComparison(
+      compared = await openComparison(
         title,
         entries,
         worktree.path,
@@ -415,6 +420,7 @@ async function compareWithBase(
     },
     node?.repo,
   );
+  return compared;
 }
 
 async function openComparison(
@@ -424,20 +430,20 @@ async function openComparison(
   left: (file: string) => vscode.Uri,
   right: (file: string) => vscode.Uri,
   log: (line: string) => void,
-): Promise<void> {
+): Promise<ComparedFile[]> {
   if (entries.length === 0) {
     void vscode.window.showInformationMessage(`GitGlasses: ${title}: no differences.`);
-    return;
+    return [];
   }
   const root = vscode.Uri.file(worktreePath);
-  const resources = entries.map((entry) => [
+  const resources = entries.map((entry): ComparedFile => [
     vscode.Uri.joinPath(root, ...entry.path.split('/')),
     entry.left === undefined ? undefined : left(entry.left),
     entry.right === undefined ? undefined : right(entry.right),
   ]);
   try {
     await vscode.commands.executeCommand('vscode.changes', title, resources);
-    return;
+    return resources;
   } catch (error) {
     // vscode.changes is missing on some hosts (older VS Code builds, Theia).
     log(`multi-file diff unavailable, listing files instead: ${errorMessage(error)}`);
@@ -446,7 +452,7 @@ async function openComparison(
     entries.map((entry) => ({ label: entry.path, entry })),
     { title, placeholder: 'File to compare' },
   );
-  if (picked === 'back' || !picked) return;
+  if (picked === 'back' || !picked) return resources;
   const { entry } = picked;
   await vscode.commands.executeCommand(
     'vscode.diff',
@@ -454,6 +460,7 @@ async function openComparison(
     right(entry.right ?? entry.path),
     `${entry.path} (${title})`,
   );
+  return resources;
 }
 
 /** Picks the branch the rows compare with, or the default. */

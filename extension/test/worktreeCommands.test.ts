@@ -91,10 +91,12 @@ const UNMOUNTED: WorktreeEntry = {
 function harness(
   status: WorktreeStatus = agentStatus(),
   worktrees: WorktreeEntry[] = [MAIN, AGENT],
+  wip = { staged: [], unstaged: [], untracked: [] as string[] },
 ) {
   const requests: Request[] = [];
   const answers: Record<string, (params: Record<string, unknown>) => unknown> = {
     'worktree/list': () => ({ worktrees }),
+    'status/summary': () => wip,
     'worktree/status': (params) =>
       params.path === AGENT.path
         ? status
@@ -132,7 +134,7 @@ function harness(
     },
     keys: () => [...stored.keys()],
   };
-  const repos = {};
+  const repos = { locateOrDiscover: async () => ({ repoId: 'r2', rootPath: AGENT.path }) };
   const view = new WorktreesViewProvider(engine as never, repos as never, state as never);
   const log = vi.fn();
   registerWorktreeCommands(engine as never, repos as never, view, log);
@@ -252,6 +254,28 @@ describe('Compare with Base', () => {
     expect(resources).toHaveLength(1);
     // An added file has no left side.
     expect(resources[0][1]).toBeUndefined();
+  });
+
+  it('gives files new in the working tree no side at the base', async () => {
+    const { run, node, sent } = harness(agentStatus({ dirty: 2 }), [MAIN, AGENT], {
+      staged: [],
+      unstaged: [{ path: 'README.md', status: 'M' }],
+      untracked: ['notes.txt'],
+    } as never);
+    const compared = (await run('gitglasses.worktrees.compareWithBase', node(AGENT))) as [
+      { path: string },
+      { path: string } | undefined,
+      { path: string } | undefined,
+    ][];
+    expect(sent('status/summary')[0].params).toEqual({ repoId: 'r2' });
+    const changes = ui.executed.find((call) => call.command === 'vscode.changes');
+    expect(changes?.args[0]).toBe('main ↔ worktree-auth (Working Tree)');
+    expect(changes?.args[1]).toBe(compared);
+    const byPath = new Map(compared.map(([label, left, right]) => [label.path, { left, right }]));
+    expect(byPath.get(`${AGENT.path}/notes.txt`)?.left).toBeUndefined();
+    expect(byPath.get(`${AGENT.path}/notes.txt`)?.right?.path).toBe(`${AGENT.path}/notes.txt`);
+    expect(byPath.get(`${AGENT.path}/README.md`)?.left).toBeDefined();
+    expect(byPath.get(`${AGENT.path}/src/session.ts`)?.left).toBeUndefined();
   });
 
   it('explains when there is no base to compare with', async () => {

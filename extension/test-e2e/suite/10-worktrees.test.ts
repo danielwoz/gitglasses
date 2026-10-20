@@ -28,6 +28,9 @@ function git(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
+/** One file a comparison opened: the label URI and its two sides. */
+type ComparedFile = [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
+
 function rows(): Thenable<Row[]> {
   return vscode.commands.executeCommand<Row[]>('_gitglasses.worktreeRows');
 }
@@ -110,7 +113,10 @@ describe('worktrees view', () => {
   it('opens what a worktree changed since it left the base', async () => {
     const clean = (await rows()).find((row) => row.label === 'worktree-agent-clean');
     assert.ok(clean, 'no worktree-agent-clean row');
-    void vscode.commands.executeCommand('gitglasses.worktrees.compareWithBase', clean.node);
+    const opened = vscode.commands.executeCommand<ComparedFile[] | undefined>(
+      'gitglasses.worktrees.compareWithBase',
+      clean.node,
+    );
     const expected = `${mainBranch} ↔ worktree-agent-clean (Working Tree)`;
     const activeTab = (): string | undefined =>
       vscode.window.tabGroups.activeTabGroup.activeTab?.label;
@@ -119,6 +125,19 @@ describe('worktrees view', () => {
       `the comparison never opened (active tab: ${activeTab()})`,
     );
     assert.ok(label.startsWith(expected), label);
+
+    // Every side the comparison shows has content to show; a file that is
+    // new in the worktree (committed or untracked) has no side at the base.
+    const compared = await opened;
+    assert.ok(compared, 'the comparison reported no files');
+    const names = compared.map(([file]) => path.basename(file.fsPath)).sort();
+    assert.deepStrictEqual(names, ['agent.txt', 'notes.txt']);
+    for (const [file, left, right] of compared) {
+      assert.strictEqual(left, undefined, `${file.fsPath} has a side at the base`);
+      assert.ok(right, `${file.fsPath} has no working tree side`);
+      const document = await vscode.workspace.openTextDocument(right);
+      assert.ok(document.getText().length > 0, `${right.toString()} is empty`);
+    }
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
   });
 });
