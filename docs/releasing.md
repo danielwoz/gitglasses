@@ -13,7 +13,8 @@ then:
    `alpine-arm64`, `darwin-x64`, `darwin-arm64`, `win32-x64`, `win32-arm64`,
    `web`), refusing an engine whose format or CPU does not match the target,
    and runs each packaged engine on its own platform;
-4. packs `gitglasses-mcp` and runs it from a clean npm install;
+4. packs `gitglasses-mcp`, with `mcp-server/npm-readme.md` as the README
+   npm shows, and runs it from a clean npm install;
 5. waits for the CI workflow to have passed on the tagged commit itself,
    from its push to `main` (a pull request run does not count: it tested
    the pull request merged into its base branch);
@@ -200,7 +201,9 @@ To switch before 0.2.0 instead, run step 4 on `main`: temporarily add
    `mcp-server/README.md` and the MCP section of `README.md` to
    `npx -y gitglasses-mcp@<version>`, and drop the "not on npm yet"
    paragraphs (the `mcp-package` test in `scripts/test` forbids `npx` in
-   README examples until then, so update it in the same change).
+   those README examples until then, so update it in the same change).
+   The npm page needs no change: it shows `mcp-server/npm-readme.md`,
+   which already gives the `npx` form for the published version.
 
 ### 9. Protect `main` and the release tags
 
@@ -259,7 +262,7 @@ node scripts/package-vsix.mjs --target linux-x64 --engine build/release/engine/g
 node scripts/package-vsix.mjs --target web
 node scripts/verify-vsix.mjs dist/gitglasses-linux-x64-0.2.0.vsix --target linux-x64 --run
 
-pnpm --filter gitglasses-mcp pack --pack-destination "$PWD/dist-npm"
+node scripts/pack-mcp.mjs --out dist-npm
 node scripts/verify-mcp-package.mjs dist-npm/gitglasses-mcp-0.2.0.tgz --version 0.2.0
 
 # Alpine engine (x64 here; arm64 on an arm64 host)

@@ -40,6 +40,12 @@ describe('release workflow', () => {
     expect(jobs.get('ci')).not.toContain('gh api');
   });
 
+  it('packs gitglasses-mcp with its npm README and checks the tarball', () => {
+    expect(jobs.get('package-mcp')).toContain('node scripts/pack-mcp.mjs --out dist-npm');
+    expect(jobs.get('package-mcp')).toContain('node scripts/verify-mcp-package.mjs');
+    expect(jobs.get('package-mcp')).not.toMatch(/pnpm[^\n]* pack\b/);
+  });
+
   it('takes the release notes from the changelog parser the version job checks with', () => {
     expect(jobs.get('version')).toContain('node scripts/check-versions.mjs');
     expect(jobs.get('release-assets')).toContain('node scripts/release-notes.mjs "$VERSION" > release-notes.md');

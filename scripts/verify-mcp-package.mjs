@@ -1,18 +1,17 @@
 #!/usr/bin/env node
 // Checks the gitglasses-mcp npm package before it is published: installs the
-// packed tarball into an empty directory, as `npx gitglasses-mcp` would, then
-// starts the installed CLI and completes an MCP handshake and tools/list.
+// tarball from pack-mcp.mjs into an empty directory, as `npx gitglasses-mcp`
+// would, checks its files and the README npm will show, then starts the
+// installed CLI and completes an MCP handshake and tools/list.
 // Usage:
 //   node scripts/verify-mcp-package.mjs <gitglasses-mcp-x.y.z.tgz> [--version <v>]
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { PACKAGE_FILES, npmReadmeProblems } from './lib/mcp-package.mjs';
 import { smokeTestMcpServer } from './lib/mcp-smoke.mjs';
-
-// Everything the package may contain; anything else is a packaging mistake.
-const EXPECTED_FILES = ['LICENSE', 'README.md', 'dist/cli.js', 'package.json'];
 
 const args = process.argv.slice(2);
 const tarball = args.find((arg) => !arg.startsWith('--') && args[args.indexOf(arg) - 1] !== '--version');
@@ -39,9 +38,12 @@ try {
   });
   const installed = path.join(dir, 'node_modules', 'gitglasses-mcp');
   const files = listFiles(installed).filter((file) => !file.startsWith('node_modules/')).sort();
-  if (JSON.stringify(files) !== JSON.stringify(EXPECTED_FILES)) {
-    throw new Error(`package contents are ${files.join(', ')}; expected ${EXPECTED_FILES.join(', ')}`);
+  if (JSON.stringify(files) !== JSON.stringify(PACKAGE_FILES)) {
+    throw new Error(`package contents are ${files.join(', ')}; expected ${PACKAGE_FILES.join(', ')}`);
   }
+  const { version: packed } = JSON.parse(readFileSync(path.join(installed, 'package.json'), 'utf8'));
+  const readmeProblems = npmReadmeProblems(readFileSync(path.join(installed, 'README.md'), 'utf8'), version ?? packed);
+  if (readmeProblems.length > 0) throw new Error(`${readmeProblems.join('; ')} (pack it with scripts/pack-mcp.mjs)`);
   // No engine is configured, so the server must start without one.
   const { serverInfo, tools } = await smokeTestMcpServer(path.join(installed, 'dist', 'cli.js'), {
     version,

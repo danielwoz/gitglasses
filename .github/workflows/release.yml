@@ -517,12 +517,15 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      # The tarball carries the npm README (mcp-server/npm-readme.md) in place
+      # of the repository README, which describes running from a clone.
       - name: Build and pack
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter "gitglasses-mcp..." build
-          pnpm --filter gitglasses-mcp pack --pack-destination "$GITHUB_WORKSPACE/dist-npm"
-      # Installs the tarball into an empty directory as npx would and runs it.
+          node scripts/pack-mcp.mjs --out dist-npm
+      # Installs the tarball into an empty directory as npx would, checks its
+      # files and README, and runs it.
       - name: Verify the package
         env:
           VERSION: ${{ needs.version.outputs.version }}

@@ -137,3 +137,7 @@ pnpm --filter gitglasses-mcp test
 
 The integration test spawns the real engine binary and is skipped (with a
 console note) when no binary can be found.
+
+The npm package is packed with `node scripts/pack-mcp.mjs` from the repository
+root, never with `pnpm pack`: npm users get `npm-readme.md` as the package's
+README, since this one describes running the server from a clone.
