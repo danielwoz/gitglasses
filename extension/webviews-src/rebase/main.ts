@@ -427,10 +427,18 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       const upstream = document.createElement('code');
       upstream.textContent = message.upstream;
       if (mode === 'todo') {
-        upstreamEl.append('git rebase -i is waiting for this list: ', upstream);
+        if (message.underWay) {
+          const command = document.createElement('code');
+          command.textContent = 'git rebase --edit-todo';
+          upstreamEl.append(command, ' is waiting for the rest of this rebase');
+        } else {
+          upstreamEl.append('git rebase -i is waiting for this list: ', upstream);
+        }
         startBtn.textContent = 'Save and Continue';
-        cancelBtn.textContent = 'Cancel Rebase';
-        cancelBtn.title = 'Hand git an empty list: the rebase stops before anything changes';
+        cancelBtn.textContent = message.underWay ? 'Close' : 'Cancel Rebase';
+        cancelBtn.title = message.underWay
+          ? 'Leave the list as it is'
+          : 'Hand git an empty list: the rebase stops before anything changes';
         hintEl.textContent =
           'Older commits apply first (top to bottom). Drag rows, or focus one and press Alt+↑/↓ to move it; P R E S F D set its action. git asks for reword and squash messages afterwards. Closing this tab runs the list as git wrote it.';
       } else {

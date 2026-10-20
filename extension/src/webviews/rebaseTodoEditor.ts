@@ -1,20 +1,26 @@
 // The rebase editor as a custom editor for the todo list `git rebase -i`
 // hands its sequence editor, for rebases started outside GitGlasses (in a
-// terminal, with VS Code as git's editor). It is offered through "Reopen
-// Editor With…", and opens on its own when gitglasses.rebaseEditor.enabled
-// is set, through a workbench.editorAssociations entry for the todo file:
-// `code --wait` returns as soon as any editor of the file closes, so the
-// todo has to open in this editor directly rather than be reopened in it.
-// Save and Continue writes the reordered list back and closes the editor,
-// which hands it to git; Cancel Rebase hands git an empty list.
+// terminal, with VS Code as git's editor). It opens on its own when
+// gitglasses.rebaseEditor.enabled is set, through a
+// workbench.editorAssociations entry for the todo file: `code --wait`
+// returns as soon as any editor of the file closes, so the todo has to open
+// in this editor directly rather than be reopened in it. Save and Continue
+// writes the reordered list back and closes the editor, which hands it to
+// git; Cancel Rebase hands git an empty list, and for a rebase already
+// under way (`git rebase --edit-todo`) Close leaves the list as it is. A
+// list that changed on disk since the editor opened it has been taken by git
+// already and is never written over.
 
 import * as vscode from 'vscode';
 import { renderWebviewHtml } from './webviewHtml';
 import {
   editorAssociationsFor,
+  isRebaseUnderWay,
   parseTodo,
   rebaseEditorEnabled,
   serializeTodo,
+  todoUnchanged,
+  unsupportedStepsMessage,
 } from './rebaseTodoLogic';
 import type { HostToWebviewMessage, WebviewToHostMessage } from '../../webviews-src/rebase/ipc';
 import type { LogFn } from '../views/errorReport';
@@ -29,6 +35,10 @@ class RebaseTodoEditorProvider implements vscode.CustomTextEditorProvider {
   ) {}
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): void {
+    const opened = document.getText();
+    const underWay = this.readText(vscode.Uri.joinPath(document.uri, '..', 'done')).then(
+      isRebaseUnderWay,
+    );
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webviews');
     panel.webview.options = { enableScripts: true, localResourceRoots: [distRoot] };
     panel.webview.html = renderWebviewHtml(panel.webview, distRoot, {
@@ -40,12 +50,21 @@ class RebaseTodoEditorProvider implements vscode.CustomTextEditorProvider {
     const post = (message: HostToWebviewMessage): void => {
       void panel.webview.postMessage(message);
     };
-    const unsupportedMessage = (): string =>
-      `This list has steps the rebase editor cannot show:\n${parsed.unsupported.join('\n')}\n\n` +
-      'Reopen it as text (Reopen Editor With… › Text Editor) to edit it.';
+    const unsupportedMessage = async (): Promise<string> =>
+      unsupportedStepsMessage(parsed.unsupported, await underWay);
 
-    // Writing the list and closing the editor hands it back to git.
-    const handBack = async (text: string): Promise<void> => {
+    // Writing the list (when there is one to write) and closing the editor
+    // hands it back to git.
+    const handBack = async (text: string | undefined): Promise<void> => {
+      if (text === undefined) {
+        panel.dispose();
+        return;
+      }
+      if (!todoUnchanged(opened, await this.readText(document.uri))) {
+        throw new Error(
+          'The list changed on disk since this editor opened it: git has already gone on with the rebase, so nothing was written.',
+        );
+      }
       const edit = new vscode.WorkspaceEdit();
       edit.replace(
         document.uri,
@@ -77,21 +96,24 @@ class RebaseTodoEditorProvider implements vscode.CustomTextEditorProvider {
                 mergeCount: 0,
                 autoStash: false,
                 keepPlan: false,
+                underWay: await underWay,
               });
               if (parsed.unsupported.length > 0) {
-                post({ type: 'error', message: unsupportedMessage() });
+                post({ type: 'error', message: await unsupportedMessage() });
               }
               break;
             case 'start':
               // Steps the editor does not show would be lost on writing.
               if (parsed.unsupported.length > 0) {
-                post({ type: 'error', message: unsupportedMessage() });
+                post({ type: 'error', message: await unsupportedMessage() });
                 return;
               }
               await handBack(serializeTodo(message.plan, parsed));
               break;
             case 'cancel':
-              await handBack('');
+              // An empty list stops a rebase that has not started, but would
+              // drop the rest of one already under way.
+              await handBack((await underWay) ? undefined : '');
               break;
           }
         } catch (error) {
@@ -101,6 +123,19 @@ class RebaseTodoEditorProvider implements vscode.CustomTextEditorProvider {
       },
     );
     panel.onDidDispose(() => subscription.dispose());
+  }
+
+  // A file's text, or undefined when it cannot be read (a missing file is
+  // expected: git removes its rebase state as the rebase ends).
+  private async readText(uri: vscode.Uri): Promise<string | undefined> {
+    try {
+      return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    } catch (error) {
+      if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound')) {
+        this.log(`rebase todo editor: cannot read ${uri.fsPath}: ${errorMessage(error)}`);
+      }
+      return undefined;
+    }
   }
 }
 

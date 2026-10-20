@@ -20,6 +20,10 @@ export interface RebaseInit {
   autoStash: boolean;
   /** Keep the actions already chosen for commits that are still there. */
   keepPlan: boolean;
+  /** (mode 'todo') The list belongs to a rebase that has already run steps
+   *  (`git rebase --edit-todo`): cancelling leaves it as it is rather than
+   *  emptying it. */
+  underWay?: boolean;
 }
 
 /** A rebase stopped part-way: on conflicts, at an edit step, or on an error

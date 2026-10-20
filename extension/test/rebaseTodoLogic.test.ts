@@ -3,9 +3,12 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   editorAssociationsFor,
+  isRebaseUnderWay,
   parseTodo,
   rebaseEditorEnabled,
   serializeTodo,
+  todoUnchanged,
+  unsupportedStepsMessage,
 } from '../src/webviews/rebaseTodoLogic';
 
 const TODO = [
@@ -138,5 +141,31 @@ describe('rebaseEditorEnabled', () => {
     expect(manifest.capabilities.untrustedWorkspaces.restrictedConfigurations).toContain(
       'gitglasses.rebaseEditor.enabled',
     );
+  });
+});
+
+describe('handing the list back to git', () => {
+  it('tells a rebase already under way from one waiting for its first list', () => {
+    expect(isRebaseUnderWay(undefined)).toBe(false);
+    expect(isRebaseUnderWay('')).toBe(false);
+    expect(isRebaseUnderWay('edit e4ce021dc3056b8239edfe0a9bf5d6cde64dbd18 c2\n')).toBe(true);
+  });
+
+  it('writes only over the list the editor opened', () => {
+    expect(todoUnchanged(TODO, TODO)).toBe(true);
+    expect(todoUnchanged(TODO, TODO.replace(/\n/g, '\r\n'))).toBe(true);
+    // git took the list and went on: it rewrote the rest, or removed it.
+    expect(todoUnchanged(TODO, TODO.split('\n').slice(1).join('\n'))).toBe(false);
+    expect(todoUnchanged(TODO, undefined)).toBe(false);
+  });
+
+  it('never suggests reopening the list as text, which would hand it to git', () => {
+    for (const underWay of [false, true]) {
+      const message = unsupportedStepsMessage(['exec make test'], underWay);
+      expect(message).toContain('exec make test');
+      expect(message).not.toMatch(/reopen/i);
+      expect(message).toContain('gitglasses.rebaseEditor.enabled');
+    }
+    expect(unsupportedStepsMessage(['break'], true)).toContain('git rebase --edit-todo');
   });
 });

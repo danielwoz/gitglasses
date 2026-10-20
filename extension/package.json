@@ -1398,7 +1398,7 @@
           "type": "boolean",
           "scope": "application",
           "default": false,
-          "markdownDescription": "Open the todo list of an interactive rebase started outside GitGlasses, such as `git rebase -i` in a terminal, in the GitGlasses rebase editor. Git must use VS Code as its editor, for example `git config --global sequence.editor \"code --wait\"`. The editor is always available through **Reopen Editor With…**. Read from user settings only."
+          "markdownDescription": "Open the todo list of an interactive rebase started outside GitGlasses, such as `git rebase -i` in a terminal, in the GitGlasses rebase editor. Git must use VS Code as its editor, for example `git config --global sequence.editor \"code --wait\"`. Turn it on before git opens the list: git goes on as soon as any editor of the list closes, so reopening a list that is already open as text hands it to git unchanged. Read from user settings only."
         },
         "gitglasses.mode": {
           "type": "string",

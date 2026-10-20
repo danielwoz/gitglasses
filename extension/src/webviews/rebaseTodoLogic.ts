@@ -115,6 +115,31 @@ export function serializeTodo(
   return [...lines, ...drops].map((line) => `${line}\n`).join('');
 }
 
+/** True when the list belongs to a rebase that has already run steps
+ *  (`git rebase --edit-todo`): git's done file lists them. While
+ *  `git rebase -i` waits for its first list there is no done file yet. */
+export function isRebaseUnderWay(doneText: string | undefined): boolean {
+  return doneText !== undefined && doneText.trim() !== '';
+}
+
+/** True when the list on disk is still the one the editor opened. git takes
+ *  the list as soon as any editor of the file closes (`code --wait`), then
+ *  rewrites or removes it as the rebase goes on, so a list that changed has
+ *  been taken already and writing over it would only disturb that rebase. */
+export function todoUnchanged(opened: string, onDisk: string | undefined): boolean {
+  return onDisk !== undefined && onDisk.replace(/\r\n/g, '\n') === opened.replace(/\r\n/g, '\n');
+}
+
+/** What the editor says about a list with steps it cannot show. Reopening
+ *  the list as text would close this editor and hand the list to git at
+ *  once, so the way to a text editor goes through git instead. */
+export function unsupportedStepsMessage(lines: readonly string[], underWay: boolean): string {
+  const steps = `This list has steps the rebase editor cannot show:\n${lines.join('\n')}\n\n`;
+  return underWay
+    ? `${steps}Close this tab to leave the list as it is. To edit it as text, turn gitglasses.rebaseEditor.enabled off and run git rebase --edit-todo.`
+    : `${steps}Close this tab to run the list as git wrote it, or press Cancel Rebase. To edit it as text, turn gitglasses.rebaseEditor.enabled off (or set GIT_SEQUENCE_EDITOR to a text editor) and run the rebase again.`;
+}
+
 /** gitglasses.rebaseEditor.enabled as the user set it in their user
  *  settings. It drives an editor association in the user settings, so a
  *  workspace's value never counts: a repository's .vscode/settings.json
