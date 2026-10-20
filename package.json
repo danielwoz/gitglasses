@@ -7,7 +7,10 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "format": "node scripts/check-format.mjs --fix",
+    "format:check": "node scripts/check-format.mjs",
+    "test:scripts": "node --test \"scripts/test/*.test.mjs\""
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
