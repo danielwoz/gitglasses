@@ -6,6 +6,7 @@ import type { GraphRef, GraphRow } from './ipc';
 import {
   ChipBox,
   SelectionState,
+  edgeColorLane,
   edgePath,
   graphColumnWidth,
   laneColor,
@@ -152,7 +153,7 @@ export class GraphRenderer {
       // Edges beneath the dot.
       for (const edge of row.laneEdges) {
         const path = edgePath(edge, rowTop, ROW_HEIGHT, LANE_PADDING, LANE_WIDTH);
-        ctx.strokeStyle = laneColor(edge.kind === 'branchOut' ? edge.toLane : edge.fromLane);
+        ctx.strokeStyle = laneColor(edgeColorLane(edge));
         ctx.lineWidth = 2;
         ctx.beginPath();
         if (path.kind === 'line') {

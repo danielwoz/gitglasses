@@ -80,7 +80,7 @@ export function refChipAtPoint(x: number, y: number, chips: readonly ChipBox[]):
 export interface LaneEdge {
   fromLane: number;
   toLane: number;
-  kind: 'line' | 'mergeIn' | 'branchOut';
+  kind: 'line' | 'lineIn' | 'lineOut' | 'mergeIn' | 'branchOut';
 }
 
 export type EdgePath =
@@ -97,41 +97,59 @@ export type EdgePath =
       y1: number;
     };
 
+function curve(x0: number, y0: number, x1: number, y1: number): EdgePath {
+  const midY = (y0 + y1) / 2;
+  return { kind: 'curve', x0, y0, cp1x: x0, cp1y: midY, cp2x: x1, cp2y: midY, x1, y1 };
+}
+
 /** Geometry for one edge drawn through the row whose top edge is `rowTop`.
  *
- * - line: pass-through vertical spanning the full row height.
- * - mergeIn: a child lane curves from the row top into the dot at row center.
- * - branchOut: a curve leaves the dot at row center down to the parent lane
- *   at the row bottom.
+ * - line: a lane passing through, top to bottom; when toLane differs it moves
+ *   into that lane by the row bottom.
+ * - lineIn: the row's own lane from the row top into the dot.
+ * - lineOut: the row's own lane from the dot to the row bottom.
+ * - mergeIn: another lane curves from the row top into the dot.
+ * - branchOut: a curve leaves the dot for another lane at the row bottom.
  *
  * Curves are cubic with vertically-eased control points (each control point
- * sits at the midpoint y, keeping tangents vertical at both endpoints). */
+ * sits at the midpoint y, keeping tangents vertical at both endpoints).
+ * `column` maps a lane to the column it is drawn in (identity by default). */
 export function edgePath(
   edge: LaneEdge,
   rowTop: number,
   rowH: number,
   padding: number,
   laneWidth: number,
+  column: (lane: number) => number = (lane) => lane,
 ): EdgePath {
-  const fromX = laneX(edge.fromLane, padding, laneWidth);
-  const toX = laneX(edge.toLane, padding, laneWidth);
+  const fromX = laneX(column(edge.fromLane), padding, laneWidth);
+  const toX = laneX(column(edge.toLane), padding, laneWidth);
   const centerY = rowTop + rowH / 2;
-  if (edge.kind === 'line') {
-    return { kind: 'line', x: fromX, y0: rowTop, y1: rowTop + rowH };
+  const bottom = rowTop + rowH;
+  switch (edge.kind) {
+    case 'line':
+      return fromX === toX
+        ? { kind: 'line', x: fromX, y0: rowTop, y1: bottom }
+        : curve(fromX, rowTop, toX, bottom);
+    case 'lineIn':
+      return { kind: 'line', x: fromX, y0: rowTop, y1: centerY };
+    case 'lineOut':
+      return fromX === toX
+        ? { kind: 'line', x: fromX, y0: centerY, y1: bottom }
+        : curve(fromX, centerY, toX, bottom);
+    case 'mergeIn':
+      return curve(fromX, rowTop, toX, centerY);
+    case 'branchOut':
+      return curve(fromX, centerY, toX, bottom);
   }
-  const [y0, y1] = edge.kind === 'mergeIn' ? [rowTop, centerY] : [centerY, rowTop + rowH];
-  const midY = (y0 + y1) / 2;
-  return {
-    kind: 'curve',
-    x0: fromX,
-    y0,
-    cp1x: fromX,
-    cp1y: midY,
-    cp2x: toX,
-    cp2y: midY,
-    x1: toX,
-    y1,
-  };
+}
+
+/** The lane whose color an edge is drawn in. Straight segments keep their
+ *  lane's color; a curve between two lanes takes the color of the one further
+ *  right, the side branch it starts or ends, so a branch keeps one color from
+ *  its fork to its merge. */
+export function edgeColorLane(edge: LaneEdge): number {
+  return Math.max(edge.fromLane, edge.toLane);
 }
 
 // --- Selection reducer ------------------------------------------------------

@@ -1546,9 +1546,18 @@
                         "type": "integer"
                       },
                       "kind": {
+                        "description": "line: a lane passing through the row, top to bottom. lineIn: the row's own lane from the row top into its dot, continuing the child above. lineOut: the row's own lane from its dot to the row bottom, towards its first parent. mergeIn: another lane curving from the row top into the dot. branchOut: a curve from the dot to another lane at the row bottom.",
                         "anyOf": [
                           {
                             "const": "line",
+                            "type": "string"
+                          },
+                          {
+                            "const": "lineIn",
+                            "type": "string"
+                          },
+                          {
+                            "const": "lineOut",
                             "type": "string"
                           },
                           {

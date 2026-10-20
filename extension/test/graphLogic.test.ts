@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ChipBox,
   LANE_PALETTE,
+  edgeColorLane,
   edgePath,
   emptySelection,
   laneColor,
@@ -207,5 +208,49 @@ describe('reduceSelection', () => {
     const initial = reduceSelection(emptySelection(), 1, { ctrl: false, shift: false }, shas);
     expect(reduceSelection(initial, -1, { ctrl: false, shift: false }, shas)).toBe(initial);
     expect(reduceSelection(initial, 5, { ctrl: false, shift: false }, shas)).toBe(initial);
+  });
+});
+
+describe('edgePath for own-lane segments', () => {
+  const padding = 12;
+  const laneWidth = 14;
+  const rowTop = 100;
+  const rowH = 26;
+  const x = (lane: number): number => laneX(lane, padding, laneWidth);
+
+  it('draws lineIn from the row top down to the dot', () => {
+    expect(
+      edgePath({ fromLane: 1, toLane: 1, kind: 'lineIn' }, rowTop, rowH, padding, laneWidth),
+    ).toEqual({ kind: 'line', x: x(1), y0: 100, y1: 113 });
+  });
+
+  it('draws lineOut from the dot down to the row bottom', () => {
+    expect(
+      edgePath({ fromLane: 1, toLane: 1, kind: 'lineOut' }, rowTop, rowH, padding, laneWidth),
+    ).toEqual({ kind: 'line', x: x(1), y0: 113, y1: 126 });
+  });
+
+  it('curves a line that moves to another lane from the row top to the row bottom', () => {
+    const path = edgePath(
+      { fromLane: 3, toLane: 1, kind: 'line' },
+      rowTop,
+      rowH,
+      padding,
+      laneWidth,
+    );
+    expect(path).toMatchObject({ kind: 'curve', x0: x(3), y0: 100, x1: x(1), y1: 126 });
+  });
+});
+
+describe('edgeColorLane', () => {
+  it('keeps a straight segment in its own lane color', () => {
+    expect(edgeColorLane({ fromLane: 2, toLane: 2, kind: 'line' })).toBe(2);
+    expect(edgeColorLane({ fromLane: 0, toLane: 0, kind: 'lineOut' })).toBe(0);
+  });
+
+  it('colors a curve by the side branch, whichever end it is on', () => {
+    expect(edgeColorLane({ fromLane: 0, toLane: 3, kind: 'branchOut' })).toBe(3);
+    expect(edgeColorLane({ fromLane: 3, toLane: 0, kind: 'mergeIn' })).toBe(3);
+    expect(edgeColorLane({ fromLane: 4, toLane: 1, kind: 'branchOut' })).toBe(4);
   });
 });

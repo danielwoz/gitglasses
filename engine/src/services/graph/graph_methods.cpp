@@ -9,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <queue>
 #include <set>
 #include <string>
 #include <tuple>
@@ -134,9 +133,15 @@ struct RowLayout {
   rpc::Json edges;
 };
 
+rpc::Json laneEdge(std::size_t from, std::size_t to, const char* kind) {
+  return {{"fromLane", from}, {"toLane", to}, {"kind", kind}};
+}
+
 // Applies one row to the active-lane state. Edge order within a row is
-// deterministic: mergeIn (ascending fromLane), then branchOut (parent order),
-// then pass-through line edges (ascending lane).
+// deterministic: lineIn, mergeIn (ascending fromLane), one edge per parent in
+// parent order (lineOut when the parent continues in this lane, branchOut
+// otherwise), then pass-through line edges (ascending fromLane; a line whose
+// toLane differs moves into that lane by the row bottom).
 RowLayout layoutRow(LaneState& state, const std::string& sha,
                     const std::vector<std::string>& parents) {
   auto& lanes = state.lanes;
@@ -146,43 +151,68 @@ RowLayout layoutRow(LaneState& state, const std::string& sha,
   }
 
   rpc::Json edges = rpc::Json::array();
-  std::set<std::size_t> involved;
   std::size_t lane = 0;
   if (waiting.empty()) {
     lane = state.allocate(sha);
   } else {
     lane = waiting[0];
+    // The child above already drew down to this row's top: continue it into
+    // the dot.
+    edges.push_back(laneEdge(lane, lane, "lineIn"));
     for (std::size_t j = 1; j < waiting.size(); ++j) {
-      edges.push_back({{"fromLane", waiting[j]}, {"toLane", lane}, {"kind", "mergeIn"}});
+      edges.push_back(laneEdge(waiting[j], lane, "mergeIn"));
       lanes[waiting[j]].reset();
-      involved.insert(waiting[j]);
     }
   }
-  involved.insert(lane);
+
+  // Lanes that enter the row from above and do not end in the dot pass
+  // through it, each to the column it continues in below.
+  std::vector<std::size_t> passing;
+  for (std::size_t i = 0; i < lanes.size(); ++i) {
+    if (i != lane && lanes[i]) passing.push_back(i);
+  }
+  std::map<std::size_t, std::size_t> continuesIn;
+  for (const std::size_t i : passing) continuesIn[i] = i;
+  auto waitingFor = [&](const std::string& parent) -> std::optional<std::size_t> {
+    for (const std::size_t i : passing) {
+      if (lanes[i] && *lanes[i] == parent) return i;
+    }
+    return std::nullopt;
+  };
 
   if (parents.empty()) {
     lanes[lane].reset();  // a root commit frees its lane after the row
   } else {
-    lanes[lane] = parents[0];  // first parent continues in this lane
-    for (std::size_t pi = 1; pi < parents.size(); ++pi) {
-      std::optional<std::size_t> target;
-      for (std::size_t i = 0; i < lanes.size(); ++i) {
-        if (i != lane && lanes[i] && *lanes[i] == parents[pi]) {
-          target = i;
-          break;
-        }
-      }
-      if (!target) target = state.allocate(parents[pi]);
-      edges.push_back({{"fromLane", lane}, {"toLane", *target}, {"kind", "branchOut"}});
-      involved.insert(*target);
+    // Every line leading to the first parent becomes one, in the leftmost of
+    // their lanes, as git log --graph collapses them. Without this a branch
+    // forked from a commit shown far below would hold its own column all
+    // the way down to it.
+    std::vector<std::size_t> sameParent;
+    for (const std::size_t i : passing) {
+      if (*lanes[i] == parents[0]) sameParent.push_back(i);
     }
+    const std::size_t keep = sameParent.empty() ? lane : std::min(lane, sameParent.front());
+    if (keep == lane) {
+      lanes[lane] = parents[0];  // first parent continues in this lane
+      edges.push_back(laneEdge(lane, lane, "lineOut"));
+    } else {
+      lanes[lane].reset();
+      edges.push_back(laneEdge(lane, keep, "branchOut"));
+    }
+    for (const std::size_t i : sameParent) {
+      if (i == keep) continue;
+      lanes[i].reset();
+      continuesIn[i] = keep;
+    }
+  }
+  for (std::size_t pi = 1; pi < parents.size(); ++pi) {
+    std::optional<std::size_t> target = waitingFor(parents[pi]);
+    if (!target) target = state.allocate(parents[pi]);
+    // The own lane, freed by a join above, can be the lowest free lane.
+    edges.push_back(laneEdge(lane, *target, *target == lane ? "lineOut" : "branchOut"));
   }
 
-  for (std::size_t i = 0; i < lanes.size(); ++i) {
-    if (lanes[i] && involved.find(i) == involved.end()) {
-      edges.push_back({{"fromLane", i}, {"toLane", i}, {"kind", "line"}});
-    }
-  }
+  for (const auto& [from, to] : continuesIn) edges.push_back(laneEdge(from, to, "line"));
   state.shrink();
   return {lane, std::move(edges)};
 }
@@ -361,7 +391,7 @@ struct OidEq {
 
 struct Node {
   std::vector<git_oid> parents;
-  std::int64_t time = 0;  // committer time (topological tie-break)
+  std::int64_t time = 0;  // committer time (orders the branch tips)
   int pendingChildren = 0;
 };
 
@@ -406,41 +436,43 @@ Result<NodeMap> collectNodes(const core::Repo& repo, const std::vector<std::stri
   return nodes;
 }
 
-// Walks the DAG once and materializes the row order a page slices from.
-// Topological: children before parents, ties by committer time (newest first)
-// then sha (lexicographic) — fully deterministic.
+// Walks the DAG once and materializes the row order a page slices from, the
+// way `git log --topo-order` orders a graph: children before parents, and each
+// branch's commits kept together. Ready commits form a stack, so a commit's
+// parents come out right after it; a merge's later parents are pushed last
+// and come out first, which shows the merged branch directly below the merge
+// and lets its lane close before the first-parent line moves on. Branch tips
+// start newest first by committer time, then by sha (lexicographic), so the
+// order is fully deterministic.
 std::vector<cache::GraphPlanRow> buildOrder(NodeMap& nodes, const CancelToken& token) {
   // A ready commit carries its own oid, so popping it needs no hex lookup;
-  // sha is kept only for the tie-break and is moved into the emitted row.
+  // sha is kept only for the tip order and is moved into the emitted row.
   struct Ready {
     std::int64_t time;
     std::string sha;
     git_oid oid;
   };
-  // priority_queue pops its greatest element, so this "less than" is inverted
-  // against the emission order: greatest time wins, and on equal times the
-  // smallest sha does.
-  struct ReadyOrder {
-    bool operator()(const Ready& a, const Ready& b) const {
-      if (a.time != b.time) return a.time < b.time;
-      return a.sha > b.sha;
-    }
-  };
-  std::priority_queue<Ready, std::vector<Ready>, ReadyOrder> ready;
+  std::vector<Ready> ready;
   for (const auto& [oid, node] : nodes) {
-    if (node.pendingChildren == 0) ready.push({node.time, core::oidToHex(oid), oid});
+    if (node.pendingChildren == 0) ready.push_back({node.time, core::oidToHex(oid), oid});
   }
+  // The stack pops from the back: oldest tips first in the vector, so the
+  // newest (and on equal times the smallest sha) is popped first.
+  std::sort(ready.begin(), ready.end(), [](const Ready& a, const Ready& b) {
+    if (a.time != b.time) return a.time < b.time;
+    return a.sha > b.sha;
+  });
 
   std::vector<cache::GraphPlanRow> order;
   order.reserve(nodes.size());
   while (!ready.empty()) {
     token.throwIfCancelled();
-    const Ready top = ready.top();
-    ready.pop();
+    Ready top = std::move(ready.back());
+    ready.pop_back();
     Node& node = nodes.at(top.oid);
 
     cache::GraphPlanRow row;
-    row.sha = top.sha;
+    row.sha = std::move(top.sha);
     row.parents.reserve(node.parents.size());
     for (const auto& parent : node.parents) row.parents.push_back(core::oidToHex(parent));
     // Parents that just lost their last child become ready, reusing the hex
@@ -448,7 +480,7 @@ std::vector<cache::GraphPlanRow> buildOrder(NodeMap& nodes, const CancelToken& t
     for (std::size_t i = 0; i < node.parents.size(); ++i) {
       const auto it = nodes.find(node.parents[i]);
       if (it != nodes.end() && --it->second.pendingChildren == 0) {
-        ready.push({it->second.time, row.parents[i], node.parents[i]});
+        ready.push_back({it->second.time, row.parents[i], node.parents[i]});
       }
     }
     order.push_back(std::move(row));
