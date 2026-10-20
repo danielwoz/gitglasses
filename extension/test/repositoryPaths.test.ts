@@ -72,6 +72,21 @@ describe('relativeWithinRoot (edge cases)', () => {
     expect(relativeWithinRoot('/r/outer/inner', '/r/outer/inner/a.ts', false)).toBe('a.ts');
     expect(relativeWithinRoot('/r/outer', '/r/outer/inner/a.ts', false)).toBe('inner/a.ts');
   });
+
+  it('keeps the whole relative path when case folding changes the root length', () => {
+    // 'İ' (U+0130) lower-cases to 'i' plus a combining dot: two code units.
+    const root = '/Users/x/İstanbul/repo';
+    expect(relativeWithinRoot(root, '/Users/x/İstanbul/repo/src/a.ts', true)).toBe('src/a.ts');
+    expect(relativeWithinRoot(root, '/Users/x/İSTANBUL/repo/src/a.ts', true)).toBe('src/a.ts');
+    expect(relativeWithinRoot('C:/Users/İ/repo', 'c:\\Users\\İ\\repo\\Src\\B.ts', true)).toBe(
+      'Src/B.ts',
+    );
+  });
+
+  it('handles a drive root and a UNC share as the repository root', () => {
+    expect(relativeWithinRoot('C:/', 'c:\\src\\a.ts', true)).toBe('src/a.ts');
+    expect(relativeWithinRoot('//server/share', '\\\\server\\share\\a\\b.ts', true)).toBe('a/b.ts');
+  });
 });
 
 describe('sameRoot', () => {

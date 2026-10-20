@@ -47,9 +47,12 @@ export function relativeWithinRoot(
   if (target === root) return '';
   if (!target.startsWith(`${root}/`)) return undefined;
 
-  // Slice the original (not the case-folded copy) so the path keeps its case.
-  const rawTarget = fsPath.replace(/\\/g, '/');
-  return rawTarget.slice(root.length + 1);
+  // Take the remainder from the original (not the case-folded copy) so the
+  // path keeps its case. It is cut by segment count, not by length: folding
+  // can change a string's length ('İ' lower-cases to two code units) but
+  // never adds or removes a '/'.
+  const rootSegments = root.split('/').length;
+  return fsPath.replace(/\\/g, '/').split('/').slice(rootSegments).join('/');
 }
 
 /** Whether two repository roots are the same path, ignoring a trailing

@@ -191,6 +191,19 @@ describe('RepositoryService letter case', () => {
     const located = await repos.locateOrDiscover(fileUri('/Users/x/projects/Foo/Main.swift'));
     expect(located?.relativePath).toBe('Main.swift');
   });
+
+  it('keeps the full relative path under a root whose case folding changes its length', async () => {
+    const { engine } = fakeEngine([
+      { id: 'r1', root: '/Users/x/İstanbul/repo', match: '/Users/x/İstanbul/repo' },
+    ]);
+    const repos = service(engine, { caseInsensitive: true });
+
+    expect(await repos.locateOrDiscover(fileUri('/Users/x/İstanbul/repo/src/a.ts'))).toEqual({
+      repoId: 'r1',
+      rootPath: '/Users/x/İstanbul/repo',
+      relativePath: 'src/a.ts',
+    });
+  });
 });
 
 describe('RepositoryService nested repositories', () => {
