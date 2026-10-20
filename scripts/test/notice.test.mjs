@@ -1,6 +1,8 @@
 // NOTICE must carry the license of everything the packages redistribute: the
 // libraries statically linked into the native and wasm engines, the runtimes
-// linked with them, and the npm code bundled into the extension.
+// linked with them, and the npm code bundled into the extension and into its
+// copy of the MCP server. extension/esbuild.mjs also refuses to bundle a
+// package into the MCP server that NOTICE does not name.
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -22,6 +24,14 @@ const SECTIONS = {
   spdlog: 'spdlog',
   'nlohmann-json': 'nlohmann/json',
   '@sinclair/typebox': 'TypeBox',
+  '@modelcontextprotocol/sdk': 'MCP TypeScript SDK',
+  zod: 'Zod',
+  'zod-to-json-schema': 'zod-to-json-schema',
+  ajv: 'Ajv',
+  'ajv-formats': 'ajv-formats',
+  'fast-uri': 'fast-uri',
+  'fast-deep-equal': 'fast-deep-equal',
+  'json-schema-traverse': 'json-schema-traverse',
 };
 // Build and test tooling that never ships.
 const NOT_SHIPPED = new Set(['gtest', 'vcpkg-cmake', 'vcpkg-cmake-config', 'vcpkg-cmake-get-vars']);
@@ -58,6 +68,20 @@ describe('NOTICE', () => {
           `${dependency} (via ${name}) needs a NOTICE section`,
         ).toBeDefined();
       }
+    }
+  });
+
+  it('covers the npm packages bundled into the MCP server the extension ships', () => {
+    const { dependencies } = readJson('mcp-server/package.json');
+    expect(Object.keys(dependencies).length).toBeGreaterThan(0);
+    for (const name of Object.keys(dependencies)) {
+      expect(SECTIONS[name], `${name} (via gitglasses-mcp) needs a NOTICE section`).toBeDefined();
+    }
+    // The paragraph the build checks names every package by its npm name.
+    const paragraph = /The MCP server bundled into[\s\S]*?\n\n/.exec(notice)?.[0] ?? '';
+    for (const [name, section] of Object.entries(SECTIONS)) {
+      if (!paragraph.includes(name)) continue;
+      expect(sections, `${name} is named but has no section`).toContain(section);
     }
   });
 

@@ -132,6 +132,10 @@ export function vsixFiles(target, { engine, version = '0.2.0' } = {}) {
     { name: 'extension/NOTICE', data: 'GitGlasses third-party notices' },
     { name: 'extension/changelog.md', data: `# Changelog\n\n## [${version}]\n\n- Fixes.\n` },
     { name: 'extension/dist/extension.js', data: '' },
+    {
+      name: 'extension/dist/mcp/cli.js',
+      data: `#!/usr/bin/env node\n"use strict";var v="${version}";require("node:fs");\n`,
+    },
     { name: 'extension/dist/web/extension.js', data: '' },
     { name: 'extension/dist/web/gitglasses-engine-wasm.wasm', data: WASM_HEADER },
   ];
