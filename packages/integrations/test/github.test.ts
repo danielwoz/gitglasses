@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  AuthError,
-  CredentialScopeError,
-  ProviderError,
-  RateLimitError,
-} from '../src/errors.js';
+import { AuthError, ProviderError, RateLimitError } from '../src/errors.js';
 import type { FetchLike, HttpRequestInit, HttpResponseLike } from '../src/http.js';
 import type { PullRequest, RepoDescriptor } from '../src/models.js';
 import { createGitHubEnterpriseProvider, GitHubProvider } from '../src/providers/github.js';
@@ -183,62 +178,6 @@ describe('GitHubProvider.getMyPullRequests', () => {
     const [d, g] = await provider.getMyPullRequests(auth);
     expect(d.draft).toBe(true);
     expect(g.state).toBe('merged');
-  });
-});
-
-describe('GitHubProvider.getViewerLogin', () => {
-  const host = 'github.corp.example';
-
-  it("reads the token's login from the enterprise host's GET /user", async () => {
-    const { fetchFn, requests } = stubFetch(() => jsonResponse({ login: 'octo', id: 7 }));
-    const provider = createGitHubEnterpriseProvider(host, fetchFn);
-    expect(await provider.getViewerLogin({ token: 'ghe-token', host })).toBe('octo');
-    expect(requests).toHaveLength(1);
-    expect(requests[0].url).toBe('https://github.corp.example/api/v3/user');
-    expect(requests[0].init?.method).toBe('GET');
-    expect(requests[0].init?.headers?.authorization).toBe('Bearer ghe-token');
-  });
-
-  it('asks once per token', async () => {
-    const { fetchFn, requests } = stubFetch((_url, init) =>
-      jsonResponse({ login: init?.headers?.authorization === 'Bearer a' ? 'ann' : 'bob' })
-    );
-    const provider = createGitHubEnterpriseProvider(host, fetchFn);
-    expect(await provider.getViewerLogin({ token: 'a', host })).toBe('ann');
-    expect(await provider.getViewerLogin({ token: 'a', host })).toBe('ann');
-    expect(await provider.getViewerLogin({ token: 'b', host })).toBe('bob');
-    expect(requests).toHaveLength(2);
-  });
-
-  it("refuses another host's credential without sending it", async () => {
-    const { fetchFn, requests } = stubFetch(() => jsonResponse({ login: 'octo' }));
-    const provider = createGitHubEnterpriseProvider(host, fetchFn);
-    await expect(
-      provider.getViewerLogin({ token: 'dotcom-token', host: 'github.com' })
-    ).rejects.toBeInstanceOf(CredentialScopeError);
-    expect(requests).toHaveLength(0);
-  });
-
-  it('fails on a profile without a login, and on a rate limit', async () => {
-    const empty = createGitHubEnterpriseProvider(
-      host,
-      stubFetch(() => jsonResponse({})).fetchFn
-    );
-    await expect(empty.getViewerLogin({ token: 't', host })).rejects.toBeInstanceOf(
-      ProviderError
-    );
-    const limited = createGitHubEnterpriseProvider(
-      host,
-      stubFetch(() =>
-        jsonResponse({ message: 'API rate limit exceeded' }, 403, {
-          'X-RateLimit-Remaining': '0',
-          'X-RateLimit-Reset': '1784000000',
-        })
-      ).fetchFn
-    );
-    await expect(limited.getViewerLogin({ token: 't', host })).rejects.toBeInstanceOf(
-      RateLimitError
-    );
   });
 });
 

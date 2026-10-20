@@ -1,8 +1,6 @@
 import {
   TtlCache,
   groupItems,
-  type AuthContext,
-  type HostingProvider,
   type LaunchpadBucket,
   type LaunchpadGroup,
   type PullRequest,
@@ -36,19 +34,13 @@ export interface LaunchpadModel {
 }
 
 /**
- * The login a connection's pull request authors are compared with: the
- * account name stored with the credential, else the provider's answer for the
- * token (cached per token), else '' when neither is known.
+ * The username a connection's pull request authors are compared with: the
+ * author of a pull request the provider reports as the viewer's own, else the
+ * account name stored with the credential. A token stored without one (GitHub
+ * Enterprise, Bitbucket Data Center) still finds its owner's pull requests.
  */
-async function viewerLogin(
-  entry: { provider: HostingProvider; auth: { username?: string } },
-  auth: AuthContext,
-): Promise<string> {
-  if (entry.auth.username) return entry.auth.username;
-  if (!entry.provider.getViewerLogin) return '';
-  // A failed lookup only leaves the Changes Requested group empty; the
-  // connection's pull requests still show.
-  return entry.provider.getViewerLogin(auth).catch(() => '');
+function viewerLogin(prs: readonly PullRequest[], storedUsername: string | undefined): string {
+  return prs.find((pr) => pr.viewerRole === 'author')?.author.username || storedUsername || '';
 }
 
 // Fetches "my PRs" across every connected hosting provider, classifies them
@@ -72,14 +64,10 @@ export class LaunchpadService {
     const results = await Promise.allSettled(
       entries.map(async (entry) => {
         if (force) this.cache.delete(entry.host);
-        const auth = toAuthContext(entry.auth, entry.host);
-        const [{ value }, viewer] = await Promise.all([
-          this.cache.getOrFetch(entry.host, FRESH_MS, STALE_MS, () =>
-            entry.provider.getMyPullRequests(auth, { limit: 50 }),
-          ),
-          viewerLogin(entry, auth),
-        ]);
-        return { items: value, viewer };
+        const { value } = await this.cache.getOrFetch(entry.host, FRESH_MS, STALE_MS, () =>
+          entry.provider.getMyPullRequests(toAuthContext(entry.auth, entry.host), { limit: 50 }),
+        );
+        return { items: value, viewer: viewerLogin(value, entry.auth.username) };
       }),
     );
 

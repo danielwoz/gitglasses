@@ -1,6 +1,7 @@
 // The Launchpad groups a connection's pull requests by who the user is on
-// that host. A token stored without an account name (GitHub Enterprise, or
-// any personal access token) is asked who it belongs to.
+// that host. A token stored without an account name (GitHub Enterprise,
+// Bitbucket Data Center, or any personal access token) is matched to its
+// owner by the pull requests the provider reports as the viewer's own.
 
 import { describe, expect, it } from 'vitest';
 import type { FetchLike, HttpRequestInit, HttpResponseLike } from '@gitglasses/integrations';
@@ -9,6 +10,7 @@ import { LaunchpadService, type StorageLike } from '../src/integrations/launchpa
 import { buildHostingEntries } from '../src/integrations/providerSetup';
 
 const HOST = 'github.corp.example';
+const DC_HOST = 'bitbucket.corp.example';
 
 function jsonResponse(body: unknown, status = 200): HttpResponseLike {
   return {
@@ -43,16 +45,14 @@ function prNode(number: number, author: string, reviewDecision: string): unknown
   };
 }
 
+type Requests = Array<{ url: string; init?: HttpRequestInit }>;
+
 /** An enterprise host where "octo" has one pull request with changes
  *  requested, and is mentioned on someone else's. */
-function enterpriseHost(user: () => HttpResponseLike = () => jsonResponse({ login: 'octo' })): {
-  fetchFn: FetchLike;
-  requests: Array<{ url: string; init?: HttpRequestInit }>;
-} {
-  const requests: Array<{ url: string; init?: HttpRequestInit }> = [];
+function enterpriseHost(): { fetchFn: FetchLike; requests: Requests } {
+  const requests: Requests = [];
   const fetchFn: FetchLike = async (url, init) => {
     requests.push({ url, init });
-    if (url === `https://${HOST}/api/v3/user`) return user();
     if (url === `https://${HOST}/api/graphql`) {
       return jsonResponse({
         data: {
@@ -71,14 +71,48 @@ function enterpriseHost(user: () => HttpResponseLike = () => jsonResponse({ logi
   return { fetchFn, requests };
 }
 
-function service(fetchFn: FetchLike, username?: string): LaunchpadService {
-  const { entries } = buildHostingEntries(
-    [{ domain: HOST, provider: 'github-enterprise' }],
-    fetchFn,
-  );
-  const entry = entries.get(HOST)!;
+function dcPullRequest(id: number, author: string, status: string): unknown {
+  const ref = (branch: string) => ({
+    id: `refs/heads/${branch}`,
+    displayId: branch,
+    repository: { slug: 'widgets', project: { key: 'ACME' } },
+  });
+  return {
+    id,
+    title: `PR ${id}`,
+    state: 'OPEN',
+    author: { user: { name: author, slug: author } },
+    reviewers: [{ user: { name: 'reviewer' }, status }],
+    fromRef: ref(`topic-${id}`),
+    toRef: ref('main'),
+    createdDate: Date.parse('2026-07-01T00:00:00Z'),
+    updatedDate: Date.parse(`2026-07-0${id}T00:00:00Z`),
+  };
+}
+
+/** A Data Center host where "ann" authored a pull request that needs work,
+ *  and reviews someone else's. */
+function dataCenterHost(): FetchLike {
+  return async (url) => {
+    if (url.includes('/dashboard/pull-requests') && url.includes('role=AUTHOR')) {
+      return jsonResponse({ values: [dcPullRequest(1, 'ann', 'NEEDS_WORK')] });
+    }
+    if (url.includes('/dashboard/pull-requests') && url.includes('role=REVIEWER')) {
+      return jsonResponse({ values: [dcPullRequest(2, 'bob', 'NEEDS_WORK')] });
+    }
+    return jsonResponse({ message: 'Not Found' }, 404);
+  };
+}
+
+function service(
+  fetchFn: FetchLike,
+  username?: string,
+  host: { domain: string; provider: string } = { domain: HOST, provider: 'github-enterprise' },
+): LaunchpadService {
+  const { entries } = buildHostingEntries([host], fetchFn);
+  const entry = entries.get(host.domain)!;
   const integrations = {
-    getConnectedHostingEntries: async () => [{ ...entry, auth: { token: 'ghe-token', username } }],
+    getConnectedHostingEntries: async () => [{ ...entry, auth: { token: 'token', username } }],
   } as unknown as IntegrationService;
   const storage: StorageLike = { get: () => undefined, update: async () => undefined };
   return new LaunchpadService(integrations, storage, () => Date.parse('2026-07-10T00:00:00Z'));
@@ -96,35 +130,36 @@ describe('LaunchpadService viewer', () => {
       ['changes-requested', [1]],
       ['waiting', [2]],
     ]);
-    const lookup = requests.find((request) => request.url.endsWith('/user'));
-    expect(lookup?.url).toBe(`https://${HOST}/api/v3/user`);
-    expect(lookup?.init?.headers?.authorization).toBe('Bearer ghe-token');
+    // The search names the viewer, so nothing else is asked.
+    expect(requests.map((request) => request.url)).toEqual([`https://${HOST}/api/graphql`]);
   });
 
-  it('asks who the token belongs to once per connection', async () => {
+  it('asks only for the pull requests on each refresh', async () => {
     const { fetchFn, requests } = enterpriseHost();
     const launchpad = service(fetchFn);
     await launchpad.getModel();
     await launchpad.getModel(true);
-    await launchpad.getModel(true);
-    const lookups = requests.filter((request) => request.url.endsWith('/user'));
-    const searches = requests.filter((request) => request.url.endsWith('/graphql'));
-    expect(lookups).toHaveLength(1);
-    expect(searches).toHaveLength(3);
+    await launchpad.getModel();
+    expect(requests.map((request) => request.url)).toEqual([
+      `https://${HOST}/api/graphql`,
+      `https://${HOST}/api/graphql`,
+    ]);
   });
 
-  it('uses the account name stored with the credential without asking', async () => {
-    const { fetchFn, requests } = enterpriseHost();
+  it('agrees with the account name stored with the credential', async () => {
+    const { fetchFn } = enterpriseHost();
     const model = await service(fetchFn, 'octo').getModel();
     expect(buckets(model)[0]).toEqual(['changes-requested', [1]]);
-    expect(requests.some((request) => request.url.endsWith('/user'))).toBe(false);
   });
 
-  it('still lists the pull requests when the lookup fails', async () => {
-    const { fetchFn } = enterpriseHost(() =>
-      jsonResponse({ message: 'API rate limit exceeded' }, 429),
-    );
-    const model = await service(fetchFn).getModel();
-    expect(buckets(model)).toEqual([['waiting', [2, 1]]]);
+  it('finds the token owner on Bitbucket Data Center too', async () => {
+    const launchpad = service(dataCenterHost(), undefined, {
+      domain: DC_HOST,
+      provider: 'bitbucketDC',
+    });
+    expect(buckets(await launchpad.getModel())).toEqual([
+      ['needs-your-review', [2]],
+      ['changes-requested', [1]],
+    ]);
   });
 });

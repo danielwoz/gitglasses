@@ -33,7 +33,6 @@ import type {
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
 import {
-  CachedIdentity,
   COMMIT_PULL_REQUESTS_TTL_MS,
   ISSUE_TTL_MS,
   isFullSha,
@@ -265,7 +264,6 @@ export class GitHubProvider
   ]);
 
   private readonly client: ProviderClient;
-  private readonly identity = new CachedIdentity<string>();
 
   constructor(options: GitHubProviderOptions = {}) {
     assertKnownOptions(options, OPTION_KEYS, 'GitHubProvider');
@@ -318,21 +316,6 @@ export class GitHubProvider
     return nodes
       .filter((node): node is GraphQlPullRequestNode => node !== null && 'number' in node)
       .map((node) => this.mapPullRequest(node, viewer));
-  }
-
-  /**
-   * The login of the account the token belongs to, from REST GET /user,
-   * cached per token. A personal access token carries no account name of its
-   * own, and pull requests name their author by this login.
-   */
-  async getViewerLogin(auth: AuthContext): Promise<string> {
-    return this.identity.get(auth.token, async () => {
-      const user = await this.client.getJson<{ login?: unknown }>(auth, p`/user`);
-      if (typeof user?.login !== 'string' || user.login === '') {
-        throw new ProviderError('GitHub /user returned no login');
-      }
-      return user.login;
-    });
   }
 
   async getPullRequestForBranch(
