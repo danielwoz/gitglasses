@@ -82,6 +82,14 @@ const repoBHead = git(repoB, ['rev-parse', 'HEAD']).trim();
 // territory in libgit2), not just loose objects.
 git(repoB, ['repack', '-adq']);
 
+// Repo C: content that is not UTF-8 (Latin-1), which a response must carry
+// without failing.
+const repoC = join(scratch, 'repoC');
+git(scratch, ['init', '-q', '-b', 'main', 'repoC']);
+writeFileSync(join(repoC, 'latin1.txt'), Buffer.from('caf\xe9 au lait\n', 'latin1'));
+git(repoC, ['add', 'latin1.txt']);
+git(repoC, ['commit', '-q', '-m', 'latin-1 content'], ALICE, 6);
+
 // ------------------------------------------------------------- wasm engine
 
 const factory = (await import(modulePath)).default;
@@ -95,6 +103,8 @@ Module.FS.mkdir('/repo');
 Module.FS.mount(Module.FS.filesystems.NODEFS, { root: repoA }, '/repo');
 Module.FS.mkdir('/repo2');
 Module.FS.mount(Module.FS.filesystems.NODEFS, { root: repoB }, '/repo2');
+Module.FS.mkdir('/repo3');
+Module.FS.mount(Module.FS.filesystems.NODEFS, { root: repoC }, '/repo3');
 
 Module.ccall('gg_wasm_init', null, [], []);
 
@@ -296,6 +306,15 @@ check('second repo works independently (multi-repo state)', () => {
   // Repo A answers unchanged after B was added.
   const stateA = result('repo/state', { repoId });
   assert.equal(stateA.head.oid, mergeSha);
+});
+
+check('responses carrying bytes that are not UTF-8 still succeed', () => {
+  const { repoId: repoId3 } = result('repo/discover', { path: '/repo3' });
+  const response = rpc('rev/fileAtRev', { repoId: repoId3, path: 'latin1.txt', rev: 'HEAD' });
+  assert.ok(response.result, `expected a result, got ${JSON.stringify(response)}`);
+  // Invalid UTF-8 is replaced, as the native engine's frames replace it.
+  assert.equal(response.result.contents, 'caf\ufffd au lait\n');
+  assert.equal(response.result.binary, false);
 });
 
 check('shutdown succeeds', () => {
