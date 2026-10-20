@@ -7,7 +7,8 @@ import { relativeTime } from '../system/dates';
 
 const REFRESH_INTERVAL_MS = 60_000;
 
-/** Run by the first-run welcome; not contributed, so not in the palette. */
+/** Run by the first-run welcome. Hidden from the palette, where Connect
+ *  Integration… lists GitHub first. */
 const CONNECT_GITHUB = 'gitglasses.launchpad.connectGitHub';
 
 export interface LaunchpadNode {
@@ -76,7 +77,7 @@ function prNode(pr: PullRequest, snoozed: boolean): LaunchpadNode {
   return node;
 }
 
-class LaunchpadViewProvider implements vscode.TreeDataProvider<LaunchpadNode> {
+export class LaunchpadViewProvider implements vscode.TreeDataProvider<LaunchpadNode> {
   private readonly emitter = new vscode.EventEmitter<LaunchpadNode | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
   private model: LaunchpadModel | undefined;

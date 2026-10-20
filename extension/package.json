@@ -232,6 +232,12 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "gitglasses.launchpad.connectGitHub",
+        "title": "Connect GitHub…",
+        "category": "GitGlasses",
+        "icon": "$(github)"
+      },
+      {
         "command": "gitglasses.launchpad.open",
         "title": "Open in Browser",
         "category": "GitGlasses"
@@ -572,7 +578,8 @@
             },
             "completionEvents": [
               "onCommand:gitglasses.addIntegration",
-              "onCommand:gitglasses.connectIntegration"
+              "onCommand:gitglasses.connectIntegration",
+              "onCommand:gitglasses.launchpad.connectGitHub"
             ]
           }
         ]
@@ -930,6 +937,10 @@
         },
         {
           "command": "gitglasses.addIntegration",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.launchpad.connectGitHub",
           "when": "false"
         },
         {
