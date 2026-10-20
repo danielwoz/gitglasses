@@ -99,9 +99,15 @@ interface GraphQlBranchPullRequestNode extends GraphQlPullRequestNode {
   headRepositoryOwner: { login: string } | null;
 }
 
-interface GraphQlBranchData {
+interface GraphQlNumberData {
   viewer?: { login: string };
-  repository?: { pullRequests?: { nodes: Array<GraphQlBranchPullRequestNode | null> } } | null;
+  repository?: { pullRequest?: GraphQlBranchPullRequestNode | null } | null;
+}
+
+/** The parts of a REST pull request list item a branch lookup reads. */
+interface RestPullHead {
+  number?: number;
+  head?: { ref?: string; repo?: { owner?: { login?: string } } | null } | null;
 }
 
 interface RestAssignedIssue {
@@ -139,31 +145,17 @@ const PR_FRAGMENT = `
   assignees(first: 10) { nodes { login } }
 `;
 
-/**
- * Open pull requests in one repository whose head branch has a given name.
- * The head repository's owner comes back with each, because GitHub matches
- * headRefName regardless of which fork the branch lives in.
- */
-const BRANCH_QUERY = `
-query ($owner: String!, $name: String!, $branch: String!, $first: Int!) {
+/** One pull request by number, with its head repository's owner. */
+const NUMBER_QUERY = `
+query ($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
-    pullRequests(
-      headRefName: $branch
-      states: [OPEN]
-      first: $first
-      orderBy: { field: UPDATED_AT, direction: DESC }
-    ) {
-      nodes {
-        ${PR_FRAGMENT}
-        headRepositoryOwner { login }
-      }
+    pullRequest(number: $number) {
+      ${PR_FRAGMENT}
+      headRepositoryOwner { login }
     }
   }
 }`;
-
-/** Pull requests one branch lookup considers before giving up. */
-const BRANCH_LOOKUP_LIMIT = 20;
 
 const OPTION_KEYS = ['id', 'host', 'apiBaseUrl', 'graphqlUrl', 'fetchFn'] as const;
 
@@ -324,24 +316,37 @@ export class GitHubProvider
     branch: string,
     head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
-    const data = await this.client.graphql<GraphQlBranchData>(auth, BRANCH_QUERY, {
+    // A fork owner can have only one fork in a repository's network, so the
+    // head repository's owner identifies it. REST filters on "owner:branch"
+    // server-side; GraphQL's headRefName matches the branch in every fork, so
+    // other forks' same-named branches could crowd this one out of a page.
+    const headOwner = (head ?? repo).owner.toLowerCase();
+    const isHead = (owner: string | undefined, ref: string | undefined): boolean =>
+      ref === branch && owner?.toLowerCase() === headOwner;
+    const headFilter = `${headOwner}:${branch}`;
+    const pulls = await this.client.getJson<RestPullHead[]>(
+      auth,
+      p`/repos/${repo.owner}/${repo.name}/pulls?state=open&head=${headFilter}&per_page=10`
+    );
+    // A deleted head repository has no owner and never matches.
+    const match = (pulls ?? []).find((pull) =>
+      isHead(pull.head?.repo?.owner?.login, pull.head?.ref)
+    );
+    if (match?.number === undefined) {
+      return undefined;
+    }
+    const data = await this.client.graphql<GraphQlNumberData>(auth, NUMBER_QUERY, {
       owner: repo.owner,
       name: repo.name,
-      branch,
-      first: BRANCH_LOOKUP_LIMIT,
+      number: match.number,
     });
-    const viewer = data.viewer?.login ?? '';
-    // A fork owner can have only one fork in a repository's network, so the
-    // head repository's owner identifies it. A deleted head repository has no
-    // owner and never matches.
-    const headOwner = (head ?? repo).owner.toLowerCase();
-    const node = (data.repository?.pullRequests?.nodes ?? []).find(
-      (n): n is GraphQlBranchPullRequestNode =>
-        n !== null &&
-        'number' in n &&
-        n.headRepositoryOwner?.login.toLowerCase() === headOwner
-    );
-    return node ? this.mapPullRequest(node, viewer) : undefined;
+    const node = data.repository?.pullRequest;
+    // Checked again on the full record, which may be newer than the list.
+    const stillHead = node && isHead(node.headRepositoryOwner?.login, node.headRefName);
+    if (!node || !stillHead || node.state !== 'OPEN') {
+      return undefined;
+    }
+    return this.mapPullRequest(node, data.viewer?.login ?? '');
   }
 
   /** Open issues assigned to the authenticated user, across repositories. */
