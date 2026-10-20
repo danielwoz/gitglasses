@@ -433,9 +433,10 @@ function versionText(version: StoryVersion, currentPath: string): string {
 }
 
 /**
- * `story` as markdown of at most `maxChars` characters. The blame, commit,
- * pull requests and issues come first; earlier versions fill what is left,
- * whole, newest first, with a note on how many did not fit.
+ * `story` as markdown of at most `maxChars` characters (or the truncation
+ * note alone, when `maxChars` is shorter than it). The blame, commit, pull
+ * requests and issues come first; earlier versions fill what is left, whole,
+ * newest first, with a note on how many did not fit.
  */
 export function formatLineStory(
   story: LineStory<CommitDetails>,
@@ -493,9 +494,42 @@ export function formatLineStory(
     }
   }
 
-  if (text.length <= options.maxChars) return text;
-  const cut = text.slice(0, options.maxChars - 80);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf('\n'), 0))}\n\n(truncated to ${options.maxChars} characters; pass a higher "maxChars")`;
+  return truncateStory(text, options.maxChars);
+}
+
+/** The fence `text` leaves open at its end, or undefined when it closes all. */
+function openFence(text: string): string | undefined {
+  let open: string | undefined;
+  for (const line of text.split('\n')) {
+    const marks = /^`{3,}/.exec(line)?.[0];
+    if (marks === undefined) continue;
+    // fence() makes each closing line exactly its opening marks, longer than
+    // any run of backticks inside.
+    if (open === undefined) open = marks;
+    else if (line === open) open = undefined;
+  }
+  return open;
+}
+
+/**
+ * `text` in at most `maxChars` characters: cut at a line end, with a fence the
+ * cut leaves open closed so the note on the cut stays outside the quoted
+ * data. A limit with no room for any of the story gives the note alone.
+ */
+function truncateStory(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const note = `(truncated to ${maxChars} characters; pass a higher "maxChars")`;
+  const room = maxChars - note.length - 2;
+  let end = room;
+  while (end > 0) {
+    end = text.lastIndexOf('\n', end - 1);
+    if (end <= 0) break;
+    const kept = text.slice(0, end).replace(/\n+$/, '');
+    const open = openFence(kept);
+    const closed = open === undefined ? kept : `${kept}\n${open}`;
+    if (closed.length <= room) return `${closed}\n\n${note}`;
+  }
+  return note;
 }
 
 // --- registration -----------------------------------------------------------

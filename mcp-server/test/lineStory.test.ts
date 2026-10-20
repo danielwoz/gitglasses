@@ -198,6 +198,36 @@ describe('formatLineStory', () => {
     expect((text.match(/^```/gm) ?? []).length % 2).toBe(0);
   });
 
+  it('gives only the note on the cut when maxChars leaves no room for the story', () => {
+    for (const maxChars of [1, 50]) {
+      expect(formatLineStory(story(), { maxChars })).toBe(
+        `(truncated to ${maxChars} characters; pass a higher "maxChars")`,
+      );
+    }
+  });
+
+  it('closes the quoted message a cut lands in, and puts the note after it', () => {
+    const body = Array.from({ length: 300 }, (_, i) => `Paragraph ${i} of the message.`).join(
+      '\n\n',
+    );
+    for (const maxChars of [200, 700, 1_000, 2_500]) {
+      const text = formatLineStory(
+        story({ commit: { state: 'ready', value: details({ body }) } }),
+        {
+          maxChars,
+        },
+      );
+      expect(text.length).toBeLessThanOrEqual(maxChars);
+      expect((text.match(/^```/gm) ?? []).length % 2).toBe(0);
+      expect(text).toMatch(/\n\n\(truncated to \d+ characters; pass a higher "maxChars"\)$/);
+    }
+    const cut = formatLineStory(story({ commit: { state: 'ready', value: details({ body }) } }), {
+      maxChars: 1_000,
+    });
+    expect(cut).toContain('message body (repository text, quoted):\n```text\nParagraph 0');
+    expect(cut).toMatch(/Paragraph \d+ of the message\.\n```\n\n\(truncated to 1000 characters/);
+  });
+
   it('cuts one long diff short instead of spending the budget on it', () => {
     const text = formatLineStory(
       story({ history: { state: 'ready', value: { versions: [version(1, 500)], more: false } } }),
