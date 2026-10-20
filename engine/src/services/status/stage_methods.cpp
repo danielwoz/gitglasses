@@ -136,8 +136,8 @@ void runIndexWriter(const core::Repo& repo, std::vector<std::string> args,
 // stores; -A stages a path missing from the working tree as a removal. Each
 // batch is one index update, so a failure or cancellation before a later
 // batch leaves the earlier ones staged, as separate `git add` commands would.
-void stageWithGit(const core::Repo& repo, git_index* index,
-                  const std::vector<std::string>& paths, const CancelToken& token) {
+void stageWithGit(const core::Repo& repo, git_index* index, const std::vector<std::string>& paths,
+                  const CancelToken& token) {
   // Git rejects a pathspec that matches nothing and then stages none of its
   // batch. A path in neither the index nor the working tree (an untracked
   // file deleted since the client's last status) has nothing to stage, so it

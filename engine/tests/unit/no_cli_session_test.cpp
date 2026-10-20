@@ -188,8 +188,7 @@ TEST_F(NoCliSessionTest, StagingDeletionOfFilteredFileWithoutGitCli) {
   Json stage = session.request(
       req(3, "stage/files", {{"repoId", repoId}, {"paths", {"big.bin"}}, {"action", "stage"}}));
   ASSERT_TRUE(stage.contains("result")) << stage.dump();
-  EXPECT_EQ(gg::testing::gitCapture(fixture.root(), "diff --cached --name-status"),
-            "D\tbig.bin\n");
+  EXPECT_EQ(gg::testing::gitCapture(fixture.root(), "diff --cached --name-status"), "D\tbig.bin\n");
 
   // A filtered file that is present still needs the CLI.
   Json kept = session.request(
