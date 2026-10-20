@@ -2,6 +2,7 @@
 
 #include <git2.h>
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -115,17 +116,33 @@ void refuseSkipWorktree(git_index* index, const std::vector<std::string>& paths)
   }
 }
 
+// Ceiling on a git command that writes the index. Git holds index.lock for
+// the whole run, clean filters included, and a killed git leaves the lock
+// behind, which keeps every git tool out of the repository until someone
+// deletes it. The ceiling is sized for filters working through large files
+// (Git LFS, git-crypt), not for catching a stalled git.
+constexpr std::chrono::milliseconds kIndexWriteTimeout = std::chrono::hours(1);
+
+// Runs a git command that writes the index. For the same reason it is not
+// cancelled once started; callers check for cancellation before each run.
+void runIndexWriter(const core::Repo& repo, std::vector<std::string> args,
+                    const std::string& what) {
+  status_detail::runGitChecked(repo, std::move(args), CancelToken::none(), what, 0,
+                               kIndexWriteTimeout);
+}
+
 // `git add` runs every filter driver (git-lfs, git-crypt, custom clean
 // filters) and working-tree-encoding, so the index receives exactly what git
 // stores; -A stages a path missing from the working tree as a removal. Each
-// batch is one index update, so a failure in a later batch leaves the earlier
-// ones staged, as separate `git add` commands would.
+// batch is one index update, so a failure or cancellation before a later
+// batch leaves the earlier ones staged, as separate `git add` commands would.
 void stageWithGit(const core::Repo& repo, const std::vector<std::string>& paths,
                   const CancelToken& token) {
   for (auto& batch : status_detail::argvBatches(paths)) {
+    token.throwIfCancelled();
     std::vector<std::string> args = {"--literal-pathspecs", "add", "-A", "--"};
     for (auto& path : batch) args.push_back(std::move(path));
-    status_detail::runGitChecked(repo, std::move(args), token, "git add");
+    runIndexWriter(repo, std::move(args), "git add");
   }
 }
 
@@ -212,18 +229,18 @@ void resetToHead(const core::Repo& repo, git_index* index, const std::vector<std
 }
 
 // Applies a patch to the index with `git apply --cached`. The patch goes
-// through a TempFile, which is removed on every exit path, including the
-// CancelledError runGit() can throw. --whitespace=nowarn keeps an
-// apply.whitespace setting from rewriting the lines being staged.
+// through a TempFile, which is removed on every exit path. --whitespace=nowarn
+// keeps an apply.whitespace setting from rewriting the lines being staged.
 void applyToIndexWithGit(const core::Repo& repo, const std::string& patch, bool reverse,
                          const CancelToken& token) {
+  token.throwIfCancelled();
   auto file = util::TempFile::create(patch, "gg-hunk-", ".patch");
   if (!file) throw rpc::HandlerError{{file.error()}};
   std::vector<std::string> args = {"apply", "--cached", "--whitespace=nowarn"};
   if (reverse) args.emplace_back("--reverse");
   args.push_back(file.value().path());
-  status_detail::runGitChecked(repo, std::move(args), token,
-                               reverse ? "git apply --cached --reverse" : "git apply --cached");
+  runIndexWriter(repo, std::move(args),
+                 reverse ? "git apply --cached --reverse" : "git apply --cached");
 }
 
 }  // namespace

@@ -12,6 +12,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -633,6 +634,41 @@ TEST(StatusService, StageFilesKeepsGitLfsPointer) {
   const std::string staged = gitOut(fixture.root(), "cat-file -p :big.bin");
   EXPECT_EQ(staged.rfind("version https://git-lfs.github.com/spec/v1\n", 0), 0u)
       << "index holds " << staged.size() << " bytes instead of an LFS pointer";
+}
+
+// `git add` holds index.lock while its clean filters run, and a killed git
+// leaves the lock behind. Cancelling stage/files therefore lets a running
+// `git add` finish instead of locking the repository for every git tool.
+TEST(StatusService, CancelledStageFilesLeavesNoIndexLock) {
+  FixtureRepo fixture;
+  fixture.writeFile(".git/slow-clean.sh", "sleep 1\ncat\n");
+  fixture.run("git config filter.slow.clean \"sh .git/slow-clean.sh\"");
+  fixture.run("git config filter.slow.smudge cat");
+  fixture.writeFile(".gitattributes", "*.bin filter=slow\n");
+  fixture.writeFile("a.bin", "one\n");
+  fixture.run("git -c filter.slow.clean=cat add .gitattributes a.bin");
+  commitTick(fixture, "seed", 1);
+  fixture.writeFile("a.bin", "two\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const auto lock = fixture.root() / ".git" / "index.lock";
+  bool sawLock = false;
+  std::thread canceller([&] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!std::filesystem::exists(lock) && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    sawLock = std::filesystem::exists(lock);
+    session.notify({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 10}}}});
+  });
+  Json stage = stageFiles(session, 10, repoId, {"a.bin"}, "stage");
+  canceller.join();
+  ASSERT_TRUE(sawLock) << "git add never took index.lock: " << stage.dump();
+
+  EXPECT_FALSE(std::filesystem::exists(lock)) << stage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "cat-file -p :a.bin"), "two\n");
+  EXPECT_EQ(gitOut(fixture.root(), "status --porcelain"), "M  a.bin\n");
 }
 
 TEST(StatusService, HunksOfFilteredFileAreGitsHunks) {

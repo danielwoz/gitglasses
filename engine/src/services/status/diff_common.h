@@ -2,11 +2,13 @@
 
 #include <git2.h>
 
+#include <chrono>
 #include <string>
 #include <vector>
 
 #include "core/git2.h"
 #include "core/repo.h"
+#include "exec/git_process.h"
 #include "util/cancel.h"
 #include "util/result.h"
 
@@ -82,7 +84,8 @@ std::vector<bool> confirmCleanChanges(const core::Repo& repo,
 // spawn failure, a timeout, or an exit code other than 0 and `alsoOk` fails
 // the request with git's stderr, naming the command as `what`.
 std::string runGitChecked(const core::Repo& repo, std::vector<std::string> args,
-                          const CancelToken& token, const std::string& what, int alsoOk = 0);
+                          const CancelToken& token, const std::string& what, int alsoOk = 0,
+                          std::chrono::milliseconds timeout = exec::kDefaultGitTimeout);
 
 // Splits paths into runs that keep each git command line well under the
 // Windows limit (32767 UTF-16 units), so a large "stage all" never fails to

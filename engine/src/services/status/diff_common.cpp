@@ -208,9 +208,11 @@ std::vector<bool> confirmCleanChanges(const core::Repo& repo,
 }
 
 std::string runGitChecked(const core::Repo& repo, std::vector<std::string> args,
-                          const CancelToken& token, const std::string& what, int alsoOk) {
+                          const CancelToken& token, const std::string& what, int alsoOk,
+                          std::chrono::milliseconds timeout) {
   exec::RunOpts opts;
   opts.rawOutput = true;
+  opts.timeout = timeout;
   std::string output;
   auto status = exec::runGit(repo.workdir(), std::move(args), opts, token,
                              [&output](std::string chunk) { output = std::move(chunk); });
