@@ -1,5 +1,6 @@
 // What the manifest promises the user before any code runs: palette entries
-// only where a command can act, and one category for every command.
+// only where a command can act, one category for every command, and view
+// states the extension renders itself.
 
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
@@ -97,5 +98,13 @@ describe('command palette', () => {
     ]) {
       expect(palette.get(fileOnly), fileOnly).toMatch(/\bresourceScheme == file\b/);
     }
+  });
+});
+
+describe('sidebar', () => {
+  const sidebar = views.gitglasses;
+
+  it('contributes no welcome content, which some hosts show in place of the tree', () => {
+    expect(manifest.contributes.viewsWelcome).toBeUndefined();
   });
 });

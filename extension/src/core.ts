@@ -22,7 +22,13 @@ import {
   setRevisionRootLookup,
 } from './scm/revisionContentProvider';
 import { QuickDiffSources, hasBuiltinGit } from './scm/quickDiffSources';
-import { ViewBase, ViewNode, setActiveRepoResolver } from './views/viewBase';
+import {
+  ViewBase,
+  ViewNode,
+  ViewWithStates,
+  setActiveRepoResolver,
+  setViewLogger,
+} from './views/viewBase';
 import { CommitsViewProvider } from './views/commitsView';
 import {
   BranchesViewProvider,
@@ -160,6 +166,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     engine,
     (root) => repos.repositories().find((repo) => repos.isRootOf(repo.repoId, root))?.repoId,
   );
+  setViewLogger(deps.log);
 
   const auth = new AuthManager(context.secrets);
   const integrations = new IntegrationService(auth);
@@ -284,11 +291,13 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     );
   }
 
+  const stateHost = () => ({ hasBuiltinGit: builtinGit, trusted: vscode.workspace.isTrusted });
   const treeViews: vscode.TreeView<ViewNode>[] = [];
   for (const [viewId, provider] of Object.entries(views)) {
-    const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: provider });
+    const withStates = new ViewWithStates(viewId, provider, stateHost);
+    const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: withStates });
     treeViews.push(treeView);
-    disposables.push(provider, treeView);
+    disposables.push(provider, withStates, treeView);
   }
 
   // Which repository the views describe, shown next to each view's title. A
