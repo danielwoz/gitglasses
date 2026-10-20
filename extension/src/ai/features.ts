@@ -23,6 +23,7 @@ import {
   nlSearchPrompt,
 } from './prompts';
 import { sanitizeAiMarkdown } from './sanitize';
+import { CommitSearchQuery, describeQuery, isoDay, needsGitLog } from '../views/searchQuery';
 
 const CONTEXT_BUDGET_TOKENS = 6000;
 const MAX_CONTEXT_FILES = 30;
@@ -444,6 +445,8 @@ async function generateCommitMessage(
   }
 }
 
+// --- Natural-language search ---------------------------------------------------
+
 // NL search results land in the Search & Compare view via the provider's
 // runExternalSearch hook, labeled with the user's question. The QuickPick path
 // below covers a host that wired in no view provider.
@@ -459,15 +462,15 @@ async function nlSearch(
   const ready = await ai.prepare();
   if (!ready) return;
   const request = await vscode.window.showInputBox({
-    prompt: 'Describe the commits to find',
+    prompt: 'Describe the commits to find: who, what, which files or code, and when',
     placeHolder: 'e.g. commits by alice about the login crash last month',
   });
   if (!request) return;
 
   const raw = await ai.complete(ready, 'GitGlasses: translating search…', {
     system: NL_SEARCH_SYSTEM,
-    prompt: nlSearchPrompt(request),
-    maxTokens: 200,
+    prompt: nlSearchPrompt(request, isoDay(new Date())),
+    maxTokens: 300,
   });
   if (!raw) return;
   const parsed = parseNlSearchQuery(raw);
@@ -479,7 +482,10 @@ async function nlSearch(
   }
 
   if (searchView) {
-    await searchView.runExternalSearch(parsed.query, `NL: "${request}"`);
+    await searchView.runExternalSearch(
+      parsed.query,
+      `for "${request}" (${describeQuery(parsed.query)})`,
+    );
     return;
   }
 
@@ -490,12 +496,12 @@ async function nlSearch(
   });
   let truncated: boolean;
   try {
-    const result = await engine.request('search/commits', {
-      repoId: repo.repoId,
-      streamId,
-      limit: NL_SEARCH_LIMIT,
-      query: parsed.query,
-    });
+    const params = { repoId: repo.repoId, streamId, limit: NL_SEARCH_LIMIT };
+    const { sha, ...logQuery } = parsed.query;
+    const { text, author } = parsed.query;
+    const result = needsGitLog(parsed.query)
+      ? await engine.request('search/log', { ...params, query: logQuery })
+      : await engine.request('search/commits', { ...params, query: { text, author, sha } });
     truncated = result.truncated;
   } catch (error) {
     void vscode.window.showWarningMessage(
@@ -506,15 +512,9 @@ async function nlSearch(
     sub.dispose();
   }
 
-  const queryLabel = [
-    parsed.query.text && `text: "${parsed.query.text}"`,
-    parsed.query.author && `author: "${parsed.query.author}"`,
-    parsed.query.sha && `sha: ${parsed.query.sha}`,
-  ]
-    .filter(Boolean)
-    .join(', ');
+  const queryLabel = describeQuery(parsed.query);
   if (matches.length === 0) {
-    void vscode.window.showInformationMessage(`GitGlasses: no commits matched (${queryLabel}).`);
+    void vscode.window.showInformationMessage(`GitGlasses: no commits ${queryLabel}.`);
     return;
   }
   const picked = await vscode.window.showQuickPick(
@@ -524,7 +524,7 @@ async function nlSearch(
       commit,
     })),
     {
-      placeHolder: `${matches.length}${truncated ? '+' : ''} matches for ${queryLabel}`,
+      placeHolder: `${matches.length}${truncated ? '+' : ''} commits ${queryLabel}`,
       matchOnDescription: true,
     },
   );
@@ -535,10 +535,7 @@ async function nlSearch(
 
 /** The slice of SearchViewProvider that NL search feeds results into. */
 export interface ExternalSearchTarget {
-  runExternalSearch(
-    query: { text?: string; author?: string; sha?: string },
-    label: string,
-  ): Promise<void>;
+  runExternalSearch(query: CommitSearchQuery, label: string): Promise<void>;
 }
 
 export function registerAiFeatures(

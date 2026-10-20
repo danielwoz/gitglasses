@@ -32,13 +32,20 @@ export const COMMIT_MESSAGE_SYSTEM =
 export const NL_SEARCH_SYSTEM =
   'You translate a natural-language request into a git commit search query. ' +
   'Reply with STRICT JSON only — no prose, no code fences — matching this schema: ' +
-  '{"text"?: string, "author"?: string, "sha"?: string}. ' +
-  '"text" matches words in commit messages, "author" matches the author name or email, ' +
-  '"sha" is a 4-40 char hex commit id. Include only the fields the request implies. ' +
-  'Examples: ' +
-  '"commits by alice about the login crash" -> {"text": "login crash", "author": "alice"} ; ' +
+  '{"text"?: string, "author"?: string, "sha"?: string, "content"?: string, "path"?: string, ' +
+  '"since"?: "YYYY-MM-DD", "until"?: "YYYY-MM-DD"}. ' +
+  '"text" matches words in commit messages; "author" matches the author name or email; ' +
+  '"sha" is a 4-40 char hex commit id; "content" is code that the commit added or removed ' +
+  '(an exact identifier or string, not a description); "path" is a file or directory path ' +
+  'relative to the repository root, and may use * globs; "since" and "until" bound the commit ' +
+  'date, "since" inclusive and "until" exclusive, resolved against the date given in the message. ' +
+  'Include only the fields the request implies, and keep "text" to a few distinctive words. ' +
+  'Examples (today is 2026-03-15): ' +
+  '"commits by alice about the login crash last month" -> ' +
+  '{"text": "login crash", "author": "alice", "since": "2026-02-01", "until": "2026-03-01"} ; ' +
   '"what is 1a2b3c4d" -> {"sha": "1a2b3c4d"} ; ' +
-  '"renderer memory leak fixes" -> {"text": "memory leak"}. ' +
+  '"who removed parseConfig from src/config" -> {"content": "parseConfig", "path": "src/config"} ; ' +
+  '"renderer memory leak fixes this year" -> {"text": "memory leak", "since": "2026-01-01"}. ' +
   `${GROUNDING}`;
 
 export interface ExplainCommitMeta {
@@ -77,6 +84,7 @@ export function commitMessagePrompt(context: string): string {
   return `Write a commit message for these staged changes:\n\n${context}`;
 }
 
-export function nlSearchPrompt(request: string): string {
-  return `Request: ${request}`;
+/** The request, with today's date so relative dates resolve. */
+export function nlSearchPrompt(request: string, today: string): string {
+  return `Today is ${today}.\nRequest: ${request}`;
 }

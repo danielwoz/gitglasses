@@ -58,7 +58,14 @@ describe('prompt templates', () => {
     expect(prompt).toContain('Fixes: #12');
     expect(prompt).toContain('Refs: main, tag v1');
     expect(prompt).toContain('Diff:\n=== a.ts ===');
-    expect(nlSearchPrompt('find alice commits')).toContain('find alice commits');
+    expect(nlSearchPrompt('find alice commits', '2026-10-21')).toContain('find alice commits');
+  });
+
+  it('nl search gets today so relative dates resolve, and its schema has dates', () => {
+    expect(nlSearchPrompt('last week', '2026-10-21')).toContain('Today is 2026-10-21.');
+    for (const field of ['"since"', '"until"', '"content"', '"path"']) {
+      expect(NL_SEARCH_SYSTEM).toContain(field);
+    }
   });
 
   it('every system prompt treats repository text as data', () => {
