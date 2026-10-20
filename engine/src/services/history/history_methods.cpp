@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -28,6 +29,7 @@
 #include "exec/parsers/history_log.h"
 #include "services/history/log_order_cache.h"
 #include "services/params.h"
+#include "services/status/diff_common.h"
 #include "util/sha256.h"
 
 namespace gg::services {
@@ -106,6 +108,31 @@ Result<RevwalkPtr> newWalk(const core::Repo& repo, const std::string& ref, unsig
     return core::gitError("revwalk push '" + ref + "'");
   }
   return walk;
+}
+
+// Visits the commits reachable from `tip` but not from `hidden` in `sorting`
+// order: what `git rev-list hidden..tip` lists.
+void walkExclusive(const core::Repo& repo, const git_oid& tip, const git_oid& hidden,
+                   unsigned int sorting, const CancelToken& token,
+                   const std::function<void(const git_oid&)>& visit) {
+  git_revwalk* rawWalk = nullptr;
+  if (git_revwalk_new(&rawWalk, repo.raw()) != 0) {
+    throw rpc::HandlerError{{core::gitError("revwalk")}};
+  }
+  RevwalkPtr walk(rawWalk);
+  git_revwalk_sorting(walk.get(), sorting);
+  if (git_revwalk_push(walk.get(), &tip) != 0 || git_revwalk_hide(walk.get(), &hidden) != 0) {
+    throw rpc::HandlerError{
+        {core::gitError("revwalk " + core::oidToHex(hidden) + ".." + core::oidToHex(tip))}};
+  }
+  git_oid oid;
+  int status = 0;
+  std::size_t visited = 0;
+  while ((status = git_revwalk_next(&oid, walk.get())) == 0) {
+    if ((visited++ & 0x3ff) == 0) token.throwIfCancelled();
+    visit(oid);
+  }
+  if (status != GIT_ITEROVER) throw rpc::HandlerError{{core::gitError("revwalk")}};
 }
 
 // --- log/commits paging ------------------------------------------------------
@@ -381,6 +408,66 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
         }
         rpc::Json result = {{"commits", std::move(commits)}};
         if (hasMore) result["nextCursor"] = encodeLogCursor(tip, start + limit);
+        return result;
+      },
+      rpc::Mode::Concurrent);
+
+  // Two revisions compared the way `git log base..head` and `git rev-list
+  // --left-right --count base...head` compare them: the merge base, the
+  // commits each side has that the other lacks, and the first `limit` of
+  // head's own commits in topological order. Reads through libgit2 alone.
+  dispatcher.method(
+      "log/compare",
+      [&context](const rpc::Json& params, const CancelToken& token,
+                 const rpc::NotifyFn&) -> rpc::Json {
+        const auto limit = static_cast<std::size_t>(pageLimit(params));
+        const std::string base = requireString(params, "base");
+        const std::string head = requireString(params, "head");
+        auto repo = context.registry.open(params.value("repoId", ""));
+        if (!repo) throw rpc::HandlerError{{repo.error()}};
+
+        auto baseCommit = status_detail::resolveCommit(repo.value(), base);
+        if (!baseCommit) throw rpc::HandlerError{{baseCommit.error()}};
+        auto headCommit = status_detail::resolveCommit(repo.value(), head);
+        if (!headCommit) throw rpc::HandlerError{{headCommit.error()}};
+        const git_oid baseOid = *git_commit_id(baseCommit.value().get());
+        const git_oid headOid = *git_commit_id(headCommit.value().get());
+
+        rpc::Json result = {{"base", core::oidToHex(baseOid)}, {"head", core::oidToHex(headOid)}};
+        git_oid mergeBase;
+        const int found = git_merge_base(&mergeBase, repo.value().raw(), &baseOid, &headOid);
+        if (found == 0) {
+          result["mergeBase"] = core::oidToHex(mergeBase);
+        } else if (found != GIT_ENOTFOUND) {
+          throw rpc::HandlerError{
+              {core::gitError("merge base of '" + base + "' and '" + head + "'")}};
+        }
+
+        std::vector<git_oid> page;
+        std::int64_t ahead = 0;
+        walkExclusive(repo.value(), headOid, baseOid, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME, token,
+                      [&](const git_oid& oid) {
+                        if (page.size() < limit) page.push_back(oid);
+                        ++ahead;
+                      });
+        std::int64_t behind = 0;
+        walkExclusive(repo.value(), baseOid, headOid, GIT_SORT_NONE, token,
+                      [&](const git_oid&) { ++behind; });
+
+        rpc::Json commits = rpc::Json::array();
+        for (const git_oid& oid : page) {
+          token.throwIfCancelled();
+          const std::string sha = core::oidToHex(oid);
+          git_commit* rawCommit = nullptr;
+          if (git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
+            throw rpc::HandlerError{{core::gitError("lookup commit " + sha)}};
+          }
+          core::CommitPtr commit(rawCommit);
+          commits.push_back(commitSummaryJson(commit.get(), sha));
+        }
+        result["ahead"] = ahead;
+        result["behind"] = behind;
+        result["commits"] = std::move(commits);
         return result;
       },
       rpc::Mode::Concurrent);

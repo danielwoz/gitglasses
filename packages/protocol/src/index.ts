@@ -143,6 +143,7 @@ export interface Requests {
   'repo/close': { params: P<'repo/close'>; result: Empty };
   'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
+  'log/compare': { params: P<'log/compare'>; result: R<'log/compare'> };
   'commit/details': { params: P<'commit/details'>; result: R<'commit/details'> };
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };

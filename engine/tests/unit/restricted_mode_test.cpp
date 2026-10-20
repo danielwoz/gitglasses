@@ -173,6 +173,7 @@ TEST(RestrictedMode, ReadsRunNothingTheRepositoryConfigures) {
       {"graph/rows", {{"repoId", repoId}, {"limit", 10}}},
       {"graph/find", {{"repoId", repoId}, {"query", "a"}}},
       {"log/commits", {{"repoId", repoId}, {"limit", 10}}},
+      {"log/compare", {{"repoId", repoId}, {"base", "HEAD"}, {"head", "HEAD"}}},
       {"rev/fileAtRev", {{"repoId", repoId}, {"path", "a.txt"}, {"rev", "HEAD"}}},
       {"refs/list", {{"repoId", repoId}}},
       {"repo/state", {{"repoId", repoId}}},
