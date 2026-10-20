@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -27,19 +28,25 @@ Json note(const std::string& method, Json params) {
 
 struct BlameSessionTest : ::testing::Test {
   FixtureRepo fixture;
-  InteractiveSession session;
+  // Started by open(), once the fixture's commits are made: making them sets
+  // environment variables, which the engine reads as it starts.
+  std::unique_ptr<InteractiveSession> server;
   std::string repoId;
   std::int64_t nextId = 10;
 
+  InteractiveSession& session() { return *server; }
+
   void open() {
-    session.request(gg::testing::initRequest(1));
-    Json discovered = session.request(req(2, "repo/discover", {{"path", fixture.root().string()}}));
+    server = std::make_unique<InteractiveSession>();
+    session().request(gg::testing::initRequest(1));
+    Json discovered =
+        session().request(req(2, "repo/discover", {{"path", fixture.root().string()}}));
     repoId = discovered["result"].value("repoId", "");
     ASSERT_FALSE(repoId.empty()) << discovered.dump();
   }
 
   void push(const std::string& path, const std::string& contents, std::int64_t version) {
-    session.notify(
+    session().notify(
         note("doc/didChange",
              {{"repoId", repoId}, {"path", path}, {"contents", contents}, {"version", version}}));
   }
@@ -47,7 +54,7 @@ struct BlameSessionTest : ::testing::Test {
   Json blame(const std::string& path, std::optional<std::int64_t> docVersion) {
     Json params = {{"repoId", repoId}, {"path", path}, {"streamId", "s" + std::to_string(nextId)}};
     if (docVersion) params["docVersion"] = *docVersion;
-    Json response = session.request(req(nextId++, "blame/file", std::move(params)));
+    Json response = session().request(req(nextId++, "blame/file", std::move(params)));
     EXPECT_TRUE(response.contains("result")) << response.dump();
     return response.value("result", Json::object());
   }
@@ -111,7 +118,7 @@ TEST_F(BlameSessionTest, DiskVersionIgnoresAPushedBuffer) {
   Json missing = blame("notes.txt", 9);
   EXPECT_EQ(missing.value("docVersion", std::int64_t{-2}), 4);
 
-  session.notify(note("doc/didClose", {{"repoId", repoId}, {"path", "notes.txt"}}));
+  session().notify(note("doc/didClose", {{"repoId", repoId}, {"path", "notes.txt"}}));
   Json closed = blame("notes.txt", std::nullopt);
   EXPECT_EQ(closed.value("totalLines", 0), 4);
   EXPECT_EQ(closed.value("docVersion", std::int64_t{-2}), -1);
@@ -131,7 +138,7 @@ TEST_F(BlameSessionTest, ReportsLfsAndAcceptsOptions) {
                  {"path", "data.csv"},
                  {"streamId", "lfs"},
                  {"options", {{"ignoreWhitespace", true}, {"moves", "withinFile"}}}};
-  Json response = session.request(req(50, "blame/file", params));
+  Json response = session().request(req(50, "blame/file", params));
   ASSERT_TRUE(response.contains("result")) << response.dump();
   EXPECT_TRUE(response["result"].value("lfs", false));
   EXPECT_EQ(response["result"].value("totalLines", 0), 3);
