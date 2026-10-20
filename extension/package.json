@@ -87,7 +87,10 @@
     }
   },
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:gitglasses.graph",
+    "onWebviewPanel:gitglasses.timeline",
+    "onWebviewPanel:gitglasses.commitDetails"
   ],
   "main": "./dist/extension.js",
   "browser": "./dist/web/extension.js",
@@ -1622,6 +1625,14 @@
           "minimum": 50,
           "maximum": 5000,
           "description": "Rows loaded per page in the Commit Graph and Visual File History"
+        },
+        "gitglasses.graph.maxLanes": {
+          "type": "number",
+          "scope": "window",
+          "default": 20,
+          "minimum": 4,
+          "maximum": 200,
+          "description": "Most branch lanes the Commit Graph draws side by side. Lanes past it fold into one column marked +N, so commit messages stay readable on merge-heavy repositories. The graph also never takes more than 40% of the panel's width."
         },
         "gitglasses.codeLens.enabled": {
           "type": "boolean",

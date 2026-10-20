@@ -195,3 +195,62 @@ describe('GraphStore.shas caching', () => {
     expect([...store.shas()]).toEqual([]);
   });
 });
+
+describe('GraphStore.replaceAll', () => {
+  it('swaps every row and keeps the selection on commits that are still there', () => {
+    const store = new GraphStore();
+    store.appendPage(makeRows(4), 'c1');
+    store.selection = { selected: new Set(['sha-1', 'sha-3']), anchor: 1 };
+    // A refresh: a new commit on top, sha-3 gone.
+    const fresh = [makeRows(1, 9)[0], ...makeRows(3)];
+    store.replaceAll(fresh, 'c2');
+    expect(store.shas()).toEqual(['sha-9', 'sha-0', 'sha-1', 'sha-2']);
+    expect([...store.selection.selected]).toEqual(['sha-1']);
+    expect(store.selection.anchor).toBe(2);
+    expect(store.nextCursor).toBe('c2');
+    expect(store.indexOf('sha-9')).toBe(0);
+    expect(store.indexOf('sha-3')).toBe(-1);
+  });
+
+  it('releases the paging guard and recomputes the lane maximum', () => {
+    const store = new GraphStore();
+    store.appendPage(makeLanedRows([5]), 'c1');
+    store.beginLoadMore(1);
+    store.replaceAll(makeLanedRows([1]), undefined);
+    expect(store.requestInFlight).toBe(false);
+    expect(store.maxLane).toBe(1);
+  });
+});
+
+describe('GraphStore selection helpers', () => {
+  it('lists selected rows in row order and exposes the anchor row', () => {
+    const store = new GraphStore();
+    store.appendPage(makeRows(5), 'c1');
+    store.selection = { selected: new Set(['sha-3', 'sha-1']), anchor: 3 };
+    expect(store.selectedRows().map((row) => row.sha)).toEqual(['sha-1', 'sha-3']);
+    expect(store.anchorRow()?.sha).toBe('sha-3');
+    store.selection = { selected: new Set(), anchor: -1 };
+    expect(store.anchorRow()).toBeUndefined();
+  });
+});
+
+describe('GraphStore.acceptRows', () => {
+  it('takes a refresh from a newer generation and adopts it', () => {
+    const store = new GraphStore();
+    store.generation = 3;
+    expect(store.acceptRows(5, true)).toBe(true);
+    expect(store.generation).toBe(5);
+  });
+
+  it('drops pages of any other generation, and older refreshes', () => {
+    const store = new GraphStore();
+    store.generation = 5;
+    // A page requested before a refresh: its cursor belongs to the old rows.
+    expect(store.acceptRows(4, false)).toBe(false);
+    expect(store.acceptRows(6, false)).toBe(false);
+    // A refresh that finished after a newer one.
+    expect(store.acceptRows(4, true)).toBe(false);
+    expect(store.acceptRows(5, false)).toBe(true);
+    expect(store.generation).toBe(5);
+  });
+});

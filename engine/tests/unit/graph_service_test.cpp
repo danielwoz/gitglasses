@@ -1,14 +1,17 @@
-// End-to-end tests for graph/rows: golden lane layouts for canonical
-// topologies (per docs/specs/commit-graph-lanes.md), determinism, paging,
-// synthetic WIP/stash rows and refs decorations, driven through the full
-// server loop the way the extension drives the engine.
+// End-to-end tests for graph/rows and graph/find: golden lane layouts for
+// canonical topologies (per docs/specs/commit-graph-lanes.md), determinism,
+// paging, synthetic WIP/stash rows, refs decorations and find, driven through
+// the full server loop the way the extension drives the engine.
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -126,9 +129,9 @@ void expectLayout(const Json& rows, const std::vector<ExpectedRow>& expected) {
 TEST(GraphService, LinearLayoutGolden) {
   // main: initial -- c1 -- c2 (HEAD)
   //
-  //   c2       lane 0
-  //   c1       lane 0
-  //   initial  lane 0
+  //   c2       lane 0   lineOut
+  //   c1       lane 0   lineIn, lineOut
+  //   initial  lane 0   lineIn
   FixtureRepo fixture;
   commitTick(fixture, "c1", 1);
   commitTick(fixture, "c2", 2);
@@ -137,9 +140,10 @@ TEST(GraphService, LinearLayoutGolden) {
   const std::string repoId = discoverRepo(session, fixture.root());
   Json result = graphRows(session, 10, repoId);
 
-  expectLayout(result["rows"], {{rev(fixture, "HEAD"), 0, Json::array()},
-                                {rev(fixture, "HEAD~1"), 0, Json::array()},
-                                {rev(fixture, "HEAD~2"), 0, Json::array()}});
+  expectLayout(result["rows"], {{rev(fixture, "HEAD"), 0, Json::array({edge(0, 0, "lineOut")})},
+                                {rev(fixture, "HEAD~1"), 0,
+                                 Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut")})},
+                                {rev(fixture, "HEAD~2"), 0, Json::array({edge(0, 0, "lineIn")})}});
   EXPECT_FALSE(result.contains("nextCursor"));
   EXPECT_GT(result["refsFingerprint"].get<std::int64_t>(), 0);
 
@@ -160,11 +164,14 @@ TEST(GraphService, SingleMergeLayoutGolden) {
   //              \              /
   //               f1 (feature)-
   //
-  //   M     lane 0   branchOut 0->1
-  //   m1    lane 0   line 1
-  //   f1    lane 1   line 0
-  //   base  lane 0   mergeIn 1->0
-  //   init  lane 0
+  // The merged branch comes right below the merge, as in git log --graph.
+  // Once m1 also leads to base, f1's lane moves into lane 0 (line 1->0).
+  //
+  //   M     lane 0   lineOut, branchOut 0->1
+  //   f1    lane 1   lineIn, lineOut, line 0
+  //   m1    lane 0   lineIn, lineOut, line 1->0
+  //   base  lane 0   lineIn, lineOut
+  //   init  lane 0   lineIn
   FixtureRepo fixture;
   commitTick(fixture, "base", 1);
   fixture.run("git checkout -q -b feature");
@@ -177,12 +184,15 @@ TEST(GraphService, SingleMergeLayoutGolden) {
   const std::string repoId = discoverRepo(session, fixture.root());
   Json result = graphRows(session, 10, repoId);
 
-  expectLayout(result["rows"],
-               {{rev(fixture, "HEAD"), 0, Json::array({edge(0, 1, "branchOut")})},
-                {rev(fixture, "HEAD^1"), 0, Json::array({edge(1, 1, "line")})},
-                {rev(fixture, "HEAD^2"), 1, Json::array({edge(0, 0, "line")})},
-                {rev(fixture, "HEAD~2"), 0, Json::array({edge(1, 0, "mergeIn")})},
-                {rev(fixture, "HEAD~3"), 0, Json::array()}});
+  expectLayout(
+      result["rows"],
+      {{rev(fixture, "HEAD"), 0, Json::array({edge(0, 0, "lineOut"), edge(0, 1, "branchOut")})},
+       {rev(fixture, "HEAD^2"), 1,
+        Json::array({edge(1, 1, "lineIn"), edge(1, 1, "lineOut"), edge(0, 0, "line")})},
+       {rev(fixture, "HEAD^1"), 0,
+        Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut"), edge(1, 0, "line")})},
+       {rev(fixture, "HEAD~2"), 0, Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut")})},
+       {rev(fixture, "HEAD~3"), 0, Json::array({edge(0, 0, "lineIn")})}});
   EXPECT_EQ(result["rows"][0]["parents"].size(), 2u);
 }
 
@@ -193,12 +203,15 @@ TEST(GraphService, CrissCrossLayoutGolden) {
   //                \     / \ .
   //                 -- B -- CB (crossB, HEAD) CB = merge(B, A)
   //
-  //   CB    lane 0   branchOut 0->1
-  //   CA    lane 2   branchOut 2->0, line 1
-  //   B     lane 0   line 1, line 2
-  //   A     lane 1   mergeIn 2->1, line 0
-  //   base  lane 0   mergeIn 1->0
-  //   init  lane 0
+  // CA's first parent A already has a lane to its left, so CA's lane joins
+  // it at once; lane 0 passes straight through CA's row.
+  //
+  //   CB    lane 0   lineOut, branchOut 0->1
+  //   CA    lane 2   branchOut 2->1, branchOut 2->0, line 0, line 1
+  //   B     lane 0   lineIn, lineOut, line 1
+  //   A     lane 1   lineIn, branchOut 1->0, line 0
+  //   base  lane 0   lineIn, lineOut
+  //   init  lane 0   lineIn
   FixtureRepo fixture;
   commitTick(fixture, "base", 1);
   fixture.run("git checkout -q -b sideA");
@@ -215,15 +228,18 @@ TEST(GraphService, CrissCrossLayoutGolden) {
   const std::string repoId = discoverRepo(session, fixture.root());
   Json result = graphRows(session, 10, repoId);
 
-  expectLayout(result["rows"],
-               {{rev(fixture, "crossB"), 0, Json::array({edge(0, 1, "branchOut")})},
-                {rev(fixture, "crossA"), 2,
-                 Json::array({edge(2, 0, "branchOut"), edge(1, 1, "line")})},
-                {rev(fixture, "sideB"), 0, Json::array({edge(1, 1, "line"), edge(2, 2, "line")})},
-                {rev(fixture, "sideA"), 1,
-                 Json::array({edge(2, 1, "mergeIn"), edge(0, 0, "line")})},
-                {rev(fixture, "main"), 0, Json::array({edge(1, 0, "mergeIn")})},
-                {rev(fixture, "main~1"), 0, Json::array()}});
+  expectLayout(
+      result["rows"],
+      {{rev(fixture, "crossB"), 0, Json::array({edge(0, 0, "lineOut"), edge(0, 1, "branchOut")})},
+       {rev(fixture, "crossA"), 2,
+        Json::array({edge(2, 1, "branchOut"), edge(2, 0, "branchOut"), edge(0, 0, "line"),
+                     edge(1, 1, "line")})},
+       {rev(fixture, "sideB"), 0,
+        Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut"), edge(1, 1, "line")})},
+       {rev(fixture, "sideA"), 1,
+        Json::array({edge(1, 1, "lineIn"), edge(1, 0, "branchOut"), edge(0, 0, "line")})},
+       {rev(fixture, "main"), 0, Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut")})},
+       {rev(fixture, "main~1"), 0, Json::array({edge(0, 0, "lineIn")})}});
 }
 
 TEST(GraphService, OctopusLayoutGolden) {
@@ -233,12 +249,15 @@ TEST(GraphService, OctopusLayoutGolden) {
   //                \      /
   //                 c2 --- (b2)
   //
-  //   M     lane 0   branchOut 0->1, branchOut 0->2
-  //   m1    lane 0   line 1, line 2
-  //   c2    lane 2   line 0, line 1
-  //   c1    lane 1   line 0, line 2
-  //   base  lane 0   mergeIn 1->0, mergeIn 2->0
-  //   init  lane 0
+  // The last parent's branch comes first, then the next one, then the
+  // first-parent line; lines leading to base fold leftwards as they meet.
+  //
+  //   M     lane 0   lineOut, branchOut 0->1, branchOut 0->2
+  //   c2    lane 2   lineIn, lineOut, line 0, line 1
+  //   c1    lane 1   lineIn, lineOut, line 0, line 2->1
+  //   m1    lane 0   lineIn, lineOut, line 1->0
+  //   base  lane 0   lineIn, lineOut
+  //   init  lane 0   lineIn
   FixtureRepo fixture;
   commitTick(fixture, "base", 1);
   fixture.run("git checkout -q -b b1");
@@ -257,12 +276,18 @@ TEST(GraphService, OctopusLayoutGolden) {
   ASSERT_EQ(result["rows"][0]["parents"].size(), 3u) << "octopus merge expected";
   expectLayout(
       result["rows"],
-      {{rev(fixture, "HEAD"), 0, Json::array({edge(0, 1, "branchOut"), edge(0, 2, "branchOut")})},
-       {rev(fixture, "HEAD^1"), 0, Json::array({edge(1, 1, "line"), edge(2, 2, "line")})},
-       {rev(fixture, "b2"), 2, Json::array({edge(0, 0, "line"), edge(1, 1, "line")})},
-       {rev(fixture, "b1"), 1, Json::array({edge(0, 0, "line"), edge(2, 2, "line")})},
-       {rev(fixture, "HEAD~2"), 0, Json::array({edge(1, 0, "mergeIn"), edge(2, 0, "mergeIn")})},
-       {rev(fixture, "HEAD~3"), 0, Json::array()}});
+      {{rev(fixture, "HEAD"), 0,
+        Json::array({edge(0, 0, "lineOut"), edge(0, 1, "branchOut"), edge(0, 2, "branchOut")})},
+       {rev(fixture, "b2"), 2,
+        Json::array(
+            {edge(2, 2, "lineIn"), edge(2, 2, "lineOut"), edge(0, 0, "line"), edge(1, 1, "line")})},
+       {rev(fixture, "b1"), 1,
+        Json::array(
+            {edge(1, 1, "lineIn"), edge(1, 1, "lineOut"), edge(0, 0, "line"), edge(2, 1, "line")})},
+       {rev(fixture, "HEAD^1"), 0,
+        Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut"), edge(1, 0, "line")})},
+       {rev(fixture, "HEAD~2"), 0, Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut")})},
+       {rev(fixture, "HEAD~3"), 0, Json::array({edge(0, 0, "lineIn")})}});
 }
 
 TEST(GraphService, ConcurrentBranchesLayoutGolden) {
@@ -270,10 +295,14 @@ TEST(GraphService, ConcurrentBranchesLayoutGolden) {
   //        \ .
   //         f1 (feature)
   //
-  //   m2    lane 0            (t4)
-  //   f1    lane 1   line 0   (t3)
-  //   m1    lane 0   line 1   (t2)
-  //   init  lane 0   mergeIn 1->0
+  // Topological order keeps main's commits together even though f1 is newer
+  // than m1; f1's lane joins main's lane, which already leads to their
+  // shared parent.
+  //
+  //   m2    lane 0   lineOut                     (t4)
+  //   m1    lane 0   lineIn, lineOut             (t2)
+  //   f1    lane 1   branchOut 1->0, line 0      (t3)
+  //   init  lane 0   lineIn
   FixtureRepo fixture;
   fixture.run("git branch feature");
   fixture.run("git checkout -q feature");
@@ -286,11 +315,12 @@ TEST(GraphService, ConcurrentBranchesLayoutGolden) {
   const std::string repoId = discoverRepo(session, fixture.root());
   Json result = graphRows(session, 10, repoId);
 
-  expectLayout(result["rows"],
-               {{rev(fixture, "main"), 0, Json::array()},
-                {rev(fixture, "feature"), 1, Json::array({edge(0, 0, "line")})},
-                {rev(fixture, "main~1"), 0, Json::array({edge(1, 1, "line")})},
-                {rev(fixture, "main~2"), 0, Json::array({edge(1, 0, "mergeIn")})}});
+  expectLayout(
+      result["rows"],
+      {{rev(fixture, "main"), 0, Json::array({edge(0, 0, "lineOut")})},
+       {rev(fixture, "main~1"), 0, Json::array({edge(0, 0, "lineIn"), edge(0, 0, "lineOut")})},
+       {rev(fixture, "feature"), 1, Json::array({edge(1, 0, "branchOut"), edge(0, 0, "line")})},
+       {rev(fixture, "main~2"), 0, Json::array({edge(0, 0, "lineIn")})}});
 }
 
 TEST(GraphService, DeterministicAndPagingStable) {
@@ -507,6 +537,376 @@ TEST(GraphService, UnbornHeadAndBadParams) {
   Json badCursor = session.request(
       req(12, "graph/rows", {{"repoId", repoId}, {"limit", 10}, {"cursor", "!!!not-base64!!!"}}));
   EXPECT_EQ(badCursor["error"]["code"], -32602);
+}
+
+// Lanes a row's edges reach at its top and at its bottom edge.
+std::set<int> lanesAtTop(const Json& row) {
+  std::set<int> lanes;
+  for (const auto& e : row["laneEdges"]) {
+    const std::string kind = e["kind"];
+    if (kind == "lineIn" || kind == "mergeIn" || kind == "line")
+      lanes.insert(e["fromLane"].get<int>());
+  }
+  return lanes;
+}
+
+std::set<int> lanesAtBottom(const Json& row) {
+  std::set<int> lanes;
+  for (const auto& e : row["laneEdges"]) {
+    const std::string kind = e["kind"];
+    if (kind == "lineOut" || kind == "branchOut" || kind == "line")
+      lanes.insert(e["toLane"].get<int>());
+  }
+  return lanes;
+}
+
+// Every line that leaves a row at the bottom enters the next row at the top
+// in the same lane, and nothing dangles at either end of the graph: the
+// painter draws an unbroken graph from the edges alone.
+void expectContinuous(const Json& rows) {
+  ASSERT_FALSE(rows.empty());
+  EXPECT_TRUE(lanesAtTop(rows[0]).empty()) << rows[0].dump();
+  for (size_t i = 0; i + 1 < rows.size(); ++i) {
+    EXPECT_EQ(lanesAtBottom(rows[i]), lanesAtTop(rows[i + 1]))
+        << "between rows " << i << " and " << i + 1 << ":\n"
+        << rows[i].dump() << "\n"
+        << rows[i + 1].dump();
+  }
+  EXPECT_TRUE(lanesAtBottom(rows.back()).empty()) << rows.back().dump();
+  for (const auto& row : rows) {
+    // A row's top edges all end in its dot or pass through; its own lane
+    // is never also a pass-through.
+    for (const auto& e : row["laneEdges"]) {
+      if (e["kind"] == "line") EXPECT_NE(e["fromLane"], row["lane"]) << row.dump();
+    }
+  }
+}
+
+// Builds criss-cross merges, an octopus merge, branches forked from older
+// commits, a stash and a dirty working tree in one repository.
+void buildTangledHistory(FixtureRepo& fixture) {
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b sideA");
+  commitTick(fixture, "A", 2);
+  fixture.run("git checkout -q main");
+  fixture.run("git checkout -q -b sideB");
+  commitTick(fixture, "B", 3);
+  fixture.run("git checkout -q -b crossA sideA");
+  mergeTick(fixture, "--no-ff --no-edit sideB", 4);
+  fixture.run("git checkout -q -b crossB sideB");
+  mergeTick(fixture, "--no-ff --no-edit sideA", 5);
+  fixture.run("git checkout -q main");
+  fixture.run("git checkout -q -b b1");
+  commitTick(fixture, "c1", 6);
+  fixture.run("git checkout -q main");
+  fixture.run("git checkout -q -b b2");
+  commitTick(fixture, "c2", 7);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "m1", 8);
+  octopusMergeTick(fixture, {"b1", "b2"}, 9);
+  fixture.run("git branch stale main~1");
+  commitTick(fixture, "m2", 10);
+  fixture.run("git checkout -q -b late stale");
+  commitTick(fixture, "late1", 11);
+  fixture.run("git checkout -q main");
+  fixture.writeFile("README.md", "fixture\nstashed\n");
+  fixture.run("git stash push -q");
+  fixture.writeFile("README.md", "fixture\ndirty\n");
+}
+
+TEST(GraphService, EdgesFormAnUnbrokenGraph) {
+  FixtureRepo fixture;
+  buildTangledHistory(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const Json withSynthetic = {{"include", {{"stashes", true}, {"wip", true}}}};
+  Json result = graphRows(session, 10, repoId, withSynthetic);
+  const Json& rows = result["rows"];
+  ASSERT_EQ(rows[0]["kind"], "wip");
+  expectContinuous(rows);
+
+  // Commits only: the same holds without the synthetic rows.
+  expectContinuous(graphRows(session, 11, repoId)["rows"]);
+}
+
+// The WIP row counts as a row of the sequence on every page, so pages that
+// follow the one carrying it neither skip nor repeat a commit.
+TEST(GraphService, PagingKeepsEveryRowWhenTheWipRowLeads) {
+  FixtureRepo fixture;
+  buildTangledHistory(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const Json include = {{"stashes", true}, {"wip", true}};
+  Json all = graphRows(session, 10, repoId, {{"include", include}});
+  ASSERT_EQ(all["rows"][0]["kind"], "wip");
+
+  for (const int limit : {1, 2, 5}) {
+    Json paged = Json::array();
+    Json params = {{"limit", limit}, {"include", include}};
+    std::int64_t id = 100 * limit;
+    for (;;) {
+      Json page = graphRows(session, ++id, repoId, params);
+      for (const auto& row : page["rows"]) paged.push_back(row);
+      if (!page.contains("nextCursor")) break;
+      params["cursor"] = page["nextCursor"];
+    }
+    EXPECT_EQ(paged.dump(), all["rows"].dump()) << "limit " << limit;
+  }
+}
+
+// A cursor indexes into one walk; once a ref moves it would resume at the
+// wrong row with lanes that do not fit, so the engine refuses it.
+TEST(GraphService, CursorFromBeforeARefMovedIsRejected) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+  commitTick(fixture, "c2", 2);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json first = graphRows(session, 10, repoId, {{"limit", 1}});
+  ASSERT_TRUE(first.contains("nextCursor"));
+  // Unchanged refs: the cursor still resumes.
+  Json second = graphRows(session, 11, repoId, {{"limit", 1}, {"cursor", first["nextCursor"]}});
+  EXPECT_EQ(second["rows"][0]["sha"], rev(fixture, "HEAD~1"));
+
+  commitTick(fixture, "c3", 3);
+  Json stale = session.request(req(12, "graph/rows",
+                                   {{"repoId", repoId},
+                                    {"limit", 1},
+                                    {"cursor", first["nextCursor"]},
+                                    {"include", {{"stashes", false}, {"wip", false}}}}));
+  ASSERT_TRUE(stale.contains("error")) << stale.dump();
+  EXPECT_EQ(stale["error"]["code"], -32602);
+  EXPECT_NE(stale["error"]["message"].get<std::string>().find("stale cursor"), std::string::npos);
+}
+
+TEST(GraphService, RefsFilterWalksOnlyTheNamedBranches) {
+  FixtureRepo fixture;
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  commitTick(fixture, "f1", 2);
+  commitTick(fixture, "f2", 3);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "m1", 4);
+  fixture.run("git checkout -q -b other main~1");
+  commitTick(fixture, "o1", 5);
+  fixture.run("git checkout -q main");
+  fixture.writeFile("README.md", "fixture\ndirty\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const Json withWip = {{"stashes", true}, {"wip", true}};
+  Json full = graphRows(session, 10, repoId, {{"include", withWip}});
+
+  // HEAD is on main, which the filter leaves out: no WIP row, and only
+  // feature's history, in rev-list --topo-order order.
+  Json feature =
+      graphRows(session, 11, repoId, {{"include", withWip}, {"refs", {"refs/heads/feature"}}});
+  std::vector<std::string> shas;
+  for (const auto& row : feature["rows"]) shas.push_back(row["sha"]);
+  EXPECT_EQ(shas, gitLines(fixture.root(), "rev-list --topo-order feature"));
+  EXPECT_NE(feature["refsFingerprint"], full["refsFingerprint"]);
+  expectContinuous(feature["rows"]);
+  // Decorations still name every ref at a shown commit.
+  bool sawMainAtBase = false;
+  for (const auto& row : feature["rows"]) {
+    for (const auto& ref : row["refs"]) {
+      if (ref["name"] == "feature") EXPECT_EQ(row["sha"], rev(fixture, "feature"));
+    }
+    if (row["sha"] == rev(fixture, "main~1")) sawMainAtBase = true;
+  }
+  EXPECT_TRUE(sawMainAtBase);
+
+  // Naming HEAD's branch brings the WIP row back; a branch that no longer
+  // exists is skipped.
+  Json withMain = graphRows(
+      session, 12, repoId,
+      {{"include", withWip}, {"refs", {"refs/heads/main", "refs/heads/deleted-meanwhile"}}});
+  EXPECT_EQ(withMain["rows"][0]["kind"], "wip");
+  EXPECT_EQ(withMain["rows"][1]["sha"], rev(fixture, "main"));
+  EXPECT_EQ(withMain["rows"].size(), 1 + gitLines(fixture.root(), "rev-list main").size());
+
+  // Paging a filtered walk resumes inside the same filtered walk.
+  Json paged = Json::array();
+  Json params = {{"limit", 1}, {"include", withWip}, {"refs", {"refs/heads/feature"}}};
+  std::int64_t id = 20;
+  for (;;) {
+    Json page = graphRows(session, ++id, repoId, params);
+    for (const auto& row : page["rows"]) paged.push_back(row);
+    if (!page.contains("nextCursor")) break;
+    params["cursor"] = page["nextCursor"];
+  }
+  EXPECT_EQ(paged.dump(), feature["rows"].dump());
+
+  // A filter naming nothing that exists walks nothing.
+  Json none = graphRows(session, 40, repoId, {{"refs", {"refs/heads/nope"}}});
+  EXPECT_TRUE(none["rows"].empty());
+
+  // A cursor from the full walk does not resume a filtered one.
+  Json firstFull = graphRows(session, 41, repoId, {{"limit", 1}});
+  Json mixed = session.request(req(42, "graph/rows",
+                                   {{"repoId", repoId},
+                                    {"limit", 1},
+                                    {"cursor", firstFull["nextCursor"]},
+                                    {"refs", {"refs/heads/feature"}}}));
+  EXPECT_EQ(mixed["error"]["code"], -32602) << mixed.dump();
+}
+
+// Commits come out in the order `git rev-list --topo-order` gives them.
+TEST(GraphService, OrderMatchesGitTopoOrder) {
+  FixtureRepo fixture;
+  buildTangledHistory(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json result = graphRows(session, 10, repoId);
+  std::vector<std::string> shas;
+  for (const auto& row : result["rows"]) shas.push_back(row["sha"]);
+  EXPECT_EQ(shas, gitLines(fixture.root(), "rev-list --topo-order --branches HEAD"));
+}
+
+// Topic branches developed side by side and merged one after another, the
+// usual shape of an integration-heavy repository. Each topic is shown right
+// below its merge and its lane joins the one leading to the common base, so
+// the graph stays a few lanes wide however many topics there are.
+TEST(GraphService, MergedTopicsReuseLanes) {
+  constexpr int kTopics = 12;
+  FixtureRepo fixture;
+  commitTick(fixture, "base", 1);
+  int tick = 2;
+  for (int round = 0; round < 2; ++round) {
+    for (int t = 0; t < kTopics; ++t) {
+      const std::string branch = "topic" + std::to_string(t);
+      fixture.run(round == 0 ? "git checkout -q -b " + branch + " main"
+                             : "git checkout -q " + branch);
+      commitTick(fixture, branch + " work " + std::to_string(round), tick++);
+    }
+  }
+  fixture.run("git checkout -q main");
+  for (int t = 0; t < kTopics; ++t) {
+    mergeTick(fixture, "--no-ff --no-edit topic" + std::to_string(t), tick++);
+  }
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json rows = graphRows(session, 10, repoId)["rows"];
+  expectContinuous(rows);
+  int widest = 0;
+  for (const auto& row : rows) {
+    widest = std::max(widest, row["lane"].get<int>() + 1);
+    for (const auto& e : row["laneEdges"]) {
+      widest = std::max({widest, e["fromLane"].get<int>() + 1, e["toLane"].get<int>() + 1});
+    }
+  }
+  EXPECT_LE(widest, 3) << rows.dump();
+}
+
+Json graphFind(InteractiveSession& session, std::int64_t id, const std::string& repoId,
+               const std::string& query, Json extra = Json::object()) {
+  Json params = {{"repoId", repoId}, {"query", query}};
+  params.update(extra);
+  Json response = session.request(req(id, "graph/find", std::move(params)));
+  EXPECT_TRUE(response.contains("result")) << response.dump();
+  return response["result"];
+}
+
+// Shas of the matches, each checked against the row at its index.
+std::vector<std::string> matchedShas(const Json& found, const Json& rows) {
+  std::vector<std::string> shas;
+  for (const auto& match : found["matches"]) {
+    const std::size_t index = match["index"].get<std::size_t>();
+    EXPECT_LT(index, rows.size()) << found.dump();
+    if (index < rows.size()) EXPECT_EQ(rows[index]["sha"], match["sha"]) << found.dump();
+    shas.push_back(match["sha"]);
+  }
+  return shas;
+}
+
+// graph/find searches the walk graph/rows pages through, so its matches are
+// rows the graph can show, at the positions it shows them.
+TEST(GraphService, FindMatchesRowsOfTheWalkAtTheirPositions) {
+  FixtureRepo fixture;
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  // A body below the subject, which only the full message carries.
+  fixture.runAt("@1700000120 +0000",
+                "git commit -q --allow-empty -m \"feature work\" -m \"Touches the Lexer too.\"");
+  fixture.run("git checkout -q main");
+  {
+    gg::testing::ScopedEnv name("GIT_AUTHOR_NAME", "Ada Lovelace");
+    gg::testing::ScopedEnv email("GIT_AUTHOR_EMAIL", "ada@example.com");
+    commitTick(fixture, "fix the parser", 3);
+  }
+  fixture.run("git tag v2.0");
+  commitTick(fixture, "tidy up", 4);
+  fixture.writeFile("README.md", "fixture\nstashed\n");
+  fixture.run("git stash push -q -m parked-idea");
+  fixture.writeFile("README.md", "fixture\ndirty\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const Json stashes = {{"stashes", true}};
+  const Json rows = graphRows(session, 10, repoId, {{"include", {{"stashes", true}}}})["rows"];
+  const std::string parser = rev(fixture, "v2.0");
+  const std::string feature = rev(fixture, "feature");
+
+  // Message text in any case, including the body; on another branch too.
+  Json found = graphFind(session, 11, repoId, "PARSER", {{"include", stashes}});
+  EXPECT_EQ(matchedShas(found, rows), std::vector<std::string>{parser});
+  EXPECT_FALSE(found["truncated"]);
+  EXPECT_EQ(matchedShas(graphFind(session, 12, repoId, "lexer", {{"include", stashes}}), rows),
+            std::vector<std::string>{feature});
+  // Author name or email, a ref name, a sha prefix.
+  EXPECT_EQ(matchedShas(graphFind(session, 13, repoId, "ada@", {{"include", stashes}}), rows),
+            std::vector<std::string>{parser});
+  EXPECT_EQ(matchedShas(graphFind(session, 14, repoId, "v2.", {{"include", stashes}}), rows),
+            std::vector<std::string>{parser});
+  std::string prefix = feature.substr(0, 9);
+  std::transform(prefix.begin(), prefix.end(), prefix.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  EXPECT_EQ(matchedShas(graphFind(session, 15, repoId, prefix, {{"include", stashes}}), rows),
+            std::vector<std::string>{feature});
+
+  // Stash rows match by their message and name, only when they are shown,
+  // and indices count them only then.
+  const std::string stash = rev(fixture, "refs/stash");
+  EXPECT_EQ(
+      matchedShas(graphFind(session, 16, repoId, "parked-idea", {{"include", stashes}}), rows),
+      std::vector<std::string>{stash});
+  EXPECT_EQ(matchedShas(graphFind(session, 17, repoId, "stash@{0}", {{"include", stashes}}), rows),
+            std::vector<std::string>{stash});
+  EXPECT_TRUE(graphFind(session, 18, repoId, "parked-idea")["matches"].empty());
+  const Json commitsOnly = graphRows(session, 19, repoId)["rows"];
+  EXPECT_EQ(matchedShas(graphFind(session, 20, repoId, "parser"), commitsOnly),
+            std::vector<std::string>{parser});
+
+  // The uncommitted-changes row is not counted: the index addresses the
+  // rows after it.
+  const Json withWip =
+      graphRows(session, 21, repoId, {{"include", {{"stashes", true}, {"wip", true}}}})["rows"];
+  ASSERT_EQ(withWip[0]["kind"], "wip");
+  EXPECT_EQ(withWip[found["matches"][0]["index"].get<std::size_t>() + 1]["sha"], parser);
+
+  // A filtered graph finds only what it shows.
+  const Json mainOnly = {{"refs", {"refs/heads/main"}}, {"include", stashes}};
+  EXPECT_TRUE(graphFind(session, 22, repoId, "lexer", mainOnly)["matches"].empty());
+  const Json featureOnly = {{"refs", {"refs/heads/feature"}}};
+  const Json featureRows = graphRows(session, 23, repoId, featureOnly)["rows"];
+  EXPECT_EQ(matchedShas(graphFind(session, 24, repoId, "lexer", featureOnly), featureRows),
+            std::vector<std::string>{feature});
+
+  // Stopping at the limit says more were left.
+  Json limited = graphFind(session, 25, repoId, "e", {{"limit", 1}});
+  EXPECT_EQ(limited["matches"].size(), 1u);
+  EXPECT_TRUE(limited["truncated"]);
+  EXPECT_EQ(limited["refsFingerprint"], graphRows(session, 26, repoId)["refsFingerprint"]);
+
+  Json empty = session.request(req(27, "graph/find", {{"repoId", repoId}, {"query", ""}}));
+  EXPECT_EQ(empty["error"]["code"], -32602) << empty.dump();
+  Json missing = session.request(req(28, "graph/find", {{"repoId", repoId}}));
+  EXPECT_EQ(missing["error"]["code"], -32602) << missing.dump();
 }
 
 bool hasWipRow(InteractiveSession& session, std::int64_t id, const std::string& repoId) {

@@ -1604,6 +1604,7 @@
           },
           "cursor": {
             "minLength": 1,
+            "description": "nextCursor of the previous page. A cursor is valid for one ref set only: once any ref moves (or with another `refs` filter) it fails with InvalidParams, and the first page has to be requested again.",
             "type": "string"
           },
           "limit": {
@@ -1612,6 +1613,15 @@
             "default": 100,
             "description": "Maximum entries in the page. Omitted means 100.",
             "type": "integer"
+          },
+          "refs": {
+            "minItems": 1,
+            "description": "Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.",
+            "type": "array",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            }
           },
           "include": {
             "additionalProperties": false,
@@ -1694,9 +1704,18 @@
                         "type": "integer"
                       },
                       "kind": {
+                        "description": "line: a lane passing through the row, top to bottom. lineIn: the row's own lane from the row top into its dot, continuing the child above. lineOut: the row's own lane from its dot to the row bottom, towards its first parent. mergeIn: another lane curving from the row top into the dot. branchOut: a curve from the dot to another lane at the row bottom.",
                         "anyOf": [
                           {
                             "const": "line",
+                            "type": "string"
+                          },
+                          {
+                            "const": "lineIn",
+                            "type": "string"
+                          },
+                          {
+                            "const": "lineOut",
                             "type": "string"
                           },
                           {
@@ -1821,6 +1840,97 @@
           },
           "nextCursor": {
             "type": "string"
+          },
+          "refsFingerprint": {
+            "minimum": 0,
+            "description": "Content hash of the ref set the page was sliced from. Constant across the pages of one snapshot and different once any ref moves; unrelated to the monotonic counter in repo/didChange.",
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "graph/find": {
+      "description": "The rows of a graph/rows walk that match a find query, in row order: a sha prefix, a ref the row shows, or case-insensitive text in the commit message (a stash row's own message) or the author's name or email. The walk is the one graph/rows pages through with the same `refs` and stash rows, so every match is a row the graph can show.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "query"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "query": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
+          },
+          "refs": {
+            "minItems": 1,
+            "description": "Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.",
+            "type": "array",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "include": {
+            "additionalProperties": false,
+            "default": {
+              "stashes": false
+            },
+            "description": "Whether stash rows are searched (and counted in `index`).",
+            "type": "object",
+            "properties": {
+              "stashes": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "matches",
+          "truncated",
+          "refsFingerprint"
+        ],
+        "properties": {
+          "matches": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "index"
+              ],
+              "properties": {
+                "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
+                  "type": "string"
+                },
+                "index": {
+                  "minimum": 0,
+                  "description": "The row's position in the walk, not counting the uncommitted-changes row graph/rows may put first.",
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "truncated": {
+            "type": "boolean"
           },
           "refsFingerprint": {
             "minimum": 0,
@@ -4267,6 +4377,7 @@
     "stash/list",
     "status/summary",
     "graph/rows",
+    "graph/find",
     "diff/commit",
     "diff/refs",
     "diff/fileHunks",

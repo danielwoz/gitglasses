@@ -14,6 +14,12 @@ import { graphPageSize } from '../system/settings';
 
 const REFRESH_DEBOUNCE_MS = 300;
 
+/** The panel type, also its serializer's key. */
+export const TIMELINE_VIEW_TYPE = 'gitglasses.timeline';
+
+/** The file the panel showed last, which a reload brings back. */
+const TIMELINE_FILE_KEY = 'gitglasses.timeline.file';
+
 type HostToWebviewMessage =
   | { type: 'reset'; path: string }
   | { type: 'entries'; entries: FileHistoryEntry[]; nextCursor?: string }
@@ -46,22 +52,38 @@ export class TimelineWebviewHost implements vscode.Disposable {
       );
       return;
     }
+    await this.showFile(editor.document.uri, false);
+  }
+
+  /** Targets the panel at `uri`, creating the panel unless `panel` (one
+   *  restored after a reload) is given. Reports a file outside any
+   *  repository unless `quiet`. */
+  private async showFile(
+    uri: vscode.Uri,
+    quiet: boolean,
+    panel?: vscode.WebviewPanel,
+  ): Promise<void> {
     let located: LocatedFile | undefined;
     try {
-      located = await this.repos.locateOrDiscover(editor.document.uri);
+      located = await this.repos.locateOrDiscover(uri);
     } catch {
       located = undefined;
     }
     if (!located) {
-      void vscode.window.showWarningMessage('GitGlasses: file is not in a git repository.');
+      if (!quiet) {
+        void vscode.window.showWarningMessage('GitGlasses: file is not in a git repository.');
+      }
+      panel?.dispose();
       return;
     }
 
     this.target = located;
     this.entriesBySha.clear();
+    // The panel serializer reopens the history of the same file.
+    void this.context.workspaceState.update(TIMELINE_FILE_KEY, uri.toString());
     const title = `Visual History: ${located.relativePath.split('/').pop() ?? located.relativePath}`;
 
-    if (this.panel) {
+    if (this.panel && !panel) {
       this.panel.title = title;
       this.panel.reveal();
       await this.post({ type: 'reset', path: located.relativePath });
@@ -70,16 +92,20 @@ export class TimelineWebviewHost implements vscode.Disposable {
     }
 
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webviews');
-    const panel = vscode.window.createWebviewPanel(
-      'gitglasses.timeline',
+    panel ??= vscode.window.createWebviewPanel(
+      TIMELINE_VIEW_TYPE,
       title,
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
+        // Zoom and pan live only in the webview, so it stays alive while
+        // hidden rather than resetting on every tab switch.
         retainContextWhenHidden: true,
         localResourceRoots: [distRoot],
       },
     );
+    panel.webview.options = { enableScripts: true, localResourceRoots: [distRoot] };
+    panel.title = title;
     this.panel = panel;
     panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'gitglasses.svg');
     panel.webview.html = renderWebviewHtml(panel.webview, distRoot, {
@@ -103,6 +129,18 @@ export class TimelineWebviewHost implements vscode.Disposable {
       }),
       panel.onDidDispose(() => this.onPanelDisposed()),
     );
+  }
+
+  /** Takes over a panel VS Code restored after a reload, showing the file it
+   *  showed before. File history runs git, so an untrusted workspace gets no
+   *  panel back. */
+  async restore(panel: vscode.WebviewPanel): Promise<void> {
+    const saved = this.context.workspaceState.get<string>(TIMELINE_FILE_KEY);
+    if (!saved || !vscode.workspace.isTrusted || this.panel) {
+      panel.dispose();
+      return;
+    }
+    await this.showFile(vscode.Uri.parse(saved), true, panel);
   }
 
   private async post(message: HostToWebviewMessage): Promise<void> {
@@ -180,8 +218,8 @@ export class TimelineWebviewHost implements vscode.Disposable {
   }
 }
 
-/** Registers the show-file-history command; the host lazily creates its
- *  panel. */
+/** Registers the show-file-history command and the serializer that brings
+ *  the panel back after a reload; the host lazily creates its panel. */
 export function registerTimelineWebview(
   context: vscode.ExtensionContext,
   engine: EngineClient,
@@ -191,5 +229,8 @@ export function registerTimelineWebview(
   return [
     host,
     vscode.commands.registerCommand('gitglasses.showFileHistory', () => host.show()),
+    vscode.window.registerWebviewPanelSerializer(TIMELINE_VIEW_TYPE, {
+      deserializeWebviewPanel: (panel) => host.restore(panel),
+    }),
   ];
 }

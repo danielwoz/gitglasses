@@ -359,6 +359,10 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
                                {"limit", 100},
                                {"include", {{"stashes", true}, {"wip", true}}}});
   EXPECT_FALSE(graph.value("rows", Json::array()).empty());
+  Json found =
+      checkedRequest(session, 24, "graph/find",
+                     {{"repoId", repoId}, {"query", "main"}, {"include", {{"stashes", true}}}});
+  EXPECT_FALSE(found.value("matches", Json::array()).empty());
 
   Json refs = checkedRequest(session, 7, "refs/list", {{"repoId", repoId}});
   EXPECT_FALSE(refs.value("branches", Json::array()).empty());

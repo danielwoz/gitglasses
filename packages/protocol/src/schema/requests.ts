@@ -79,6 +79,22 @@ const IsoDate = Type.String({
   pattern: '^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})?)?$',
 });
 
+/** The roots a graph walk starts from, instead of HEAD and every branch. */
+const GraphRefs = Type.Optional(
+  Type.Array(Type.String({ minLength: 1 }), {
+    minItems: 1,
+    description:
+      'Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.',
+  }),
+);
+
+/** Content hash of the ref set a graph walk covers. */
+const RefsFingerprint = Type.Integer({
+  minimum: 0,
+  description:
+    'Content hash of the ref set the page was sliced from. Constant across the pages of one snapshot and different once any ref moves; unrelated to the monotonic counter in repo/didChange.',
+});
+
 /** Continuation token, copied verbatim from the previous page's `nextCursor`.
  *  The encoding is the engine's and differs per method, so clients neither
  *  parse it nor construct one. */
@@ -426,7 +442,7 @@ export const RequestSchemas = {
   },
   'rev/fileAtRev': {
     description:
-      'Contents of a file at a revision, passed through the repository\'s checkout filters so it compares byte-for-byte against an editor buffer. Binary blobs are reported, not returned.',
+      "Contents of a file at a revision, passed through the repository's checkout filters so it compares byte-for-byte against an editor buffer. Binary blobs are reported, not returned.",
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -532,8 +548,15 @@ export const RequestSchemas = {
     params: Type.Object(
       {
         repoId: Type.String(),
-        cursor: Cursor,
+        cursor: Type.Optional(
+          Type.String({
+            minLength: 1,
+            description:
+              'nextCursor of the previous page. A cursor is valid for one ref set only: once any ref moves (or with another `refs` filter) it fails with InvalidParams, and the first page has to be requested again.',
+          }),
+        ),
         limit: Limit,
+        refs: GraphRefs,
         include: Type.Optional(
           Type.Object(
             { stashes: Type.Optional(Type.Boolean()), wip: Type.Optional(Type.Boolean()) },
@@ -553,11 +576,51 @@ export const RequestSchemas = {
         rows: Type.Array(GraphRow),
         /** Present only while more rows remain. */
         nextCursor: Type.Optional(Type.String()),
-        refsFingerprint: Type.Integer({
-          minimum: 0,
-          description:
-            'Content hash of the ref set the page was sliced from. Constant across the pages of one snapshot and different once any ref moves; unrelated to the monotonic counter in repo/didChange.',
-        }),
+        refsFingerprint: RefsFingerprint,
+      },
+      strict,
+    ),
+  },
+  'graph/find': {
+    description:
+      "The rows of a graph/rows walk that match a find query, in row order: a sha prefix, a ref the row shows, or case-insensitive text in the commit message (a stash row's own message) or the author's name or email. The walk is the one graph/rows pages through with the same `refs` and stash rows, so every match is a row the graph can show.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        query: Type.String({ minLength: 1 }),
+        limit: Limit,
+        refs: GraphRefs,
+        include: Type.Optional(
+          Type.Object(
+            { stashes: Type.Optional(Type.Boolean()) },
+            {
+              ...strict,
+              default: { stashes: false },
+              description: 'Whether stash rows are searched (and counted in `index`).',
+            },
+          ),
+        ),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        matches: Type.Array(
+          Type.Object(
+            {
+              sha: Sha,
+              index: Type.Integer({
+                minimum: 0,
+                description:
+                  "The row's position in the walk, not counting the uncommitted-changes row graph/rows may put first.",
+              }),
+            },
+            strict,
+          ),
+        ),
+        /** True when the search stopped at `limit` with matches left. */
+        truncated: Type.Boolean(),
+        refsFingerprint: RefsFingerprint,
       },
       strict,
     ),
@@ -732,11 +795,7 @@ export const RequestSchemas = {
       {
         repoId: Type.String(),
         ref: positional('Revision to reset onto.'),
-        mode: Type.Union([
-          Type.Literal('soft'),
-          Type.Literal('mixed'),
-          Type.Literal('hard'),
-        ]),
+        mode: Type.Union([Type.Literal('soft'), Type.Literal('mixed'), Type.Literal('hard')]),
       },
       strict,
     ),
@@ -747,7 +806,7 @@ export const RequestSchemas = {
     params: Type.Object(
       {
         repoId: Type.String(),
-        remote: optionalPositional('Remote to fetch. Omitted uses git\'s default.'),
+        remote: optionalPositional("Remote to fetch. Omitted uses git's default."),
         prune: Type.Optional(Type.Boolean()),
       },
       strict,
@@ -826,7 +885,7 @@ export const RequestSchemas = {
     params: Type.Object(
       {
         repoId: Type.String(),
-        message: optionalPositional('Stash message. Omitted uses git\'s generated one.'),
+        message: optionalPositional("Stash message. Omitted uses git's generated one."),
         includeUntracked: Type.Optional(Type.Boolean()),
       },
       strict,
@@ -956,6 +1015,9 @@ export const RequestSchemas = {
       strict,
     ),
     result: RebaseRunResult,
+});
+
+    result: Type.Object({ conflicts: Type.Boolean(), completed: Type.Boolean() }, strict),
   },
   'rebase/continue': {
     description:
@@ -967,6 +1029,9 @@ export const RequestSchemas = {
     description: 'Resumes a paused rebase without the commit it stopped at (--skip).',
     params: Type.Object({ repoId: Type.String() }, strict),
     result: RebaseRunResult,
+});
+
+    result: Type.Object({ conflicts: Type.Boolean(), completed: Type.Boolean() }, strict),
   },
   'rebase/abort': {
     description: 'Restores the pre-rebase state.',
@@ -1131,7 +1196,7 @@ export const RequestSchemas = {
         summary: Type.Optional(
           Type.String({
             minLength: 1,
-            description: "Overrides the summary derived from the source.",
+            description: 'Overrides the summary derived from the source.',
           }),
         ),
       },
@@ -1141,10 +1206,7 @@ export const RequestSchemas = {
   },
   'patch/apply': {
     description: 'Applies a patch envelope; 3-way when the base is missing.',
-    params: Type.Object(
-      { repoId: Type.String(), envelope: PatchEnvelope },
-      strict,
-    ),
+    params: Type.Object({ repoId: Type.String(), envelope: PatchEnvelope }, strict),
     result: Type.Object(
       {
         applied: Type.Boolean(),
@@ -1177,6 +1239,7 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'stash/list',
   'status/summary',
   'graph/rows',
+  'graph/find',
   'diff/commit',
   'diff/refs',
   'diff/fileHunks',

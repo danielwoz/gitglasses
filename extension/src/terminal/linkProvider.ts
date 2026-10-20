@@ -4,14 +4,14 @@ import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { activeWorkspaceRepo } from '../views/viewBase';
 import { findShaMatches } from '../views/viewLogic';
-import { openCommitDoc } from '../views/nodes';
+import { SHOW_COMMIT_DETAILS_COMMAND, ShowCommitDetailsArgs } from '../commitDetails/commitDetails';
 
 interface ShaTerminalLink extends vscode.TerminalLink {
   sha: string;
 }
 
-// Turns hex runs in terminal output into links that open the commit's
-// plain-text summary (resolved via search/commits with a sha query).
+// Turns hex runs in terminal output into links that open the commit in the
+// Commit Details panel (resolved via search/commits with a sha query).
 export class ShaTerminalLinkProvider implements vscode.TerminalLinkProvider<ShaTerminalLink> {
   private streamCounter = 0;
 
@@ -65,6 +65,10 @@ export class ShaTerminalLinkProvider implements vscode.TerminalLinkProvider<ShaT
       void vscode.window.showWarningMessage(`GitGlasses: no commit found for ${link.sha}.`);
       return;
     }
-    await openCommitDoc(commit);
+    const args: ShowCommitDetailsArgs = {
+      repoPath: repo.workspacePath ?? repo.rootPath,
+      sha: commit.sha,
+    };
+    await vscode.commands.executeCommand(SHOW_COMMIT_DETAILS_COMMAND, args);
   }
 }

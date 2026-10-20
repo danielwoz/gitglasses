@@ -300,11 +300,19 @@ export const LaneEdge = Type.Object(
   {
     fromLane: Lane,
     toLane: Lane,
-    kind: Type.Union([
-      Type.Literal('line'),
-      Type.Literal('mergeIn'),
-      Type.Literal('branchOut'),
-    ]),
+    kind: Type.Union(
+      [
+        Type.Literal('line'),
+        Type.Literal('lineIn'),
+        Type.Literal('lineOut'),
+        Type.Literal('mergeIn'),
+        Type.Literal('branchOut'),
+      ],
+      {
+        description:
+          "line: a lane passing through the row, top to bottom. lineIn: the row's own lane from the row top into its dot, continuing the child above. lineOut: the row's own lane from its dot to the row bottom, towards its first parent. mergeIn: another lane curving from the row top into the dot. branchOut: a curve from the dot to another lane at the row bottom.",
+      },
+    ),
   },
   strict,
 );

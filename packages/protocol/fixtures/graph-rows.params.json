@@ -7,6 +7,10 @@
     "include": {
       "stashes": true,
       "wip": true
-    }
+    },
+    "refs": [
+      "refs/heads/main",
+      "HEAD"
+    ]
   }
 }
