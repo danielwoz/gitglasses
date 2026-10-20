@@ -666,8 +666,30 @@ TEST(StatusService, DiffInAPartialCloneWithoutGitSaysStatsAreUnavailable) {
     EXPECT_EQ(file["statsUnavailable"], true) << file.dump();
   }
 
+  Json content = session.request(
+      req(12, "rev/fileAtRev", {{"repoId", repoId}, {"path", "a.txt"}, {"rev", "HEAD~1"}}));
+  ASSERT_TRUE(content.contains("error")) << content.dump();
+  EXPECT_NE(content["error"]["message"].get<std::string>().find("not available offline"),
+            std::string::npos)
+      << content.dump();
   // Nothing was downloaded.
   EXPECT_EQ(partial.missing(), missingBefore);
+}
+
+TEST(StatusService, FileAtRevInAPartialCloneFetchesTheBlob) {
+  PartialCloneFixture partial;
+  ASSERT_GT(partial.missing(), 0u);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, partial.root());
+  Json content = session.request(
+      req(10, "rev/fileAtRev", {{"repoId", repoId}, {"path", "a.txt"}, {"rev", "HEAD~2"}}));
+  ASSERT_TRUE(content.contains("result")) << content.dump();
+  EXPECT_EQ(content["result"]["contents"], "1\n2\n");
+
+  Json missingPath = session.request(
+      req(11, "rev/fileAtRev", {{"repoId", repoId}, {"path", "nope.txt"}, {"rev", "HEAD"}}));
+  EXPECT_EQ(missingPath["error"]["code"], -32001);
 }
 
 TEST(StatusService, StageFilesStageAndUnstage) {
