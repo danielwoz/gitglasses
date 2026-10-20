@@ -7,9 +7,11 @@
 //   - C++ (clang-format): the changed lines must be formatted, which is what
 //     `git clang-format` checks, so older files converge as they are edited.
 //
-// Usage: node scripts/check-format.mjs [--base <commit>] [--fix]
+// Usage: node scripts/check-format.mjs [--base <commit>] [--committed | --fix]
 //   --base <commit>          compare against the merge base of this commit and
 //                            HEAD (default: origin/main, then main)
+//   --committed              check only what HEAD commits, ignoring uncommitted
+//                            and untracked files (what CI uses)
 //   --fix                    rewrite what the check reports instead of failing
 //   --clang-format-version   print the clang-format version CI pins and exit
 
@@ -54,11 +56,12 @@ export function resolveBase(cwd, requested) {
   return undefined;
 }
 
-// Files added, copied, modified or renamed since `base`, in the working tree
-// (committed or not) plus untracked files. Each entry records the path the
-// file had at `base`, if any.
-export function changedFiles(cwd, base) {
-  const fields = git(cwd, ['diff', '--name-status', '-z', '-M', '--diff-filter=ACMR', base])
+// Files added, copied, modified or renamed since `base`: in the working tree
+// (committed or not) plus untracked files, or with `committed` only in HEAD.
+// Each entry records the path the file had at `base`, if any.
+export function changedFiles(cwd, base, { committed = false } = {}) {
+  const range = committed ? [base, 'HEAD'] : [base];
+  const fields = git(cwd, ['diff', '--name-status', '-z', '-M', '--diff-filter=ACMR', ...range])
     .split('\0')
     .filter(Boolean);
   const files = new Map();
@@ -73,15 +76,19 @@ export function changedFiles(cwd, base) {
       files.set(file, { path: file, basePath: status === 'A' ? undefined : file });
     }
   }
-  for (const file of git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']).split('\0')) {
+  const untracked = committed
+    ? []
+    : git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']).split('\0');
+  for (const file of untracked) {
     if (file && !files.has(file)) files.set(file, { path: file, basePath: undefined });
   }
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
 // Changed TypeScript/JavaScript files that must be Prettier-formatted but are
-// not. With `fix`, those files are rewritten in place.
-export async function checkPrettier({ cwd, base, files, fix = false }) {
+// not, as they are in the working tree or with `committed` in HEAD. With
+// `fix`, those files are rewritten in place.
+export async function checkPrettier({ cwd, base, files, fix = false, committed = false }) {
   const prettier = await import('prettier');
   const offenders = [];
   for (const file of files) {
@@ -92,7 +99,9 @@ export async function checkPrettier({ cwd, base, files, fix = false }) {
     });
     if (info.ignored) continue;
     const options = { ...(await prettier.resolveConfig(absolute)), filepath: absolute };
-    const source = readFileSync(absolute, 'utf8');
+    const source = committed
+      ? git(cwd, ['show', `HEAD:${file.path}`])
+      : readFileSync(absolute, 'utf8');
     if (await prettier.check(source, options)) continue;
     if (file.basePath !== undefined) {
       const before = tryGit(cwd, ['show', `${base}:${file.basePath}`]);
@@ -112,9 +121,10 @@ function clangFormatBinary() {
 }
 
 // Checks (or with `fix`, formats) the C++ lines changed since `base`, and the
-// whole of any untracked C++ file. Returns the offending files, or undefined
-// when clang-format is not installed.
-export function checkClangFormat({ cwd, base, files, fix = false }) {
+// whole of any untracked C++ file; with `committed`, only the lines HEAD
+// changes. Returns the offending files, or undefined when clang-format is not
+// installed.
+export function checkClangFormat({ cwd, base, files, fix = false, committed = false }) {
   const clangFormat = clangFormatBinary();
   if (!clangFormat) return undefined;
   if (!clangFormat.version.includes(`version ${CLANG_FORMAT_VERSION}`)) {
@@ -131,7 +141,9 @@ export function checkClangFormat({ cwd, base, files, fix = false }) {
     `--binary=${clangFormat.binary}`,
     `--extensions=${CLANG_FORMAT_EXTENSIONS.join(',')}`,
   ];
-  args.push(...(fix ? ['--force'] : ['--diff']), base, '--');
+  if (fix) args.push('--force', base);
+  else args.push('--diff', base, ...(committed ? ['HEAD'] : []));
+  args.push('--');
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   // Exit status 1 means "found something to format": a diff with --diff,
   // otherwise the list of files it rewrote.
@@ -169,6 +181,11 @@ async function main(argv) {
     return 0;
   }
   const fix = argv.includes('--fix');
+  const committed = argv.includes('--committed');
+  if (fix && committed) {
+    console.error('--fix rewrites the working tree and cannot be combined with --committed');
+    return 2;
+  }
   const baseIndex = argv.indexOf('--base');
   const requested = baseIndex >= 0 ? argv[baseIndex + 1] : undefined;
   if (baseIndex >= 0 && !requested) {
@@ -188,9 +205,10 @@ async function main(argv) {
     return 2;
   }
 
-  const files = changedFiles(repoRoot, base);
-  const prettierOffenders = await checkPrettier({ cwd: repoRoot, base, files, fix });
-  const clangOffenders = checkClangFormat({ cwd: repoRoot, base, files, fix });
+  const files = changedFiles(repoRoot, base, { committed });
+  const options = { cwd: repoRoot, base, files, fix, committed };
+  const prettierOffenders = await checkPrettier(options);
+  const clangOffenders = checkClangFormat(options);
   if (clangOffenders === undefined) {
     const message =
       `clang-format not found; C++ formatting was not checked ` +

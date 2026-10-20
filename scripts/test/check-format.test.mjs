@@ -82,6 +82,18 @@ describe('changedFiles', () => {
       { path: 'src/untracked.ts', basePath: undefined },
     ]);
   });
+
+  it('lists only what HEAD commits when committed', () => {
+    write('src/committed.ts', FORMATTED_TS);
+    git('add', 'src/committed.ts');
+    git('commit', '-q', '-m', 'add file');
+    write('src/clean.ts', UNFORMATTED_TS);
+    write('src/untracked.ts', FORMATTED_TS);
+
+    assert.deepEqual(changedFiles(repo, resolveBase(repo, 'base'), { committed: true }), [
+      { path: 'src/committed.ts', basePath: undefined },
+    ]);
+  });
 });
 
 describe('checkPrettier', () => {
@@ -110,6 +122,18 @@ describe('checkPrettier', () => {
     assert.deepEqual(await prettierOffenders(), []);
   });
 
+  it('judges the committed content, not the working tree, when committed', async () => {
+    write('src/clean.ts', UNFORMATTED_TS);
+    git('commit', '-q', '-am', 'unformat');
+    write('src/clean.ts', FORMATTED_TS);
+    write('src/untracked.ts', UNFORMATTED_TS);
+    const base = resolveBase(repo, 'base');
+    const files = changedFiles(repo, base, { committed: true });
+    assert.deepEqual(await checkPrettier({ cwd: repo, base, files, committed: true }), [
+      'src/clean.ts',
+    ]);
+  });
+
   it('rewrites exactly the reported files with fix', async () => {
     write('src/clean.ts', UNFORMATTED_TS);
     write('src/legacy.ts', UNFORMATTED_TS + 'export const   other = 2\n');
@@ -121,9 +145,10 @@ describe('checkPrettier', () => {
 });
 
 describe('checkClangFormat', { skip: !hasClangFormat && 'clang-format is not installed' }, () => {
-  function clangOffenders(fix = false) {
+  function clangOffenders(fix = false, committed = false) {
     const base = resolveBase(repo, 'base');
-    return checkClangFormat({ cwd: repo, base, files: changedFiles(repo, base), fix });
+    const files = changedFiles(repo, base, { committed });
+    return checkClangFormat({ cwd: repo, base, files, fix, committed });
   }
 
   beforeEach(() => {
@@ -146,6 +171,17 @@ describe('checkClangFormat', { skip: !hasClangFormat && 'clang-format is not ins
     assert.deepEqual(clangOffenders(), ['engine/added.cpp']);
     git('add', 'engine/added.cpp');
     assert.deepEqual(clangOffenders(), ['engine/added.cpp']);
+  });
+
+  it('checks only the lines HEAD changes when committed', () => {
+    write('engine/legacy.cpp', UNFORMATTED_CPP + UNFORMATTED_CPP.replace('add', 'sum'));
+    git('commit', '-q', '-am', 'unformatted addition');
+    write('engine/legacy.cpp', UNFORMATTED_CPP + FORMATTED_CPP.replace('add', 'sum'));
+    write('engine/untracked.cpp', UNFORMATTED_CPP);
+    assert.deepEqual(clangOffenders(false, true), ['engine/legacy.cpp']);
+
+    git('commit', '-q', '-am', 'formatted addition');
+    assert.deepEqual(clangOffenders(false, true), []);
   });
 
   it('formats the changed lines with fix and leaves the rest alone', () => {
