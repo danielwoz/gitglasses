@@ -61,7 +61,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} --parallel 4 --timeout 300
 
   engine-windows:
     runs-on: windows-2022
@@ -110,7 +110,7 @@ jobs:
 
       - name: Test
         shell: bash
-        run: ctest --preset release
+        run: ctest --preset release --parallel 4 --timeout 300
 
   engine-macos:
     runs-on: macos-14
@@ -152,7 +152,7 @@ jobs:
         run: cmake --build --preset release
 
       - name: Test
-        run: ctest --preset release
+        run: ctest --preset release --parallel 4 --timeout 300
 
   engine-wasm:
     runs-on: ubuntu-22.04
