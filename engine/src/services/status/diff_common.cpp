@@ -177,7 +177,7 @@ namespace {
 struct RenameRules {
   bool renames = true;
   bool copies = false;
-  std::size_t limit = 1000;  // git's default diff.renameLimit
+  std::size_t limit = 1000;  // git's default diff.renameLimit; 0 means none
 };
 
 RenameRules renameRules(git_repository* repo) {
@@ -198,8 +198,8 @@ RenameRules renameRules(git_repository* repo) {
   }
   std::int64_t limit = 0;
   if (git_config_get_int64(&limit, config.get(), "diff.renamelimit") == 0) {
-    // git reads zero or a negative limit as its own maximum.
-    rules.limit = limit > 0 ? static_cast<std::size_t>(limit) : 32767;
+    // git reads zero or a negative limit as no limit.
+    rules.limit = limit > 0 ? static_cast<std::size_t>(limit) : 0;
   }
   return rules;
 }
@@ -222,16 +222,46 @@ std::string_view baseName(std::string_view path) {
 }
 
 // A listed file and where its line stats come from: delta `index` of the
-// tree diff, or, for a rename paired by similarity, the two blobs. An exact
-// rename changes no line; only its binary verdict is looked up.
+// tree diff, or, for a rename or copy paired by similarity and for a change
+// of file type, the content of the two sides. An exact rename or copy
+// changes no line; only its binary verdict is looked up.
 struct PlannedChange {
   TreeFileChange file;
   std::size_t index = 0;
   bool unchangedContent = false;
-  bool fromBlobs = false;
+  bool fromSides = false;
   git_oid oldId{};
   git_oid newId{};
+  std::uint32_t oldMode = GIT_FILEMODE_BLOB;
+  std::uint32_t newMode = GIT_FILEMODE_BLOB;
 };
+
+// One side of a comparison by content: a blob, or for a submodule the line
+// naming its commit, which is what git compares.
+struct SideContent {
+  std::unique_ptr<git_blob, decltype(&git_blob_free)> blob{nullptr, git_blob_free};
+  std::string text;
+
+  const char* data() const {
+    return blob ? static_cast<const char*>(git_blob_rawcontent(blob.get())) : text.data();
+  }
+  std::size_t size() const {
+    return blob ? static_cast<std::size_t>(git_blob_rawsize(blob.get())) : text.size();
+  }
+};
+
+// Loads one side, or returns the libgit2 error code (GIT_ENOTFOUND for a blob
+// a partial clone lacks).
+int loadSide(git_repository* repo, const git_oid& id, std::uint32_t mode, SideContent& out) {
+  if (mode == GIT_FILEMODE_COMMIT) {
+    out.text = "Subproject commit " + core::oidToHex(id) + "\n";
+    return 0;
+  }
+  git_blob* raw = nullptr;
+  if (const int error = git_blob_lookup(&raw, repo, &id); error != 0) return error;
+  out.blob.reset(raw);
+  return 0;
+}
 
 // Line counts and the binary verdict from a built patch.
 void statsFromPatch(git_patch* patch, TreeFileChange& file) {
@@ -292,21 +322,31 @@ int unchangedContentStats(git_repository* repo, const git_oid& id, TreeFileChang
 int fillStats(git_repository* repo, git_diff* diff, PlannedChange& change) {
   TreeFileChange& file = change.file;
   if (change.unchangedContent) {
-    return unchangedContentStats(repo, git_diff_get_delta(diff, change.index)->new_file.id, file);
+    const git_diff_file& content = git_diff_get_delta(diff, change.index)->new_file;
+    // A submodule's commit is not in this repository and has no lines.
+    if (content.mode == GIT_FILEMODE_COMMIT) return 0;
+    return unchangedContentStats(repo, content.id, file);
   }
   git_patch* rawPatch = nullptr;
-  if (change.fromBlobs) {
-    git_blob* rawOld = nullptr;
-    git_blob* rawNew = nullptr;
-    if (const int error = git_blob_lookup(&rawOld, repo, &change.oldId); error != 0) return error;
-    std::unique_ptr<git_blob, decltype(&git_blob_free)> oldBlob(rawOld, git_blob_free);
-    if (const int error = git_blob_lookup(&rawNew, repo, &change.newId); error != 0) return error;
-    std::unique_ptr<git_blob, decltype(&git_blob_free)> newBlob(rawNew, git_blob_free);
-    if (const int error = git_patch_from_blobs(&rawPatch, oldBlob.get(), file.origPath.c_str(),
-                                               newBlob.get(), file.path.c_str(), nullptr);
-        error != 0) {
+  if (change.fromSides) {
+    SideContent oldSide;
+    SideContent newSide;
+    if (const int error = loadSide(repo, change.oldId, change.oldMode, oldSide); error != 0) {
       return error;
     }
+    if (const int error = loadSide(repo, change.newId, change.newMode, newSide); error != 0) {
+      return error;
+    }
+    const char* oldPath = file.origPath.empty() ? file.path.c_str() : file.origPath.c_str();
+    // Two blobs are compared with the repository's diff attributes, as git
+    // does; a submodule side has no attributes to apply.
+    const int error =
+        oldSide.blob && newSide.blob
+            ? git_patch_from_blobs(&rawPatch, oldSide.blob.get(), oldPath, newSide.blob.get(),
+                                   file.path.c_str(), nullptr)
+            : git_patch_from_buffers(&rawPatch, oldSide.data(), oldSide.size(), oldPath,
+                                     newSide.data(), newSide.size(), file.path.c_str(), nullptr);
+    if (error != 0) return error;
   } else {
     const git_diff_delta* delta = git_diff_get_delta(diff, change.index);
     file.binary = (delta->flags & GIT_DIFF_FLAG_BINARY) != 0;
@@ -321,46 +361,13 @@ int fillStats(git_repository* repo, git_diff* diff, PlannedChange& change) {
   return 0;
 }
 
-// Pairs exact renames in `diff` by blob id: each added regular file takes a
-// deleted regular file with the same content, preferring one with the same
-// base name, as git does. Returns, per delta, the index of the deleted file
-// an addition was paired with (or -1), and marks paired deletions.
-std::vector<std::ptrdiff_t> pairExactRenames(git_diff* diff, std::vector<bool>& pairedSource) {
-  const std::size_t count = git_diff_num_deltas(diff);
-  std::vector<std::ptrdiff_t> sourceOf(count, -1);
-  pairedSource.assign(count, false);
-  std::unordered_map<git_oid, std::vector<std::size_t>, OidHash, OidEqual> deletedById;
-  for (std::size_t i = 0; i < count; ++i) {
-    const git_diff_delta* delta = git_diff_get_delta(diff, i);
-    if (delta->status == GIT_DELTA_DELETED && isRegularFileMode(delta->old_file.mode)) {
-      deletedById[delta->old_file.id].push_back(i);
-    }
-  }
-  if (deletedById.empty()) return sourceOf;
-  for (std::size_t i = 0; i < count; ++i) {
-    const git_diff_delta* delta = git_diff_get_delta(diff, i);
-    if (delta->status != GIT_DELTA_ADDED || !isRegularFileMode(delta->new_file.mode)) continue;
-    const auto it = deletedById.find(delta->new_file.id);
-    if (it == deletedById.end()) continue;
-    const std::string_view name = baseName(delta->new_file.path);
-    std::ptrdiff_t chosen = -1;
-    for (const std::size_t candidate : it->second) {
-      if (pairedSource[candidate]) continue;
-      if (chosen < 0) chosen = static_cast<std::ptrdiff_t>(candidate);
-      if (baseName(git_diff_get_delta(diff, candidate)->old_file.path) == name) {
-        chosen = static_cast<std::ptrdiff_t>(candidate);
-        break;
-      }
-    }
-    if (chosen < 0) continue;
-    pairedSource[static_cast<std::size_t>(chosen)] = true;
-    sourceOf[i] = chosen;
-  }
-  return sourceOf;
-}
-
 // Minimum similarity (percent) for an inexact rename, git's default -M50%.
 constexpr int kRenameThreshold = 50;
+
+// Minimum similarity for pairing the only remaining source and the only
+// remaining destination that share a base name: halfway between the rename
+// threshold and identical content, as git sets it.
+constexpr int kBaseNameThreshold = kRenameThreshold + (100 - kRenameThreshold) / 2;
 
 // A rename candidate's content signature: libgit2's line-hash signature (the
 // metric its own rename detection uses) and the content size.
@@ -392,81 +399,249 @@ int signBlob(git_repository* repo, const git_oid& id, Signature& out) {
                                                               GIT_HASHSIG_ALLOW_SMALL_FILES));
 }
 
-// Pairs deletions with additions by content similarity the way git's rename
-// detection does: every destination keeps its best few sources at or above
-// the threshold (sizes too far apart to reach it are not compared), then the
-// pairs are assigned greedily, best score first, a same-named source winning
-// a tie, each file used once. Files whose blob cannot be read take no part.
-// Returns (source delta, destination delta) pairs.
-std::vector<std::pair<std::size_t, std::size_t>> pairSimilarRenames(
-    git_repository* repo, git_diff* diff, const std::vector<std::size_t>& sources,
-    const std::vector<std::size_t>& destinations, const CancelToken& token,
-    const std::function<bool()>& fetchMissing) {
-  const auto sign = [&](const git_oid& id, Signature& out) {
-    int error = signBlob(repo, id, out);
-    if (error == GIT_ENOTFOUND && fetchMissing()) error = signBlob(repo, id, out);
-    return error == 0 && out.hashsig != nullptr;
-  };
-  std::vector<Signature> sourceSigs(sources.size());
-  std::vector<bool> sourceSigned(sources.size(), false);
-  for (std::size_t s = 0; s < sources.size(); ++s) {
-    token.throwIfCancelled();
-    sourceSigned[s] = sign(git_diff_get_delta(diff, sources[s])->old_file.id, sourceSigs[s]);
-  }
+// Whether identical content may pair a source with a destination: two
+// regular files whatever their executable bits, anything else (a symlink, a
+// submodule) only with the same mode, as git requires.
+bool identicalPairAllowed(std::uint32_t sourceMode, std::uint32_t destinationMode) {
+  return (isRegularFileMode(sourceMode) && isRegularFileMode(destinationMode)) ||
+         sourceMode == destinationMode;
+}
 
-  struct Match {
-    int score;
-    bool sameName;
-    std::size_t destination;  // index into `destinations`
-    std::size_t source;       // index into `sources`
-  };
-  constexpr std::size_t kCandidatesPerDestination = 4;
-  const auto better = [](const Match& a, const Match& b) {
-    if (a.score != b.score) return a.score > b.score;
-    if (a.sameName != b.sameName) return a.sameName;
-    if (a.destination != b.destination) return a.destination < b.destination;
-    return a.source < b.source;
-  };
-  std::vector<Match> matches;
-  for (std::size_t d = 0; d < destinations.size(); ++d) {
-    token.throwIfCancelled();
-    const git_diff_delta* target = git_diff_get_delta(diff, destinations[d]);
-    Signature targetSig;
-    if (!sign(target->new_file.id, targetSig)) continue;
-    const std::string_view name = baseName(target->new_file.path);
-    std::vector<Match> best;
-    for (std::size_t s = 0; s < sources.size(); ++s) {
-      if (!sourceSigned[s]) continue;
-      const std::uint64_t larger = std::max(sourceSigs[s].size, targetSig.size);
-      const std::uint64_t smaller = std::min(sourceSigs[s].size, targetSig.size);
-      if ((larger - smaller) * 100 > larger * (100 - kRenameThreshold)) continue;
-      const int score = git_hashsig_compare(sourceSigs[s].hashsig, targetSig.hashsig);
-      if (score < kRenameThreshold) continue;
-      const Match match{
-          score, baseName(git_diff_get_delta(diff, sources[s])->old_file.path) == name, d, s};
-      if (best.size() < kCandidatesPerDestination) {
-        best.push_back(match);
-        std::sort(best.begin(), best.end(), better);
-      } else if (better(match, best.back())) {
-        best.back() = match;
-        std::sort(best.begin(), best.end(), better);
+// What rename detection paired in a tree diff, per delta.
+struct Pairing {
+  // For a destination (an added file): the source delta it takes its
+  // content from, or -1.
+  std::vector<std::ptrdiff_t> sourceOf;
+  // For a destination: the source's content is identical.
+  std::vector<bool> exact;
+  // For a source: the destinations it feeds, plus one for a modified file,
+  // which stays where it is. A deleted file that feeds several destinations
+  // is renamed into the last of them and copied into the others.
+  std::vector<int> uses;
+};
+
+// Pairs added files (destinations) with deleted files (sources; modified and
+// retyped files too when detecting copies) the way git's rename detection
+// does for porcelain diffs:
+//  1. identical content: each destination takes a source with the same
+//     blob, preferring an unused one with the same base name;
+//  2. renames only: a remaining source and destination that are the only
+//     ones with their base name pair when at least kBaseNameThreshold
+//     similar;
+//  3. unless the remaining sources times destinations exceed the limit
+//     squared, every remaining destination keeps its best few sources at or
+//     above the threshold (sizes too far apart to reach it are not
+//     compared), and pairs are assigned best score first, a same-named
+//     source winning a tie: unused sources first, then, for copies, any.
+// Only regular files are compared by content; a file whose blob cannot be
+// read takes no part in that.
+class RenameDetector {
+ public:
+  RenameDetector(git_repository* repo, git_diff* diff, const RenameRules& rules,
+                 const CancelToken& token, const std::function<bool()>& fetchMissing)
+      : repo_(repo), diff_(diff), rules_(rules), token_(token), fetchMissing_(fetchMissing) {}
+
+  Pairing run() {
+    const std::size_t count = git_diff_num_deltas(diff_);
+    pairing_.sourceOf.assign(count, -1);
+    pairing_.exact.assign(count, false);
+    pairing_.uses.assign(count, 0);
+    if (!rules_.renames) return std::move(pairing_);
+    signatures_.resize(count);
+    signAttempted_.assign(count, false);
+    for (std::size_t i = 0; i < count; ++i) {
+      switch (git_diff_get_delta(diff_, i)->status) {
+        case GIT_DELTA_ADDED:
+          destinations_.push_back(i);
+          break;
+        case GIT_DELTA_DELETED:
+          sources_.push_back(i);
+          break;
+        case GIT_DELTA_MODIFIED:
+        case GIT_DELTA_TYPECHANGE:
+          if (rules_.copies) {
+            sources_.push_back(i);
+            pairing_.uses[i] = 1;
+          }
+          break;
+        default:
+          break;
       }
     }
-    matches.insert(matches.end(), best.begin(), best.end());
+    if (sources_.empty() || destinations_.empty()) return std::move(pairing_);
+    pairIdentical();
+    if (!rules_.copies) pairUniqueBaseNames();
+    pairSimilar();
+    return std::move(pairing_);
   }
 
-  std::sort(matches.begin(), matches.end(), better);
-  std::vector<bool> sourceTaken(sources.size(), false);
-  std::vector<bool> destinationTaken(destinations.size(), false);
-  std::vector<std::pair<std::size_t, std::size_t>> pairs;
-  for (const Match& match : matches) {
-    if (sourceTaken[match.source] || destinationTaken[match.destination]) continue;
-    sourceTaken[match.source] = true;
-    destinationTaken[match.destination] = true;
-    pairs.emplace_back(sources[match.source], destinations[match.destination]);
+ private:
+  const git_diff_file& oldFile(std::size_t delta) const {
+    return git_diff_get_delta(diff_, delta)->old_file;
   }
-  return pairs;
-}
+  const git_diff_file& newFile(std::size_t delta) const {
+    return git_diff_get_delta(diff_, delta)->new_file;
+  }
+
+  void pair(std::size_t source, std::size_t destination, bool exact) {
+    pairing_.sourceOf[destination] = static_cast<std::ptrdiff_t>(source);
+    pairing_.exact[destination] = exact;
+    ++pairing_.uses[source];
+  }
+
+  void pairIdentical() {
+    std::unordered_map<git_oid, std::vector<std::size_t>, OidHash, OidEqual> sourcesById;
+    for (const std::size_t s : sources_) sourcesById[oldFile(s).id].push_back(s);
+    for (const std::size_t d : destinations_) {
+      const git_diff_file& target = newFile(d);
+      const auto it = sourcesById.find(target.id);
+      if (it == sourcesById.end()) continue;
+      const std::string_view name = baseName(target.path);
+      std::ptrdiff_t best = -1;
+      int bestScore = -1;
+      int alternatives = 100;  // git settles for the best of this many
+      for (const std::size_t s : it->second) {
+        const git_diff_file& source = oldFile(s);
+        if (!identicalPairAllowed(source.mode, target.mode)) continue;
+        const bool used = pairing_.uses[s] > 0;
+        if (used && !rules_.copies) continue;
+        const int score = (used ? 0 : 1) + (baseName(source.path) == name ? 1 : 0);
+        if (score > bestScore) {
+          best = static_cast<std::ptrdiff_t>(s);
+          bestScore = score;
+          if (score == 2) break;
+        }
+        if (--alternatives == 0) break;
+      }
+      if (best >= 0) pair(static_cast<std::size_t>(best), d, true);
+    }
+  }
+
+  void pairUniqueBaseNames() {
+    // Base name -> delta, or -1 for a name more than one file has.
+    std::unordered_map<std::string_view, std::ptrdiff_t> sourceByName;
+    std::unordered_map<std::string_view, std::ptrdiff_t> destinationByName;
+    const auto record = [](auto& byName, std::string_view name, std::size_t delta) {
+      const auto [it, inserted] = byName.emplace(name, static_cast<std::ptrdiff_t>(delta));
+      if (!inserted) it->second = -1;
+    };
+    for (const std::size_t s : sources_) {
+      if (pairing_.uses[s] == 0) record(sourceByName, baseName(oldFile(s).path), s);
+    }
+    for (const std::size_t d : destinations_) {
+      if (pairing_.sourceOf[d] < 0) record(destinationByName, baseName(newFile(d).path), d);
+    }
+    for (const auto& [name, source] : sourceByName) {
+      if (source < 0) continue;
+      const auto destination = destinationByName.find(name);
+      if (destination == destinationByName.end() || destination->second < 0) continue;
+      token_.throwIfCancelled();
+      const auto s = static_cast<std::size_t>(source);
+      const auto d = static_cast<std::size_t>(destination->second);
+      if (similarity(s, d, kBaseNameThreshold) >= kBaseNameThreshold) pair(s, d, false);
+    }
+  }
+
+  void pairSimilar() {
+    std::vector<std::size_t> sources;
+    std::vector<std::size_t> destinations;
+    for (const std::size_t s : sources_) {
+      if (rules_.copies || pairing_.uses[s] == 0) sources.push_back(s);
+    }
+    for (const std::size_t d : destinations_) {
+      if (pairing_.sourceOf[d] < 0) destinations.push_back(d);
+    }
+    if (sources.empty() || destinations.empty()) return;
+    // A limit past 2^32 cannot be reached; it also keeps the square in range.
+    const auto limit = static_cast<std::uint64_t>(rules_.limit);
+    if (limit != 0 && limit < (std::uint64_t{1} << 32) &&
+        static_cast<std::uint64_t>(sources.size()) * destinations.size() > limit * limit) {
+      return;
+    }
+
+    struct Match {
+      int score;
+      bool sameName;
+      std::size_t destination;  // delta index
+      std::size_t source;       // delta index
+    };
+    constexpr std::size_t kCandidatesPerDestination = 4;
+    const auto better = [](const Match& a, const Match& b) {
+      if (a.score != b.score) return a.score > b.score;
+      if (a.sameName != b.sameName) return a.sameName;
+      if (a.destination != b.destination) return a.destination < b.destination;
+      return a.source < b.source;
+    };
+    std::vector<Match> matches;
+    for (const std::size_t d : destinations) {
+      token_.throwIfCancelled();
+      if (!signature(d, newFile(d))) continue;
+      const std::string_view name = baseName(newFile(d).path);
+      std::vector<Match> best;
+      for (const std::size_t s : sources) {
+        const int score = similarity(s, d, kRenameThreshold);
+        if (score < kRenameThreshold) continue;
+        const Match match{score, baseName(oldFile(s).path) == name, d, s};
+        if (best.size() < kCandidatesPerDestination) {
+          best.push_back(match);
+          std::sort(best.begin(), best.end(), better);
+        } else if (better(match, best.back())) {
+          best.back() = match;
+          std::sort(best.begin(), best.end(), better);
+        }
+      }
+      matches.insert(matches.end(), best.begin(), best.end());
+    }
+
+    std::sort(matches.begin(), matches.end(), better);
+    for (const bool reuse : {false, true}) {
+      if (reuse && !rules_.copies) break;
+      for (const Match& match : matches) {
+        if (pairing_.sourceOf[match.destination] >= 0) continue;
+        if (!reuse && pairing_.uses[match.source] > 0) continue;
+        pair(match.source, match.destination, false);
+      }
+    }
+  }
+
+  // Similarity in percent of a source's old content and a destination's new
+  // content; -1 when either is not a regular file or cannot be read, or when
+  // their sizes are too far apart for them to be `threshold` similar.
+  int similarity(std::size_t source, std::size_t destination, int threshold) {
+    const Signature* from = signature(source, oldFile(source));
+    const Signature* to = signature(destination, newFile(destination));
+    if (!from || !to) return -1;
+    const std::uint64_t larger = std::max(from->size, to->size);
+    const std::uint64_t smaller = std::min(from->size, to->size);
+    if ((larger - smaller) * 100 > larger * static_cast<std::uint64_t>(100 - threshold)) return -1;
+    return git_hashsig_compare(from->hashsig, to->hashsig);
+  }
+
+  // The signature of `file`, the side of `delta` taking part, signed once.
+  const Signature* signature(std::size_t delta, const git_diff_file& file) {
+    if (!isRegularFileMode(file.mode)) return nullptr;
+    if (!signAttempted_[delta]) {
+      signAttempted_[delta] = true;
+      token_.throwIfCancelled();
+      Signature signature;
+      int error = signBlob(repo_, file.id, signature);
+      if (error == GIT_ENOTFOUND && fetchMissing_()) error = signBlob(repo_, file.id, signature);
+      if (error == 0 && signature.hashsig) signatures_[delta].emplace(std::move(signature));
+    }
+    return signatures_[delta] ? &*signatures_[delta] : nullptr;
+  }
+
+  git_repository* repo_;
+  git_diff* diff_;
+  const RenameRules& rules_;
+  const CancelToken& token_;
+  const std::function<bool()>& fetchMissing_;
+  std::vector<std::size_t> sources_;       // in path order
+  std::vector<std::size_t> destinations_;  // in path order
+  Pairing pairing_;
+  std::vector<std::optional<Signature>> signatures_;
+  std::vector<bool> signAttempted_;
+};
 
 }  // namespace
 
@@ -474,8 +649,13 @@ Result<std::vector<TreeFileChange>> treeFileChanges(const core::Repo& repo, git_
                                                     git_tree* newTree, const CancelToken& token,
                                                     std::size_t limit, std::size_t& total,
                                                     bool mayFetch) {
+  git_diff_options opts;
+  git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+  // A path that turns from a file into a symlink or a submodule (or back) is
+  // one retyped entry, as git lists it, not a deletion plus an addition.
+  opts.flags |= GIT_DIFF_INCLUDE_TYPECHANGE;
   git_diff* rawDiff = nullptr;
-  if (git_diff_tree_to_tree(&rawDiff, repo.raw(), oldTree, newTree, nullptr) != 0) {
+  if (git_diff_tree_to_tree(&rawDiff, repo.raw(), oldTree, newTree, &opts) != 0) {
     return core::gitError("diff trees");
   }
   core::DiffPtr diff(rawDiff);
@@ -499,78 +679,43 @@ Result<std::vector<TreeFileChange>> treeFileChanges(const core::Repo& repo, git_
     return fetched.ok();
   };
 
-  if (rules.copies) {
-    // Copy detection needs every modified file as a candidate source;
-    // libgit2 pairs renames and copies in one pass.
-    git_diff_find_options findOpts;
-    git_diff_find_options_init(&findOpts, GIT_DIFF_FIND_OPTIONS_VERSION);
-    findOpts.flags = GIT_DIFF_FIND_RENAMES | GIT_DIFF_FIND_COPIES;
-    findOpts.rename_limit = rules.limit;
-    int error = git_diff_find_similar(diff.get(), &findOpts);
-    if (error == GIT_ENOTFOUND && fetchMissing()) {
-      error = git_diff_find_similar(diff.get(), &findOpts);
-    }
-    if (error != 0) return core::gitError("detect renames");
-  }
-
   const std::size_t count = git_diff_num_deltas(diff.get());
-  std::vector<bool> pairedSource(count, false);
-  std::vector<std::ptrdiff_t> renameSource(count, -1);
-  std::vector<bool> exact(count, false);
-  if (rules.renames && !rules.copies) {
-    renameSource = pairExactRenames(diff.get(), pairedSource);
-    for (std::size_t i = 0; i < count; ++i) exact[i] = renameSource[i] >= 0;
+  const Pairing pairing = RenameDetector(repo.raw(), diff.get(), rules, token, fetchMissing).run();
 
-    // Similarity among what exact pairing left: unpaired deletions are the
-    // sources, unpaired additions the destinations. git skips this step when
-    // sources x destinations exceeds the limit squared.
-    std::vector<std::size_t> sources;
-    std::vector<std::size_t> destinations;
-    for (std::size_t i = 0; i < count; ++i) {
-      const git_diff_delta* delta = git_diff_get_delta(diff.get(), i);
-      if (delta->status == GIT_DELTA_DELETED && !pairedSource[i] &&
-          isRegularFileMode(delta->old_file.mode)) {
-        sources.push_back(i);
-      } else if (delta->status == GIT_DELTA_ADDED && renameSource[i] < 0 &&
-                 isRegularFileMode(delta->new_file.mode)) {
-        destinations.push_back(i);
-      }
-    }
-    const std::uint64_t candidates = static_cast<std::uint64_t>(sources.size()) *
-                                     static_cast<std::uint64_t>(destinations.size());
-    if (candidates > 0 && candidates <= static_cast<std::uint64_t>(rules.limit) * rules.limit) {
-      for (const auto& [source, destination] :
-           pairSimilarRenames(repo.raw(), diff.get(), sources, destinations, token, fetchMissing)) {
-        pairedSource[source] = true;
-        renameSource[destination] = static_cast<std::ptrdiff_t>(source);
-      }
-    }
-  }
-
+  // Uses left per source, to tell a rename from a copy: a deleted file is
+  // renamed into the last destination it feeds and copied into the others.
+  std::vector<int> usesLeft = pairing.uses;
   std::vector<PlannedChange> planned;
   planned.reserve(count);
   for (std::size_t i = 0; i < count; ++i) {
     const git_diff_delta* delta = git_diff_get_delta(diff.get(), i);
-    if (pairedSource[i]) continue;  // listed as its rename's source
+    if (delta->status == GIT_DELTA_DELETED && pairing.uses[i] > 0) {
+      continue;  // listed as the source of a rename
+    }
     PlannedChange change;
     change.index = i;
     change.file.path = delta->new_file.path ? delta->new_file.path : "";
     change.file.status = statusLetter(delta->status);
-    if ((change.file.status == 'R' || change.file.status == 'C') && delta->old_file.path) {
-      change.file.origPath = delta->old_file.path;
-    }
-    if (renameSource[i] >= 0) {
-      const git_diff_delta* source =
-          git_diff_get_delta(diff.get(), static_cast<std::size_t>(renameSource[i]));
-      change.file.status = 'R';
+    if (pairing.sourceOf[i] >= 0) {
+      const auto sourceIndex = static_cast<std::size_t>(pairing.sourceOf[i]);
+      const git_diff_delta* source = git_diff_get_delta(diff.get(), sourceIndex);
+      change.file.status = --usesLeft[sourceIndex] > 0 ? 'C' : 'R';
       change.file.origPath = source->old_file.path ? source->old_file.path : "";
-      if (exact[i]) {
+      if (pairing.exact[i]) {
         change.unchangedContent = true;
       } else {
-        change.fromBlobs = true;
+        change.fromSides = true;
         change.oldId = source->old_file.id;
         change.newId = delta->new_file.id;
       }
+    } else if (delta->status == GIT_DELTA_TYPECHANGE) {
+      // libgit2 loads no content for a retyped entry; git counts the lines of
+      // the old content against the new.
+      change.fromSides = true;
+      change.oldId = delta->old_file.id;
+      change.newId = delta->new_file.id;
+      change.oldMode = delta->old_file.mode;
+      change.newMode = delta->new_file.mode;
     }
     planned.push_back(std::move(change));
   }

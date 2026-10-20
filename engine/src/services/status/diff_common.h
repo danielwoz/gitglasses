@@ -40,9 +40,11 @@ struct TreeFileChange {
 // with rename detection as git porcelain does it: `diff.renames` (off, on,
 // or copies) and `diff.renameLimit` (default 1000) from the repository's
 // config. Exact renames (identical content) are paired first however many
-// files moved; similarity is then measured among the files left over,
-// unless their sources times destinations exceed the limit squared, in
-// which case they stay added and deleted, as git leaves them.
+// files moved, then, for renames, files that are the only ones left with
+// their base name and are similar enough; similarity is then measured among
+// the files left over, unless their sources times destinations exceed the
+// limit squared, in which case they stay added and deleted, as git leaves
+// them. A change of file type (file, symlink, submodule) is one 'T' entry.
 //
 // Per-file line stats are computed for the first `limit` files; `total`
 // receives the number of files. In a partial clone, blobs the stats need

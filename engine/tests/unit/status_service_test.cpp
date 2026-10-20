@@ -344,6 +344,12 @@ struct GitChange {
   bool operator==(const GitChange&) const = default;
 };
 
+// Readable failure output for lists of changes.
+void PrintTo(const GitChange& change, std::ostream* out) {
+  *out << change.status << ' ' << (change.origPath.empty() ? "" : change.origPath + " -> ")
+       << change.path << " +" << change.additions << " -" << change.deletions;
+}
+
 std::vector<std::string> splitNul(const std::string& text) {
   std::vector<std::string> fields;
   size_t pos = 0;
@@ -456,6 +462,135 @@ TEST(StatusService, DiffCommitPairsEveryRenameOfAMassMove) {
   EXPECT_EQ(f0["origPath"], "src/f0.txt");
   EXPECT_EQ(f0["additions"], 1);
   EXPECT_EQ(f0["deletions"], 1);
+
+  // Detecting copies too pairs every identical file first, whatever the
+  // limit, leaving one destination for the comparison by content.
+  fixture.run("git config diff.renames copies");
+  Json withCopies =
+      session.request(req(11, "diff/commit", {{"repoId", repoId}, {"sha", rev(fixture, "HEAD")}}));
+  ASSERT_TRUE(withCopies.contains("result")) << withCopies.dump().substr(0, 500);
+  const auto copies = engineChanges(withCopies["result"]["files"]);
+  EXPECT_EQ(copies, gitChanges(fixture.root(), "show " + rev(fixture, "HEAD")));
+  EXPECT_EQ(std::count_if(copies.begin(), copies.end(),
+                          [](const GitChange& change) { return change.status == "R"; }),
+            kFiles);
+}
+
+TEST(StatusService, DiffPairsEditedMovesPastTheRenameLimitByBaseName) {
+  FixtureRepo fixture;
+  // Ten files with names of their own and three that share one, all moved
+  // to a new directory and edited: 13 x 13 candidates, far past a limit of 2.
+  std::vector<std::string> names;
+  for (int i = 0; i < 10; ++i) names.push_back("unit" + std::to_string(i) + ".c");
+  for (const char* dir : {"a/", "b/", "c/"}) names.push_back(std::string(dir) + "same.c");
+  for (const auto& name : names) fixture.writeFile("old/" + name, numberedLines(name, 20));
+  fixture.run("git add old");
+  commitTick(fixture, "add sources", 1);
+  fixture.run("git rm -r -q old");
+  for (const auto& name : names) {
+    std::string edited = numberedLines(name, 20);
+    edited.replace(edited.find(name + " line 0"), name.size() + 7, "package moved");
+    fixture.writeFile("new/" + name, edited);
+  }
+  fixture.run("git add new");
+  commitTick(fixture, "move and edit", 2);
+  fixture.run("git config diff.renameLimit 2");
+  const std::string sha = rev(fixture, "HEAD");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json moved = session.request(req(10, "diff/commit", {{"repoId", repoId}, {"sha", sha}}));
+  ASSERT_TRUE(moved.contains("result")) << moved.dump();
+  const auto engine = engineChanges(moved["result"]["files"]);
+  EXPECT_EQ(engine, gitChanges(fixture.root(), "show " + sha));
+
+  // Each uniquely named file is found by its name before the limit applies;
+  // the same-named three are left to the limited comparison, which 3 x 3
+  // candidates exceed.
+  const Json& files = moved["result"]["files"];
+  for (int i = 0; i < 10; ++i) {
+    const Json unit = changeFor(files, "new/unit" + std::to_string(i) + ".c");
+    EXPECT_EQ(unit.value("status", ""), "R") << unit.dump();
+    EXPECT_EQ(unit.value("origPath", ""), "old/unit" + std::to_string(i) + ".c");
+    EXPECT_EQ(unit.value("additions", -1), 1);
+    EXPECT_EQ(unit.value("deletions", -1), 1);
+  }
+  EXPECT_EQ(changeFor(files, "new/a/same.c")["status"], "A");
+  EXPECT_EQ(changeFor(files, "old/a/same.c")["status"], "D");
+  EXPECT_EQ(files.size(), 16u);
+}
+
+// Records `content` as a blob and returns its id, for index entries such as
+// symlinks that the test writes without the filesystem supporting them.
+std::string writeBlob(FixtureRepo& fixture, const std::string& content) {
+  fixture.writeFile("blob-source.tmp", content);
+  std::string id = gitOut(fixture.root(), "hash-object -w --no-filters blob-source.tmp");
+  std::filesystem::remove(fixture.root() / "blob-source.tmp");
+  while (!id.empty() && (id.back() == '\n' || id.back() == '\r')) id.pop_back();
+  return id;
+}
+
+TEST(StatusService, DiffMatchesGitForSymlinksSubmodulesAndRetypedFiles) {
+  FixtureRepo fixture;
+  const std::string submodule = rev(fixture, "HEAD");
+  const std::string linkTarget = writeBlob(fixture, "alpha.txt");
+  fixture.writeFile("alpha.txt", numberedLines("alpha", 10));
+  fixture.writeFile("orig.txt", numberedLines("original", 10));
+  fixture.writeFile("retyped", "hello\n");
+  fixture.run("git add alpha.txt orig.txt retyped");
+  fixture.run("git update-index --add --cacheinfo 120000," + linkTarget + ",link");
+  fixture.run("git update-index --add --cacheinfo 160000," + submodule + ",sub");
+  commitTick(fixture, "base", 1);
+
+  // A symlink and a submodule move unchanged, a file becomes a symlink, a
+  // file is edited and copied, and a deleted file reappears twice.
+  fixture.run("git update-index --force-remove link sub");
+  fixture.run("git update-index --add --cacheinfo 120000," + linkTarget + ",moved-link");
+  fixture.run("git update-index --add --cacheinfo 160000," + submodule + ",modules/sub");
+  fixture.run("git update-index --add --cacheinfo 120000," + writeBlob(fixture, "orig.txt") +
+              ",retyped");
+  fixture.writeFile("copy-of-alpha.txt", numberedLines("alpha", 10));
+  fixture.writeFile("alpha.txt", numberedLines("alpha", 10) + "alpha appended\n");
+  fixture.run("git rm -q orig.txt");
+  fixture.writeFile("one.txt", numberedLines("original", 10));
+  fixture.writeFile("two.txt", numberedLines("original", 10));
+  fixture.run("git add alpha.txt copy-of-alpha.txt one.txt two.txt");
+  commitTick(fixture, "move and retype", 2);
+  const std::string sha = rev(fixture, "HEAD");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  std::int64_t id = 10;
+  const auto diffCommit = [&] {
+    Json response = session.request(req(++id, "diff/commit", {{"repoId", repoId}, {"sha", sha}}));
+    EXPECT_TRUE(response.contains("result")) << response.dump();
+    return response["result"]["files"];
+  };
+
+  Json files = diffCommit();
+  EXPECT_EQ(engineChanges(files), gitChanges(fixture.root(), "show " + sha));
+  EXPECT_EQ(changeFor(files, "moved-link")["status"], "R");
+  EXPECT_EQ(changeFor(files, "moved-link")["origPath"], "link");
+  EXPECT_EQ(changeFor(files, "modules/sub")["status"], "R");
+  EXPECT_FALSE(changeFor(files, "modules/sub").contains("statsUnavailable"));
+  EXPECT_EQ(changeFor(files, "retyped")["status"], "T");
+  EXPECT_EQ(changeFor(files, "retyped")["additions"], 1);
+  EXPECT_EQ(changeFor(files, "retyped")["deletions"], 1);
+  EXPECT_EQ(changeFor(files, "one.txt")["status"], "R");
+  EXPECT_EQ(changeFor(files, "two.txt")["status"], "A");
+  EXPECT_EQ(changeFor(files, "copy-of-alpha.txt")["status"], "A");
+
+  // Copies: an edited file feeds an exact copy, and the deleted file is
+  // copied into one destination and renamed into the last.
+  fixture.run("git config diff.renames copies");
+  files = diffCommit();
+  EXPECT_EQ(engineChanges(files), gitChanges(fixture.root(), "show " + sha));
+  EXPECT_EQ(changeFor(files, "copy-of-alpha.txt")["status"], "C");
+  EXPECT_EQ(changeFor(files, "copy-of-alpha.txt")["origPath"], "alpha.txt");
+  EXPECT_EQ(changeFor(files, "alpha.txt")["status"], "M");
+  EXPECT_EQ(changeFor(files, "one.txt")["status"], "C");
+  EXPECT_EQ(changeFor(files, "two.txt")["status"], "R");
+  EXPECT_EQ(changeFor(files, "two.txt")["origPath"], "orig.txt");
 }
 
 TEST(StatusService, DiffRenameDetectionFollowsTheRepositoryConfig) {
