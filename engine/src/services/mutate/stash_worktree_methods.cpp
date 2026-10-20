@@ -95,6 +95,17 @@ class LazyGitVersion {
   std::optional<exec::GitVersion> version_;
 };
 
+// The wasm engine reads only the workspace mirrored into its own file
+// system, and linked worktrees live outside it: listing them would report
+// every one as missing. The worktree reads are refused there instead.
+void requireHostFileSystem() {
+#ifdef GG_WASM
+  throw rpc::HandlerError{{ErrorCode::MethodNotSupported,
+                           "worktrees are not available in the web engine: linked worktrees lie "
+                           "outside the mirrored workspace"}};
+#endif
+}
+
 }  // namespace
 
 void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
@@ -150,6 +161,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "worktree/list",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
+        requireHostFileSystem();
         auto repo = openRepo(context, params);
         if (!context.cliAvailable) return {{"worktrees", worktree::listWithLibgit2(repo)}};
         auto output =
@@ -163,6 +175,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       "worktree/status",
       [&context, gitVersion](const rpc::Json& params, const CancelToken& token,
                              const rpc::NotifyFn&) -> rpc::Json {
+        requireHostFileSystem();
         worktree::StatusRequest request;
         request.path = requireString(params, "path");
         request.base = requirePositional(optionalString(params, "base"), "base");

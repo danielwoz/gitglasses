@@ -2913,7 +2913,7 @@
       }
     },
     "worktree/list": {
-      "description": "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory.",
+      "description": "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory. The web (wasm) engine, whose files hold only the mirrored workspace, refuses it with -32003.",
       "params": {
         "additionalProperties": false,
         "type": "object",
