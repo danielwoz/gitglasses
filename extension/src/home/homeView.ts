@@ -8,11 +8,31 @@ import type { LaunchpadService } from '../integrations/launchpadService';
 import { BUCKET_LABELS } from '../integrations/launchpadLogic';
 import { setStatus } from '../commands/ui';
 import { relativeTime } from '../system/dates';
-import { BranchStatus, branchCardDescription, glimpsePrs, showGetStarted } from './homeLogic';
+import {
+  BranchAction,
+  BranchStatus,
+  HeadInfo,
+  branchActionLabel,
+  branchCardActions,
+  branchCardDescription,
+  branchCardTitle,
+  glimpsePrs,
+  showGetStarted,
+} from './homeLogic';
 import { conflictLabel } from '../model/conflictLogic';
 import { allowedDespiteConflicts } from '../commands/conflictGuard';
 
 const REFRESH_DEBOUNCE_MS = 300;
+
+/** The command and icon behind each branch card action. */
+const BRANCH_ACTIONS: Record<BranchAction, { command: string; icon: string }> = {
+  commit: { command: 'gitglasses.gitCommands', icon: 'check' },
+  push: { command: 'gitglasses.home.push', icon: 'arrow-up' },
+  publish: { command: 'gitglasses.home.push', icon: 'cloud-upload' },
+  pull: { command: 'gitglasses.home.pull', icon: 'arrow-down' },
+  switchBranch: { command: 'gitglasses.home.switchBranch', icon: 'arrow-swap' },
+  createBranch: { command: 'gitglasses.home.createBranch', icon: 'add' },
+};
 
 export const GET_STARTED_DISMISSED_KEY = 'gitglasses.home.getStartedDismissed';
 
@@ -107,11 +127,13 @@ export class HomeViewProvider extends ViewBase {
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
     // The sections read independent sources, so they are fetched together:
     // the view renders one round trip after the repo resolves.
-    const [status, glimpse] = await Promise.all([
+    const [status, state, remotes, glimpse] = await Promise.all([
       this.engine.request('status/summary', { repoId: repo.repoId }),
+      this.engine.request('repo/state', { repoId: repo.repoId }),
+      this.engine.request('remote/list', { repoId: repo.repoId }),
       this.launchpadGlimpse(),
     ]);
-    const nodes: ViewNode[] = [this.branchCard(status)];
+    const nodes: ViewNode[] = [this.branchCard(status, state.head, remotes.remotes.length > 0)];
     if (status.conflicted.length > 0) nodes.push(conflictsSection(repo, status.conflicted));
     nodes.push(glimpse);
     if (showGetStarted(this.globalState.get<boolean>(GET_STARTED_DISMISSED_KEY))) {
@@ -120,23 +142,31 @@ export class HomeViewProvider extends ViewBase {
     return nodes;
   }
 
-  private branchCard(status: BranchStatus): ViewNode {
-    const node = sectionNode(
-      status.branch || 'HEAD (detached)',
-      'git-branch',
-      [
-        actionNode('Commit…', 'check', 'gitglasses.gitCommands'),
-        actionNode('Push', 'arrow-up', 'gitglasses.home.push'),
-        actionNode('Pull', 'arrow-down', 'gitglasses.home.pull'),
-        actionNode('Switch Branch…', 'arrow-swap', 'gitglasses.home.switchBranch'),
-        actionNode('Create Branch…', 'add', 'gitglasses.home.createBranch'),
-      ],
-      branchCardDescription(status),
+  private branchCard(status: BranchStatus, head: HeadInfo, hasRemote: boolean): ViewNode {
+    const actions = branchCardActions(status, head, hasRemote).map((action) =>
+      actionNode(
+        branchActionLabel(action, status),
+        BRANCH_ACTIONS[action].icon,
+        BRANCH_ACTIONS[action].command,
+      ),
     );
+    const node = sectionNode(
+      branchCardTitle(status, head),
+      head.detached ? 'git-commit' : 'git-branch',
+      actions,
+      branchCardDescription(status, head),
+    );
+    const branchLine = head.unborn
+      ? `Branch: ${head.branch || '(unnamed)'}, no commits yet`
+      : head.detached
+        ? `HEAD detached at ${head.oid}`
+        : `Branch: ${status.branch}`;
+    const upstreamLines = head.unborn || head.detached
+      ? []
+      : [`Upstream: ${status.upstream ?? 'none'}`, `Ahead ${status.ahead} / behind ${status.behind}`];
     node.item.tooltip = [
-      `Branch: ${status.branch || '(detached)'}`,
-      `Upstream: ${status.upstream ?? 'none'}`,
-      `Ahead ${status.ahead} / behind ${status.behind}`,
+      branchLine,
+      ...upstreamLines,
       `${status.conflicted.length} conflicted, ${status.staged.length} staged, ` +
         `${status.unstaged.length} unstaged, ${status.untracked.length} untracked`,
     ].join('\n');

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   BranchStatus,
+  HeadInfo,
+  branchActionLabel,
+  branchCardActions,
   branchCardDescription,
+  branchCardTitle,
   formatAheadBehind,
   formatDirtySummary,
   glimpsePrs,
@@ -108,5 +112,72 @@ describe('showGetStarted', () => {
     expect(showGetStarted(undefined)).toBe(true);
     expect(showGetStarted(false)).toBe(true);
     expect(showGetStarted(true)).toBe(false);
+  });
+});
+
+describe('branch card for each kind of HEAD', () => {
+  const head = (overrides: Partial<HeadInfo> = {}): HeadInfo => ({
+    branch: 'main',
+    oid: 'c0ffee0000000000000000000000000000000000',
+    detached: false,
+    unborn: false,
+    ...overrides,
+  });
+
+  it('names the branch of an empty repository instead of calling it detached', () => {
+    const unborn = head({ branch: 'main', oid: '', unborn: true });
+    const fresh = status({ branch: 'main', upstream: undefined, untracked: ['a.txt'] });
+    expect(branchCardTitle(fresh, unborn)).toBe('main');
+    expect(branchCardDescription(fresh, unborn)).toBe('no commits yet · 1 untracked');
+    expect(branchCardTitle(status({ branch: '' }), head({ branch: '', unborn: true }))).toBe(
+      'No commits yet',
+    );
+  });
+
+  it('offers only the first commit while the branch is unborn', () => {
+    const unborn = head({ oid: '', unborn: true });
+    expect(branchCardActions(status({ upstream: undefined }), unborn, true)).toEqual(['commit']);
+  });
+
+  it('labels a detached HEAD by its commit and offers no push or pull', () => {
+    const detached = head({ branch: '', detached: true });
+    const s = status({ branch: '', upstream: undefined });
+    expect(branchCardTitle(s, detached)).toBe('HEAD detached at c0ffee0');
+    expect(branchCardDescription(s, detached)).toBe('no branch · clean');
+    expect(branchCardActions(s, detached, true)).toEqual(['commit', 'switchBranch', 'createBranch']);
+  });
+
+  it('offers Push only with commits to push, and Pull with an upstream', () => {
+    expect(branchCardActions(status(), head(), true)).toEqual([
+      'commit',
+      'pull',
+      'switchBranch',
+      'createBranch',
+    ]);
+    expect(branchCardActions(status({ ahead: 2 }), head(), true)).toEqual([
+      'commit',
+      'push',
+      'pull',
+      'switchBranch',
+      'createBranch',
+    ]);
+  });
+
+  it('publishes a branch without an upstream when there is a remote to publish to', () => {
+    const local = status({ upstream: undefined });
+    expect(branchCardActions(local, head(), true)).toContain('publish');
+    expect(branchCardActions(local, head(), false)).toEqual([
+      'commit',
+      'switchBranch',
+      'createBranch',
+    ]);
+  });
+
+  it('counts the commits Push and Pull would move', () => {
+    const s = status({ ahead: 1, behind: 3 });
+    expect(branchActionLabel('push', s)).toBe('Push 1 commit');
+    expect(branchActionLabel('pull', s)).toBe('Pull 3 commits');
+    expect(branchActionLabel('pull', status())).toBe('Pull');
+    expect(branchActionLabel('publish', s)).toBe('Publish Branch');
   });
 });

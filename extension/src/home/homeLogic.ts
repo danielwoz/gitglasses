@@ -1,5 +1,7 @@
-// Pure home-view logic (no vscode imports): branch card formatting, launchpad
-// glimpse selection, and get-started visibility.
+// Pure home-view logic (no vscode imports): branch card formatting and
+// actions, launchpad glimpse selection, and get-started visibility.
+
+import { shortSha } from '@gitglasses/protocol/sha';
 
 /** Subset of status/summary the branch card renders. */
 export interface BranchStatus {
@@ -33,14 +35,86 @@ export function formatDirtySummary(status: BranchStatus): string {
   return parts.length > 0 ? parts.join(', ') : 'clean';
 }
 
-/** Branch card description: arrows, upstream, and dirty-state summary. */
-export function branchCardDescription(status: BranchStatus): string {
+/** Where HEAD points, as repo/state reports it. */
+export interface HeadInfo {
+  /** The branch HEAD names; for an unborn HEAD, the branch the first commit
+   *  creates (empty from engines that do not report it). */
+  branch: string;
+  oid: string;
+  detached: boolean;
+  unborn: boolean;
+}
+
+/** Branch card title: the branch, or what HEAD is when it names none. */
+export function branchCardTitle(status: BranchStatus, head?: HeadInfo): string {
+  if (head?.unborn) return head.branch || status.branch || 'No commits yet';
+  if (head?.detached) return head.oid ? `HEAD detached at ${shortSha(head.oid)}` : 'HEAD detached';
+  return status.branch || head?.branch || 'HEAD detached';
+}
+
+/** Branch card description: arrows, upstream, and dirty-state summary. An
+ *  unborn branch has no upstream to compare with, only its first commit to
+ *  make; a detached HEAD tracks nothing. */
+export function branchCardDescription(status: BranchStatus, head?: HeadInfo): string {
   const parts: string[] = [];
-  const arrows = formatAheadBehind(status.ahead, status.behind);
-  if (arrows) parts.push(arrows);
-  parts.push(status.upstream ?? 'no upstream');
+  if (head?.unborn) {
+    parts.push('no commits yet');
+  } else if (head?.detached) {
+    parts.push('no branch');
+  } else {
+    const arrows = formatAheadBehind(status.ahead, status.behind);
+    if (arrows) parts.push(arrows);
+    parts.push(status.upstream ?? 'no upstream');
+  }
   parts.push(formatDirtySummary(status));
   return parts.join(' · ');
+}
+
+export type BranchAction = 'commit' | 'push' | 'publish' | 'pull' | 'switchBranch' | 'createBranch';
+
+/**
+ * The quick actions the branch card offers. Push appears only with commits
+ * to push and Pull only with an upstream to pull from; a branch with no
+ * upstream is published instead, when there is a remote to publish to. An
+ * unborn branch has nothing to push, switch from or branch off yet, so it
+ * offers the commit that makes it real.
+ */
+export function branchCardActions(
+  status: BranchStatus,
+  head: HeadInfo | undefined,
+  hasRemote: boolean,
+): BranchAction[] {
+  if (head?.unborn) return ['commit'];
+  const actions: BranchAction[] = ['commit'];
+  if (!head?.detached) {
+    if (status.upstream) {
+      if (status.ahead > 0) actions.push('push');
+      actions.push('pull');
+    } else if (hasRemote) {
+      actions.push('publish');
+    }
+  }
+  actions.push('switchBranch', 'createBranch');
+  return actions;
+}
+
+/** The label of a branch card action, with the commit counts that apply. */
+export function branchActionLabel(action: BranchAction, status: BranchStatus): string {
+  const commits = (count: number): string => `${count} commit${count === 1 ? '' : 's'}`;
+  switch (action) {
+    case 'commit':
+      return 'Commit…';
+    case 'push':
+      return `Push ${commits(status.ahead)}`;
+    case 'publish':
+      return 'Publish Branch';
+    case 'pull':
+      return status.behind > 0 ? `Pull ${commits(status.behind)}` : 'Pull';
+    case 'switchBranch':
+      return 'Switch Branch…';
+    case 'createBranch':
+      return 'Create Branch…';
+  }
 }
 
 export const GLIMPSE_LIMIT = 3;
