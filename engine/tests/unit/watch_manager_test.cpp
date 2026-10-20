@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "test_fixtures.h"
@@ -258,6 +259,138 @@ TEST_P(WatchManagerTest, KeepsSharedDirectoriesWatchedForEveryRepository) {
   fixture.run("git branch after-unwatch");
   ASSERT_TRUE(collector.waitFor({"refs"}, from, "r1").has_value())
       << "unwatching the linked worktree stopped the main checkout's notifications";
+#endif
+}
+
+// A sweep stats the directories under refs/, not every loose ref, so its
+// cost does not grow with the number of fetched branches.
+TEST(PollingWatch, SweepCostFollowsRefDirectoriesNotRefs) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+  const std::string head = gg::testing::gitLines(fixture.root(), "rev-parse HEAD").at(0);
+  const auto remote = fixture.root() / ".git" / "refs" / "remotes" / "origin";
+  std::filesystem::create_directories(remote);
+  for (int i = 0; i < 400; ++i) {
+    std::ofstream(remote / ("branch-" + std::to_string(i)), std::ios::binary) << head << "\n";
+  }
+  Collector collector;
+  WatchManager::PollTiming timing;
+  timing.active = 20ms;
+  timing.idle = 20ms;
+  timing.fullSweep = std::chrono::hours(1);
+  WatchManager manager(collector.callback(), WatchManager::Backend::kPolling, timing);
+  manager.watch("r1", (fixture.root() / ".git").string());
+
+  std::optional<SweepCost> cost;
+  for (int i = 0; i < 250 && !(cost && cost->sweeps >= 3); ++i) {
+    std::this_thread::sleep_for(20ms);
+    cost = manager.lastSweepCost("r1");
+  }
+  ASSERT_TRUE(cost.has_value());
+  EXPECT_FALSE(cost->full);
+  EXPECT_LT(cost->entries, 40u) << "a quiet sweep examined every loose ref";
+
+  // The sweep still notices a new ref among them.
+  fixture.run("git update-ref refs/remotes/origin/branch-new HEAD");
+  EXPECT_TRUE(collector.waitFor({"refs"}, 0).has_value());
+#endif
+}
+
+TEST(PollingWatch, ReportsRefsInNewDirectoriesDeletionsAndPacking) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+  Collector collector;
+  WatchManager::PollTiming timing;
+  timing.active = 50ms;
+  timing.idle = 50ms;
+  timing.fullSweep = std::chrono::hours(1);
+  WatchManager manager(collector.callback(), WatchManager::Backend::kPolling, timing);
+  manager.watch("r1", (fixture.root() / ".git").string());
+
+  fixture.run("git branch feature/deep/topic");
+  ASSERT_TRUE(collector.waitFor({"refs"}, 0).has_value()) << "branch in a new directory";
+
+  size_t from = collector.snapshot().size();
+  fixture.run("git update-ref refs/heads/feature/deep/topic HEAD~0");
+  fixture.run("git branch -D -q feature/deep/topic");
+  ASSERT_TRUE(collector.waitFor({"refs"}, from).has_value()) << "deleted branch";
+
+  from = collector.snapshot().size();
+  fixture.run("git tag v1");
+  fixture.run("git pack-refs --all");
+  ASSERT_TRUE(collector.waitFor({"refs"}, from).has_value()) << "tag packed into packed-refs";
+
+  from = collector.snapshot().size();
+  fixture.writeFile("README.md", "stashed\n");
+  fixture.run("git stash -q");
+  const auto stash = collector.waitFor({"stash"}, from);
+  ASSERT_TRUE(stash.has_value()) << "stash push";
+#endif
+}
+
+// Tools other than git may rewrite a loose ref in place, which leaves its
+// directory's mtime alone; the full sweep still finds it.
+TEST(PollingWatch, FullSweepFindsARefRewrittenInPlace) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+  fixture.commit("second");
+  const std::string previous = gg::testing::gitLines(fixture.root(), "rev-parse HEAD~1").at(0);
+  fixture.run("git branch moved-in-place");
+  Collector collector;
+  WatchManager::PollTiming timing;
+  timing.active = 50ms;
+  timing.idle = 50ms;
+  timing.fullSweep = 300ms;
+  WatchManager manager(collector.callback(), WatchManager::Backend::kPolling, timing);
+  manager.watch("r1", (fixture.root() / ".git").string());
+  std::this_thread::sleep_for(200ms);
+
+  {
+    std::fstream ref(fixture.root() / ".git" / "refs" / "heads" / "moved-in-place",
+                     std::ios::in | std::ios::out | std::ios::binary);
+    ASSERT_TRUE(ref.is_open());
+    ref.seekp(0);
+    ref << previous << "\n";
+  }
+  EXPECT_TRUE(collector.waitFor({"refs"}, 0).has_value());
+#endif
+}
+
+TEST(PollingWatch, BacksOffWhileNothingChanges) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+  Collector collector;
+  WatchManager::PollTiming timing;
+  timing.active = 25ms;
+  timing.idle = 400ms;
+  timing.idleAfter = 150ms;
+  timing.fullSweep = std::chrono::hours(1);
+  WatchManager manager(collector.callback(), WatchManager::Backend::kPolling, timing);
+  manager.watch("r1", (fixture.root() / ".git").string());
+
+  std::this_thread::sleep_for(1500ms);
+  const auto quiet = manager.lastSweepCost("r1");
+  ASSERT_TRUE(quiet.has_value());
+  // About 6 sweeps at the active pace, then one per 400 ms; without the
+  // back-off it would be about 60.
+  EXPECT_LE(quiet->sweeps, 20u);
+
+  // A change is still reported, and the pace picks up again.
+  fixture.run("git branch wake-up");
+  ASSERT_TRUE(collector.waitFor({"refs"}, 0).has_value());
+  const auto woken = manager.lastSweepCost("r1");
+  std::this_thread::sleep_for(100ms);
+  const auto after = manager.lastSweepCost("r1");
+  ASSERT_TRUE(woken.has_value() && after.has_value());
+  EXPECT_GE(after->sweeps, woken->sweeps + 2) << "no faster sweeps after a change";
 #endif
 }
 

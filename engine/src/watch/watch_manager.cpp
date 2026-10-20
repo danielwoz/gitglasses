@@ -28,7 +28,6 @@ using Clock = std::chrono::steady_clock;
 #ifdef __linux__
 constexpr auto kDebounce = std::chrono::milliseconds(50);
 #endif
-constexpr auto kPollInterval = std::chrono::milliseconds(500);
 
 bool startsWith(const std::string& value, const std::string& prefix) {
   return value.rfind(prefix, 0) == 0;
@@ -359,15 +358,17 @@ class InotifyHub {
 
 // A single repository's polling fallback: one thread running a periodic stat
 // sweep of the gitdir (and of a linked worktree's shared refs). Members are
-// confined to that thread after construction, except the stop flag.
+// confined to that thread after construction, except the stop flag and the
+// latest sweep cost.
 class RepoWatch {
  public:
   RepoWatch(std::string repoId, std::string gitdir, std::string commondir,
-            WatchManager::Callback callback)
-      : repoId_(std::move(repoId)),
-        gitdir_(std::move(gitdir)),
-        commondir_(std::move(commondir)),
-        callback_(std::move(callback)) {
+            WatchManager::Callback callback, WatchManager::PollTiming timing)
+      : repoId_(std::move(repoId)), callback_(std::move(callback)), timing_(timing) {
+    roots_[0].base = std::move(gitdir);
+    roots_[0].categorize = &classify;
+    roots_[1].base = std::move(commondir);
+    roots_[1].categorize = &classifyShared;
     thread_ = std::thread([this] { runPoll(); });
   }
 
@@ -383,107 +384,287 @@ class RepoWatch {
   RepoWatch(const RepoWatch&) = delete;
   RepoWatch& operator=(const RepoWatch&) = delete;
 
+  std::optional<WatchManager::SweepCost> lastSweepCost() const {
+    std::lock_guard lock(costMutex_);
+    return cost_;
+  }
+
  private:
+  // mtime and size of one entry. Directories record size 0, so only their
+  // mtime counts.
+  using Stamp = std::pair<std::int64_t, std::uint64_t>;
+  using Stamps = std::map<std::string, Stamp>;
+
+  // One directory under refs/ and what its last listing held.
+  struct RefDir {
+    std::int64_t mtime = 0;
+    Stamps files;                // name -> stamp
+    std::set<std::string> dirs;  // names of subdirectories
+  };
+
+  // The gitdir ([0]) or a linked worktree's common dir ([1], `base` empty
+  // otherwise), with the state its last sweep saw.
+  struct Root {
+    std::string base;
+    std::string (*categorize)(const std::string&) = nullptr;
+    Stamps files;                        // single files and small trees
+    std::map<std::string, RefDir> refs;  // directory path relative to `base`
+  };
+
+  // Counts the filesystem entries one sweep examines.
+  struct Sweep {
+    bool full = false;
+    std::size_t entries = 0;
+    std::set<std::string> pending;
+  };
+
+  static fs::path under(const std::string& base, const std::string& rel) {
+    return rel.empty() ? fs::path(base) : fs::path(base) / rel;
+  }
+
+  static std::optional<Stamp> stampOf(const fs::path& path, Sweep& sweep) {
+    ++sweep.entries;
+    std::error_code ec;
+    const auto mtime = fs::last_write_time(path, ec);
+    if (ec) return std::nullopt;
+    std::uint64_t size = 0;
+    if (fs::is_regular_file(path, ec)) size = fs::file_size(path, ec);
+    if (ec) size = 0;
+    return Stamp{mtime.time_since_epoch().count(), size};
+  }
+
+  // The same for an entry a directory listing produced, reusing what the
+  // listing already knows (its type everywhere, its times and size on
+  // Windows).
+  static std::optional<Stamp> stampOf(const fs::directory_entry& entry, Sweep& sweep) {
+    ++sweep.entries;
+    std::error_code ec;
+    const auto mtime = entry.last_write_time(ec);
+    if (ec) return std::nullopt;
+    std::uint64_t size = 0;
+    if (entry.is_regular_file(ec)) size = entry.file_size(ec);
+    if (ec) size = 0;
+    return Stamp{mtime.time_since_epoch().count(), size};
+  }
+
+  static void report(const Root& root, const std::string& rel, Sweep& sweep) {
+    const std::string category = root.categorize(rel);
+    if (!category.empty()) sweep.pending.insert(category);
+  }
+
+  static std::string join(const std::string& dir, const std::string& name) {
+    return dir.empty() ? name : dir + "/" + name;
+  }
+
+  // Compares one single file or small tree with what the last sweep saw.
+  static void sweepFile(Root& root, const std::string& rel, Stamps& seen, Sweep& sweep) {
+    if (const auto stamp = stampOf(under(root.base, rel), sweep)) {
+      seen[rel] = *stamp;
+    }
+  }
+
+  // Every entry of a small tree (rebase-merge/, worktrees/): the sequencer
+  // writes its files in place, so each one is stamped.
+  static void sweepTree(Root& root, const std::string& rel, Stamps& seen, Sweep& sweep) {
+    const fs::path top = under(root.base, rel);
+    sweepFile(root, rel, seen, sweep);
+    if (seen.find(rel) == seen.end()) return;
+    std::error_code ec;
+    fs::recursive_directory_iterator it(top, fs::directory_options::skip_permission_denied, ec);
+    const fs::recursive_directory_iterator end;
+    const std::string prefix = top.generic_string() + "/";
+    for (; !ec && it != end; it.increment(ec)) {
+      const std::string path = it->path().generic_string();
+      if (path.compare(0, prefix.size(), prefix) != 0) continue;
+      sweepFile(root, rel + "/" + path.substr(prefix.size()), seen, sweep);
+    }
+  }
+
+  // Lists one refs directory: its files with their stamps and its
+  // subdirectories. Empty when the directory is gone.
+  static std::optional<RefDir> listRefDir(const Root& root, const std::string& rel,
+                                          std::int64_t mtime, Sweep& sweep) {
+    RefDir dir;
+    dir.mtime = mtime;
+    std::error_code ec;
+    fs::directory_iterator it(under(root.base, rel), fs::directory_options::skip_permission_denied,
+                              ec);
+    if (ec) return std::nullopt;
+    for (const fs::directory_iterator end; it != end; it.increment(ec)) {
+      if (ec) break;
+      const std::string name = it->path().filename().string();
+      std::error_code typeEc;
+      if (it->is_directory(typeEc)) {
+        dir.dirs.insert(name);
+      } else if (const auto stamp = stampOf(*it, sweep)) {
+        dir.files[name] = *stamp;
+      }
+    }
+    return dir;
+  }
+
+  // Adds `rel` and every directory below it to the refs state, reporting
+  // their files when `reportNew` (a directory that appeared since the last
+  // sweep).
+  static void addRefTree(Root& root, const std::string& rel, bool reportNew, Sweep& sweep) {
+    const auto stamp = stampOf(under(root.base, rel), sweep);
+    if (!stamp) return;
+    auto listed = listRefDir(root, rel, stamp->first, sweep);
+    if (!listed) return;
+    if (reportNew) {
+      report(root, rel, sweep);
+      for (const auto& [name, fileStamp] : listed->files) report(root, join(rel, name), sweep);
+    }
+    const std::set<std::string> subdirs = listed->dirs;
+    root.refs[rel] = std::move(*listed);
+    for (const auto& name : subdirs) addRefTree(root, join(rel, name), reportNew, sweep);
+  }
+
+  // Forgets `rel` and everything below it, reporting their files.
+  static void dropRefTree(Root& root, const std::string& rel, Sweep& sweep) {
+    const auto it = root.refs.find(rel);
+    if (it == root.refs.end()) return;
+    report(root, rel, sweep);
+    for (const auto& [name, stamp] : it->second.files) report(root, join(rel, name), sweep);
+    const std::set<std::string> subdirs = it->second.dirs;
+    root.refs.erase(it);
+    for (const auto& name : subdirs) dropRefTree(root, join(rel, name), sweep);
+  }
+
+  // Re-checks the refs directories: one stat per directory, and a new
+  // listing only for directories whose mtime moved (or all of them in a full
+  // sweep, which catches files rewritten in place).
+  static void sweepRefs(Root& root, Sweep& sweep) {
+    if (root.refs.empty()) {
+      addRefTree(root, "refs", true, sweep);
+      return;
+    }
+    std::vector<std::string> dirs;
+    dirs.reserve(root.refs.size());
+    for (const auto& [rel, state] : root.refs) dirs.push_back(rel);
+    for (const auto& rel : dirs) {
+      const auto it = root.refs.find(rel);
+      if (it == root.refs.end()) continue;  // dropped with a parent
+      const auto stamp = stampOf(under(root.base, rel), sweep);
+      if (!stamp) {
+        dropRefTree(root, rel, sweep);
+        continue;
+      }
+      if (stamp->first == it->second.mtime && !sweep.full) continue;
+      auto listed = listRefDir(root, rel, stamp->first, sweep);
+      if (!listed) {
+        dropRefTree(root, rel, sweep);
+        continue;
+      }
+      RefDir& previous = it->second;
+      for (const auto& [name, fileStamp] : listed->files) {
+        const auto old = previous.files.find(name);
+        if (old == previous.files.end() || old->second != fileStamp) {
+          report(root, join(rel, name), sweep);
+        }
+      }
+      for (const auto& [name, fileStamp] : previous.files) {
+        if (listed->files.find(name) == listed->files.end()) report(root, join(rel, name), sweep);
+      }
+      const std::set<std::string> before = previous.dirs;
+      const std::set<std::string> after = listed->dirs;
+      previous = std::move(*listed);
+      for (const auto& name : before) {
+        if (after.find(name) == after.end()) dropRefTree(root, join(rel, name), sweep);
+      }
+      for (const auto& name : after) {
+        if (before.find(name) == before.end()) addRefTree(root, join(rel, name), true, sweep);
+      }
+    }
+  }
+
+  // Adds the category of every path that appeared, changed or vanished
+  // among the single files and small trees.
+  static void diffFiles(const Root& root, const Stamps& previous, const Stamps& current,
+                        Sweep& sweep) {
+    for (const auto& [rel, stamp] : current) {
+      const auto it = previous.find(rel);
+      if (it == previous.end() || it->second != stamp) report(root, rel, sweep);
+    }
+    for (const auto& [rel, stamp] : previous) {
+      if (current.find(rel) == current.end()) report(root, rel, sweep);
+    }
+  }
+
+  void sweep(Sweep& sweep) {
+    Root& own = roots_[0];
+    Stamps files;
+    for (const char* rel : {"HEAD", "index", "packed-refs", "MERGE_HEAD", "CHERRY_PICK_HEAD"}) {
+      sweepFile(own, rel, files, sweep);
+    }
+    for (const char* rel : {"rebase-merge", "rebase-apply", "worktrees"}) {
+      sweepTree(own, rel, files, sweep);
+    }
+    diffFiles(own, own.files, files, sweep);
+    own.files = std::move(files);
+    sweepRefs(own, sweep);
+
+    Root& shared = roots_[1];
+    if (!shared.base.empty()) {
+      Stamps sharedFiles;
+      sweepFile(shared, "packed-refs", sharedFiles, sweep);
+      diffFiles(shared, shared.files, sharedFiles, sweep);
+      shared.files = std::move(sharedFiles);
+      sweepRefs(shared, sweep);
+    }
+  }
+
   void emit(const std::set<std::string>& pending) {
     if (pending.empty()) return;
     const std::vector<std::string> changed(pending.begin(), pending.end());
     callback_(repoId_, ++generation_, changed);
   }
 
-  // Snapshot of everything under one root the protocol reports on:
-  // path -> (mtime, size). Directories record size 0 so their appearance
-  // and disappearance (rebase-merge/ etc.) still diff.
-  using Stamps = std::map<std::string, std::pair<std::int64_t, std::uint64_t>>;
-
-  struct Snapshot {
-    Stamps own;     // relative to the gitdir
-    Stamps shared;  // relative to the common dir; empty unless linked
-  };
-
-  static void scanEntry(Stamps& stamps, const std::string& base, const std::string& rel) {
-    const fs::path path = fs::path(base) / rel;
-    std::error_code ec;
-    const auto mtime = fs::last_write_time(path, ec);
-    if (ec) return;
-    std::uint64_t size = 0;
-    if (fs::is_regular_file(path, ec)) size = fs::file_size(path, ec);
-    stamps[rel] = {mtime.time_since_epoch().count(), size};
-  }
-
-  static void scanTree(Stamps& stamps, const std::string& base, const char* root) {
-    scanEntry(stamps, base, root);
-    std::error_code ec;
-    fs::recursive_directory_iterator it(fs::path(base) / root,
-                                        fs::directory_options::skip_permission_denied, ec);
-    const fs::recursive_directory_iterator end;
-    for (; !ec && it != end; it.increment(ec)) {
-      std::error_code relEc;
-      scanEntry(stamps, base, fs::relative(it->path(), base, relEc).generic_string());
-    }
-  }
-
-  Snapshot scan() const {
-    Snapshot snapshot;
-    for (const char* rel : {"HEAD", "index", "packed-refs", "MERGE_HEAD", "CHERRY_PICK_HEAD"}) {
-      scanEntry(snapshot.own, gitdir_, rel);
-    }
-    for (const char* root : {"refs", "rebase-merge", "rebase-apply", "worktrees"}) {
-      scanTree(snapshot.own, gitdir_, root);
-    }
-    if (!commondir_.empty()) {
-      scanEntry(snapshot.shared, commondir_, "packed-refs");
-      scanTree(snapshot.shared, commondir_, "refs");
-    }
-    return snapshot;
-  }
-
-  // Adds the category of every path that appeared, changed or vanished.
-  static void diff(const Stamps& previous, const Stamps& current,
-                   std::string (*categorize)(const std::string&), std::set<std::string>& pending) {
-    for (const auto& [rel, stamp] : current) {
-      const auto it = previous.find(rel);
-      if (it == previous.end() || it->second != stamp) {
-        const std::string category = categorize(rel);
-        if (!category.empty()) pending.insert(category);
-      }
-    }
-    for (const auto& [rel, stamp] : previous) {
-      if (current.find(rel) == current.end()) {
-        const std::string category = categorize(rel);
-        if (!category.empty()) pending.insert(category);
-      }
-    }
-  }
-
   void runPoll() {
-    Snapshot previous = scan();
+    // The first sweep only records the starting state.
+    Sweep first;
+    first.full = true;
+    sweep(first);
+    auto now = Clock::now();
+    Clock::time_point lastChange = now;
+    Clock::time_point nextFull = now + timing_.fullSweep;
+    auto interval = timing_.active;
     std::unique_lock lock(stopMutex_);
-    while (!stopCv_.wait_for(lock, kPollInterval, [this] { return stop_; })) {
+    while (!stopCv_.wait_for(lock, interval, [this] { return stop_; })) {
       lock.unlock();
-      Snapshot current = scan();
-      std::set<std::string> pending;
-      diff(previous.own, current.own, &classify, pending);
-      diff(previous.shared, current.shared, &classifyShared, pending);
-      previous = std::move(current);
-      emit(pending);
+      now = Clock::now();
+      Sweep current;
+      current.full = now >= nextFull;
+      if (current.full) nextFull = now + timing_.fullSweep;
+      sweep(current);
+      {
+        std::lock_guard costLock(costMutex_);
+        const std::uint64_t sweeps = cost_ ? cost_->sweeps + 1 : 1;
+        cost_ = WatchManager::SweepCost{current.entries, current.full, sweeps};
+      }
+      if (!current.pending.empty()) lastChange = now;
+      emit(current.pending);
+      interval = now - lastChange >= timing_.idleAfter ? timing_.idle : timing_.active;
       lock.lock();
     }
   }
 
   const std::string repoId_;
-  const std::string gitdir_;
-  const std::string commondir_;
   const WatchManager::Callback callback_;
+  const WatchManager::PollTiming timing_;
+  Root roots_[2];
 
   std::uint64_t generation_ = 0;  // touched only by the watch thread
+  mutable std::mutex costMutex_;
+  std::optional<WatchManager::SweepCost> cost_;
   std::mutex stopMutex_;
   std::condition_variable stopCv_;
   bool stop_ = false;
   std::thread thread_;
 };
 
-WatchManager::WatchManager(Callback callback, Backend backend)
-    : callback_(std::move(callback)), backend_(backend) {
+WatchManager::WatchManager(Callback callback, Backend backend, PollTiming timing)
+    : callback_(std::move(callback)), backend_(backend), timing_(timing) {
   if (backend_ == Backend::kPolling) return;
   hub_ = InotifyHub::create(callback_);
   if (!hub_) {
@@ -517,7 +698,7 @@ void WatchManager::watch(const std::string& repoId, const std::string& gitdir,
   if (hub_) {
     spdlog::warn("inotify refused every watch for '{}'; falling back to a stat sweep", gitdir);
   }
-  polls_[repoId] = std::make_unique<RepoWatch>(repoId, gitdir, shared, callback_);
+  polls_[repoId] = std::make_unique<RepoWatch>(repoId, gitdir, shared, callback_, timing_);
 }
 
 void WatchManager::unwatch(const std::string& repoId) {
@@ -541,6 +722,14 @@ bool WatchManager::isWatching(const std::string& repoId) const {
 bool WatchManager::nativeBackendActive() const {
   std::lock_guard lock(mutex_);
   return hub_ != nullptr;
+}
+
+std::optional<WatchManager::SweepCost> WatchManager::lastSweepCost(
+    const std::string& repoId) const {
+  std::lock_guard lock(mutex_);
+  const auto it = polls_.find(repoId);
+  if (it == polls_.end()) return std::nullopt;
+  return it->second->lastSweepCost();
 }
 
 }  // namespace gg::watch
