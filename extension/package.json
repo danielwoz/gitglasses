@@ -1035,7 +1035,7 @@
     "test": "vitest run",
     "test:e2e": "node esbuild.mjs && tsc -p test-e2e/tsconfig.json && node test-e2e/headless.cjs",
     "test:web": "node esbuild.mjs && node test-web/runTests.mjs",
-    "package": "vsce package --no-dependencies"
+    "package": "node ../scripts/package-vsix.mjs"
   },
   "dependencies": {
     "@gitglasses/integrations": "workspace:*",
