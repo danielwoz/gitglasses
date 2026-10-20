@@ -14,3 +14,7 @@ vcpkg_installed/
 
 # Downloaded VS Code Web build; test:web fetches it on demand.
 extension/.vscode-test-web/
+
+# Staged into the extension only while package-vsix.mjs runs.
+extension/LICENSE
+extension/NOTICE
