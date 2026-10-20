@@ -1,12 +1,23 @@
 import * as vscode from 'vscode';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 import { lineBlameText } from './blameFormat';
-import { BUILTIN_STATUS_BAR_BLAME, statusBarVisible } from './blameSettings';
+import {
+  BUILTIN_GIT_ENABLED,
+  BUILTIN_GIT_EXTENSION,
+  BUILTIN_STATUS_BAR_BLAME,
+  builtinStatusBarBlameOn,
+  LineBlameSurfaces,
+  lineBlameSurfaces,
+  statusBarVisible,
+} from './blameSettings';
 import { DocumentBlameService } from './documentBlame';
 import { BlameHoverRenderer } from './hoverProvider';
-import { SHOW_COMMIT_DETAILS_COMMAND, DIFF_WITH_HEAD_COMMAND } from './blameHoverLogic';
+import {
+  DIFF_WITH_HEAD_COMMAND,
+  DiffWithHeadArgs,
+  SHOW_COMMIT_DETAILS_COMMAND,
+} from './blameHoverLogic';
 
-const CURSOR_DEBOUNCE_MS = 75;
 /** After an edit, so typing does not blame every keystroke's buffer. */
 const EDIT_DEBOUNCE_MS = 300;
 
@@ -19,6 +30,8 @@ export interface LineBlameState {
   /** 0-based line annotated. */
   line: number;
   inline: string;
+  /** The inline text is painted (gitglasses.currentLine.enabled). */
+  inlineVisible: boolean;
   statusBar: string;
   statusBarVisible: boolean;
 }
@@ -28,10 +41,12 @@ const PAUSED_TOOLTIP =
   'The unsaved changes in this file are over the 8 MB GitGlasses can blame, so line blame ' +
   'is paused. Save the file to see blame again.';
 
-// Inline current-line blame + status bar item. One in-flight cancellation
-// token per editor: a new cursor position or edit cancels the stale request.
-// Shown while `gitglasses.currentLine.enabled` is on and no mode suppresses
-// it; the status bar item also follows `gitglasses.statusBar.blame`.
+// Current-line blame, after the end of the line and in the status bar. One
+// in-flight cancellation token per editor: a new cursor position or edit
+// cancels the stale request. The inline text follows
+// `gitglasses.currentLine.enabled` and the status bar item
+// `gitglasses.statusBar.blame`, each on its own; a mode that suppresses
+// current-line blame hides both.
 export class LineBlameController implements vscode.Disposable {
   private readonly decoration = vscode.window.createTextEditorDecorationType({
     after: {
@@ -74,16 +89,19 @@ export class LineBlameController implements vscode.Disposable {
         this.schedule(editor);
       }),
       blame.onDidChangeSettings(() => {
-        const configured = blame.settings.currentLineEnabled;
-        if (configured !== this.configured) {
-          this.configured = configured;
-          if (!this.active()) this.clear();
-        }
-        this.refresh();
+        this.configured = blame.settings.currentLineEnabled;
+        this.surfacesChanged();
       }),
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration(BUILTIN_STATUS_BAR_BLAME)) this.refresh();
+        if (
+          e.affectsConfiguration(BUILTIN_STATUS_BAR_BLAME) ||
+          e.affectsConfiguration(BUILTIN_GIT_ENABLED)
+        ) {
+          this.surfacesChanged();
+        }
       }),
+      // VS Code's own Git extension enabled or disabled.
+      vscode.extensions.onDidChange(() => this.surfacesChanged()),
       vscode.commands.registerCommand(LINE_BLAME_STATE_COMMAND, () => this.state),
     );
   }
@@ -97,8 +115,7 @@ export class LineBlameController implements vscode.Disposable {
         ? vscode.ConfigurationTarget.Workspace
         : vscode.ConfigurationTarget.Global;
     this.configured = !this.configured;
-    if (!this.active()) this.clear();
-    else this.refresh();
+    this.surfacesChanged();
     await config.update('currentLine.enabled', this.configured, target);
   }
 
@@ -110,31 +127,48 @@ export class LineBlameController implements vscode.Disposable {
   setEnabled(enabled: boolean): void {
     if (this.suppressed === !enabled) return;
     this.suppressed = !enabled;
-    if (!this.active()) this.clear();
-    else this.refresh();
+    this.surfacesChanged();
   }
 
   refresh(): void {
     if (vscode.window.activeTextEditor) this.schedule(vscode.window.activeTextEditor);
   }
 
-  private active(): boolean {
-    return this.configured && !this.suppressed;
-  }
-
-  private statusBarShown(): boolean {
-    return statusBarVisible(
-      this.blame.settings.statusBar,
-      vscode.workspace.getConfiguration().get(BUILTIN_STATUS_BAR_BLAME),
+  private surfaces(): LineBlameSurfaces {
+    const builtinOn = builtinStatusBarBlameOn({
+      extensionPresent: vscode.extensions.getExtension(BUILTIN_GIT_EXTENSION) !== undefined,
+      gitEnabled: vscode.workspace.getConfiguration().get(BUILTIN_GIT_ENABLED),
+      statusBarItem: vscode.workspace.getConfiguration().get(BUILTIN_STATUS_BAR_BLAME),
+    });
+    return lineBlameSurfaces(
+      this.configured,
+      statusBarVisible(this.blame.settings.statusBar, builtinOn),
+      this.suppressed,
     );
   }
 
+  /** Hides what is no longer wanted at once, and repaints the rest. */
+  private surfacesChanged(): void {
+    const surfaces = this.surfaces();
+    if (!surfaces.inline && !surfaces.statusBar) {
+      this.clear();
+      return;
+    }
+    if (!surfaces.inline) this.clearInline();
+    if (!surfaces.statusBar) this.statusBar.hide();
+    this.refresh();
+  }
+
   private schedule(editor: vscode.TextEditor): void {
-    if (!this.active() || !this.blame.supports(editor.document)) return;
+    const surfaces = this.surfaces();
+    if ((!surfaces.inline && !surfaces.statusBar) || !this.blame.supports(editor.document)) {
+      return;
+    }
     clearTimeout(this.timer);
+    const delay = this.blame.settings.currentLineDelay;
     const sinceEdit = Date.now() - this.lastEditAt;
-    const wait = sinceEdit < EDIT_DEBOUNCE_MS ? EDIT_DEBOUNCE_MS - sinceEdit : CURSOR_DEBOUNCE_MS;
-    this.timer = setTimeout(() => void this.annotate(editor), Math.max(wait, CURSOR_DEBOUNCE_MS));
+    const wait = sinceEdit < EDIT_DEBOUNCE_MS ? EDIT_DEBOUNCE_MS - sinceEdit : delay;
+    this.timer = setTimeout(() => void this.annotate(editor), Math.max(wait, delay));
   }
 
   private async annotate(editor: vscode.TextEditor): Promise<void> {
@@ -150,9 +184,10 @@ export class LineBlameController implements vscode.Disposable {
     const result = await this.blame.blameDocument(document, token);
 
     // Drop stale results: editor, line, and version must still match.
+    const surfaces = this.surfaces();
     if (
       token.isCancellationRequested ||
-      !this.active() ||
+      (!surfaces.inline && !surfaces.statusBar) ||
       vscode.window.activeTextEditor !== editor ||
       editor.selection.active.line !== line ||
       document.version !== version
@@ -161,13 +196,12 @@ export class LineBlameController implements vscode.Disposable {
     }
 
     const range = document.lineAt(line).range;
-    const showStatus = this.statusBarShown();
     if (result.kind === 'tooLarge') {
-      this.paint(editor, range, PAUSED_INLINE);
+      this.paint(editor, range, PAUSED_INLINE, surfaces);
       this.statusBar.text = '$(warning) Blame paused';
       this.statusBar.tooltip = PAUSED_TOOLTIP;
       this.statusBar.command = undefined;
-      this.setState(document, line, PAUSED_INLINE, this.statusBar.text, showStatus);
+      this.setState(document, line, PAUSED_INLINE, this.statusBar.text, surfaces);
       return;
     }
     const text =
@@ -179,7 +213,7 @@ export class LineBlameController implements vscode.Disposable {
       return;
     }
 
-    this.paint(editor, range, text.inline);
+    this.paint(editor, range, text.inline, surfaces);
     this.statusBar.text = text.statusBar;
     if (text.sha && text.sha !== UNCOMMITTED_SHA && result.target.rootPath !== '') {
       this.statusBar.command = {
@@ -188,14 +222,21 @@ export class LineBlameController implements vscode.Disposable {
         arguments: [{ repoPath: result.target.rootPath, sha: text.sha }],
       };
     } else if (!text.sha && result.target.rev === undefined) {
-      this.statusBar.command = { title: 'Open Changes', command: DIFF_WITH_HEAD_COMMAND };
+      const args: DiffWithHeadArgs = { uri: document.uri.toString() };
+      this.statusBar.command = {
+        title: 'Open Changes',
+        command: DIFF_WITH_HEAD_COMMAND,
+        arguments: [args],
+      };
     } else {
       this.statusBar.command = undefined;
     }
     this.statusBar.tooltip = undefined;
-    this.setState(document, line, text.inline, text.statusBar, showStatus);
+    this.setState(document, line, text.inline, text.statusBar, surfaces);
+    if (!surfaces.statusBar) return;
     // The tooltip shows what the hover shows; it fills in once the commit's
-    // full message is known.
+    // full message is known. It costs a commit/details request, so it is
+    // only rendered while the item shows.
     const blame = result.blame;
     const target = result.target;
     void this.renderer.render(blame, target, line + 1, token).then((tooltip) => {
@@ -203,7 +244,16 @@ export class LineBlameController implements vscode.Disposable {
     });
   }
 
-  private paint(editor: vscode.TextEditor, range: vscode.Range, contentText: string): void {
+  private paint(
+    editor: vscode.TextEditor,
+    range: vscode.Range,
+    contentText: string,
+    surfaces: LineBlameSurfaces,
+  ): void {
+    if (!surfaces.inline) {
+      editor.setDecorations(this.decoration, []);
+      return;
+    }
     editor.setDecorations(this.decoration, [{ range, renderOptions: { after: { contentText } } }]);
   }
 
@@ -212,24 +262,29 @@ export class LineBlameController implements vscode.Disposable {
     line: number,
     inline: string,
     statusBar: string,
-    showStatus: boolean,
+    surfaces: LineBlameSurfaces,
   ): void {
     this.state = {
       uri: document.uri.toString(),
       line,
       inline,
+      inlineVisible: surfaces.inline,
       statusBar,
-      statusBarVisible: showStatus,
+      statusBarVisible: surfaces.statusBar,
     };
-    if (showStatus) this.statusBar.show();
+    if (surfaces.statusBar) this.statusBar.show();
     else this.statusBar.hide();
   }
 
   /** Clears the active editor, which is not necessarily the editor the caller
    *  is annotating: a stale pass reaching here has already lost its editor to
    *  an active-editor change. */
-  private clear(): void {
+  private clearInline(): void {
     vscode.window.activeTextEditor?.setDecorations(this.decoration, []);
+  }
+
+  private clear(): void {
+    this.clearInline();
     this.statusBar.hide();
     this.state = undefined;
   }

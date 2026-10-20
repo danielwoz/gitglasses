@@ -13,7 +13,12 @@ import {
   parseFormat,
   renderTemplate,
 } from '../src/annotations/blameFormat';
-import { parseBlameSettings, statusBarVisible } from '../src/annotations/blameSettings';
+import {
+  builtinStatusBarBlameOn,
+  lineBlameSurfaces,
+  parseBlameSettings,
+  statusBarVisible,
+} from '../src/annotations/blameSettings';
 import type { FileBlame } from '../src/model/blameModel';
 
 const NOW = 1_800_000_000;
@@ -159,6 +164,7 @@ describe('blame settings', () => {
   it('reads defaults when nothing is set', () => {
     expect(parseBlameSettings(() => undefined)).toEqual({
       currentLineEnabled: true,
+      currentLineDelay: 75,
       statusBar: 'auto',
       hoversEnabled: true,
       text: DEFAULT_TEXT_SETTINGS,
@@ -169,6 +175,7 @@ describe('blame settings', () => {
   it('reads every setting', () => {
     const values: Record<string, unknown> = {
       'currentLine.enabled': false,
+      'currentLine.delay': 250,
       'currentLine.format': '${sha}',
       'statusBar.blame': 'show',
       'statusBar.format': '${author}',
@@ -180,6 +187,7 @@ describe('blame settings', () => {
     };
     expect(parseBlameSettings((key) => values[key])).toEqual({
       currentLineEnabled: false,
+      currentLineDelay: 250,
       statusBar: 'show',
       hoversEnabled: false,
       text: { inlineFormat: '${sha}', statusBarFormat: '${author}', dateStyle: 'absolute' },
@@ -187,11 +195,38 @@ describe('blame settings', () => {
     });
   });
 
+  it('keeps the delay within bounds', () => {
+    const delay = (value: unknown) =>
+      parseBlameSettings((key) => (key === 'currentLine.delay' ? value : undefined))
+        .currentLineDelay;
+    expect(delay(-5)).toBe(0);
+    expect(delay(120.4)).toBe(120);
+    expect(delay(60_000)).toBe(5000);
+    expect(delay('soon')).toBe(75);
+  });
+
   it('steps aside for the built-in status bar blame only in auto', () => {
     expect(statusBarVisible('auto', true)).toBe(false);
     expect(statusBarVisible('auto', false)).toBe(true);
-    expect(statusBarVisible('auto', undefined)).toBe(true);
     expect(statusBarVisible('show', true)).toBe(true);
     expect(statusBarVisible('hide', false)).toBe(false);
+  });
+
+  it("counts VS Code's own status bar blame as on only while its Git is on", () => {
+    const on = { extensionPresent: true, gitEnabled: true, statusBarItem: true };
+    expect(builtinStatusBarBlameOn(on)).toBe(true);
+    // Its setting keeps its default (on) after git.enabled is turned off.
+    expect(builtinStatusBarBlameOn({ ...on, gitEnabled: false })).toBe(false);
+    expect(builtinStatusBarBlameOn({ ...on, extensionPresent: false })).toBe(false);
+    expect(builtinStatusBarBlameOn({ ...on, statusBarItem: false })).toBe(false);
+    // Hosts without the setting (older VS Code, other editors).
+    expect(builtinStatusBarBlameOn({ ...on, statusBarItem: undefined })).toBe(false);
+    expect(builtinStatusBarBlameOn({ ...on, gitEnabled: undefined })).toBe(true);
+  });
+
+  it('shows inline and status bar blame independently, both hidden when suppressed', () => {
+    expect(lineBlameSurfaces(false, true, false)).toEqual({ inline: false, statusBar: true });
+    expect(lineBlameSurfaces(true, false, false)).toEqual({ inline: true, statusBar: false });
+    expect(lineBlameSurfaces(true, true, true)).toEqual({ inline: false, statusBar: false });
   });
 });

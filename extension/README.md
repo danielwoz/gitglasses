@@ -39,14 +39,18 @@ your platform.
 Blame:
 
 - `gitglasses.currentLine.enabled` — inline blame on/off (also flipped by
-  **GitGlasses: Toggle Inline Blame**)
+  **GitGlasses: Toggle Inline Blame**); the status bar item has its own
+  setting
+- `gitglasses.currentLine.delay` — milliseconds the cursor rests on a line
+  before its blame shows (75 by default)
 - `gitglasses.currentLine.format` — inline blame text; tokens `${author}`,
   `${email}`, `${date}`, `${ago}`, `${summary}`, `${sha}`
 - `gitglasses.statusBar.blame` — `auto` (default) shows status bar blame
-  unless VS Code's own Git blame item (`git.blame.statusBarItem.enabled`) is
-  on, so the same line is never described twice; `show` or `hide` to choose
-  yourself. The GitGlasses item's tooltip is the full hover and a click opens
-  the commit
+  unless VS Code's own Git blame item (`git.blame.statusBarItem.enabled`,
+  with `git.enabled` on) is showing, so the same line is never described
+  twice; `show` or `hide` to choose yourself, with or without inline blame.
+  The GitGlasses item's tooltip is the full hover and a click opens the
+  commit
 - `gitglasses.statusBar.format` — status bar text, same tokens
 - `gitglasses.hovers.enabled` — blame hovers on/off
 - `gitglasses.blame.dateStyle` — `relative`, `absolute` or `iso` for `${date}`

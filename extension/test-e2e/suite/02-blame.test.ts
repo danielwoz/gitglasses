@@ -17,8 +17,19 @@ interface LineBlameState {
   uri: string;
   line: number;
   inline: string;
+  inlineVisible: boolean;
   statusBar: string;
   statusBarVisible: boolean;
+}
+
+/** Whether VS Code's own Git shows blame in the status bar. */
+function builtinStatusBarBlameOn(): boolean {
+  const config = vscode.workspace.getConfiguration();
+  return (
+    vscode.extensions.getExtension('vscode.git') !== undefined &&
+    config.get('git.enabled') !== false &&
+    config.get('git.blame.statusBarItem.enabled') === true
+  );
 }
 
 function revParse(spec: string): string {
@@ -220,8 +231,8 @@ describe('blame pipeline', () => {
     );
     assert.match(state.inline, /^Ada Lovelace, .+ ago • revise alpha$/);
     // By default the item steps aside for VS Code's own status bar blame.
-    const builtin = vscode.workspace.getConfiguration().get('git.blame.statusBarItem.enabled');
-    assert.strictEqual(state.statusBarVisible, builtin !== true);
+    assert.strictEqual(state.statusBarVisible, !builtinStatusBarBlameOn());
+    assert.strictEqual(state.inlineVisible, true);
 
     const config = vscode.workspace.getConfiguration('gitglasses');
     await config.update(
@@ -271,6 +282,26 @@ describe('blame pipeline', () => {
       await vscode.workspace
         .getConfiguration('gitglasses')
         .update('currentLine.enabled', undefined, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  it('shows status bar blame with inline blame off', async () => {
+    const editor = await openBlameFile();
+    editor.selection = new vscode.Selection(1, 0, 1, 0);
+    await waitForLineBlame((s) => s.line === 1, 'line 1');
+    const config = vscode.workspace.getConfiguration('gitglasses');
+    await config.update('currentLine.enabled', false, vscode.ConfigurationTarget.Workspace);
+    await config.update('statusBar.blame', 'show', vscode.ConfigurationTarget.Workspace);
+    try {
+      editor.selection = new vscode.Selection(0, 0, 0, 0);
+      const state = await waitForLineBlame(
+        (s) => s.line === 0 && s.statusBarVisible && !s.inlineVisible,
+        'the status bar item alone',
+      );
+      assert.match(state.statusBar, /Ada Lovelace/);
+    } finally {
+      await config.update('currentLine.enabled', undefined, vscode.ConfigurationTarget.Workspace);
+      await config.update('statusBar.blame', undefined, vscode.ConfigurationTarget.Workspace);
     }
   });
 
