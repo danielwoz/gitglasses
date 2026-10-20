@@ -1236,6 +1236,62 @@ TEST(StatusService, SummaryIgnoresTouchedFilteredFiles) {
   EXPECT_EQ(gitOut(fixture.root(), "status --porcelain"), " M edited.env\n");
 }
 
+// Sets a file's mtime well in the past, as an edit made a while ago has it.
+void age(const FixtureRepo& fixture, const std::string& path) {
+  std::filesystem::last_write_time(
+      fixture.root() / path,
+      std::filesystem::file_time_type::clock::now() - std::chrono::minutes(10));
+}
+
+size_t lineCount(const std::filesystem::path& file) {
+  std::ifstream in(file, std::ios::binary);
+  size_t lines = 0;
+  for (std::string line; std::getline(in, line);) ++lines;
+  return lines;
+}
+
+// Polling status must not run a file's clean filter again while the file is
+// unchanged: for Git LFS or git-crypt that re-reads and re-hashes the whole
+// file on every refresh.
+TEST(StatusService, SummaryCleansAnUnchangedFilteredFileOnce) {
+  FixtureRepo fixture;
+  fixture.writeFile(".git/counting-clean.sh",
+                    "echo cleaned >> .git/clean-runs\n"
+                    "sed -e s/SECRET/REDACTED/\n");
+  fixture.run("git config filter.counting.clean \"sh .git/counting-clean.sh\"");
+  fixture.run("git config filter.counting.smudge cat");
+  fixture.writeFile(".gitattributes", "*.env filter=counting\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.run("git add .gitattributes app.env");
+  commitTick(fixture, "seed", 1);
+  // Same bytes, an older mtime: libgit2 sees raw bytes that differ from the
+  // stored (cleaned) blob, and only the clean filter can settle it.
+  age(fixture, "app.env");
+  const auto runs = fixture.root() / ".git" / "clean-runs";
+  std::filesystem::remove(runs);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json first = statusSummary(session, 10, repoId);
+  EXPECT_TRUE(first["unstaged"].empty()) << first.dump();
+  const size_t afterFirst = lineCount(runs);
+  ASSERT_GE(afterFirst, 1u) << "the clean filter never ran";
+
+  for (int i = 0; i < 3; ++i) {
+    Json again = statusSummary(session, 11 + i, repoId);
+    EXPECT_TRUE(again["unstaged"].empty()) << again.dump();
+  }
+  EXPECT_EQ(lineCount(runs), afterFirst) << "an unchanged file was cleaned again";
+
+  // A real edit is still found, and cleaned once more.
+  fixture.writeFile("app.env", "token=SECRET\nport=2\n");
+  age(fixture, "app.env");
+  Json edited = statusSummary(session, 20, repoId);
+  ASSERT_EQ(edited["unstaged"].size(), 1u) << edited.dump();
+  EXPECT_EQ(changeFor(edited["unstaged"], "app.env")["status"], "M");
+  EXPECT_GT(lineCount(runs), afterFirst);
+}
+
 // The content recheck of filtered files must not hide a change of the
 // executable bit, which git reports and stages whatever the content.
 TEST(StatusService, SummaryKeepsModeChangeOfFilteredFiles) {

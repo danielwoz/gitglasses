@@ -5,13 +5,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -735,13 +738,87 @@ bool needsCleanRecheck(git_repository* repo, const git_status_entry& entry) {
   return pathFilter(repo, delta->new_file.path).any();
 }
 
+namespace {
+
+// What a cleaned hash depends on besides the file's bytes, which stand in for
+// them: the file's size and mtime, and how the path is filtered.
+struct CleanStamp {
+  std::uintmax_t size = 0;
+  std::filesystem::file_time_type::rep mtime = 0;
+  std::string filter;
+
+  bool operator==(const CleanStamp&) const = default;
+};
+
+// `git hash-object` results for working-tree files git cleans before it
+// compares them, so that polling a repository with large Git LFS or
+// git-crypt files does not run their clean filter on every status. An entry
+// holds while the file's size, mtime and filter attributes stay the same.
+// Thread-safe and bounded; shared by every repository in the process.
+class CleanHashCache {
+ public:
+  std::optional<std::string> get(const std::string& key, const CleanStamp& stamp) {
+    std::lock_guard lock(mutex_);
+    const auto it = entries_.find(key);
+    if (it == entries_.end() || !(it->second.first == stamp)) return std::nullopt;
+    return it->second.second;
+  }
+
+  void put(const std::string& key, CleanStamp stamp, std::string id) {
+    std::lock_guard lock(mutex_);
+    if (entries_.size() >= kMaxEntries && entries_.find(key) == entries_.end()) entries_.clear();
+    entries_[key] = {std::move(stamp), std::move(id)};
+  }
+
+ private:
+  static constexpr std::size_t kMaxEntries = 4096;
+  std::mutex mutex_;
+  std::map<std::string, std::pair<CleanStamp, std::string>> entries_;
+};
+
+CleanHashCache& cleanHashCache() {
+  static CleanHashCache cache;
+  return cache;
+}
+
+// A file modified within this long of being hashed may change again without
+// its mtime moving (coarse filesystem timestamps), so its hash is not kept.
+constexpr auto kRacyWindow = std::chrono::seconds(3);
+
+}  // namespace
+
 std::vector<bool> confirmCleanChanges(const core::Repo& repo,
                                       const std::vector<CleanRecheck>& candidates,
                                       const CancelToken& token) {
   std::vector<bool> changed(candidates.size(), true);
+  const auto startedAt = std::filesystem::file_time_type::clock::now();
+
+  // Candidates whose cleaned hash is still known need no git run.
+  std::vector<size_t> pending;
+  std::vector<std::optional<CleanStamp>> stamps(candidates.size());
+  std::vector<std::string> keys(candidates.size());
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    const auto file = pathFromUtf8(repo.workdir()) / pathFromUtf8(candidates[i].path);
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(file, ec);
+    std::error_code timeEc;
+    const auto mtime = std::filesystem::last_write_time(file, timeEc);
+    keys[i] = repo.gitdir() + '\n' + candidates[i].path;
+    if (!ec && !timeEc) {
+      stamps[i] = CleanStamp{size, mtime.time_since_epoch().count(),
+                             pathFilter(repo.raw(), candidates[i].path).describe()};
+      if (const auto known = cleanHashCache().get(keys[i], *stamps[i])) {
+        changed[i] = *known != core::oidToHex(candidates[i].indexId);
+        continue;
+      }
+      if (startedAt - mtime < kRacyWindow) stamps[i].reset();
+    }
+    pending.push_back(i);
+  }
+
   std::vector<std::string> paths;
-  paths.reserve(candidates.size());
-  for (const auto& candidate : candidates) paths.push_back(candidate.path);
+  paths.reserve(pending.size());
+  for (const size_t i : pending) paths.push_back(candidates[i].path);
 
   size_t offset = 0;
   for (auto& batch : argvBatches(paths)) {
@@ -755,8 +832,10 @@ std::vector<bool> confirmCleanChanges(const core::Repo& repo,
           ids.push_back(std::move(line));
         });
     if (status && status.value().exitCode == 0 && ids.size() == size) {
-      for (size_t i = 0; i < size; ++i) {
-        changed[offset + i] = ids[i] != core::oidToHex(candidates[offset + i].indexId);
+      for (size_t j = 0; j < size; ++j) {
+        const size_t i = pending[offset + j];
+        changed[i] = ids[j] != core::oidToHex(candidates[i].indexId);
+        if (stamps[i]) cleanHashCache().put(keys[i], *stamps[i], ids[j]);
       }
     }
     offset += size;

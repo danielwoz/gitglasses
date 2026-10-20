@@ -138,7 +138,9 @@ struct CleanRecheck {
 // For each candidate, whether git sees the working-tree file as different
 // from the index once its clean filter and working-tree-encoding have run
 // (`git hash-object`, which only reads). A candidate git cannot hash (a
-// failing filter, a vanished file) counts as changed.
+// failing filter, a vanished file) counts as changed. Cleaned hashes are
+// remembered per file while its size, mtime and filter attributes stay the
+// same, so repeated status polls do not re-run the filters.
 std::vector<bool> confirmCleanChanges(const core::Repo& repo,
                                       const std::vector<CleanRecheck>& candidates,
                                       const CancelToken& token);
