@@ -855,6 +855,9 @@ export const RequestSchemas = {
         conflicts: Type.Boolean(),
         /** True when the envelope's base commit exists in this repository. */
         baseFound: Type.Boolean(),
+        message: Type.Optional(
+          Type.String({ description: "git's explanation when the patch was not applied." }),
+        ),
       },
       strict,
     ),

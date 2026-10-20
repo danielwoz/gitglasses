@@ -3136,6 +3136,10 @@
           },
           "baseFound": {
             "type": "boolean"
+          },
+          "message": {
+            "description": "git's explanation when the patch was not applied.",
+            "type": "string"
           }
         }
       }

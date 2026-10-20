@@ -64,6 +64,26 @@ RawGitOutput runGitRawOrThrow(const core::Repo& repo, std::vector<std::string> a
   return std::move(output).value();
 }
 
+// `git <command> <rest>` for a command that prints a patch, with the options
+// that make the patch one `git apply` reads back whatever the user's config
+// says: no colour, a/ and b/ prefixes (diff.noprefix and
+// diff.mnemonicPrefix would change them), binary content with full blob ids
+// instead of "Binary files differ", no external diff (diff.external,
+// GIT_EXTERNAL_DIFF) or textconv driver, and submodules as commit lines
+// rather than diff.submodule's log or diff formats.
+std::vector<std::string> patchCommand(std::vector<std::string> command,
+                                      const std::vector<std::string>& rest) {
+  std::vector<std::string> args = {"-c", "color.ui=never",           "-c", "diff.noprefix=false",
+                                   "-c", "diff.mnemonicPrefix=false"};
+  args.insert(args.end(), command.begin(), command.end());
+  for (const char* option : {"--binary", "--no-ext-diff", "--no-textconv", "--no-color",
+                             "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short"}) {
+    args.emplace_back(option);
+  }
+  args.insert(args.end(), rest.begin(), rest.end());
+  return args;
+}
+
 // Resolves `spec` to a full commit sha or throws GitError.
 std::string resolveCommit(const core::Repo& repo, const std::string& spec,
                           const CancelToken& token) {
@@ -117,7 +137,7 @@ std::optional<std::string> originFingerprint(git_repository* raw) {
 std::string wipPatchText(const core::Repo& repo, bool includeUntracked,
                          const CancelToken& token) {
   std::string patch =
-      runGitRawOrThrow(repo, {"diff", "HEAD"}, token, "git diff HEAD").stdoutText;
+      runGitRawOrThrow(repo, patchCommand({"diff"}, {"HEAD"}), token, "git diff HEAD").stdoutText;
   if (!includeUntracked) return patch;
 
   const RawGitOutput listed =
@@ -132,7 +152,8 @@ std::string wipPatchText(const core::Repo& repo, bool includeUntracked,
     if (path.empty()) continue;
     // Exits 1 when the file has content (the sides differ); only other exit
     // codes are real failures.
-    auto output = runGitRaw(repo, {"diff", "--no-index", "--", "/dev/null", path}, token);
+    auto output =
+        runGitRaw(repo, patchCommand({"diff", "--no-index"}, {"--", "/dev/null", path}), token);
     if (!output) throw rpc::HandlerError{{output.error()}};
     if (output.value().exitCode != 0 && output.value().exitCode != 1) {
       throw rpc::HandlerError{{ErrorCode::GitError,
@@ -182,9 +203,10 @@ EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
       throw rpc::HandlerError{{ErrorCode::GitError, "git rev-parse produced no output"}};
     }
     built.baseSha = parent.lines.front();
-    built.patch = runGitRawOrThrow(repo, {"stash", "show", "-p", "--include-untracked", ref},
-                                   token, "git stash show")
-                      .stdoutText;
+    built.patch =
+        runGitRawOrThrow(repo, patchCommand({"stash", "show", "-p"}, {"--include-untracked", ref}),
+                         token, "git stash show")
+            .stdoutText;
     built.summary = commitSubject(repo, ref, token);
     return built;
   }
@@ -196,7 +218,8 @@ EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
     if (parent.value().exitCode == 0 && !parent.value().lines.empty()) {
       built.baseSha = parent.value().lines.front();
       built.patch =
-          runGitRawOrThrow(repo, {"diff", built.baseSha, sha}, token, "git diff").stdoutText;
+          runGitRawOrThrow(repo, patchCommand({"diff"}, {built.baseSha, sha}), token, "git diff")
+              .stdoutText;
     } else {
       // Root commit: no parent exists, so the envelope records the commit
       // itself as base and the patch is the diff from the empty tree.
@@ -206,8 +229,8 @@ EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
       if (emptyTree.lines.empty()) {
         throw rpc::HandlerError{{ErrorCode::GitError, "git hash-object produced no output"}};
       }
-      built.patch = runGitRawOrThrow(repo, {"diff", emptyTree.lines.front(), sha}, token,
-                                     "git diff")
+      built.patch = runGitRawOrThrow(repo, patchCommand({"diff"}, {emptyTree.lines.front(), sha}),
+                                     token, "git diff")
                         .stdoutText;
     }
     built.summary = commitSubject(repo, sha, token);
@@ -218,7 +241,8 @@ EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
     built.baseSha = resolveCommit(repo, requireString(source, "base"), token);
     const std::string head = resolveCommit(repo, requireString(source, "head"), token);
     built.patch =
-        runGitRawOrThrow(repo, {"diff", built.baseSha, head}, token, "git diff").stdoutText;
+        runGitRawOrThrow(repo, patchCommand({"diff"}, {built.baseSha, head}), token, "git diff")
+            .stdoutText;
     built.summary = commitSubject(repo, head, token);
     return built;
   }
@@ -346,7 +370,13 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (conflicts) {
           return {{"applied", true}, {"conflicts", true}, {"baseFound", baseFound}};
         }
-        return {{"applied", false}, {"conflicts", false}, {"baseFound", baseFound}};
+        std::string message = output.value().stderrText;
+        while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+          message.pop_back();
+        }
+        rpc::Json result = {{"applied", false}, {"conflicts", false}, {"baseFound", baseFound}};
+        if (!message.empty()) result["message"] = message;
+        return result;
       },
       rpc::Mode::Serial);
 }

@@ -376,6 +376,86 @@ TEST(PatchService, RangeSourceEnvelope) {
   EXPECT_EQ(slurp(clone.root() / "r2.txt"), "second\n");
 }
 
+// Config that changes what `git diff` prints must not change the patch:
+// prefixes, colour, an external diff tool and the submodule format are all
+// pinned, and binary content travels as a binary patch.
+TEST(PatchService, PatchesIgnoreConfigThatChangesDiffOutput) {
+  FixtureRepo fixture;
+  const std::string binary1("\x89PNG\x00\x01\x02\x03 image", 14);
+  const std::string binary2("\x89PNG\x00\x07\x08\x09 image v2", 17);
+  fixture.writeFile("a.txt", "l1\nl2\nl3\n");
+  fixture.writeFile("img.bin", binary1);
+  fixture.run("git add a.txt img.bin");
+  commitTick(fixture.root(), "base", 1);
+  CloneRepo clone(fixture);
+
+  fixture.run("git config diff.noprefix true");
+  fixture.run("git config diff.mnemonicPrefix true");
+  fixture.run("git config color.ui always");
+  fixture.run("git config color.diff always");
+  fixture.run("git config diff.external gg-no-such-diff-tool");
+  fixture.run("git config diff.submodule log");
+  fixture.writeFile("a.txt", "l1\nl2 edited\nl3\n");
+  fixture.writeFile("img.bin", binary2);
+  fixture.writeFile("new.bin", binary1);
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  const std::string repoA = discoverRepo(session, 2, fixture.root());
+  const std::string repoB = discoverRepo(session, 3, clone.root());
+
+  Json envelope = createPatch(session, 10, repoA, {{"kind", "wip"}, {"includeUntracked", true}});
+  const std::string patchText = envelope["patch"];
+  EXPECT_EQ(patchText.find('\x1b'), std::string::npos) << "colour escapes in the patch";
+  EXPECT_NE(patchText.find("diff --git a/a.txt b/a.txt"), std::string::npos) << patchText;
+  EXPECT_NE(patchText.find("GIT binary patch"), std::string::npos) << patchText;
+
+  Json applied = applyPatch(session, 11, repoB, envelope);
+  EXPECT_TRUE(applied["applied"].get<bool>()) << applied.dump();
+  EXPECT_FALSE(applied["conflicts"].get<bool>());
+  EXPECT_EQ(slurp(clone.root() / "a.txt"), "l1\nl2 edited\nl3\n");
+  EXPECT_EQ(slurp(clone.root() / "img.bin"), binary2);
+  EXPECT_EQ(slurp(clone.root() / "new.bin"), binary1);
+
+  // The commit and stash sources take the same path through git.
+  fixture.run("git add a.txt img.bin new.bin");
+  commitTick(fixture.root(), "binary work", 2);
+  runGit(clone.root(), "git reset -q --hard");
+  runGit(clone.root(), "git clean -fdq");
+  Json fromCommit =
+      createPatch(session, 12, repoA, {{"kind", "commit"}, {"sha", rev(fixture.root(), "HEAD")}});
+  Json appliedCommit = applyPatch(session, 13, repoB, fromCommit);
+  EXPECT_TRUE(appliedCommit["applied"].get<bool>()) << appliedCommit.dump();
+  EXPECT_EQ(slurp(clone.root() / "img.bin"), binary2);
+
+  fixture.writeFile("img.bin", binary1);
+  fixture.run("git stash push -q -m \"binary stash\"");
+  Json fromStash = createPatch(session, 14, repoA, {{"kind", "stash"}, {"index", 0}});
+  Json appliedStash = applyPatch(session, 15, repoA, fromStash);
+  EXPECT_TRUE(appliedStash["applied"].get<bool>()) << appliedStash.dump();
+  EXPECT_EQ(slurp(fixture.root() / "img.bin"), binary1);
+}
+
+TEST(PatchService, ApplyFailureCarriesGitsReason) {
+  FixtureRepo source;
+  source.writeFile("f.txt", "l1\nl2\nl3\n");
+  source.run("git add f.txt");
+  commitTick(source.root(), "base", 1);
+  source.writeFile("f.txt", "l1\nl2 patched\nl3\n");
+  FixtureRepo unrelated;
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  const std::string repoA = discoverRepo(session, 2, source.root());
+  const std::string repoC = discoverRepo(session, 3, unrelated.root());
+  Json envelope = createPatch(session, 10, repoA, {{"kind", "wip"}});
+  Json applied = applyPatch(session, 11, repoC, envelope);
+  EXPECT_FALSE(applied["applied"].get<bool>());
+  ASSERT_TRUE(applied.contains("message")) << applied.dump();
+  EXPECT_NE(applied["message"].get<std::string>().find("f.txt"), std::string::npos)
+      << applied.dump();
+}
+
 TEST(PatchService, InvalidParamsRejected) {
   FixtureRepo fixture;
   InteractiveSession session;
