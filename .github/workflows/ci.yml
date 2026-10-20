@@ -40,7 +40,11 @@ jobs:
           cache: pnpm
 
       - name: Install clang-format
-        run: pipx install "clang-format==$(node scripts/check-format.mjs --clang-format-version)"
+        run: |
+          python3 -m venv "$RUNNER_TEMP/clang-format"
+          "$RUNNER_TEMP/clang-format/bin/pip" install --quiet \
+            "clang-format==$(node scripts/check-format.mjs --clang-format-version)"
+          echo "$RUNNER_TEMP/clang-format/bin" >> "$GITHUB_PATH"
 
       - name: Install workspace
         run: pnpm install --frozen-lockfile
@@ -55,7 +59,7 @@ jobs:
       - name: Check the formatting of the changed files
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
-        run: node scripts/check-format.mjs --base "$BASE"
+        run: node scripts/check-format.mjs --base "$BASE" --committed
 
       - name: Test the repository scripts
         run: pnpm test:scripts
