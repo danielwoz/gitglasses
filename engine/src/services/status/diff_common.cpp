@@ -1,5 +1,6 @@
 #include "services/status/diff_common.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -19,6 +20,26 @@ namespace {
 // than UTF-16 takes code units, so this bounds the Windows command line too,
 // leaving room for the executable, the working directory and the options.
 constexpr size_t kArgvBudget = 16 * 1024;
+
+char statusLetter(git_delta_t status) {
+  switch (status) {
+    case GIT_DELTA_ADDED:
+    case GIT_DELTA_UNTRACKED:
+      return 'A';
+    case GIT_DELTA_DELETED:
+      return 'D';
+    case GIT_DELTA_RENAMED:
+      return 'R';
+    case GIT_DELTA_COPIED:
+      return 'C';
+    case GIT_DELTA_TYPECHANGE:
+      return 'T';
+    case GIT_DELTA_CONFLICTED:
+      return 'U';
+    default:
+      return 'M';
+  }
+}
 
 bool isRegularFileMode(std::uint32_t mode) {
   return mode == GIT_FILEMODE_BLOB || mode == GIT_FILEMODE_BLOB_EXECUTABLE;
@@ -79,6 +100,89 @@ bool parseHunkHeader(const std::string& line, HunkBlock& out) {
 }
 
 }  // namespace
+
+Result<core::TreePtr> commitTree(git_commit* commit) {
+  git_tree* tree = nullptr;
+  if (git_commit_tree(&tree, commit) != 0) return core::gitError("read commit tree");
+  return core::TreePtr(tree);
+}
+
+Result<core::CommitPtr> resolveCommit(const core::Repo& repo, const std::string& rev) {
+  git_object* raw = nullptr;
+  if (git_revparse_single(&raw, repo.raw(), rev.c_str()) != 0) {
+    return core::gitError("resolve '" + rev + "'");
+  }
+  core::ObjectPtr object(raw);
+  git_object* peeled = nullptr;
+  if (git_object_peel(&peeled, object.get(), GIT_OBJECT_COMMIT) != 0) {
+    return core::gitError("'" + rev + "' does not point to a commit");
+  }
+  return core::CommitPtr(reinterpret_cast<git_commit*>(peeled));
+}
+
+Result<core::DiffPtr> commitDiff(const core::Repo& repo, git_commit* commit) {
+  auto tree = commitTree(commit);
+  if (!tree) return tree.error();
+
+  core::TreePtr parentTree;
+  if (git_commit_parentcount(commit) > 0) {
+    git_commit* rawParent = nullptr;
+    if (git_commit_parent(&rawParent, commit, 0) != 0) {
+      return core::gitError("lookup parent of " + core::oidToHex(*git_commit_id(commit)));
+    }
+    core::CommitPtr parent(rawParent);
+    auto parentTreeResult = commitTree(parent.get());
+    if (!parentTreeResult) return parentTreeResult.error();
+    parentTree = std::move(parentTreeResult.value());
+  }
+
+  git_diff* rawDiff = nullptr;
+  if (git_diff_tree_to_tree(&rawDiff, repo.raw(), parentTree.get(), tree.value().get(), nullptr) !=
+      0) {
+    return core::gitError("diff commit " + core::oidToHex(*git_commit_id(commit)));
+  }
+  return core::DiffPtr(rawDiff);
+}
+
+Result<std::vector<TreeFileChange>> treeFileChanges(git_diff* diff, const CancelToken& token,
+                                                    std::size_t limit, std::size_t& total) {
+  git_diff_find_options findOpts;
+  git_diff_find_options_init(&findOpts, GIT_DIFF_FIND_OPTIONS_VERSION);
+  if (git_diff_find_similar(diff, &findOpts) != 0) return core::gitError("detect renames");
+
+  total = git_diff_num_deltas(diff);
+  const std::size_t count = std::min(total, limit);
+  std::vector<TreeFileChange> files;
+  files.reserve(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    token.throwIfCancelled();
+    const git_diff_delta* delta = git_diff_get_delta(diff, i);
+    TreeFileChange file;
+    file.path = delta->new_file.path ? delta->new_file.path : "";
+    file.status = statusLetter(delta->status);
+    if ((file.status == 'R' || file.status == 'C') && delta->old_file.path) {
+      file.origPath = delta->old_file.path;
+    }
+    file.binary = (delta->flags & GIT_DIFF_FLAG_BINARY) != 0;
+    if (!file.binary) {
+      git_patch* rawPatch = nullptr;
+      if (git_patch_from_diff(&rawPatch, diff, i) == 0 && rawPatch) {
+        core::PatchPtr patch(rawPatch);
+        // Building the patch loads both sides, which is when binary content
+        // is detected.
+        file.binary = (git_patch_get_delta(patch.get())->flags & GIT_DIFF_FLAG_BINARY) != 0;
+        size_t contextLines = 0, additions = 0, deletions = 0;
+        if (!file.binary &&
+            git_patch_line_stats(&contextLines, &additions, &deletions, patch.get()) == 0) {
+          file.additions = additions;
+          file.deletions = deletions;
+        }
+      }
+    }
+    files.push_back(std::move(file));
+  }
+  return files;
+}
 
 Result<core::DiffPtr> singleFileDiff(const core::Repo& repo, const std::string& path, bool staged) {
   git_diff_options opts;

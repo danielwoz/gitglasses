@@ -161,6 +161,98 @@ export const FileChange = Type.Object(
   strict,
 );
 
+/** A file one commit changes, as commit/details lists it: a FileChange that
+ *  also says whether the content is binary. */
+export const CommitFileChange = Type.Object(
+  {
+    path: Type.String({ description: 'Path after the commit (for a deletion, the deleted path).' }),
+    status: FileChangeStatus,
+    origPath: Type.Optional(
+      Type.String({ description: 'Path before the commit; renames and copies only.' }),
+    ),
+    /** 0 for binary files, whose lines are not counted. */
+    additions: Count,
+    deletions: Count,
+    binary: Type.Boolean({
+      description: 'Either side is binary; additions and deletions are then 0.',
+    }),
+  },
+  strict,
+);
+
+/** One `Key: value` trailer from the end of a commit message. */
+export const CommitTrailer = Type.Object(
+  {
+    key: Type.String(),
+    value: Type.String(),
+  },
+  strict,
+);
+
+/** A ref that points at a commit. */
+export const CommitRef = Type.Object(
+  {
+    name: Type.String({
+      description: "Short name: 'HEAD', 'main', 'origin/main', 'v1.0'.",
+    }),
+    kind: Type.Union(
+      [Type.Literal('head'), Type.Literal('branch'), Type.Literal('remote'), Type.Literal('tag')],
+      {
+        description:
+          "'head' when HEAD resolves to the commit (attached or detached), 'branch' for a local branch, 'remote' for a remote-tracking branch, 'tag' for a tag (annotated tags peeled).",
+      },
+    ),
+  },
+  strict,
+);
+
+export const CommitDetails = Type.Object(
+  {
+    /** The commit the requested revision resolved to. */
+    sha: Sha,
+    parents: Type.Array(Sha),
+    author: BlameSignature,
+    committer: BlameSignature,
+    subject: Type.String({
+      description:
+        "The message's first paragraph with its line breaks folded into spaces, like git's %s.",
+    }),
+    body: Type.String({
+      description:
+        'The message after the subject and the blank line that ends it, trailers included, trimmed; empty when there is none.',
+    }),
+    trailers: Type.Array(CommitTrailer, {
+      description: "Trailers parsed from the message's closing paragraph, in order.",
+    }),
+    refs: Type.Array(CommitRef, {
+      description:
+        'Refs pointing at the commit: HEAD, then local branches, remote branches and tags, each sorted by name.',
+    }),
+    files: Type.Array(CommitFileChange, {
+      description:
+        "Files changed against the first parent (the empty tree for a root commit), with diff/commit's rename detection. Capped; see `truncated`.",
+    }),
+    stats: Type.Object(
+      {
+        /** Every changed file, including those past the cap. */
+        files: Count,
+        /** Sums over the listed files. */
+        additions: Count,
+        deletions: Count,
+      },
+      {
+        ...strict,
+        description:
+          '`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set.',
+      },
+    ),
+    truncated: Type.Boolean({
+      description: 'More files changed than `files` lists.',
+    }),
+  },
+  strict,
+);
+
 export const GraphRef = Type.Object(
   {
     name: Type.String(),

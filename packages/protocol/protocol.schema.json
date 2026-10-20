@@ -517,6 +517,264 @@
         }
       }
     },
+    "commit/details": {
+      "description": "One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most 2000 files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "sha"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "sha": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision naming the commit: a full or short sha, HEAD, a branch or a tag.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sha",
+          "parents",
+          "author",
+          "committer",
+          "subject",
+          "body",
+          "trailers",
+          "refs",
+          "files",
+          "stats",
+          "truncated"
+        ],
+        "properties": {
+          "sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          },
+          "author": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "name",
+              "email",
+              "time"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "time": {
+                "type": "integer"
+              }
+            }
+          },
+          "committer": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "name",
+              "email",
+              "time"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "time": {
+                "type": "integer"
+              }
+            }
+          },
+          "subject": {
+            "description": "The message's first paragraph with its line breaks folded into spaces, like git's %s.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The message after the subject and the blank line that ends it, trailers included, trimmed; empty when there is none.",
+            "type": "string"
+          },
+          "trailers": {
+            "description": "Trailers parsed from the message's closing paragraph, in order.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "key",
+                "value"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "refs": {
+            "description": "Refs pointing at the commit: HEAD, then local branches, remote branches and tags, each sorted by name.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "kind"
+              ],
+              "properties": {
+                "name": {
+                  "description": "Short name: 'HEAD', 'main', 'origin/main', 'v1.0'.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "'head' when HEAD resolves to the commit (attached or detached), 'branch' for a local branch, 'remote' for a remote-tracking branch, 'tag' for a tag (annotated tags peeled).",
+                  "anyOf": [
+                    {
+                      "const": "head",
+                      "type": "string"
+                    },
+                    {
+                      "const": "branch",
+                      "type": "string"
+                    },
+                    {
+                      "const": "remote",
+                      "type": "string"
+                    },
+                    {
+                      "const": "tag",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "files": {
+            "description": "Files changed against the first parent (the empty tree for a root commit), with diff/commit's rename detection. Capped; see `truncated`.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions",
+                "binary"
+              ],
+              "properties": {
+                "path": {
+                  "description": "Path after the commit (for a deletion, the deleted path).",
+                  "type": "string"
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    },
+                    {
+                      "const": "T",
+                      "type": "string"
+                    },
+                    {
+                      "const": "U",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "description": "Path before the commit; renames and copies only.",
+                  "type": "string"
+                },
+                "additions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "deletions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "binary": {
+                  "description": "Either side is binary; additions and deletions are then 0.",
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "stats": {
+            "additionalProperties": false,
+            "description": "`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set.",
+            "type": "object",
+            "required": [
+              "files",
+              "additions",
+              "deletions"
+            ],
+            "properties": {
+              "files": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "additions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "deletions": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            }
+          },
+          "truncated": {
+            "description": "More files changed than `files` lists.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "history/file": {
       "description": "File history following renames, newest first.",
       "params": {
@@ -3162,6 +3420,7 @@
     "diff/commit",
     "diff/refs",
     "diff/fileHunks",
-    "remote/list"
+    "remote/list",
+    "commit/details"
   ]
 }

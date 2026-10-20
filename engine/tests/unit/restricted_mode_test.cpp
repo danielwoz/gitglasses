@@ -169,6 +169,7 @@ TEST(RestrictedMode, ReadsRunNothingTheRepositoryConfigures) {
       {"status/summary", {{"repoId", repoId}}},
       {"diff/fileHunks", {{"repoId", repoId}, {"path", "a.txt"}, {"staged", false}}},
       {"diff/commit", {{"repoId", repoId}, {"sha", "HEAD"}}},
+      {"commit/details", {{"repoId", repoId}, {"sha", "HEAD"}}},
       {"graph/rows", {{"repoId", repoId}, {"limit", 10}}},
       {"log/commits", {{"repoId", repoId}, {"limit", 10}}},
       {"rev/fileAtRev", {{"repoId", repoId}, {"path", "a.txt"}, {"rev", "HEAD"}}},

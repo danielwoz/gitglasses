@@ -233,6 +233,19 @@ check('diff/commit reports the extend-app change', () => {
                    [{ path: 'app.txt', status: 'M', additions: 1, deletions: 0 }]);
 });
 
+check('commit/details reads the merge against its first parent', () => {
+  const details = result('commit/details', { repoId, sha: 'v1' });
+  assert.equal(details.sha, mergeSha);
+  assert.equal(details.parents.length, 2);
+  assert.equal(details.subject, 'merge side');
+  assert.deepEqual(details.refs.map((r) => [r.name, r.kind]),
+                   [['HEAD', 'head'], ['main', 'branch'], ['v1', 'tag']]);
+  assert.deepEqual(details.files, [
+    { path: 'side.txt', status: 'A', additions: 1, deletions: 0, binary: false },
+  ]);
+  assert.equal(details.truncated, false);
+});
+
 check('search/commits streams matches', () => {
   const search = result('search/commits',
                         { repoId, streamId: 'q1', limit: 50, query: { text: 'extend' } });

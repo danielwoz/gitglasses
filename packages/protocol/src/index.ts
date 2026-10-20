@@ -19,7 +19,7 @@ export { PROTOCOL_VERSION } from './version.js';
 // The TypeBox schemas themselves, so consumers can validate at runtime.
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
-export { RESTRICTED_MODE_METHODS } from './schema/requests.js';
+export { COMMIT_DETAILS_MAX_FILES, RESTRICTED_MODE_METHODS } from './schema/requests.js';
 
 // Sha helpers also have their own lean entry point: @gitglasses/protocol/sha.
 export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
@@ -84,6 +84,10 @@ export type BlameSignature = Static<typeof models.BlameSignature>;
 export type BlameCommit = Static<typeof models.BlameCommit>;
 export type BlameHunk = Static<typeof models.BlameHunk>;
 export type CommitSummaryInfo = Static<typeof models.CommitSummaryInfo>;
+export type CommitDetails = Static<typeof models.CommitDetails>;
+export type CommitFileChange = Static<typeof models.CommitFileChange>;
+export type CommitRef = Static<typeof models.CommitRef>;
+export type CommitTrailer = Static<typeof models.CommitTrailer>;
 export type FileHistoryEntry = Static<typeof models.FileHistoryEntry>;
 export type FileChange = Static<typeof models.FileChange>;
 export type GraphRef = Static<typeof models.GraphRef>;
@@ -127,6 +131,7 @@ export interface Requests {
   'repo/close': { params: P<'repo/close'>; result: Empty };
   'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
+  'commit/details': { params: P<'commit/details'>; result: R<'commit/details'> };
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };
   'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };

@@ -59,6 +59,7 @@ const PURE_METHODS = [
   'diff/commit',
   'diff/refs',
   'diff/fileHunks',
+  'commit/details',
   'stage/files',
   'stage/hunks',
   'worktree/list',
@@ -121,6 +122,7 @@ describe('isMethodAvailable in Restricted Mode', () => {
       'diff/fileHunks',
       'rev/fileAtRev',
       'refs/list',
+      'commit/details',
     ]) {
       expect(isMethodAvailable(restricted, method), method).toBe(true);
     }

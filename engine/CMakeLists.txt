@@ -34,6 +34,7 @@ if(EMSCRIPTEN)
     src/rpc/dispatcher.cpp
     src/services/blame/blame_service.cpp
     src/services/blame/blame_methods.cpp
+    src/services/commit/commit_methods.cpp
     src/services/graph/graph_methods.cpp
     src/services/history/history_methods.cpp
     src/services/mutate/mutate_common.cpp
@@ -155,6 +156,7 @@ target_link_libraries(gg_watch PUBLIC gg_util PRIVATE gg_warnings)
 add_library(gg_services STATIC
   src/services/blame/blame_service.cpp
   src/services/blame/blame_methods.cpp
+  src/services/commit/commit_methods.cpp
   src/services/graph/graph_methods.cpp
   src/services/history/history_methods.cpp
   src/services/mutate/mutate_common.cpp

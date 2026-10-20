@@ -385,6 +385,13 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   EXPECT_FALSE(file.value("binary", true));
 
   checkedRequest(session, 21, "patch/create", {{"repoId", repoId}, {"source", {{"kind", "wip"}}}});
+
+  Json details =
+      checkedRequest(session, 22, "commit/details", {{"repoId", repoId}, {"sha", "v1.0"}});
+  EXPECT_FALSE(details.value("refs", Json::array()).empty());
+  EXPECT_FALSE(details.value("files", Json::array()).empty());
+  checkedRequest(session, 23, "commit/details",
+                 {{"repoId", repoId}, {"sha", log["commits"].back()["sha"]}});
 }
 
 // The engine must refuse what the schema forbids. Every case here is params
@@ -460,6 +467,8 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
           {"ref", "HEAD"},
           {"createBranch", "-x"}},
          "option-like createBranch");
+  reject("commit/details", {{"repoId", repoId}, {"sha", "--output=/dev/null"}},
+         "option-like commit/details sha");
 
   // Empty strings never stand in for an omitted value.
   reject("mutate/fetch", {{"repoId", repoId}, {"remote", ""}}, "empty remote");
@@ -470,6 +479,7 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
   reject("blame/file", {{"repoId", repoId}, {"path", ""}, {"streamId", "s"}}, "empty path");
   reject("search/commits", {{"repoId", repoId}, {"streamId", ""}}, "empty streamId");
   reject("diff/commit", {{"repoId", repoId}, {"sha", ""}}, "empty sha");
+  reject("commit/details", {{"repoId", repoId}, {"sha", ""}}, "empty commit/details sha");
 
   // Required members the engine will not guess.
   reject("stash/apply", {{"repoId", repoId}, {"index", 0}}, "missing pop");

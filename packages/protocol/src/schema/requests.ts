@@ -6,6 +6,7 @@ import { Type } from '@sinclair/typebox';
 
 import {
   BlameCommit,
+  CommitDetails,
   CommitSummaryInfo,
   DiffHunk,
   FileChange,
@@ -38,6 +39,10 @@ export const DEFAULT_FILE_BYTES = 4 * 1024 * 1024;
 /** Largest cap a client may ask for, chosen to keep the response frame
  * inside the engine's frame limit once JSON escaping is applied. */
 export const MAX_FILE_BYTES = 16 * 1024 * 1024;
+
+/** Most files commit/details lists; a commit that changes more sets
+ *  `truncated`. */
+export const COMMIT_DETAILS_MAX_FILES = 2000;
 
 const Limit = Type.Optional(
   Type.Integer({
@@ -210,6 +215,19 @@ export const RequestSchemas = {
       },
       strict,
     ),
+  },
+  'commit/details': {
+    description: `One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most ${COMMIT_DETAILS_MAX_FILES} files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.`,
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        sha: positional(
+          'Revision naming the commit: a full or short sha, HEAD, a branch or a tag.',
+        ),
+      },
+      strict,
+    ),
+    result: CommitDetails,
   },
   'history/file': {
     description: 'File history following renames, newest first.',
@@ -866,4 +884,5 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'diff/refs',
   'diff/fileHunks',
   'remote/list',
+  'commit/details',
 ];

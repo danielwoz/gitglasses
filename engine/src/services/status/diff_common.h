@@ -3,6 +3,7 @@
 #include <git2.h>
 
 #include <chrono>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,33 @@
 #include "util/result.h"
 
 namespace gg::services::status_detail {
+
+// The commit a revspec names (full or short sha, HEAD, a branch, a tag),
+// peeling annotated tags.
+Result<core::CommitPtr> resolveCommit(const core::Repo& repo, const std::string& rev);
+
+// The tree a commit records.
+Result<core::TreePtr> commitTree(git_commit* commit);
+
+// The change a commit introduces: its tree against its first parent's tree,
+// or against the empty tree for a root commit.
+Result<core::DiffPtr> commitDiff(const core::Repo& repo, git_commit* commit);
+
+// One file of a tree-to-tree diff.
+struct TreeFileChange {
+  std::string path;
+  std::string origPath;  // the source path of a rename or copy, else empty
+  char status = 'M';     // M A D R C T U
+  std::size_t additions = 0;
+  std::size_t deletions = 0;
+  bool binary = false;  // binary files carry no line counts
+};
+
+// Runs rename detection on `diff` (libgit2's default find options), then
+// lists its first `limit` files with per-file line stats. `total` receives
+// the number of files in the diff once renames are paired.
+Result<std::vector<TreeFileChange>> treeFileChanges(git_diff* diff, const CancelToken& token,
+                                                    std::size_t limit, std::size_t& total);
 
 // Diff limited to one path: index -> workdir (staged == false, untracked
 // content included) or HEAD tree -> index (staged == true; empty tree when

@@ -1,0 +1,55 @@
+{
+  "method": "commit/details",
+  "kind": "result",
+  "payload": {
+    "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "parents": ["0f1e2d3c4b5a69788796a5b4c3d2e1f001234567"],
+    "author": {
+      "name": "Fixture Author",
+      "email": "fixture@example.invalid",
+      "time": 1700000000
+    },
+    "committer": {
+      "name": "Fixture Committer",
+      "email": "committer@example.invalid",
+      "time": 1700000060
+    },
+    "subject": "Add the frame parser",
+    "body": "The parser reads frames\nand validates them.\n\nSigned-off-by: Fixture Author <fixture@example.invalid>",
+    "trailers": [
+      { "key": "Signed-off-by", "value": "Fixture Author <fixture@example.invalid>" }
+    ],
+    "refs": [
+      { "name": "HEAD", "kind": "head" },
+      { "name": "main", "kind": "branch" },
+      { "name": "origin/main", "kind": "remote" },
+      { "name": "v1.0", "kind": "tag" }
+    ],
+    "files": [
+      {
+        "path": "src/parser.ts",
+        "status": "A",
+        "additions": 40,
+        "deletions": 0,
+        "binary": false
+      },
+      {
+        "path": "src/frames.ts",
+        "origPath": "src/old_frames.ts",
+        "status": "R",
+        "additions": 2,
+        "deletions": 1,
+        "binary": false
+      },
+      {
+        "path": "media/logo.png",
+        "status": "M",
+        "additions": 0,
+        "deletions": 0,
+        "binary": true
+      }
+    ],
+    "stats": { "files": 3, "additions": 42, "deletions": 1 },
+    "truncated": false
+  }
+}
