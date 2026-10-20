@@ -1,11 +1,29 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { EngineClient } from '@gitglasses/rpc';
+import { ErrorCodes } from '@gitglasses/protocol';
+import { EngineClient, EngineRestartedError } from '@gitglasses/rpc';
+import type { AliasResolver, PathFlavor } from './pathAliases';
 
 export interface LocatedFile {
   repoId: string;
+  /** The repository root in the spelling of the located path, so joining
+   *  relativePath onto it names the file the editor has open. */
   rootPath: string;
   relativePath: string;
+}
+
+// The web worker host has no `process`.
+const hostPlatform = typeof process === 'undefined' ? '' : process.platform;
+
+/** Whether paths compare without regard to letter case by default: NTFS on
+ *  Windows and APFS on macOS are case-insensitive unless formatted otherwise. */
+export function defaultCaseInsensitive(platform: string = hostPlatform): boolean {
+  return platform === 'win32' || platform === 'darwin';
+}
+
+function comparable(value: string, caseInsensitive: boolean): string {
+  const slashed = value.replace(/\\/g, '/').replace(/\/+$/, '');
+  return caseInsensitive ? slashed.toLowerCase() : slashed;
 }
 
 /**
@@ -16,20 +34,15 @@ export interface LocatedFile {
  * comparison. rootPath is libgit2's git_repository_workdir(), which uses
  * forward slashes on every platform; fsPath is VS Code's, which uses
  * backslashes on Windows. Drive letters also vary in case between the two,
- * and NTFS is case-insensitive.
+ * and NTFS and APFS are case-insensitive.
  */
 export function relativeWithinRoot(
   rootPath: string,
   fsPath: string,
-  caseInsensitive: boolean = process.platform === 'win32',
+  caseInsensitive: boolean = defaultCaseInsensitive(),
 ): string | undefined {
-  const normalize = (value: string): string => {
-    const slashed = value.replace(/\\/g, '/').replace(/\/+$/, '');
-    return caseInsensitive ? slashed.toLowerCase() : slashed;
-  };
-
-  const root = normalize(rootPath);
-  const target = normalize(fsPath);
+  const root = comparable(rootPath, caseInsensitive);
+  const target = comparable(fsPath, caseInsensitive);
   if (root === '') return undefined;
   if (target === root) return '';
   if (!target.startsWith(`${root}/`)) return undefined;
@@ -40,13 +53,13 @@ export function relativeWithinRoot(
 }
 
 /** Whether two repository roots are the same path, ignoring a trailing
- *  separator, separator style, and case on Windows. */
-export function sameRoot(a: string, b: string): boolean {
-  const normalize = (value: string): string => {
-    const slashed = value.replace(/\\/g, '/').replace(/\/+$/, '');
-    return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
-  };
-  return normalize(a) === normalize(b);
+ *  separator, separator style, and case where the platform ignores it. */
+export function sameRoot(
+  a: string,
+  b: string,
+  caseInsensitive: boolean = defaultCaseInsensitive(),
+): boolean {
+  return comparable(a, caseInsensitive) === comparable(b, caseInsensitive);
 }
 
 /** A repository's display name: the last segment of its root path. */
@@ -55,25 +68,86 @@ export function repoName(rootPath: string): string {
   return parts[parts.length - 1] || rootPath;
 }
 
-// Maps workspace files to engine repo ids, discovering repos lazily on first
-// touch of a file inside them.
+/** A repository the service has registered. */
+export interface KnownRepository {
+  repoId: string;
+  /** The root as the engine reports it. */
+  rootPath: string;
+  /** Other spellings of the same directory that editor paths use. */
+  aliases: readonly string[];
+}
+
+export interface RepositoryServiceOptions {
+  /** Finds the editor's spelling of a root the engine reports under another
+   *  name (symlink, 8.3 short name, letter case). Hosts with a real
+   *  filesystem supply one; without it such files go unmatched, with a
+   *  warning in the log. */
+  resolveAlias?: AliasResolver;
+  /** Writes a line to the host's log. */
+  log?: (line: string) => void;
+  /** Path comparison mode; defaults to the platform's. */
+  caseInsensitive?: boolean;
+  /** Path operations on editor paths; defaults to the platform's. */
+  pathFlavor?: PathFlavor;
+  /** Clock for expiring "in no repository" answers. */
+  now?: () => number;
+}
+
+/** How long the engine's "in no repository" answer for a directory is reused
+ *  before the engine is asked again. A repository created inside the
+ *  workspace drops it sooner, through forgetDirectories(). */
+export const NO_REPOSITORY_TTL_MS = 30_000;
+
+/** Bound on the set of log lines already written once. */
+const MAX_REMEMBERED_REPORTS = 500;
+
+interface Registered {
+  repoId: string;
+  rootPath: string;
+  aliases: string[];
+}
+
+interface DirectoryAnswer {
+  /** Undefined when the directory is in no repository. */
+  repoId?: string;
+  /** Expiry of a negative answer. */
+  expires?: number;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// Maps workspace files to engine repo ids. The engine is asked once per
+// directory which repository contains it, so a file inside a submodule or a
+// nested clone resolves to that inner repository even when its parent is
+// already known; later lookups in the directory are answered locally.
 export class RepositoryService {
-  private rootsById = new Map<string, string>();
-  /** (repoId, rootPath) ordered by path length, longest first, so nested repos
-   *  match before their parents. Rebuilt on mutation, not per lookup. */
+  private registered = new Map<string, Registered>();
+  /** (repoId, spelling) for every spelling of every root, longest first, so
+   *  nested repos match before their parents. Rebuilt on mutation, not per
+   *  lookup. */
   private sortedRoots: [string, string][] = [];
-  private discovering = new Map<string, Promise<string | undefined>>();
+  /** The engine's answer per directory, keyed by its comparable form. */
+  private directories = new Map<string, DirectoryAnswer>();
+  private discovering = new Map<string, Promise<void>>();
+  private listeners = new Set<() => void>();
+  /** Raised while rediscoverAll re-registers, which reports one change. */
+  private quiet = 0;
+  /** Directory lookups the engine did not answer. */
+  private unanswered = 0;
+  private reported = new Set<string>();
+  private readonly caseInsensitive: boolean;
+  private readonly flavor: PathFlavor;
+  private readonly now: () => number;
 
-  constructor(private readonly engine: EngineClient) {}
-
-  private setRoot(repoId: string, rootPath: string): void {
-    this.rootsById.set(repoId, rootPath);
-    this.sortedRoots = [...this.rootsById.entries()].sort((a, b) => b[1].length - a[1].length);
-  }
-
-  private clearRoots(): void {
-    this.rootsById.clear();
-    this.sortedRoots = [];
+  constructor(
+    private readonly engine: EngineClient,
+    private readonly options: RepositoryServiceOptions = {},
+  ) {
+    this.caseInsensitive = options.caseInsensitive ?? defaultCaseInsensitive();
+    this.flavor = options.pathFlavor ?? path;
+    this.now = options.now ?? Date.now;
   }
 
   /** Synchronous lookup against already-discovered repos. */
@@ -81,48 +155,251 @@ export class RepositoryService {
     if (uri.scheme !== 'file') return undefined;
     const fsPath = uri.fsPath;
     for (const [repoId, rootPath] of this.sortedRoots) {
-      const relative = relativeWithinRoot(rootPath, fsPath);
+      const relative = relativeWithinRoot(rootPath, fsPath, this.caseInsensitive);
       if (relative === undefined) continue;
       return { repoId, rootPath, relativePath: relative };
     }
     return undefined;
   }
 
-  /** Discovers the repo containing the file if not yet known. */
+  /** Asks the engine which repository contains the file's directory, unless
+   *  it already answered for that directory, then locates the file. */
   async locateOrDiscover(uri: vscode.Uri): Promise<LocatedFile | undefined> {
-    const located = this.locate(uri);
-    if (located) return located;
     if (uri.scheme !== 'file') return undefined;
-
-    const dir = path.dirname(uri.fsPath);
-    let inflight = this.discovering.get(dir);
-    if (!inflight) {
-      inflight = this.engine
-        .request('repo/discover', { path: dir })
-        .then((info) => {
-          // Engine reports the root with a trailing slash; normalize.
-          this.setRoot(info.repoId, info.rootPath.replace(/\/$/, ''));
-          return info.repoId;
-        })
-        .catch(() => undefined)
-        .finally(() => this.discovering.delete(dir));
-      this.discovering.set(dir, inflight);
-    }
-    await inflight;
+    const dir = this.flavor.dirname(uri.fsPath);
+    if (!this.answered(dir)) await this.discoverDirectory(dir);
     return this.locate(uri);
   }
 
   /** Re-register all known repos (after an engine respawn: ids are stale). */
   async rediscoverAll(): Promise<void> {
-    const roots = [...this.rootsById.values()];
-    this.clearRoots();
-    for (const root of roots) {
-      try {
-        const info = await this.engine.request('repo/discover', { path: root });
-        this.setRoot(info.repoId, info.rootPath.replace(/\/$/, ''));
-      } catch {
-        // Repo may have vanished; drop it.
+    const previous = [...this.registered.values()];
+    const before = this.rootsKey();
+    this.registered.clear();
+    this.directories.clear();
+    this.rebuild();
+    this.quiet++;
+    try {
+      for (const repo of previous) {
+        try {
+          const info = await this.engine.request('repo/discover', { path: repo.rootPath });
+          this.register(info.repoId, info.rootPath);
+          // The editor's spellings of the root carry over to the new id.
+          const current = this.registered.get(info.repoId);
+          if (current) for (const alias of repo.aliases) this.addAlias(current, alias);
+        } catch (error) {
+          // The repository may have vanished; drop it.
+          this.log(`dropped ${repo.rootPath} after the engine restarted: ${errorText(error)}`);
+        }
       }
+      this.rebuild();
+    } finally {
+      this.quiet--;
     }
+    if (this.rootsKey() !== before) this.fireChanged();
+  }
+
+  /** Every registered repository, in registration order. */
+  repositories(): KnownRepository[] {
+    return [...this.registered.values()].map((repo) => ({
+      repoId: repo.repoId,
+      rootPath: repo.rootPath,
+      aliases: [...repo.aliases],
+    }));
+  }
+
+  /** The engine's spelling of a registered repository's root. */
+  rootOf(repoId: string): string | undefined {
+    return this.registered.get(repoId)?.rootPath;
+  }
+
+  /** Whether `candidate` names the repository's root in any known spelling. */
+  isRootOf(repoId: string, candidate: string): boolean {
+    const repo = this.registered.get(repoId);
+    if (!repo) return false;
+    return [repo.rootPath, ...repo.aliases].some((spelling) =>
+      sameRoot(spelling, candidate, this.caseInsensitive),
+    );
+  }
+
+  /** Forgets every per-directory answer, so the next lookup in each directory
+   *  asks the engine again: a repository appeared or vanished. */
+  forgetDirectories(): void {
+    this.directories.clear();
+  }
+
+  /** Drops the repositories rooted at `dir`, whose .git was removed: its files
+   *  belong to an enclosing repository again. The engine releases them too,
+   *  so a repository created there later is registered and watched afresh. */
+  async forgetRepositoriesAt(dir: string): Promise<void> {
+    const gone = [...this.registered.values()].filter((repo) =>
+      [repo.rootPath, ...repo.aliases].some((spelling) =>
+        sameRoot(spelling, dir, this.caseInsensitive),
+      ),
+    );
+    if (gone.length === 0) return;
+    for (const repo of gone) this.registered.delete(repo.repoId);
+    this.directories.clear();
+    this.rebuild();
+    this.fireChanged();
+    for (const repo of gone) {
+      this.log(`repository ${repo.repoId} at ${repo.rootPath} is gone`);
+      await this.engine
+        .request('repo/close', { repoId: repo.repoId })
+        .catch((error: unknown) =>
+          this.log(`could not release ${repo.repoId}: ${errorText(error)}`),
+        );
+    }
+  }
+
+  /** How many directory lookups so far went unanswered (engine not started,
+   *  restarting or failing). A workspace scan during which this grows missed
+   *  repositories and is not worth keeping. */
+  unansweredLookups(): number {
+    return this.unanswered;
+  }
+
+  /** Called whenever a repository is registered or dropped. */
+  onDidChangeRepositories(listener: () => void): { dispose(): void } {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  private key(dir: string): string {
+    return comparable(dir, this.caseInsensitive);
+  }
+
+  private answered(dir: string): boolean {
+    const key = this.key(dir);
+    const answer = this.directories.get(key);
+    if (!answer) return false;
+    if (answer.expires !== undefined && answer.expires <= this.now()) {
+      this.directories.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  private discoverDirectory(dir: string): Promise<void> {
+    const key = this.key(dir);
+    let inflight = this.discovering.get(key);
+    if (!inflight) {
+      inflight = this.engine
+        .request('repo/discover', { path: dir })
+        .then(
+          (info) => {
+            this.register(info.repoId, info.rootPath, dir);
+            this.directories.set(key, { repoId: info.repoId });
+          },
+          (error: unknown) => this.discoveryFailed(dir, key, error),
+        )
+        .finally(() => this.discovering.delete(key));
+      this.discovering.set(key, inflight);
+    }
+    return inflight;
+  }
+
+  private discoveryFailed(dir: string, key: string, error: unknown): void {
+    if ((error as { code?: unknown } | undefined)?.code === ErrorCodes.RepoNotFound) {
+      this.directories.set(key, { expires: this.now() + NO_REPOSITORY_TTL_MS });
+      this.logOnce(`none\0${key}`, `no repository contains ${dir}`);
+      return;
+    }
+    this.unanswered++;
+    // Not started yet, or restarting: the next lookup asks again.
+    if (error instanceof EngineRestartedError) return;
+    const message = errorText(error);
+    this.logOnce(
+      `failed\0${key}\0${message}`,
+      `repository discovery failed for ${dir}: ${message}`,
+    );
+  }
+
+  /** Records a repository the engine reported, learning the editor's
+   *  spelling of its root when `requestedDir` spells it differently. */
+  private register(repoId: string, reportedRoot: string, requestedDir?: string): void {
+    // The engine reports the root with a trailing slash; normalize.
+    const rootPath = reportedRoot.replace(/[\\/]+$/, '') || reportedRoot;
+    let repo = this.registered.get(repoId);
+    const added = repo === undefined;
+    if (!repo) {
+      repo = { repoId, rootPath, aliases: [] };
+      this.registered.set(repoId, repo);
+    } else {
+      repo.rootPath = rootPath;
+    }
+    if (added) this.log(`repository ${repoId} at ${rootPath}`);
+    if (requestedDir !== undefined && !this.contains(repo, requestedDir)) {
+      this.learnAlias(repo, requestedDir);
+    }
+    this.rebuild();
+    if (added) this.fireChanged();
+  }
+
+  private contains(repo: Registered, dir: string): boolean {
+    return [repo.rootPath, ...repo.aliases].some(
+      (spelling) => relativeWithinRoot(spelling, dir, this.caseInsensitive) !== undefined,
+    );
+  }
+
+  private learnAlias(repo: Registered, dir: string): void {
+    const alias = this.options.resolveAlias?.(dir, repo.rootPath);
+    if (alias === undefined) {
+      this.logOnce(
+        `unmatched\0${repo.repoId}\0${this.key(dir)}`,
+        `warning: the engine places ${dir} in the repository at ${repo.rootPath}, ` +
+          'but no directory on that path is the repository root, so files there ' +
+          'cannot be matched to it',
+      );
+      return;
+    }
+    if (this.addAlias(repo, alias)) {
+      this.log(`repository ${repo.repoId} at ${repo.rootPath} is open as ${alias}`);
+    }
+  }
+
+  private addAlias(repo: Registered, alias: string): boolean {
+    if (sameRoot(repo.rootPath, alias, this.caseInsensitive)) return false;
+    if (repo.aliases.some((known) => sameRoot(known, alias, this.caseInsensitive))) return false;
+    repo.aliases.push(alias);
+    return true;
+  }
+
+  private rebuild(): void {
+    const entries: [string, string][] = [];
+    for (const repo of this.registered.values()) {
+      entries.push([repo.repoId, repo.rootPath]);
+      for (const alias of repo.aliases) entries.push([repo.repoId, alias]);
+    }
+    this.sortedRoots = entries.sort(
+      (a, b) =>
+        comparable(b[1], this.caseInsensitive).length -
+        comparable(a[1], this.caseInsensitive).length,
+    );
+  }
+
+  private rootsKey(): string {
+    return [...this.registered.values()]
+      .map((repo) => comparable(repo.rootPath, this.caseInsensitive))
+      .sort()
+      .join('\n');
+  }
+
+  private fireChanged(): void {
+    if (this.quiet > 0) return;
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  private log(line: string): void {
+    this.options.log?.(line);
+  }
+
+  /** Logs a line the first time its key is seen, so a lookup repeated on
+   *  every cursor move reports its failure once. */
+  private logOnce(key: string, line: string): void {
+    if (this.reported.has(key)) return;
+    if (this.reported.size >= MAX_REMEMBERED_REPORTS) this.reported.clear();
+    this.reported.add(key);
+    this.log(line);
   }
 }

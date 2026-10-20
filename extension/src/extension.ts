@@ -13,6 +13,8 @@ import { errorMessage } from './commands/ui';
 import { HeadChangeTracker } from './engine/capabilityGate';
 import { DocumentSync } from './engine/documentSync';
 import { RepositoryService } from './model/repositoryService';
+import { identityAliasResolver } from './model/pathAliases';
+import { nodeFileIdentity } from './model/nodeFileIdentity';
 import { ViewNode, activeWorkspaceRepo, requireRepo } from './views/viewBase';
 import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
 import {
@@ -72,7 +74,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   context.subscriptions.push({ dispose: () => engine.dispose() });
 
-  const repos = new RepositoryService(engine);
+  // The engine reports repository roots with symlinks resolved and 8.3 short
+  // names expanded, while the editor keeps the spelling the workspace was
+  // opened with; file identity maps one onto the other.
+  const repos = new RepositoryService(engine, {
+    resolveAlias: identityAliasResolver(nodeFileIdentity),
+    log,
+  });
   const docSync = new DocumentSync(engine, repos);
   context.subscriptions.push(docSync);
 
