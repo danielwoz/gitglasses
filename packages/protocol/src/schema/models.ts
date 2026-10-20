@@ -510,7 +510,11 @@ export const WorktreeEntry = Type.Object(
     locked: Type.Boolean(),
     prunable: Type.Boolean({
       description:
-        'The worktree directory is gone; `git worktree prune` would drop the entry.',
+        "`git worktree prune` would drop the entry: the worktree's directory or its .git file is gone and the entry is not locked.",
+    }),
+    missing: Type.Boolean({
+      description:
+        "The worktree's directory does not exist. git keeps a locked entry even then (a worktree on removable media, say), so this can be true while prunable is false.",
     }),
     current: Type.Boolean({
       description: 'The worktree this repoId was opened from.',

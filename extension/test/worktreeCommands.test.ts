@@ -39,6 +39,7 @@ const MAIN: WorktreeEntry = {
   bare: false,
   locked: false,
   prunable: false,
+  missing: false,
   current: true,
 };
 
@@ -49,6 +50,7 @@ const AGENT: WorktreeEntry = {
   bare: false,
   locked: false,
   prunable: false,
+  missing: false,
   current: false,
 };
 
@@ -74,10 +76,25 @@ function agentStatus(overrides: Partial<WorktreeStatus> = {}): WorktreeStatus {
   };
 }
 
-function harness(status: WorktreeStatus = agentStatus()) {
+/** A locked worktree whose directory is gone: git keeps its entry. */
+const UNMOUNTED: WorktreeEntry = {
+  path: '/media/usb/app-review',
+  branch: 'review',
+  sha: SHA,
+  bare: false,
+  locked: true,
+  prunable: false,
+  missing: true,
+  current: false,
+};
+
+function harness(
+  status: WorktreeStatus = agentStatus(),
+  worktrees: WorktreeEntry[] = [MAIN, AGENT],
+) {
   const requests: Request[] = [];
   const answers: Record<string, (params: Record<string, unknown>) => unknown> = {
-    'worktree/list': () => ({ worktrees: [MAIN, AGENT] }),
+    'worktree/list': () => ({ worktrees }),
     'worktree/status': (params) =>
       params.path === AGENT.path
         ? status
@@ -127,7 +144,15 @@ function harness(status: WorktreeStatus = agentStatus()) {
     repo: REPO,
   });
   const sent = (method: string) => requests.filter((request) => request.method === method);
-  return { view, run, node, sent, requests, log };
+  const render = () =>
+    (
+      view as unknown as {
+        getRootNodes(
+          r: unknown,
+        ): Promise<{ item: { label: string; description: string; contextValue: string } }[]>;
+      }
+    ).getRootNodes(REPO);
+  return { view, run, node, sent, requests, log, render };
 }
 
 beforeEach(() => {
@@ -153,6 +178,17 @@ describe('worktree rows', () => {
     );
     expect(rows[0].item.description).toBe('current · base');
     expect(sent('worktree/status')).toHaveLength(2);
+  });
+
+  it('read no status for a worktree whose directory is missing', async () => {
+    const { render, sent } = harness(agentStatus(), [MAIN, AGENT, UNMOUNTED]);
+    const rows = await render();
+    await vi.waitFor(() => expect(sent('worktree/status')).toHaveLength(2));
+    expect(sent('worktree/status').map((request) => request.params.path)).not.toContain(
+      UNMOUNTED.path,
+    );
+    expect(rows[2].item.description).toBe('missing · locked');
+    expect(rows[2].item.contextValue).toBe('gitglassesMissingWorktree');
   });
 });
 

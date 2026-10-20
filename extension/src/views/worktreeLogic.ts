@@ -44,12 +44,18 @@ function isOnBase(worktree: WorktreeEntry, status: WorktreeStatus): boolean {
   return status.base !== undefined && worktree.branch === status.base.ref;
 }
 
+/** Whether the worktree has no checkout to read: its directory is gone, or
+ *  is no longer a worktree, or is missing while a lock keeps the entry. */
+export function hasNoCheckout(worktree: WorktreeEntry): boolean {
+  return worktree.prunable || worktree.missing;
+}
+
 /** The kind of row a worktree is, for its context menu: the current one, the
  *  main one, a linked one, or one that cannot be opened (bare, or its
  *  directory is gone). */
 export function worktreeContext(worktree: WorktreeEntry, index: number): string {
   if (worktree.bare) return 'gitglassesBareWorktree';
-  if (worktree.prunable) return 'gitglassesMissingWorktree';
+  if (hasNoCheckout(worktree)) return 'gitglassesMissingWorktree';
   if (worktree.current) return 'gitglassesCurrentWorktree';
   // worktree/list puts the main worktree first.
   return index === 0 ? 'gitglassesMainWorktree' : 'gitglassesWorktree';
@@ -72,7 +78,7 @@ export function worktreeDescription(worktree: WorktreeEntry, status?: WorktreeSt
   if (worktree.bare) parts.push('bare');
   else if (!worktree.branch) parts.push(`detached@${shortSha(worktree.sha)}`);
   if (worktree.current) parts.push('current');
-  if (worktree.prunable) parts.push('missing');
+  if (hasNoCheckout(worktree)) parts.push('missing');
   if (worktree.locked) parts.push('locked');
   if (status) {
     if (status.dirty) parts.push(`${status.dirty} changed`);
@@ -117,7 +123,15 @@ export function worktreeTooltip(
     lines.push(`Detached HEAD at ${shortSha(worktree.sha)}`);
   }
   if (worktree.prunable) {
-    lines.push('The directory is gone; `git worktree prune` removes the entry.');
+    lines.push(
+      worktree.missing
+        ? 'The directory is gone; `git worktree prune` removes the entry.'
+        : 'The directory is no longer a worktree (its .git file is gone); `git worktree prune` removes the entry.',
+    );
+  } else if (worktree.missing) {
+    lines.push(
+      'The directory is missing; the lock keeps `git worktree prune` from removing the entry.',
+    );
   }
   if (worktree.locked) lines.push('Locked against removal and pruning');
   if (status?.agent) {

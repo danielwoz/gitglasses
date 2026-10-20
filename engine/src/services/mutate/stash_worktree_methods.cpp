@@ -41,9 +41,13 @@ rpc::Json parseWorktreePorcelain(const std::vector<std::string>& lines, const co
   bool bare = false, locked = false, prunable = false, open = false;
   const auto flush = [&] {
     if (!open) return;
-    rpc::Json entry = {{"path", path},         {"sha", sha},
-                       {"bare", bare},         {"locked", locked},
-                       {"prunable", prunable}, {"current", worktree::isRepoDirectory(repo, path)}};
+    rpc::Json entry = {{"path", path},
+                       {"sha", sha},
+                       {"bare", bare},
+                       {"locked", locked},
+                       {"prunable", prunable},
+                       {"missing", !bare && worktree::isMissingDirectory(path)},
+                       {"current", worktree::isRepoDirectory(repo, path)}};
     if (!branch.empty()) entry["branch"] = branch;
     worktrees.push_back(std::move(entry));
     path.clear();

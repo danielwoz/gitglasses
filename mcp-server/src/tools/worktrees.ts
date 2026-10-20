@@ -24,6 +24,12 @@ export interface WorktreeReport {
   outside?: boolean;
 }
 
+/** Whether a listed worktree has a checkout to read a status from: not a
+ *  bare repository, and its directory is there and still a worktree. */
+function hasCheckout(entry: WorktreeEntry): boolean {
+  return !entry.bare && !entry.prunable && !entry.missing;
+}
+
 /** Lists the worktrees and reads the status of the first
  *  MAX_WORKTREE_STATUSES, a few at a time. A status that fails is reported
  *  on its worktree rather than failing the call. Worktrees `mayRead` refuses
@@ -37,7 +43,7 @@ export async function collectWorktrees(
   const reports: WorktreeReport[] = worktrees.map((entry) => ({ entry }));
   const candidates = reports
     .slice(0, MAX_WORKTREE_STATUSES)
-    .filter((report) => !report.entry.bare && !report.entry.prunable);
+    .filter((report) => hasCheckout(report.entry));
   const pending: WorktreeReport[] = [];
   for (const report of candidates) {
     if (await mayRead(report.entry.path)) pending.push(report);
@@ -103,6 +109,18 @@ function mergeLine(base: NonNullable<WorktreeStatus['base']>): string {
   return MERGE_SKIPPED[base.mergeSkipped ?? 'failed'];
 }
 
+/** What a worktree without a checkout lacks, and what `git worktree prune`
+ *  makes of it: git drops the entry unless it is locked. */
+function missingFlag(entry: WorktreeEntry): string | undefined {
+  if (entry.prunable) {
+    return entry.missing
+      ? 'directory missing (git worktree prune would remove it)'
+      : 'no longer a worktree: its .git file is gone (git worktree prune would remove it)';
+  }
+  if (entry.missing) return 'directory missing (locked, so git worktree prune keeps it)';
+  return undefined;
+}
+
 /** One block per worktree: path, then indented facts. Agent names come from
  *  repository content (trailers), so they are quoted. */
 function formatReport(report: WorktreeReport, statusRead: boolean): string[] {
@@ -115,7 +133,7 @@ function formatReport(report: WorktreeReport, statusRead: boolean): string[] {
   const flags = [
     entry.current ? 'the repository this call named' : undefined,
     entry.locked ? 'locked' : undefined,
-    entry.prunable ? 'directory missing (git worktree prune would remove it)' : undefined,
+    missingFlag(entry),
   ].filter((flag): flag is string => flag !== undefined);
   if (flags.length > 0) facts.push(flags.join('; '));
   if (status?.agent) {
@@ -142,7 +160,7 @@ function formatReport(report: WorktreeReport, statusRead: boolean): string[] {
   if (report.error) facts.push(`status unavailable: ${report.error}`);
   else if (report.outside) {
     facts.push('status not read: outside the directories this server serves (see --allow)');
-  } else if (!status && !entry.bare && !entry.prunable && !statusRead) {
+  } else if (!status && hasCheckout(entry) && !statusRead) {
     facts.push('status not read (only the first worktrees are)');
   }
   return [...lines, ...facts.map((fact) => `  ${fact}`)];

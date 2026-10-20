@@ -365,15 +365,14 @@ core::ReferencePtr headBranch(git_repository* raw) {
   return head;
 }
 
-// HEAD as the worktree's administrative directory records it, for a worktree
-// whose directory is gone: the branch it names (and that branch's commit), or
-// the commit a detached HEAD holds.
-rpc::Json recordedHead(const core::Repo& main, const std::string& name) {
+// HEAD as a linked worktree's administrative directory records it, which is
+// where git reads it too: the branch it names (and that branch's commit), or
+// the commit a detached HEAD holds. Whatever repository sits at the
+// worktree's recorded path is never consulted, so an entry pointing at an
+// unrelated repository reports the HEAD this repository holds for it.
+rpc::Json recordedHead(const core::Repo& main, const fs::path& adminDir) {
   rpc::Json entry = {{"sha", ""}};
-  const char* common = git_repository_commondir(main.raw());
-  if (!common) return entry;
-  std::ifstream in(util::pathFromUtf8(common) / "worktrees" / util::pathFromUtf8(name) / "HEAD",
-                   std::ios::binary);
+  std::ifstream in(adminDir / "HEAD", std::ios::binary);
   std::string line;
   if (!std::getline(in, line)) return entry;
   line = std::string(trim(line));
@@ -391,6 +390,25 @@ rpc::Json recordedHead(const core::Repo& main, const std::string& name) {
     entry["sha"] = core::oidToHex(oid);
   }
   return entry;
+}
+
+// Whether `git worktree prune` would drop a linked worktree's entry, by
+// git's own rule: its administrative directory is gone or, unless the entry
+// is locked, its gitdir file is missing or empty or names a .git that no
+// longer exists. A relative gitdir (worktree.useRelativePaths) is relative to
+// the administrative directory.
+bool prunableEntry(const fs::path& adminDir, bool locked) {
+  std::error_code ec;
+  if (!fs::is_directory(adminDir, ec)) return true;
+  if (locked) return false;
+  std::ifstream in(adminDir / "gitdir", std::ios::binary);
+  std::string line;
+  if (!in || !std::getline(in, line)) return true;
+  while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+  if (line.empty()) return true;
+  fs::path dotGit = util::pathFromUtf8(line);
+  if (dotGit.is_relative()) dotGit = adminDir / dotGit;
+  return !fs::exists(dotGit, ec);
 }
 
 rpc::Json headFields(const core::Repo& repo) {
@@ -482,25 +500,33 @@ bool isRepoDirectory(const core::Repo& repo, const std::string& path) {
   return same && !ec;
 }
 
+bool isMissingDirectory(const std::string& path) {
+  std::error_code ec;
+  const bool exists = fs::exists(util::pathFromUtf8(path), ec);
+  return !exists && !ec;
+}
+
 rpc::Json listWithLibgit2(const core::Repo& repo) {
   rpc::Json worktrees = rpc::Json::array();
   const char* common = git_repository_commondir(repo.raw());
   auto main = core::Repo::open(common ? common : repo.gitdir());
   if (!main) throw rpc::HandlerError{{main.error()}};
 
-  const auto entry = [&repo](const core::Repo& opened, std::string path, bool bare, bool locked,
-                             bool prunable) {
-    rpc::Json item = bare ? rpc::Json{{"sha", ""}} : headFields(opened);
+  const auto finish = [&repo](rpc::Json item, std::string path, bool bare, bool locked,
+                              bool prunable) {
     item["path"] = withoutTrailingSlash(std::move(path));
     item["bare"] = bare;
     item["locked"] = locked;
     item["prunable"] = prunable;
-    item["current"] = isRepoDirectory(repo, item["path"].get<std::string>());
+    const std::string& listed = item["path"].get_ref<const std::string&>();
+    item["missing"] = !bare && isMissingDirectory(listed);
+    item["current"] = isRepoDirectory(repo, listed);
     return item;
   };
   const core::Repo& primary = main.value();
-  worktrees.push_back(entry(primary, primary.isBare() ? primary.gitdir() : primary.workdir(),
-                            primary.isBare(), false, false));
+  const bool bare = primary.isBare();
+  worktrees.push_back(finish(bare ? rpc::Json{{"sha", ""}} : headFields(primary),
+                             bare ? primary.gitdir() : primary.workdir(), bare, false, false));
 
   git_strarray names = {};
   if (git_worktree_list(&names, primary.raw()) != 0) {
@@ -508,6 +534,7 @@ rpc::Json listWithLibgit2(const core::Repo& repo) {
   }
   std::unique_ptr<git_strarray, decltype(&git_strarray_dispose)> namesGuard(&names,
                                                                             git_strarray_dispose);
+  const fs::path adminRoot = util::pathFromUtf8(common ? common : primary.gitdir()) / "worktrees";
   std::vector<rpc::Json> linked;
   for (size_t i = 0; i < names.count; ++i) {
     git_worktree* rawWorktree = nullptr;
@@ -516,21 +543,10 @@ rpc::Json listWithLibgit2(const core::Repo& repo) {
                                                                          git_worktree_free);
     const char* path = git_worktree_path(worktree.get());
     if (!path) continue;
+    const fs::path adminDir = adminRoot / util::pathFromUtf8(names.strings[i]);
     const bool locked = git_worktree_is_locked(nullptr, worktree.get()) > 0;
-    const bool prunable = git_worktree_validate(worktree.get()) != 0;
-    auto opened = prunable ? Result<core::Repo>(Error{ErrorCode::RepoNotFound, "missing"})
-                           : core::Repo::open(path);
-    if (opened) {
-      linked.push_back(entry(opened.value(), path, false, locked, prunable));
-      continue;
-    }
-    rpc::Json item = recordedHead(primary, names.strings[i]);
-    item["path"] = withoutTrailingSlash(path);
-    item["bare"] = false;
-    item["locked"] = locked;
-    item["prunable"] = prunable;
-    item["current"] = false;
-    linked.push_back(std::move(item));
+    linked.push_back(finish(recordedHead(primary, adminDir), path, false, locked,
+                            prunableEntry(adminDir, locked)));
   }
   std::sort(linked.begin(), linked.end(), [](const rpc::Json& a, const rpc::Json& b) {
     return a["path"].get<std::string>() < b["path"].get<std::string>();

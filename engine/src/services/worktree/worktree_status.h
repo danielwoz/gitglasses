@@ -45,12 +45,18 @@ std::vector<std::string> mergeTreeConflicts(std::string_view output, std::size_t
 
 // The repository's worktrees read through libgit2 alone, in the shape and
 // order `git worktree list --porcelain` gives them: the main worktree (or the
-// bare repository) first, then the linked worktrees sorted by path.
+// bare repository) first, then the linked worktrees sorted by path. As git
+// does, a linked worktree's HEAD and prunability come from its
+// administrative directory, never from what sits at its recorded path.
 rpc::Json listWithLibgit2(const core::Repo& repo);
 
 // Whether `path` names the directory `repo` serves: its working tree, or its
 // gitdir when it is bare. Compares the files, not the spelling.
 bool isRepoDirectory(const core::Repo& repo, const std::string& path);
+
+// True when nothing exists at `path` (a worktree directory deleted, or on
+// media that is not mounted); false when it exists or cannot be checked.
+bool isMissingDirectory(const std::string& path);
 
 // What can be checked about one worktree.
 struct StatusRequest {

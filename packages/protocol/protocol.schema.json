@@ -2913,7 +2913,7 @@
       }
     },
     "worktree/list": {
-      "description": "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2.",
+      "description": "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2944,6 +2944,7 @@
                 "bare",
                 "locked",
                 "prunable",
+                "missing",
                 "current"
               ],
               "properties": {
@@ -2963,7 +2964,11 @@
                   "type": "boolean"
                 },
                 "prunable": {
-                  "description": "The worktree directory is gone; `git worktree prune` would drop the entry.",
+                  "description": "`git worktree prune` would drop the entry: the worktree's directory or its .git file is gone and the entry is not locked.",
+                  "type": "boolean"
+                },
+                "missing": {
+                  "description": "The worktree's directory does not exist. git keeps a locked entry even then (a worktree on removable media, say), so this can be true while prunable is false.",
                   "type": "boolean"
                 },
                 "current": {

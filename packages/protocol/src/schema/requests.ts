@@ -919,7 +919,7 @@ export const RequestSchemas = {
   },
   'worktree/list': {
     description:
-      'Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2.',
+      "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory.",
     params: Type.Object({ repoId: Type.String() }, strict),
     result: Type.Object({ worktrees: Type.Array(WorktreeEntry) }, strict),
   },

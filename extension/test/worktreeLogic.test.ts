@@ -24,6 +24,7 @@ function entry(overrides: Partial<WorktreeEntry> = {}): WorktreeEntry {
     bare: false,
     locked: false,
     prunable: false,
+    missing: false,
     current: false,
     ...overrides,
   };
@@ -78,7 +79,9 @@ describe('worktreeDescription', () => {
   it('labels detached, bare, missing and locked worktrees', () => {
     expect(worktreeDescription(entry({ branch: undefined }))).toBe('detached@1234567');
     expect(worktreeDescription(entry({ bare: true, sha: '' }))).toBe('bare');
-    expect(worktreeDescription(entry({ prunable: true, locked: true }))).toBe('missing · locked');
+    expect(worktreeDescription(entry({ prunable: true, missing: true }))).toBe('missing');
+    // git keeps a locked entry whose directory is gone (removable media).
+    expect(worktreeDescription(entry({ missing: true, locked: true }))).toBe('missing · locked');
   });
 
   it('shows the status at a glance', () => {
@@ -166,9 +169,21 @@ describe('worktreeTooltip', () => {
   });
 
   it('explains a missing directory and a failed status', () => {
-    const tooltip = worktreeTooltip(entry({ prunable: true }), undefined, { error: 'boom' });
-    expect(tooltip).toContain('git worktree prune');
+    const tooltip = worktreeTooltip(entry({ prunable: true, missing: true }), undefined, {
+      error: 'boom',
+    });
+    expect(tooltip).toContain('The directory is gone; `git worktree prune` removes the entry.');
     expect(tooltip).toContain('Status unavailable: boom');
+  });
+
+  it('does not promise that prune removes a locked entry', () => {
+    const tooltip = worktreeTooltip(entry({ missing: true, locked: true }), undefined);
+    expect(tooltip).toContain(
+      'The directory is missing; the lock keeps `git worktree prune` from removing the entry.',
+    );
+    expect(tooltip).not.toContain('removes the entry');
+    const unlinked = worktreeTooltip(entry({ prunable: true }), undefined);
+    expect(unlinked).toContain('no longer a worktree');
   });
 });
 
@@ -179,6 +194,9 @@ describe('worktreeContext', () => {
     expect(worktreeContext(entry(), 2)).toBe('gitglassesWorktree');
     expect(worktreeContext(entry({ bare: true }), 0)).toBe('gitglassesBareWorktree');
     expect(worktreeContext(entry({ prunable: true }), 1)).toBe('gitglassesMissingWorktree');
+    expect(worktreeContext(entry({ missing: true, locked: true }), 1)).toBe(
+      'gitglassesMissingWorktree',
+    );
   });
 });
 

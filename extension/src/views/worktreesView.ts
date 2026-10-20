@@ -16,6 +16,7 @@ import {
   confirmDiscardWorktreeChanges,
   confirmWorktreeAndBranchRemove,
   defaultWorktreePath,
+  hasNoCheckout,
   statusKey,
   worktreeContext,
   worktreeDescription,
@@ -116,7 +117,7 @@ export class WorktreesViewProvider extends ViewBase {
         vscode.TreeItemCollapsibleState.None,
       );
       item.iconPath = new vscode.ThemeIcon(
-        worktree.current ? 'folder-active' : worktree.prunable ? 'warning' : 'folder',
+        worktree.current ? 'folder-active' : hasNoCheckout(worktree) ? 'warning' : 'folder',
       );
       item.contextValue = worktreeContext(worktree, index);
       const node: WorktreeNode = {
@@ -128,7 +129,7 @@ export class WorktreesViewProvider extends ViewBase {
       };
       // Bare repositories and vanished directories have no status to load.
       const entry =
-        worktree.bare || worktree.prunable
+        worktree.bare || hasNoCheckout(worktree)
           ? undefined
           : this.statuses.get(worktree.path, statusKey(worktree, base));
       render(node, worktree, entry);
@@ -363,7 +364,7 @@ async function compareWithBase(
   node?: WorktreeNode,
 ): Promise<void> {
   const worktree = node?.worktree;
-  if (!worktree || worktree.bare || worktree.prunable) return;
+  if (!worktree || worktree.bare || hasNoCheckout(worktree)) return;
   await withRepo(
     repos,
     'compare with base',

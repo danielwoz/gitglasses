@@ -10,6 +10,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "exec/cli_detect.h"
@@ -470,11 +471,13 @@ TEST(WorktreeList, MarksTheCurrentAndPrunableWorktrees) {
   ASSERT_NE(keptEntry, nullptr);
   EXPECT_FALSE((*keptEntry)["current"].get<bool>());
   EXPECT_FALSE((*keptEntry)["prunable"].get<bool>());
+  EXPECT_FALSE((*keptEntry)["missing"].get<bool>());
   bool sawGone = false;
   for (const auto& entry : worktrees) {
     if (entry.value("branch", "") != "gone") continue;
     sawGone = true;
     EXPECT_TRUE(entry["prunable"].get<bool>()) << entry.dump();
+    EXPECT_TRUE(entry["missing"].get<bool>()) << entry.dump();
   }
   EXPECT_TRUE(sawGone) << worktrees.dump();
 
@@ -543,6 +546,111 @@ TEST(WorktreeList, RestrictedModeListsThroughLibgit2AndSkipsTheMergeCheck) {
   EXPECT_EQ(status["result"]["base"]["behind"], 1);
   EXPECT_TRUE(status["result"]["base"]["mergesCleanly"].is_null()) << status.dump();
   EXPECT_EQ(status["result"]["base"]["mergeSkipped"], "restricted");
+}
+
+// worktree/list from git and from libgit2 (Restricted Mode), canonicalised.
+std::pair<std::set<std::string>, Json> listBothWays(const fs::path& root) {
+  std::set<std::string> fromGit;
+  {
+    InteractiveSession session;
+    session.request(gg::testing::initRequest(1));
+    Json discover = session.request(req(2, "repo/discover", {{"path", root.string()}}));
+    Json list =
+        session.request(req(3, "worktree/list", {{"repoId", discover["result"]["repoId"]}}));
+    EXPECT_TRUE(list.contains("result")) << list.dump();
+    for (const auto& entry : list["result"]["worktrees"]) fromGit.insert(canonicalEntry(entry));
+  }
+  gg::testing::ScopedRestrictedMode restricted;
+  InteractiveSession session;
+  session.request(gg::testing::initRequest(1));
+  Json discover = session.request(req(2, "repo/discover", {{"path", root.string()}}));
+  Json list = session.request(req(3, "worktree/list", {{"repoId", discover["result"]["repoId"]}}));
+  EXPECT_TRUE(list.contains("result")) << list.dump();
+  return {fromGit, list["result"].value("worktrees", Json::array())};
+}
+
+// The libgit2 listing reads each linked worktree the way git does: HEAD from
+// the worktree's administrative directory and git's prune rule, whatever
+// sits at the path the entry records.
+TEST(WorktreeList, Libgit2ReadsLinkedWorktreesTheWayGitDoes) {
+  FixtureRepo fixture;
+  FixtureRepo other;
+  other.run("git checkout -q -b private-plans");
+  other.writeFile("plans.txt", "plans\n");
+  other.run("git add plans.txt");
+  other.commit("work in the other repository");
+  const std::string otherHead = rev(other.root(), "HEAD");
+  const std::string mainHead = rev(fixture.root(), "main");
+
+  const std::string base = fixture.root().string();
+  const fs::path lockedGone = base + "-locked-gone";
+  const fs::path gone = base + "-gone";
+  const fs::path unlinked = base + "-unlinked";
+  const fs::path detached = base + "-detached";
+  const fs::path pointed = base + "-pointed";
+  struct Cleanup {
+    std::vector<fs::path> dirs;
+    ~Cleanup() {
+      std::error_code ec;
+      for (const auto& dir : dirs) fs::remove_all(dir, ec);
+    }
+  } cleanup{{lockedGone, gone, unlinked, detached, pointed}};
+
+  // A locked worktree whose directory is gone (removable media): git keeps it.
+  fixture.run("git worktree add -q -b locked-gone \"" + lockedGone.string() + "\" main");
+  fixture.run("git worktree lock \"" + lockedGone.string() + "\"");
+  fs::remove_all(lockedGone);
+  // An unlocked one whose directory is gone, and one that lost its .git file.
+  fixture.run("git worktree add -q -b gone \"" + gone.string() + "\" main");
+  fs::remove_all(gone);
+  fixture.run("git worktree add -q -b unlinked \"" + unlinked.string() + "\" main");
+  fs::remove(unlinked / ".git");
+  fixture.run("git worktree add -q --detach \"" + detached.string() + "\" main");
+  // An entry whose gitdir names an unrelated repository's .git.
+  fixture.run("git worktree add -q -b pointed \"" + pointed.string() + "\" main");
+  writeFile(fixture.root() / ".git" / "worktrees" / pointed.filename() / "gitdir",
+            (other.root() / ".git").string() + "\n");
+
+  const auto [fromGit, worktrees] = listBothWays(fixture.root());
+  std::set<std::string> fromLibgit2;
+  for (const auto& entry : worktrees) fromLibgit2.insert(canonicalEntry(entry));
+  EXPECT_EQ(fromLibgit2, fromGit);
+
+  bool sawLocked = false, sawGone = false;
+  for (const auto& entry : worktrees) {
+    const std::string branch = entry.value("branch", "");
+    if (branch == "locked-gone") {
+      sawLocked = true;
+      EXPECT_TRUE(entry["locked"].get<bool>()) << entry.dump();
+      EXPECT_FALSE(entry["prunable"].get<bool>()) << entry.dump();
+      EXPECT_TRUE(entry["missing"].get<bool>()) << entry.dump();
+    } else if (branch == "gone") {
+      sawGone = true;
+      EXPECT_TRUE(entry["prunable"].get<bool>()) << entry.dump();
+      EXPECT_TRUE(entry["missing"].get<bool>()) << entry.dump();
+    }
+  }
+  EXPECT_TRUE(sawLocked && sawGone) << worktrees.dump();
+
+  const Json* withoutDotGit = entryFor(worktrees, unlinked);
+  ASSERT_NE(withoutDotGit, nullptr) << worktrees.dump();
+  EXPECT_TRUE((*withoutDotGit)["prunable"].get<bool>());
+  EXPECT_FALSE((*withoutDotGit)["missing"].get<bool>());
+
+  const Json* detachedEntry = entryFor(worktrees, detached);
+  ASSERT_NE(detachedEntry, nullptr) << worktrees.dump();
+  EXPECT_FALSE(detachedEntry->contains("branch"));
+  EXPECT_EQ((*detachedEntry)["sha"], mainHead);
+
+  // The unrelated repository's branch and commit never appear: the entry
+  // reports the HEAD this repository records for it.
+  const Json* foreign = entryFor(worktrees, other.root());
+  ASSERT_NE(foreign, nullptr) << worktrees.dump();
+  EXPECT_EQ((*foreign)["branch"], "pointed");
+  EXPECT_EQ((*foreign)["sha"], mainHead);
+  EXPECT_FALSE((*foreign)["current"].get<bool>());
+  EXPECT_EQ(worktrees.dump().find("private-plans"), std::string::npos) << worktrees.dump();
+  EXPECT_EQ(worktrees.dump().find(otherHead), std::string::npos) << worktrees.dump();
 }
 
 // A git older than 2.38 has no `merge-tree --write-tree`: the check is

@@ -27,6 +27,7 @@ function entry(overrides: Partial<WorktreeEntry> = {}): WorktreeEntry {
     bare: false,
     locked: false,
     prunable: false,
+    missing: false,
     current: false,
     ...overrides,
   };
@@ -103,12 +104,14 @@ describe('formatWorktrees', () => {
         },
       },
       { entry: entry({ path: '/repos/app-y', branch: undefined }), error: 'boom' },
-      { entry: entry({ path: '/repos/gone', branch: 'gone', prunable: true }) },
+      { entry: entry({ path: '/repos/gone', branch: 'gone', prunable: true, missing: true }) },
+      { entry: entry({ path: '/repos/unlinked', branch: 'unlinked', prunable: true }) },
     ]);
     expect(text).toContain('vs main: 1 ahead, 2 behind; not checked: this repository is served');
     expect(text).toContain('detached HEAD at 1234567');
     expect(text).toContain('status unavailable: boom');
     expect(text).toContain('directory missing (git worktree prune would remove it)');
+    expect(text).toContain('no longer a worktree: its .git file is gone');
   });
 
   it('quotes agent names, which come from commit trailers', () => {
@@ -136,7 +139,7 @@ function fakeEngine(count: number, failing = new Set<string>()) {
       if (method === 'worktree/list') {
         return {
           worktrees: Array.from({ length: count }, (_, i) =>
-            entry({ path: `/wt/${i}`, branch: `b${i}`, prunable: i === 1 }),
+            entry({ path: `/wt/${i}`, branch: `b${i}`, prunable: i === 1, missing: i === 1 }),
           ),
         };
       }
@@ -188,6 +191,33 @@ describe('collectWorktrees', () => {
     expect(formatWorktrees(reports)).toContain(
       'status not read: outside the directories this server serves',
     );
+  });
+
+  it('reads no status for a locked worktree whose directory is gone', async () => {
+    const asked: string[] = [];
+    const client = {
+      async request(method: string, params: { path?: string }) {
+        if (method === 'worktree/list') {
+          return {
+            worktrees: [
+              entry({ path: '/wt/0' }),
+              entry({ path: '/media/usb/review', branch: 'review', locked: true, missing: true }),
+            ],
+          };
+        }
+        asked.push(params.path!);
+        return { path: params.path, dirty: 0 };
+      },
+    };
+    const reports = await collectWorktrees(
+      { client: client as unknown as EngineClient, repoId: 'r1' },
+      undefined,
+    );
+    expect(asked).toEqual(['/wt/0']);
+    const text = formatWorktrees(reports);
+    expect(text).toContain('locked; directory missing (locked, so git worktree prune keeps it)');
+    expect(text).not.toContain('would remove it');
+    expect(text).not.toContain('status not read');
   });
 
   it('fails the call for a base that names nothing', async () => {
