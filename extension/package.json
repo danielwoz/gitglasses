@@ -140,6 +140,12 @@
         "icon": "$(git-branch)"
       },
       {
+        "command": "gitglasses.scm.showGraph",
+        "title": "Show Commit Graph",
+        "category": "GitGlasses",
+        "icon": "$(git-branch)"
+      },
+      {
         "command": "gitglasses.showFileHistory",
         "title": "Show Visual File History",
         "category": "GitGlasses",
@@ -655,7 +661,7 @@
       ],
       "scm/title": [
         {
-          "command": "gitglasses.showGraph",
+          "command": "gitglasses.scm.showGraph",
           "when": "scmProvider == git || scmProvider == gitglasses",
           "group": "navigation"
         }
@@ -801,6 +807,10 @@
         {
           "command": "gitglasses.showGraph",
           "when": "gitglasses.hasRepository"
+        },
+        {
+          "command": "gitglasses.scm.showGraph",
+          "when": "false"
         },
         {
           "command": "gitglasses.showFileHistory",

@@ -130,10 +130,11 @@ describe('sidebar', () => {
 describe('Source Control', () => {
   it('adds a Commit Graph button to the title bar of git repositories', () => {
     const item = (menus['scm/title'] ?? []).find(
-      (entry) => entry.command === 'gitglasses.showGraph',
+      (entry) => entry.command === 'gitglasses.scm.showGraph',
     );
     expect(item?.group).toBe('navigation');
     expect(item?.when).toMatch(/\bscmProvider == git\b/);
+    expect(commands.find((command) => command.command === item?.command)).toBeDefined();
   });
 });
 

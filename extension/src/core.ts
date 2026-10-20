@@ -22,6 +22,7 @@ import {
   setRevisionRootLookup,
 } from './scm/revisionContentProvider';
 import { hasBuiltinGit, registerQuickDiff } from './scm/quickDiffSources';
+import { registerScmGraphButton } from './scm/scmGraphButton';
 import {
   ViewBase,
   ViewNode,
@@ -414,6 +415,12 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     }),
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
     vscode.commands.registerCommand('gitglasses.selectRepository', () => activeRepo.pick()),
+    registerScmGraphButton({
+      locateOrDiscover: (uri) => repos.locateOrDiscover(uri),
+      activeRepoId: async () => (await activeRepo.resolve())?.repoId,
+      setActive: (rootPath) => activeRepo.setActive(rootPath),
+      log: deps.log,
+    }),
     ...registerKeyboardShortcuts(),
     vscode.commands.registerCommand('gitglasses.openWalkthrough', () => openWalkthrough(deps.log)),
     ...registerGitGraphMigration(context),
