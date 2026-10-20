@@ -34,17 +34,23 @@ runs:
       shell: bash
       env:
         INSTALL_DIR: ${{ inputs.install-dir }}
+        PACKAGES: ${{ inputs.packages }}
       run: |
         # Native Windows tools need C:/... paths, not the shell's /c/... form.
         if [ "$RUNNER_OS" = Windows ]; then
           home=$(cygpath -m "$USERPROFILE")
           workspace=$(cygpath -m "$GITHUB_WORKSPACE")
+          action=$(cygpath -m "$GITHUB_ACTION_PATH")
         else
           home=$HOME
           workspace=$GITHUB_WORKSPACE
+          action=$GITHUB_ACTION_PATH
         fi
         echo "install-root=$home/.cache/gitglasses/$INSTALL_DIR" >> "$GITHUB_OUTPUT"
         echo "binary-cache=$home/.cache/vcpkg/archives" >> "$GITHUB_OUTPUT"
+        echo "action-path=$action" >> "$GITHUB_OUTPUT"
+        # Cache keys cannot hold the commas of a feature list.
+        echo "request=$(printf '%s' "$PACKAGES" | git hash-object --stdin | cut -c1-12)" >> "$GITHUB_OUTPUT"
         echo "VCPKG_ROOT=$workspace/vcpkg" >> "$GITHUB_ENV"
 
     - name: Bootstrap vcpkg at the manifest baseline
@@ -61,15 +67,18 @@ runs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
         fi
 
-    # Keyed on everything that changes the installed packages; an older entry
-    # for the same triplet still seeds the binary cache after a baseline bump.
+    # Keyed on everything that changes the installed packages. After a
+    # baseline bump an older entry for the same triplet is restored only to
+    # seed the binary cache: install.sh rebuilds the install directory unless
+    # the key matched exactly.
     - name: Cache vcpkg packages
+      id: cache
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cache/gitglasses/${{ inputs.install-dir }}
           ~/.cache/vcpkg/archives
-        key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ inputs.triplet }}-${{ inputs.install-dir }}-${{ hashFiles('vcpkg.json', 'ci/triplets/**') }}
+        key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ inputs.triplet }}-${{ inputs.install-dir }}-${{ steps.paths.outputs.request }}-${{ hashFiles('vcpkg.json', 'ci/triplets/**') }}
         restore-keys: |
           vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ inputs.triplet }}-${{ inputs.install-dir }}-
 
@@ -79,16 +88,7 @@ runs:
         TRIPLET: ${{ inputs.triplet }}
         PACKAGES: ${{ inputs.packages }}
         INSTALL_ROOT: ${{ steps.paths.outputs.install-root }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         VCPKG_DEFAULT_BINARY_CACHE: ${{ steps.paths.outputs.binary-cache }}
-      run: |
-        mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-        args=(install --triplet "$TRIPLET" --overlay-triplets="$GITHUB_WORKSPACE/ci/triplets"
-              --x-install-root="$INSTALL_ROOT")
-        if [ -n "$PACKAGES" ]; then
-          # Classic mode: from inside the checkout vcpkg would find vcpkg.json
-          # and reject package arguments.
-          cd "$RUNNER_TEMP"
-          read -ra packages <<< "$PACKAGES"
-          args+=("${packages[@]}")
-        fi
-        "$VCPKG_ROOT/vcpkg" "${args[@]}"
+        ACTION_DIR: ${{ steps.paths.outputs.action-path }}
+      run: bash "$ACTION_DIR/install.sh"
