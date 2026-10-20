@@ -323,6 +323,181 @@
         "command": "gitglasses.selectRepository",
         "title": "GitGlasses: Select Repository…",
         "icon": "$(repo)"
+      },
+      {
+        "command": "gitglasses.branch.checkout",
+        "title": "Switch to Branch",
+        "category": "GitGlasses",
+        "icon": "$(arrow-swap)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.create",
+        "title": "Create Branch…",
+        "category": "GitGlasses",
+        "icon": "$(add)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.rename",
+        "title": "Rename Branch…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.delete",
+        "title": "Delete Branch…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.merge",
+        "title": "Merge into Current Branch",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.rebase",
+        "title": "Rebase Current Branch onto This…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.push",
+        "title": "Push Branch",
+        "category": "GitGlasses",
+        "icon": "$(cloud-upload)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.setUpstream",
+        "title": "Set Upstream…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.branch.openOnRemote",
+        "title": "Open Branch on Remote",
+        "category": "GitGlasses",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "gitglasses.ref.compareWithHead",
+        "title": "Compare with HEAD",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.ref.compareWithWorkingTree",
+        "title": "Compare with Working Tree",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.ref.copyName",
+        "title": "Copy Name",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.tag.create",
+        "title": "Create Tag…",
+        "category": "GitGlasses",
+        "icon": "$(add)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.tag.delete",
+        "title": "Delete Tag…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.tag.push",
+        "title": "Push Tag…",
+        "category": "GitGlasses",
+        "icon": "$(cloud-upload)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.tag.deleteRemote",
+        "title": "Delete Tag from Remote…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.tag.checkout",
+        "title": "Check Out Tag (Detached HEAD)",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.stash.apply",
+        "title": "Apply Stash",
+        "category": "GitGlasses",
+        "icon": "$(check)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.stash.pop",
+        "title": "Pop Stash",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.stash.drop",
+        "title": "Drop Stash…",
+        "category": "GitGlasses",
+        "icon": "$(trash)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.stash.show",
+        "title": "Show Stash Changes",
+        "category": "GitGlasses",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "gitglasses.stash.create",
+        "title": "Stash Changes…",
+        "category": "GitGlasses",
+        "icon": "$(add)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.stash.createIncludeUntracked",
+        "title": "Stash Changes Including Untracked Files…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.remote.fetch",
+        "title": "Fetch",
+        "category": "GitGlasses",
+        "icon": "$(sync)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.remote.prune",
+        "title": "Fetch and Prune",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.remote.add",
+        "title": "Add Remote…",
+        "category": "GitGlasses",
+        "icon": "$(add)",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.remote.remove",
+        "title": "Remove Remote…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.remote.openOnHost",
+        "title": "Open Remote in Browser",
+        "category": "GitGlasses",
+        "icon": "$(globe)"
       }
     ],
     "viewsContainers": {
@@ -718,6 +893,36 @@
           "command": "gitglasses.showFileHistory",
           "when": "view == gitglasses.views.fileHistory && isWorkspaceTrusted",
           "group": "navigation"
+        },
+        {
+          "command": "gitglasses.branch.create",
+          "when": "view == gitglasses.views.branches && isWorkspaceTrusted",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gitglasses.tag.create",
+          "when": "view == gitglasses.views.tags && isWorkspaceTrusted",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gitglasses.stash.create",
+          "when": "view == gitglasses.views.stashes && isWorkspaceTrusted",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gitglasses.stash.createIncludeUntracked",
+          "when": "view == gitglasses.views.stashes && isWorkspaceTrusted",
+          "group": "1_stash"
+        },
+        {
+          "command": "gitglasses.remote.fetch",
+          "when": "view == gitglasses.views.remotes && isWorkspaceTrusted",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gitglasses.remote.add",
+          "when": "view == gitglasses.views.remotes && isWorkspaceTrusted",
+          "group": "navigation@4"
         }
       ],
       "editor/title": [
@@ -803,6 +1008,156 @@
         {
           "command": "gitglasses.launchpad.unsnooze",
           "when": "view == gitglasses.views.launchpad && viewItem == gitglassesLaunchpadSnoozedPr"
+        },
+        {
+          "command": "gitglasses.branch.checkout",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|RemoteBranch)$/ && isWorkspaceTrusted",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.branch.push",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesCurrentBranch && isWorkspaceTrusted",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.stash.apply",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesStash && isWorkspaceTrusted",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.stash.drop",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesStash && isWorkspaceTrusted",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.remote.fetch",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesRemote && isWorkspaceTrusted",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.branch.checkout",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|RemoteBranch)$/ && isWorkspaceTrusted",
+          "group": "1_switch@1"
+        },
+        {
+          "command": "gitglasses.tag.checkout",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesTag && isWorkspaceTrusted",
+          "group": "1_switch@2"
+        },
+        {
+          "command": "gitglasses.branch.create",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|CurrentBranch|RemoteBranch|Tag)$/ && isWorkspaceTrusted",
+          "group": "2_create@1"
+        },
+        {
+          "command": "gitglasses.tag.create",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|CurrentBranch|RemoteBranch)$/ && isWorkspaceTrusted",
+          "group": "2_create@2"
+        },
+        {
+          "command": "gitglasses.branch.merge",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|RemoteBranch|Tag)$/ && isWorkspaceTrusted",
+          "group": "3_integrate@1"
+        },
+        {
+          "command": "gitglasses.branch.rebase",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|RemoteBranch|Tag)$/ && isWorkspaceTrusted",
+          "group": "3_integrate@2"
+        },
+        {
+          "command": "gitglasses.branch.push",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Current)?Branch$/ && isWorkspaceTrusted",
+          "group": "4_remote@1"
+        },
+        {
+          "command": "gitglasses.branch.setUpstream",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Current)?Branch$/ && isWorkspaceTrusted",
+          "group": "4_remote@2"
+        },
+        {
+          "command": "gitglasses.tag.push",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesTag && isWorkspaceTrusted",
+          "group": "4_remote@3"
+        },
+        {
+          "command": "gitglasses.tag.deleteRemote",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesTag && isWorkspaceTrusted",
+          "group": "4_remote@4"
+        },
+        {
+          "command": "gitglasses.branch.openOnRemote",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|CurrentBranch|RemoteBranch)$/",
+          "group": "4_remote@5"
+        },
+        {
+          "command": "gitglasses.ref.compareWithHead",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|RemoteBranch|Tag)$/",
+          "group": "5_compare@1"
+        },
+        {
+          "command": "gitglasses.ref.compareWithWorkingTree",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|CurrentBranch|RemoteBranch|Tag)$/",
+          "group": "5_compare@2"
+        },
+        {
+          "command": "gitglasses.branch.rename",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Current)?Branch$/ && isWorkspaceTrusted",
+          "group": "6_manage@1"
+        },
+        {
+          "command": "gitglasses.branch.delete",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesBranch && isWorkspaceTrusted",
+          "group": "6_manage@2"
+        },
+        {
+          "command": "gitglasses.tag.delete",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesTag && isWorkspaceTrusted",
+          "group": "6_manage@3"
+        },
+        {
+          "command": "gitglasses.ref.copyName",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Branch|CurrentBranch|RemoteBranch|Tag|Remote)$/",
+          "group": "7_copy@1"
+        },
+        {
+          "command": "gitglasses.stash.apply",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesStash && isWorkspaceTrusted",
+          "group": "1_apply@1"
+        },
+        {
+          "command": "gitglasses.stash.pop",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesStash && isWorkspaceTrusted",
+          "group": "1_apply@2"
+        },
+        {
+          "command": "gitglasses.stash.show",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesStash",
+          "group": "2_show@1"
+        },
+        {
+          "command": "gitglasses.stash.drop",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesStash && isWorkspaceTrusted",
+          "group": "6_manage@1"
+        },
+        {
+          "command": "gitglasses.remote.fetch",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesRemote && isWorkspaceTrusted",
+          "group": "1_fetch@1"
+        },
+        {
+          "command": "gitglasses.remote.prune",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesRemote && isWorkspaceTrusted",
+          "group": "1_fetch@2"
+        },
+        {
+          "command": "gitglasses.remote.openOnHost",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesRemote",
+          "group": "4_remote@1"
+        },
+        {
+          "command": "gitglasses.remote.remove",
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem == gitglassesRemote && isWorkspaceTrusted",
+          "group": "6_manage@1"
         }
       ],
       "commandPalette": [
@@ -869,6 +1224,118 @@
         {
           "command": "gitglasses.home.dismissGetStarted",
           "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.checkout",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.create",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.rename",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.delete",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.merge",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.rebase",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.push",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.setUpstream",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.branch.openOnRemote",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.ref.compareWithHead",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.ref.compareWithWorkingTree",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.ref.copyName",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.tag.delete",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.tag.push",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.tag.deleteRemote",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.tag.checkout",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.stash.apply",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.stash.pop",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.stash.drop",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.stash.show",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.stash.create",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.stash.createIncludeUntracked",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.remote.fetch",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.remote.prune",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.remote.remove",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.remote.openOnHost",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.tag.create",
+          "when": "!gitglasses.noRepository"
+        },
+        {
+          "command": "gitglasses.remote.add",
+          "when": "!gitglasses.noRepository"
         }
       ]
     },
