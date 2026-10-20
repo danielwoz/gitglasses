@@ -281,6 +281,15 @@ describe('buildLineStory', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('bad token'));
   });
 
+  it('does not offer to connect a forge that cannot look pull requests up', async () => {
+    const { getPullRequestsForCommit: _omit, ...withoutLookup } = provider();
+    const story = await buildLineStory(
+      input,
+      sources({ forge: hosted(withoutLookup as HostingProvider, false) }),
+    );
+    expect(story.pullRequests).toMatchObject({ state: 'unsupported', named: { number: 7 } });
+  });
+
   it('reports a forge without commit lookups, a missing forge, and no git', async () => {
     const { getPullRequestsForCommit: _omit, ...withoutLookup } = provider();
     const unsupported = await buildLineStory(

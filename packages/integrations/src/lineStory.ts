@@ -449,14 +449,16 @@ export async function buildLineStory<C extends StoryCommit>(
       story.pullRequests = { state: 'unavailable', reason: 'restricted', named: named() };
       return;
     }
-    if (!forge.auth) {
-      await commit;
-      story.pullRequests = { state: 'notConnected', forge: forge.label, named: named() };
-      return;
-    }
+    // A forge that cannot look pull requests up by commit says so whether or
+    // not it is connected: connecting would not help.
     if (!supportsCommitPullRequests(forge.provider)) {
       await commit;
       story.pullRequests = { state: 'unsupported', forge: forge.label, named: named() };
+      return;
+    }
+    if (!forge.auth) {
+      await commit;
+      story.pullRequests = { state: 'notConnected', forge: forge.label, named: named() };
       return;
     }
     try {
