@@ -61,6 +61,17 @@ inline std::vector<std::string> childEnvOverrides(const SpawnOpts& opts) {
   return overrides;
 }
 
+#ifndef _WIN32
+// Creates a pipe whose two ends close on exec, so no child ever inherits them:
+// not git (posix_spawn's dup2 onto fds 1 and 2 gives it the copies it needs),
+// not the hooks and helpers git starts, and not a concurrent spawn on another
+// thread. An inherited write end keeps the read side from seeing EOF for as
+// long as its holder lives, which a helper left running in the background (a
+// hook's watcher, a detached auto-gc) can make minutes. Returns false when
+// the pipe cannot be created.
+bool makeCloexecPipe(int fds[2]);
+#endif
+
 // A spawned `git` child process. Stdout is line-buffered for parsing; stderr
 // is captured for error reporting. Cancellation kills the whole process
 // group, so a blame of a huge file stops costing CPU the moment the client

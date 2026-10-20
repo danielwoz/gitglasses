@@ -3,14 +3,17 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
 
 #ifndef _WIN32
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -172,6 +175,48 @@ std::string runToEnd(const std::filesystem::path& dir, std::vector<std::string> 
   std::string out = process.value().readAll(token);
   EXPECT_EQ(process.value().wait(token), 0) << process.value().stderrOutput();
   return out;
+}
+
+// The descriptors open in this process.
+std::set<int> openDescriptors() {
+  std::set<int> fds;
+  const long limit = std::min(sysconf(_SC_OPEN_MAX), 65536L);
+  for (int fd = 0; fd < limit; ++fd) {
+    if (fcntl(fd, F_GETFD) != -1) fds.insert(fd);
+  }
+  return fds;
+}
+
+// The output pipes close on exec by themselves. Where a spawn also closes
+// every descriptor above stderr (glibc >= 2.34, macOS), that hides a pipe
+// without the flag from the tests below that run a child; a build for an
+// older glibc relies on the flag alone.
+TEST(GitProcess, OutputPipesCloseOnExec) {
+  int fds[2];
+  ASSERT_TRUE(makeCloexecPipe(fds));
+  EXPECT_TRUE(fcntl(fds[0], F_GETFD) & FD_CLOEXEC) << "read end";
+  EXPECT_TRUE(fcntl(fds[1], F_GETFD) & FD_CLOEXEC) << "write end";
+  close(fds[0]);
+  close(fds[1]);
+}
+
+// The read ends this process holds while git runs would otherwise reach
+// every child spawned meanwhile, along with its hooks and helpers.
+TEST(GitProcess, DescriptorsHeldForAChildCloseOnExec) {
+  gg::testing::FixtureRepo fixture;
+  const std::set<int> before = openDescriptors();
+  auto process = GitProcess::spawn(fixture.root().string(), {"--version"});
+  ASSERT_TRUE(process.ok()) << process.error().message;
+  int held = 0;
+  for (int fd : openDescriptors()) {
+    if (before.count(fd)) continue;
+    ++held;
+    EXPECT_TRUE(fcntl(fd, F_GETFD) & FD_CLOEXEC) << "fd " << fd << " would reach later children";
+  }
+  EXPECT_GE(held, 2) << "expected the stdout and stderr read ends";
+  CancelToken token;
+  process.value().readAll(token);
+  EXPECT_EQ(process.value().wait(token), 0);
 }
 
 // A helper that a hook or alias leaves running in the background must not

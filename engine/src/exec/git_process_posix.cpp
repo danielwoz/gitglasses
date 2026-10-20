@@ -20,25 +20,6 @@ namespace {
 
 constexpr int kPollIntervalMs = 50;
 
-// A pipe whose two ends close on exec, so no child ever inherits them: not
-// git (posix_spawn's dup2 onto fds 1 and 2 gives it the copies it needs), not
-// the hooks and helpers git starts, and not a concurrent spawn on another
-// thread. An inherited write end keeps the read side from seeing EOF for as
-// long as its holder lives, which a helper left running in the background
-// (a hook's watcher, a detached auto-gc) can make minutes.
-bool makePipe(int fds[2]) {
-#ifdef __APPLE__
-  // No pipe2(). The gap before FD_CLOEXEC is set is covered by
-  // POSIX_SPAWN_CLOEXEC_DEFAULT on every spawn this engine makes.
-  if (pipe(fds) != 0) return false;
-  fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-  fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-  return true;
-#else
-  return pipe2(fds, O_CLOEXEC) == 0;
-#endif
-}
-
 struct SpawnActions {
   posix_spawn_file_actions_t actions;
   SpawnActions() { posix_spawn_file_actions_init(&actions); }
@@ -53,13 +34,26 @@ struct SpawnAttr {
 
 }  // namespace
 
+bool makeCloexecPipe(int fds[2]) {
+#ifdef __APPLE__
+  // No pipe2(). The gap before FD_CLOEXEC is set is covered by
+  // POSIX_SPAWN_CLOEXEC_DEFAULT on every spawn this engine makes.
+  if (pipe(fds) != 0) return false;
+  fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+  fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+  return true;
+#else
+  return pipe2(fds, O_CLOEXEC) == 0;
+#endif
+}
+
 Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args,
                                      const SpawnOpts& opts) {
   if (restrictedMode()) return Error{ErrorCode::Restricted, kRestrictedModeMessage};
 
   int outPipe[2], errPipe[2];
-  if (!makePipe(outPipe)) return Error{ErrorCode::Internal, "pipe() failed"};
-  if (!makePipe(errPipe)) {
+  if (!makeCloexecPipe(outPipe)) return Error{ErrorCode::Internal, "pipe() failed"};
+  if (!makeCloexecPipe(errPipe)) {
     close(outPipe[0]);
     close(outPipe[1]);
     return Error{ErrorCode::Internal, "pipe() failed"};
