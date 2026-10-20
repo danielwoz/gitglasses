@@ -462,7 +462,10 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       await reload();
     }),
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
-    vscode.commands.registerCommand('gitglasses.selectRepository', () => activeRepo.pick()),
+    // A root path, as a keybinding's args, selects that repository directly.
+    vscode.commands.registerCommand('gitglasses.selectRepository', (rootPath?: unknown) =>
+      typeof rootPath === 'string' ? activeRepo.select(rootPath) : activeRepo.pick(),
+    ),
     registerScmGraphButton({
       locateOrDiscover: (uri) => repos.locateOrDiscover(uri),
       activeRepoId: async () => (await activeRepo.resolve())?.repoId,

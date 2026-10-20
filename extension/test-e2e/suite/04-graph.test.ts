@@ -22,15 +22,10 @@ async function closeEditors(): Promise<void> {
 }
 
 /** Picks the `index`th entry of Select Repository's quick pick. */
+/** Selects the workspace's `index`th repository, as picking it would. */
 async function selectRepository(index: number): Promise<void> {
-  const picked = vscode.commands.executeCommand('gitglasses.selectRepository');
-  // The quick pick opens once the repository list resolves.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  for (let i = 0; i < index; i++) {
-    await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
-  }
-  await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-  await picked;
+  const repos = await listRepositories();
+  await vscode.commands.executeCommand('gitglasses.selectRepository', repos[index].rootPath);
 }
 
 describe('graph webview', () => {

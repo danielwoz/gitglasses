@@ -321,6 +321,22 @@ describe('ActiveRepoManager selection', () => {
     expect((await active.resolve())?.workspacePath).toBe(link);
   });
 
+  it('selects a repository by its root, and only one the workspace has', async () => {
+    layout('.git', 'api/.git');
+    const engine = fakeEngine([repo('r1', ''), repo('r2', 'api')]);
+    const { active } = manager(engine);
+    expect((await active.resolve())?.repoId).toBe('r1');
+
+    const changed = nextChange(active);
+    await active.select(path.join(root, 'api'));
+    expect(await changed).toBe(true);
+    expect((await active.resolve())?.repoId).toBe('r2');
+
+    await active.select(path.join(root, 'elsewhere'));
+    expect((await active.resolve())?.repoId).toBe('r2');
+    expect(controls.messages.at(-1)).toContain('no repository in this workspace is rooted at');
+  });
+
   it('falls back to the folder repository when the stored choice is gone', async () => {
     layout('.git');
     const engine = fakeEngine([repo('r1', '')]);
