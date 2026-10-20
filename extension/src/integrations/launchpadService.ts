@@ -33,12 +33,21 @@ export interface LaunchpadModel {
   attentionCount: number;
 }
 
+/**
+ * The username a connection's pull request authors are compared with: the
+ * author of a pull request the provider reports as the viewer's own, else the
+ * account name stored with the credential. A token stored without one (GitHub
+ * Enterprise, Bitbucket Data Center) still finds its owner's pull requests.
+ */
+function viewerLogin(prs: readonly PullRequest[], storedUsername: string | undefined): string {
+  return prs.find((pr) => pr.viewerRole === 'author')?.author.username || storedUsername || '';
+}
+
 // Fetches "my PRs" across every connected hosting provider, classifies them
 // into launchpad buckets, and layers snooze state on top. Results are cached
 // 60s with stale-while-revalidate so view refreshes stay cheap.
 export class LaunchpadService {
   private readonly cache = new TtlCache<PullRequest[]>();
-  private readonly viewerByHost = new Map<string, string>();
 
   constructor(
     private readonly integrations: IntegrationService,
@@ -55,11 +64,10 @@ export class LaunchpadService {
     const results = await Promise.allSettled(
       entries.map(async (entry) => {
         if (force) this.cache.delete(entry.host);
-        this.viewerByHost.set(entry.host, entry.auth.username ?? '');
         const { value } = await this.cache.getOrFetch(entry.host, FRESH_MS, STALE_MS, () =>
           entry.provider.getMyPullRequests(toAuthContext(entry.auth, entry.host), { limit: 50 }),
         );
-        return { host: entry.host, items: value };
+        return { items: value, viewer: viewerLogin(value, entry.auth.username) };
       }),
     );
 
@@ -70,10 +78,9 @@ export class LaunchpadService {
     // One dead provider never blanks the list: rejected entries are skipped.
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
-      const viewer = this.viewerByHost.get(result.value.host) ?? '';
       const { active, snoozed } = partitionSnoozed(result.value.items, snoozes, nowMs);
       snoozedItems.push(...snoozed);
-      perProvider.push(groupItems(active, viewer));
+      perProvider.push(groupItems(active, result.value.viewer));
     }
 
     const groups: LaunchpadModel['groups'] = mergeGroups(perProvider);

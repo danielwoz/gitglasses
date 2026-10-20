@@ -74,7 +74,7 @@ describe('applyAutolinks', () => {
   it('percent-encodes capture groups substituted into the URL', () => {
     const patterns = [{ regex: 'T-(\\S+)', urlTemplate: 'https://t.example/$1' }];
     expect(applyAutolinks('T-a/b?c=d', patterns)).toBe(
-      '[T\\-a/b?c=d](<https://t.example/a%2Fb%3Fc%3Dd>)',
+      '[T\\-a/b?c\\=d](<https://t.example/a%2Fb%3Fc%3Dd>)',
     );
   });
 });

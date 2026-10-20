@@ -14,6 +14,7 @@ import type {
   ProvenanceMark,
 } from './ipc';
 import { relativeTime } from './graphLogic';
+import { bodyWithoutTrailers, isListedTrailer } from '../../src/system/trailers';
 import {
   ChangeSummary,
   FileEntry,
@@ -207,10 +208,13 @@ function renderCommit(
   if (view.provenance) row('Provenance', ...provenanceValue(view.provenance));
   info.append(meta);
 
-  if (d.body) info.append(el('div', 'details-message', d.body));
-  if (d.trailers.length > 0) {
+  // The trailers are listed below, so the message leaves them out.
+  const message = bodyWithoutTrailers(d.body, d.trailers);
+  if (message) info.append(el('div', 'details-message', message));
+  const listed = d.trailers.filter(isListedTrailer);
+  if (listed.length > 0) {
     const trailers = el('dl', 'details-trailers');
-    for (const trailer of d.trailers) {
+    for (const trailer of listed) {
       trailers.append(el('dt', undefined, trailer.key), el('dd', undefined, trailer.value));
     }
     info.append(trailers);

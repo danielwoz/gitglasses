@@ -15,6 +15,7 @@ import { provenanceHoverLine } from '../provenance/provenanceMarkdown';
 import { lfsHasUncommittedChange, lfsLastChange } from './blameFormat';
 import {
   BLAME_HOVER_COMMANDS,
+  MAX_BODY_LINES,
   joinBlocks,
   messageBlocks,
   pullRequestNumber,
@@ -108,11 +109,16 @@ export class BlameHoverRenderer {
         : escapeMarkdown(text);
 
     const subject = details?.subject || commit.summary;
-    const { blocks, truncated } = messageBlocks(details?.body ?? '');
+    const { blocks, truncated } = messageBlocks(
+      details?.body ?? '',
+      MAX_BODY_LINES,
+      details?.trailers,
+    );
     const rendered = await Promise.all(
       blocks.map(async (block) => ({
         markdown: await linkify(block.text),
         listItem: block.listItem,
+        trailer: block.trailer,
       })),
     );
     const number = hosting
