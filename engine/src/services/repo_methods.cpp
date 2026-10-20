@@ -11,8 +11,7 @@ void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
 
   dispatcher.method(
       "repo/discover",
-      [&context](const rpc::Json& params, const CancelToken&,
-                 const rpc::NotifyFn&) -> rpc::Json {
+      [&context](const rpc::Json& params, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
         const std::string path = params.value("path", "");
         if (path.empty()) {
           throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
@@ -44,8 +43,7 @@ void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
   // the path under a new id.
   dispatcher.method(
       "repo/close",
-      [&context](const rpc::Json& params, const CancelToken&,
-                 const rpc::NotifyFn&) -> rpc::Json {
+      [&context](const rpc::Json& params, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
         const std::string repoId = params.value("repoId", "");
         if (!context.registry.byId(repoId)) {
           throw rpc::HandlerError{{ErrorCode::RepoNotFound, "unknown repo id: " + repoId}};
@@ -99,8 +97,7 @@ void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
           contents = std::move(it->get_ref<std::string&>());
         }
         context.docOverlay.update(params.value("repoId", ""), params.value("path", ""),
-                                  std::move(contents),
-                                  params.value("version", std::int64_t{0}));
+                                  std::move(contents), params.value("version", std::int64_t{0}));
       },
       rpc::NotificationMode::Queued);
 

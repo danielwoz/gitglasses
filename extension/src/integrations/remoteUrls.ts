@@ -127,7 +127,9 @@ const BITBUCKET_DC: Builder = (repo, target) => {
         ? `${base}/browse`
         : `${base}/browse?at=${encodeURIComponent(`refs/heads/${target.branch}`)}`;
     case 'commit':
-      return target.sha === '' ? `${base}/commits` : `${base}/commits/${encodeURIComponent(target.sha)}`;
+      return target.sha === ''
+        ? `${base}/commits`
+        : `${base}/commits/${encodeURIComponent(target.sha)}`;
     case 'file': {
       const path = encodePath(target.path);
       if (path === '') return `${base}/browse`;
@@ -151,9 +153,7 @@ const AZURE_DEVOPS: Builder = (repo, target) => {
     case 'repo':
       return base;
     case 'branch':
-      return target.branch === ''
-        ? base
-        : `${base}?version=GB${encodeURIComponent(target.branch)}`;
+      return target.branch === '' ? base : `${base}?version=GB${encodeURIComponent(target.branch)}`;
     case 'commit':
       return target.sha === '' ? base : `${base}/commit/${encodeURIComponent(target.sha)}`;
     case 'file': {

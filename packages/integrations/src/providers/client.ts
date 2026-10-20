@@ -64,7 +64,6 @@ export function segments(value: string): Path {
   return new Path(value.split('/').map(encodeURIComponent).join('/'));
 }
 
-
 /** In-flight requests a provider keeps open while fanning out over results. */
 export const FANOUT_CONCURRENCY = 6;
 
@@ -84,7 +83,7 @@ const RESPONSE_CACHE_MAX_ENTRIES = 512;
 export async function mapPooled<T, R>(
   items: readonly T[],
   limit: number,
-  fn: (item: T, index: number) => Promise<R>
+  fn: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
@@ -175,7 +174,7 @@ export class ProviderClient {
       if (!credentialAllowsUrl(endpoint, this.credentialHost)) {
         throw new Error(
           `${options.name} endpoint ${JSON.stringify(endpoint)} is not on ${this.credentialHost}, ` +
-            'the host its credentials are issued for'
+            'the host its credentials are issued for',
         );
       }
     }
@@ -199,7 +198,7 @@ export class ProviderClient {
     const url = this.url(path);
     const key = `GET ${url}\n${tokenFingerprint(auth.token)}`;
     const { value } = await this.responses.getOrFetch(key, ttlMs, 0, () =>
-      this.requestJson<T>(auth, url)
+      this.requestJson<T>(auth, url),
     );
     return value as T | undefined;
   }
@@ -241,7 +240,7 @@ export class ProviderClient {
   async graphql<T>(
     auth: AuthContext,
     query: string,
-    variables: Record<string, unknown>
+    variables: Record<string, unknown>,
   ): Promise<T> {
     const response = await this.send(auth, 'POST', this.graphqlUrl, { query, variables });
     throwForStatus(this.name, response);
@@ -290,13 +289,13 @@ export class ProviderClient {
       if (owner !== this.credentialHost) {
         throw new CredentialScopeError(
           `${this.name}: refusing to send the credential for ${JSON.stringify(auth.host)} ` +
-            `to ${this.credentialHost}`
+            `to ${this.credentialHost}`,
         );
       }
     }
     if (!credentialAllowsUrl(url, this.credentialHost)) {
       throw new CredentialScopeError(
-        `${this.name}: refusing to send the credential for ${this.credentialHost} to ${hostOfUrl(url)}`
+        `${this.name}: refusing to send the credential for ${this.credentialHost} to ${hostOfUrl(url)}`,
       );
     }
   }
@@ -305,7 +304,7 @@ export class ProviderClient {
     auth: AuthContext,
     method: string,
     url: string,
-    body?: unknown
+    body?: unknown,
   ): Promise<HttpResponseLike> {
     const headers: Record<string, string> = { ...this.headers };
     if (body !== undefined) {
@@ -380,7 +379,7 @@ function transportError(name: string, url: string, cause: unknown): ProviderErro
   return new ProviderError(
     `${name} could not reach ${hostOfUrl(url)}: ${transportReason(cause)}`,
     undefined,
-    { cause }
+    { cause },
   );
 }
 
@@ -392,7 +391,7 @@ export function mergeByRole<T>(
   primary: readonly T[],
   secondary: readonly T[],
   keyOf: (item: T) => string | number,
-  limit: number
+  limit: number,
 ): T[] {
   const merged = new Map<string | number, T>();
   for (const item of [...primary, ...secondary]) {
@@ -417,7 +416,7 @@ export class CachedIdentity<T> {
 
   constructor(
     private readonly ttlMs: number = IDENTITY_TTL_MS,
-    clock?: Clock
+    clock?: Clock,
   ) {
     this.cache = new TtlCache<T>(clock);
   }

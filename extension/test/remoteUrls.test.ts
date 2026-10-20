@@ -55,19 +55,15 @@ describe('buildRemoteUrl', () => {
     expect(buildRemoteUrl('gitlab', gl, { kind: 'commit', sha: 'abc123' })).toBe(
       'https://gitlab.com/danielwoz/gitglasses/-/commit/abc123',
     );
-    expect(
-      buildRemoteUrl('gitlab', gl, { kind: 'file', path: 'src/a.ts', ref: 'main' }),
-    ).toBe('https://gitlab.com/danielwoz/gitglasses/-/blob/main/src/a.ts');
+    expect(buildRemoteUrl('gitlab', gl, { kind: 'file', path: 'src/a.ts', ref: 'main' })).toBe(
+      'https://gitlab.com/danielwoz/gitglasses/-/blob/main/src/a.ts',
+    );
   });
 
   it('uses each forge’s line-fragment syntax', () => {
     const file = { kind: 'file', path: 'src/a.ts', ref: 'main' } as const;
-    expect(buildRemoteUrl('github', gh, { ...file, startLine: 5, endLine: 9 })).toMatch(
-      /#L5-L9$/,
-    );
-    expect(buildRemoteUrl('gitlab', gl, { ...file, startLine: 5, endLine: 9 })).toMatch(
-      /#L5-9$/,
-    );
+    expect(buildRemoteUrl('github', gh, { ...file, startLine: 5, endLine: 9 })).toMatch(/#L5-L9$/);
+    expect(buildRemoteUrl('gitlab', gl, { ...file, startLine: 5, endLine: 9 })).toMatch(/#L5-9$/);
     expect(buildRemoteUrl('bitbucket', bb, { ...file, startLine: 5, endLine: 9 })).toMatch(
       /#lines-5:9$/,
     );
@@ -155,9 +151,7 @@ describe('buildRemoteUrl', () => {
           startLine: 5,
           endLine: 9,
         }),
-      ).toBe(
-        'https://git.corp.example/projects/ENG/repos/gitglasses/browse/src/a.ts?at=main#5-9',
-      );
+      ).toBe('https://git.corp.example/projects/ENG/repos/gitglasses/browse/src/a.ts?at=main#5-9');
     });
 
     it('links a commit under /commits', () => {

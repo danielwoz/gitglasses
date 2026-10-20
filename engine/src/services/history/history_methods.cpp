@@ -98,16 +98,13 @@ Result<void> runGitLog(const core::Repo& repo, std::vector<std::string> args,
   if (!status) return status.error();
   parser.finish();
   if (status.value().exitCode != 0) {
-    return Error{ErrorCode::GitError, "git log failed (" +
-                                          std::to_string(status.value().exitCode) + "): " +
-                                          status.value().stderrText};
+    return Error{ErrorCode::GitError, "git log failed (" + std::to_string(status.value().exitCode) +
+                                          "): " + status.value().stderrText};
   }
   return {};
 }
 
-char lowerByte(char c) {
-  return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-}
+char lowerByte(char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
 
 std::string toLower(std::string_view text) {
   std::string lowered(text);
@@ -121,8 +118,7 @@ std::string toLower(std::string_view text) {
 bool containsCi(const char* haystack, std::string_view loweredNeedle) {
   if (!haystack) return false;
   const std::string_view text(haystack);
-  const auto hit = std::search(text.begin(), text.end(), loweredNeedle.begin(),
-                               loweredNeedle.end(),
+  const auto hit = std::search(text.begin(), text.end(), loweredNeedle.begin(), loweredNeedle.end(),
                                [](char a, char b) { return lowerByte(a) == b; });
   return hit != text.end();
 }

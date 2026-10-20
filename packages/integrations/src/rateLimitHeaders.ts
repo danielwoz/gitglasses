@@ -66,7 +66,7 @@ export function parseRetryAfter(value: string, now: number): number | undefined 
 /** Reads every rate-limit signal a response carries, resolved against `now`. */
 export function readRateLimitSignals(
   headers: HttpHeadersLike | Record<string, string>,
-  now: number
+  now: number,
 ): RateLimitSignals {
   const get = headerGetter(headers);
   const signals: RateLimitSignals = {};
@@ -94,7 +94,7 @@ export function readRateLimitSignals(
 
 function numericHeader(
   get: (name: string) => string | undefined,
-  names: readonly string[]
+  names: readonly string[],
 ): number | undefined {
   for (const name of names) {
     const raw = get(name);

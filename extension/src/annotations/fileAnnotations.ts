@@ -225,11 +225,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   /** Clears only the decoration types the previous mode painted, then paints
    *  the current one. Re-rendering the same mode overwrites its types in
    *  place, so the steady state costs no clearing calls at all. */
-  private applyMode(
-    editor: vscode.TextEditor,
-    mode: AnnotationMode,
-    fileBlame: FileBlame,
-  ): void {
+  private applyMode(editor: vscode.TextEditor, mode: AnnotationMode, fileBlame: FileBlame): void {
     const previous = this.appliedModes.get(editor);
     if (previous === undefined) this.clearDecorations(editor);
     else if (previous !== mode) this.clearMode(editor, previous);

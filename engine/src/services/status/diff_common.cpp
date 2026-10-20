@@ -80,8 +80,7 @@ bool parseHunkHeader(const std::string& line, HunkBlock& out) {
 
 }  // namespace
 
-Result<core::DiffPtr> singleFileDiff(const core::Repo& repo, const std::string& path,
-                                     bool staged) {
+Result<core::DiffPtr> singleFileDiff(const core::Repo& repo, const std::string& path, bool staged) {
   git_diff_options opts;
   git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
   char* pathspec[] = {const_cast<char*>(path.c_str())};

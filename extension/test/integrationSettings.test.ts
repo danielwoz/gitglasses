@@ -31,9 +31,7 @@ describe('normalizeDomain', () => {
 
   it('drops a port so the stored domain can actually match a remote', () => {
     expect(normalizeDomain('git.corp.example:8443')).toBe('git.corp.example');
-    expect(normalizeDomain('https://git.corp.example:8443/o/repo.git')).toBe(
-      'git.corp.example',
-    );
+    expect(normalizeDomain('https://git.corp.example:8443/o/repo.git')).toBe('git.corp.example');
   });
 
   it('returns empty for empty input', () => {
@@ -58,9 +56,9 @@ describe('isValidDomain', () => {
 
 describe('addHostSetting', () => {
   it('appends a normalized entry', () => {
-    expect(
-      addHostSetting([], { domain: 'https://git.example.com/', provider: 'gitlab' }),
-    ).toEqual([{ domain: 'git.example.com', provider: 'gitlab' }]);
+    expect(addHostSetting([], { domain: 'https://git.example.com/', provider: 'gitlab' })).toEqual([
+      { domain: 'git.example.com', provider: 'gitlab' },
+    ]);
   });
 
   it('replaces rather than duplicates an existing domain', () => {
@@ -97,9 +95,9 @@ describe('removeHostSetting', () => {
 
 describe('addIssueSetting', () => {
   it('records provider and normalized host', () => {
-    expect(addIssueSetting([], { provider: 'jira', host: 'https://acme.atlassian.net' })).toEqual(
-      [{ provider: 'jira', host: 'acme.atlassian.net' }],
-    );
+    expect(addIssueSetting([], { provider: 'jira', host: 'https://acme.atlassian.net' })).toEqual([
+      { provider: 'jira', host: 'acme.atlassian.net' },
+    ]);
   });
 
   it('omits host entirely when the provider needs none', () => {
@@ -123,10 +121,7 @@ describe('addIssueSetting', () => {
 
 describe('removeIssueSetting', () => {
   it('removes the matching provider+host', () => {
-    const existing = [
-      { provider: 'jira', host: 'a.atlassian.net' },
-      { provider: 'linear' },
-    ];
+    const existing = [{ provider: 'jira', host: 'a.atlassian.net' }, { provider: 'linear' }];
     expect(removeIssueSetting(existing, 'jira', 'a.atlassian.net')).toEqual([
       { provider: 'linear' },
     ]);

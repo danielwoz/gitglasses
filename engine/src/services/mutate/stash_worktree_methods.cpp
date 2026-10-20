@@ -14,8 +14,8 @@ namespace gg::services {
 namespace {
 
 using mutate_detail::openRepo;
-using mutate_detail::runConflictAware;
 using mutate_detail::requirePositional;
+using mutate_detail::runConflictAware;
 using mutate_detail::runGitOrThrow;
 
 std::string requireStashRef(const rpc::Json& params) {
@@ -79,8 +79,7 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"stash", "push"};
         if (params.value("includeUntracked", false)) args.push_back("--include-untracked");
-        const std::string message =
-            requirePositional(optionalString(params, "message"), "message");
+        const std::string message = requirePositional(optionalString(params, "message"), "message");
         if (!message.empty()) {
           args.push_back("-m");
           args.push_back(message);

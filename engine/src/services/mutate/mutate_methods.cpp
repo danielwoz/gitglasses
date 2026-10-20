@@ -15,10 +15,10 @@ namespace {
 
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
-using mutate_detail::runConflictAware;
-using mutate_detail::runGit;
 using mutate_detail::requirePositional;
 using mutate_detail::requirePositionals;
+using mutate_detail::runConflictAware;
+using mutate_detail::runGit;
 using mutate_detail::runGitOrThrow;
 
 }  // namespace

@@ -162,9 +162,8 @@ Result<std::shared_ptr<const cache::BlameResult>> BlameService::blameWithCli(
 
   const int exitCode = process.value().wait(token);
   if (process.value().timedOut()) {
-    return Error{ErrorCode::GitError,
-                 "git blame timed out after " +
-                     std::to_string(process.value().timeout().count()) + "ms"};
+    return Error{ErrorCode::GitError, "git blame timed out after " +
+                                          std::to_string(process.value().timeout().count()) + "ms"};
   }
   if (exitCode != 0) {
     return Error{ErrorCode::GitError,

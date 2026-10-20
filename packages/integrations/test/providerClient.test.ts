@@ -28,9 +28,7 @@ describe('path encoding', () => {
     const { fetchFn, requests } = stubFetch(() => jsonResponse({}, 404));
     const provider = new GitHubProvider({ fetchFn });
     await provider.getIssueOrPr(auth, { ...repo, owner: '../../evil', name: 'a b' }, '#7');
-    expect(requests[0].url).toBe(
-      'https://api.github.com/repos/..%2F..%2Fevil/a%20b/issues/7'
-    );
+    expect(requests[0].url).toBe('https://api.github.com/repos/..%2F..%2Fevil/a%20b/issues/7');
   });
 
   it('does not double-encode a project path GitLab wants as one segment', async () => {
@@ -39,7 +37,7 @@ describe('path encoding', () => {
     await provider.getPullRequestForBranch(auth, { ...repo, owner: 'group/sub' }, 'feat/x');
     expect(requests[0].url).toBe(
       'https://gitlab.com/api/v4/projects/group%2Fsub%2Fwidgets/merge_requests' +
-        '?state=opened&source_branch=feat%2Fx'
+        '?state=opened&source_branch=feat%2Fx',
     );
   });
 });
@@ -54,7 +52,7 @@ describe('transport failures', () => {
     const error = await provider.getMyPullRequests(auth).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ProviderError);
     expect((error as Error).message).toMatch(
-      /GitLab could not reach git\.corp\.example: its TLS certificate could not be verified/
+      /GitLab could not reach git\.corp\.example: its TLS certificate could not be verified/,
     );
     expect((error as Error).cause).toBeInstanceOf(TypeError);
   });
@@ -110,7 +108,7 @@ describe('response cache', () => {
 
   it('coalesces concurrent lookups of the same reference into one request', async () => {
     const { fetchFn, requests } = stubFetch(() =>
-      jsonResponse({ id: 900, iid: 7, title: 'x', web_url: 'u', state: 'opened', updated_at: 't' })
+      jsonResponse({ id: 900, iid: 7, title: 'x', web_url: 'u', state: 'opened', updated_at: 't' }),
     );
     const provider = new GitLabProvider({ fetchFn });
     await Promise.all([
@@ -122,14 +120,14 @@ describe('response cache', () => {
 
   it('never serves one token a response fetched for another', async () => {
     const { fetchFn, requests } = stubFetch((_, init) =>
-      jsonResponse({ avatar_url: init?.headers?.authorization })
+      jsonResponse({ avatar_url: init?.headers?.authorization }),
     );
     const provider = new GitLabProvider({ fetchFn });
     expect(await provider.getAvatarUrl({ token: 'first' }, 'alice@example.com')).toBe(
-      'Bearer first'
+      'Bearer first',
     );
     expect(await provider.getAvatarUrl({ token: 'second' }, 'alice@example.com')).toBe(
-      'Bearer second'
+      'Bearer second',
     );
     expect(requests).toHaveLength(2);
   });
@@ -162,7 +160,7 @@ describe('status mapping', () => {
       jsonResponse({ message: 'rate limited' }, 403, {
         'ratelimit-remaining': '0',
         'ratelimit-reset': '1784000000',
-      })
+      }),
     );
     const provider = new GitHubProvider({ fetchFn });
     const error = await provider.getMyPullRequests(auth).catch((e: unknown) => e);

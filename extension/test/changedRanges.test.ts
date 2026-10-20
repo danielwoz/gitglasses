@@ -30,19 +30,12 @@ describe('computeChangedRanges', () => {
   });
 
   it('picks out only the uncommitted hunks', () => {
-    const blame = blameOf([
-      hunk('abc', 1, 3),
-      hunk(UNCOMMITTED_SHA, 4, 2),
-      hunk('abc', 6, 4),
-    ]);
+    const blame = blameOf([hunk('abc', 1, 3), hunk(UNCOMMITTED_SHA, 4, 2), hunk('abc', 6, 4)]);
     expect(computeChangedRanges(blame)).toEqual([{ startLine: 4, lineCount: 2 }]);
   });
 
   it('merges adjacent uncommitted hunks into one run', () => {
-    const blame = blameOf([
-      hunk(UNCOMMITTED_SHA, 1, 2),
-      hunk(UNCOMMITTED_SHA, 3, 3),
-    ]);
+    const blame = blameOf([hunk(UNCOMMITTED_SHA, 1, 2), hunk(UNCOMMITTED_SHA, 3, 3)]);
     expect(computeChangedRanges(blame)).toEqual([{ startLine: 1, lineCount: 5 }]);
   });
 
@@ -59,18 +52,12 @@ describe('computeChangedRanges', () => {
   });
 
   it('merges overlapping hunks to their union rather than double counting', () => {
-    const blame = blameOf([
-      hunk(UNCOMMITTED_SHA, 1, 5),
-      hunk(UNCOMMITTED_SHA, 3, 2),
-    ]);
+    const blame = blameOf([hunk(UNCOMMITTED_SHA, 1, 5), hunk(UNCOMMITTED_SHA, 3, 2)]);
     expect(computeChangedRanges(blame)).toEqual([{ startLine: 1, lineCount: 5 }]);
   });
 
   it('sorts out-of-order hunks before merging', () => {
-    const blame = blameOf([
-      hunk(UNCOMMITTED_SHA, 5, 2),
-      hunk(UNCOMMITTED_SHA, 1, 4),
-    ]);
+    const blame = blameOf([hunk(UNCOMMITTED_SHA, 5, 2), hunk(UNCOMMITTED_SHA, 1, 4)]);
     expect(computeChangedRanges(blame)).toEqual([{ startLine: 1, lineCount: 6 }]);
   });
 

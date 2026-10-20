@@ -68,10 +68,8 @@ TEST(Server, DiscoverListAndState) {
   Json list = session.request({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/list"}});
   EXPECT_EQ(list["result"]["repos"].size(), 1u);
 
-  Json state = session.request({{"jsonrpc", "2.0"},
-                                {"id", 4},
-                                {"method", "repo/state"},
-                                {"params", {{"repoId", "r1"}}}});
+  Json state = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "repo/state"}, {"params", {{"repoId", "r1"}}}});
   EXPECT_EQ(state["result"]["head"]["branch"], "main");
   EXPECT_EQ(state["result"]["head"]["oid"].get<std::string>().size(), 40u);
   EXPECT_EQ(state["result"]["head"]["unborn"], false);
@@ -160,28 +158,22 @@ TEST(Server, CloseReleasesTheRepoAndItsWatch) {
                                    {"params", {{"path", fixture.root().string()}}}});
   const std::string repoId = discover["result"]["repoId"];
 
-  Json closed = session.request({{"jsonrpc", "2.0"},
-                                 {"id", 3},
-                                 {"method", "repo/close"},
-                                 {"params", {{"repoId", repoId}}}});
+  Json closed = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/close"}, {"params", {{"repoId", repoId}}}});
   ASSERT_TRUE(closed.contains("result")) << closed.dump();
 
   Json list = session.request({{"jsonrpc", "2.0"}, {"id", 4}, {"method", "repo/list"}});
   EXPECT_EQ(list["result"]["repos"].size(), 0u);
 
   // The id is gone, so requests addressing it fail rather than resurrect it.
-  Json state = session.request({{"jsonrpc", "2.0"},
-                                {"id", 5},
-                                {"method", "repo/state"},
-                                {"params", {{"repoId", repoId}}}});
+  Json state = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 5}, {"method", "repo/state"}, {"params", {{"repoId", repoId}}}});
   ASSERT_TRUE(state.contains("error")) << state.dump();
   EXPECT_EQ(state["error"]["code"], static_cast<int>(ErrorCode::RepoNotFound));
 
   // Closing twice is an error, not a crash.
-  Json again = session.request({{"jsonrpc", "2.0"},
-                                {"id", 6},
-                                {"method", "repo/close"},
-                                {"params", {{"repoId", repoId}}}});
+  Json again = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 6}, {"method", "repo/close"}, {"params", {{"repoId", repoId}}}});
   EXPECT_TRUE(again.contains("error")) << again.dump();
 
   // The path can be registered again afterwards.

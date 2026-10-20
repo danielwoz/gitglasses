@@ -108,7 +108,17 @@ describe('GraphStore infinite-scroll trigger', () => {
 describe('GraphStore lane maximum', () => {
   it('tracks the highest lane across rows and their edges', () => {
     const store = new GraphStore();
-    store.appendPage(makeLanedRows([0, 2, 1], [[0, 0], [0, 5], [1, 1]]), 'c1');
+    store.appendPage(
+      makeLanedRows(
+        [0, 2, 1],
+        [
+          [0, 0],
+          [0, 5],
+          [1, 1],
+        ],
+      ),
+      'c1',
+    );
     expect(store.maxLane).toBe(5);
   });
 
@@ -125,7 +135,16 @@ describe('GraphStore lane maximum', () => {
 
   it('matches a full scan of the rows', () => {
     const store = new GraphStore();
-    const pages = [makeLanedRows([1, 4], [[0, 2], [3, 9]]), makeLanedRows([6], [[6, 2]])];
+    const pages = [
+      makeLanedRows(
+        [1, 4],
+        [
+          [0, 2],
+          [3, 9],
+        ],
+      ),
+      makeLanedRows([6], [[6, 2]]),
+    ];
     for (const page of pages) store.appendPage(page, 'c');
     let expected = 0;
     for (const row of store.rows) {

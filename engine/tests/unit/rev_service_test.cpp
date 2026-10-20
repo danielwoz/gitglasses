@@ -82,21 +82,17 @@ TEST(RevService, TruncatesAtMaxBytesOnACharacterBoundary) {
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
 
-  Json capped = session.request(req(10, "rev/fileAtRev",
-                                    {{"repoId", repoId},
-                                     {"path", "wide.txt"},
-                                     {"rev", "HEAD"},
-                                     {"maxBytes", 10}}));
+  Json capped = session.request(
+      req(10, "rev/fileAtRev",
+          {{"repoId", repoId}, {"path", "wide.txt"}, {"rev", "HEAD"}, {"maxBytes", 10}}));
   ASSERT_TRUE(capped.contains("result")) << capped.dump();
   EXPECT_TRUE(capped["result"]["truncated"].get<bool>());
   EXPECT_EQ(capped["result"]["size"], 12);
   EXPECT_EQ(capped["result"]["contents"], "一二三");
 
-  Json whole = session.request(req(11, "rev/fileAtRev",
-                                   {{"repoId", repoId},
-                                    {"path", "wide.txt"},
-                                    {"rev", "HEAD"},
-                                    {"maxBytes", 12}}));
+  Json whole = session.request(
+      req(11, "rev/fileAtRev",
+          {{"repoId", repoId}, {"path", "wide.txt"}, {"rev", "HEAD"}, {"maxBytes", 12}}));
   EXPECT_FALSE(whole["result"]["truncated"].get<bool>());
   EXPECT_EQ(whole["result"]["contents"], text);
 }
@@ -123,10 +119,8 @@ TEST(RevService, BlameOnUnbornHeadIsEmptyNotAGitError) {
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, empty.root);
 
-  Json blame = session.request(req(10, "blame/file",
-                                   {{"repoId", repoId},
-                                    {"path", "fresh.txt"},
-                                    {"streamId", "unborn"}}));
+  Json blame = session.request(
+      req(10, "blame/file", {{"repoId", repoId}, {"path", "fresh.txt"}, {"streamId", "unborn"}}));
   ASSERT_TRUE(blame.contains("result")) << blame.dump();
   EXPECT_EQ(blame["result"]["totalLines"], 0);
   EXPECT_TRUE(blame["result"]["commits"].empty());

@@ -16,10 +16,7 @@ import { LineBlameController } from './annotations/lineBlame';
 import { FileAnnotationsController } from './annotations/fileAnnotations';
 import { BlameHoverProvider } from './annotations/hoverProvider';
 import { BlameCodeLensProvider } from './codelens/blameCodeLens';
-import {
-  RevisionContentProvider,
-  encodeRevisionUri,
-} from './scm/revisionContentProvider';
+import { RevisionContentProvider, encodeRevisionUri } from './scm/revisionContentProvider';
 import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
 import { ViewBase, ViewNode, setActiveRepoResolver } from './views/viewBase';
 import { CommitsViewProvider } from './views/commitsView';
@@ -91,13 +88,11 @@ export function createRestrictedNotifier(): () => void {
   return (): void => {
     if (shown) return;
     shown = true;
-    void vscode.window
-      .showWarningMessage(RESTRICTED_NOTICE, MANAGE_TRUST)
-      .then((choice) => {
-        if (choice === MANAGE_TRUST) {
-          void vscode.commands.executeCommand('workbench.trust.manage');
-        }
-      });
+    void vscode.window.showWarningMessage(RESTRICTED_NOTICE, MANAGE_TRUST).then((choice) => {
+      if (choice === MANAGE_TRUST) {
+        void vscode.commands.executeCommand('workbench.trust.manage');
+      }
+    });
   };
 }
 

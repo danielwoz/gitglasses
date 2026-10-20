@@ -51,14 +51,10 @@ describe('codeSpan', () => {
 
 describe('markdownLinkDestination', () => {
   it('wraps the URL so spaces and parentheses stay inside it', () => {
-    expect(markdownLinkDestination('https://x.example/a (b)')).toBe(
-      '<https://x.example/a (b)>',
-    );
+    expect(markdownLinkDestination('https://x.example/a (b)')).toBe('<https://x.example/a (b)>');
   });
 
   it('encodes the characters that would close the destination', () => {
-    expect(markdownLinkDestination('https://x.example/<>')).toBe(
-      '<https://x.example/%3C%3E>',
-    );
+    expect(markdownLinkDestination('https://x.example/<>')).toBe('<https://x.example/%3C%3E>');
   });
 });

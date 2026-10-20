@@ -34,8 +34,8 @@ bool mayWaitForInput(const std::vector<std::string>& args) {
 
 }  // namespace
 
-Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args,
-                         const RunOpts& opts, const CancelToken& token, const GitSink& sink) {
+Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args, const RunOpts& opts,
+                         const CancelToken& token, const GitSink& sink) {
   const bool mayPrompt = mayWaitForInput(args);
   SpawnOpts spawnOpts;
   spawnOpts.extraEnv = opts.extraEnv;

@@ -19,8 +19,7 @@ namespace gg::services::status_detail {
 // HEAD is unborn). The path is literal, never a glob, so `app/[id]/page.tsx`
 // cannot pick up `app/i/page.tsx`; a directory path still covers its
 // contents. Rename detection stays off so paths are stable.
-Result<core::DiffPtr> singleFileDiff(const core::Repo& repo, const std::string& path,
-                                     bool staged);
+Result<core::DiffPtr> singleFileDiff(const core::Repo& repo, const std::string& path, bool staged);
 
 // The delta of `diff` whose path is exactly `path`, or nullptr.
 const git_diff_delta* deltaForPath(git_diff* diff, const std::string& path, size_t* index);

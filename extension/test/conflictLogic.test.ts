@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  conflictLabel,
-  conflictTooltip,
-  confirmWithConflicts,
-} from '../src/model/conflictLogic';
+import { conflictLabel, conflictTooltip, confirmWithConflicts } from '../src/model/conflictLogic';
 
 const files = (count: number): string[] =>
   Array.from({ length: count }, (_, i) => `src/file${i}.ts`);

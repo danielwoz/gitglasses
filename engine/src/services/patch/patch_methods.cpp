@@ -25,8 +25,8 @@ namespace {
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
 using mutate_detail::repoCwd;
-using mutate_detail::runGit;
 using mutate_detail::requirePositional;
+using mutate_detail::runGit;
 using mutate_detail::runGitOrThrow;
 
 // Captured `git` invocation whose stdout is kept byte-exact. Patch text must
@@ -43,10 +43,9 @@ Result<RawGitOutput> runGitRaw(const core::Repo& repo, std::vector<std::string> 
   exec::RunOpts opts;
   opts.rawOutput = true;
   RawGitOutput output;
-  auto status = exec::runGit(repoCwd(repo), std::move(args), opts, token,
-                             [&output](std::string bytes) {
-                               output.stdoutText = std::move(bytes);
-                             });
+  auto status =
+      exec::runGit(repoCwd(repo), std::move(args), opts, token,
+                   [&output](std::string bytes) { output.stdoutText = std::move(bytes); });
   if (!status) return status.error();
   output.exitCode = status.value().exitCode;
   output.stderrText = status.value().stderrText;

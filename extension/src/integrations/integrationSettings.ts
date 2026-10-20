@@ -192,10 +192,7 @@ export function addHostSetting(
   return [...kept, next];
 }
 
-export function removeHostSetting(
-  existing: readonly HostSetting[],
-  domain: string,
-): HostSetting[] {
+export function removeHostSetting(existing: readonly HostSetting[], domain: string): HostSetting[] {
   const wanted = normalizeDomain(domain);
   return existing.filter((host) => normalizeDomain(host.domain) !== wanted);
 }
@@ -216,7 +213,9 @@ export function addIssueSetting(
         (issue.host === undefined ? undefined : normalizeDomain(issue.host)) === host
       ),
   );
-  const next: IssueSetting = host ? { provider: entry.provider, host } : { provider: entry.provider };
+  const next: IssueSetting = host
+    ? { provider: entry.provider, host }
+    : { provider: entry.provider };
   return [...kept, next];
 }
 

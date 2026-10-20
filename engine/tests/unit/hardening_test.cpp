@@ -13,9 +13,9 @@
 #include "rpc/dispatcher.h"
 #include "rpc/framing.h"
 #include "server.h"
-#include "util/temp_file.h"
 #include "test_fixtures.h"
 #include "test_session.h"
+#include "util/temp_file.h"
 
 namespace gg {
 namespace {
@@ -79,8 +79,7 @@ TEST(Hardening, DeeplyNestedPayloadIsRejectedNotParsed) {
 TEST(Hardening, NestingWithinTheLimitStillParses) {
   // A depth the parser handles comfortably must not be rejected.
   std::string params = std::string(8, '[') + std::string(8, ']');
-  std::string body =
-      R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":)" + params + "}";
+  std::string body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":)" + params + "}";
 
   std::istringstream in(frame(body));
   std::ostringstream out;
@@ -133,13 +132,11 @@ TEST(Hardening, OptionLookingRemoteIsRejectedByFetch) {
                    {"method", "repo/discover"},
                    {"params", {{"path", fixture.root().string()}}}});
 
-  const Json response =
-      session.request({{"jsonrpc", "2.0"},
-                       {"id", 3},
-                       {"method", "mutate/fetch"},
-                       {"params",
-                        {{"repoId", "r1"},
-                         {"remote", "--upload-pack=touch /tmp/gg_should_not_exist"}}}});
+  const Json response = session.request(
+      {{"jsonrpc", "2.0"},
+       {"id", 3},
+       {"method", "mutate/fetch"},
+       {"params", {{"repoId", "r1"}, {"remote", "--upload-pack=touch /tmp/gg_should_not_exist"}}}});
   ASSERT_TRUE(response.contains("error")) << response.dump();
   EXPECT_EQ(response["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
 }

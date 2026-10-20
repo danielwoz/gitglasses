@@ -6,12 +6,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import {
-  RepositoryService,
-  defaultCaseInsensitive,
-  repoName,
-  sameRoot,
-} from './repositoryService';
+import { RepositoryService, defaultCaseInsensitive, repoName, sameRoot } from './repositoryService';
 import {
   DEFAULT_SCAN_SETTINGS,
   DiscoveryHost,
@@ -146,9 +141,7 @@ async function scanWorkspace(repos: RepositoryService): Promise<WorkspaceScan> {
 
 /** Every repository the workspace folders hold, the folders' own first, in
  *  folder order. */
-export async function discoverWorkspaceRepos(
-  repos: RepositoryService,
-): Promise<WorkspaceRepo[]> {
+export async function discoverWorkspaceRepos(repos: RepositoryService): Promise<WorkspaceRepo[]> {
   return (await scanWorkspace(repos)).repos;
 }
 

@@ -40,7 +40,7 @@ describe('parseRetryAfter', () => {
 
   it('reads an http-date', () => {
     expect(parseRetryAfter('Wed, 22 Jul 2026 10:00:45 GMT', NOW)).toBe(
-      Date.parse('2026-07-22T10:00:45Z')
+      Date.parse('2026-07-22T10:00:45Z'),
     );
   });
 
@@ -54,8 +54,8 @@ describe('readRateLimitSignals', () => {
     expect(
       readRateLimitSignals(
         { 'RateLimit-Remaining': '4', 'RateLimit-Limit': '100', 'RateLimit-Reset': '20' },
-        NOW
-      )
+        NOW,
+      ),
     ).toEqual({ remaining: 4, limit: 100, resetAt: NOW + 20_000 });
   });
 
@@ -66,14 +66,14 @@ describe('readRateLimitSignals', () => {
     ]);
     const signals = readRateLimitSignals(
       { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
-      NOW
+      NOW,
     );
     expect(signals.resetAt).toBe(1_700_000_030_000);
   });
 
   it('reads the Jira spelling of the reset header', () => {
     expect(readRateLimitSignals({ 'x-ratelimit-requests-reset': '15' }, NOW).resetAt).toBe(
-      NOW + 15_000
+      NOW + 15_000,
     );
   });
 

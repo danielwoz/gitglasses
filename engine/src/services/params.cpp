@@ -7,8 +7,7 @@ namespace gg::services {
 namespace {
 
 [[noreturn]] void reject(const char* key, const std::string& what) {
-  throw rpc::HandlerError{
-      {ErrorCode::InvalidParams, std::string("'") + key + "' " + what}};
+  throw rpc::HandlerError{{ErrorCode::InvalidParams, std::string("'") + key + "' " + what}};
 }
 
 // Locates a param, treating a non-object params payload as carrying none.

@@ -21,10 +21,7 @@ export function conflictTooltip(files: readonly string[]): string {
 }
 
 /** Confirmation for running `operation` while conflicts are unresolved. */
-export function confirmWithConflicts(
-  operation: string,
-  files: readonly string[],
-): Confirmation {
+export function confirmWithConflicts(operation: string, files: readonly string[]): Confirmation {
   return {
     message:
       `This repository has ${conflictLabel(files.length)} to resolve. ` +

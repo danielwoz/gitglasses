@@ -150,8 +150,7 @@ class GitProcess {
   bool reaped_ = false;
   int exitCode_ = -1;
   std::chrono::milliseconds timeout_ = kDefaultGitTimeout;
-  std::chrono::steady_clock::time_point deadline_ =
-      std::chrono::steady_clock::time_point::max();
+  std::chrono::steady_clock::time_point deadline_ = std::chrono::steady_clock::time_point::max();
   bool timedOut_ = false;
 };
 

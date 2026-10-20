@@ -17,10 +17,9 @@ namespace {
 Result<GitOutput> collectLines(const std::string& cwd, std::vector<std::string> args,
                                const exec::RunOpts& opts, const CancelToken& token) {
   GitOutput output;
-  auto status = exec::runGit(cwd, std::move(args), opts, token,
-                             [&output](std::string line) {
-                               output.lines.push_back(std::move(line));
-                             });
+  auto status = exec::runGit(cwd, std::move(args), opts, token, [&output](std::string line) {
+    output.lines.push_back(std::move(line));
+  });
   if (!status) return status.error();
   output.exitCode = status.value().exitCode;
   output.stderrText = status.value().stderrText;

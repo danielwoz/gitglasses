@@ -138,8 +138,7 @@ void validate(const Json& schema, const Json& value, const std::string& path,
     }
     if (schema.contains("pattern") &&
         !std::regex_search(text, std::regex(schema["pattern"].get<std::string>()))) {
-      errors.push_back(path + ": " + value.dump() + " does not match " +
-                       schema["pattern"].dump());
+      errors.push_back(path + ": " + value.dump() + " does not match " + schema["pattern"].dump());
     }
   }
   if (value.is_number()) {
@@ -226,8 +225,7 @@ void rejectedRequest(InteractiveSession& session, std::int64_t id, const std::st
                      Json params, const std::string& what) {
   const Json schema = methodSchema(method, "params");
   ASSERT_FALSE(errorsFor(schema, params).empty())
-      << what << ": the schema accepts these params, so the case proves nothing: "
-      << params.dump();
+      << what << ": the schema accepts these params, so the case proves nothing: " << params.dump();
   const Json response = session.request(req(id, method, std::move(params)));
   ASSERT_TRUE(response.contains("error"))
       << what << ": engine accepted params the schema forbids: " << response.dump();
@@ -361,14 +359,13 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   checkedRequest(session, 9, "history/file",
                  {{"repoId", repoId}, {"path", "src/main.txt"}, {"limit", 10}});
   checkedRequest(session, 10, "history/line",
-                 {{"repoId", repoId}, {"path", "src/main.txt"}, {"startLine", 1},
-                  {"endLine", 2}});
+                 {{"repoId", repoId}, {"path", "src/main.txt"}, {"startLine", 1}, {"endLine", 2}});
   checkedRequest(session, 11, "diff/commit",
                  {{"repoId", repoId}, {"sha", log["commits"][0]["sha"]}});
   checkedRequest(session, 12, "diff/refs",
                  {{"repoId", repoId}, {"base", "feature"}, {"head", "main"}});
-  Json hunks = checkedRequest(session, 13, "diff/fileHunks",
-                              {{"repoId", repoId}, {"path", "src/main.txt"}});
+  Json hunks =
+      checkedRequest(session, 13, "diff/fileHunks", {{"repoId", repoId}, {"path", "src/main.txt"}});
   EXPECT_FALSE(hunks.value("hunks", Json::array()).empty());
   checkedRequest(session, 14, "stash/list", {{"repoId", repoId}});
   checkedRequest(session, 15, "worktree/list", {{"repoId", repoId}});
@@ -387,8 +384,7 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   EXPECT_FALSE(file.value("truncated", true));
   EXPECT_FALSE(file.value("binary", true));
 
-  checkedRequest(session, 21, "patch/create",
-                 {{"repoId", repoId}, {"source", {{"kind", "wip"}}}});
+  checkedRequest(session, 21, "patch/create", {{"repoId", repoId}, {"source", {{"kind", "wip"}}}});
 }
 
 // The engine must refuse what the schema forbids. Every case here is params
@@ -417,10 +413,10 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
   reject("mutate/cherryPick", {{"repoId", repoId}, {"shas", Json::array()}}, "empty shas");
   reject("stage/files", {{"repoId", repoId}, {"action", "stage"}, {"paths", Json::array()}},
          "empty paths");
-  reject("stage/hunks",
-         {{"repoId", repoId}, {"path", "src/main.txt"}, {"action", "stage"},
-          {"hunks", Json::array()}},
-         "empty hunks");
+  reject(
+      "stage/hunks",
+      {{"repoId", repoId}, {"path", "src/main.txt"}, {"action", "stage"}, {"hunks", Json::array()}},
+      "empty hunks");
 
   // Page sizes outside [1, MAX_LIMIT], and non-integers that would truncate.
   reject("log/commits", {{"repoId", repoId}, {"limit", 0}}, "zero limit");
@@ -443,33 +439,32 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
          {{"repoId", repoId},
           {"path", "src/main.txt"},
           {"action", "stage"},
-          {"hunks", Json::array({{{"oldStart", -1}, {"oldLines", 1}, {"newStart", 1},
-                                  {"newLines", 1}}})}},
+          {"hunks",
+           Json::array({{{"oldStart", -1}, {"oldLines", 1}, {"newStart", 1}, {"newLines", 1}}})}},
          "negative hunk offset");
 
   // Values that git would parse as options if they reached its argv.
   reject("mutate/branchCreate", {{"repoId", repoId}, {"name", "--force"}}, "option-like name");
-  reject("mutate/branchCreate",
-         {{"repoId", repoId}, {"name", "ok"}, {"startPoint", "-x"}}, "option-like startPoint");
-  reject("mutate/reset", {{"repoId", repoId}, {"ref", "-x"}, {"mode", "soft"}},
-         "option-like ref");
-  reject("mutate/revert", {{"repoId", repoId}, {"shas", Json::array({"-x"})}},
-         "option-like sha");
+  reject("mutate/branchCreate", {{"repoId", repoId}, {"name", "ok"}, {"startPoint", "-x"}},
+         "option-like startPoint");
+  reject("mutate/reset", {{"repoId", repoId}, {"ref", "-x"}, {"mode", "soft"}}, "option-like ref");
+  reject("mutate/revert", {{"repoId", repoId}, {"shas", Json::array({"-x"})}}, "option-like sha");
   reject("rebase/preview", {{"repoId", repoId}, {"upstream", "--output=/dev/null"}},
          "option-like rebase upstream");
   reject("rebase/start",
          {{"repoId", repoId}, {"upstream", "--output=/dev/null"}, {"plan", Json::array()}},
          "option-like rebase upstream");
   reject("worktree/add",
-         {{"repoId", repoId}, {"path", "/tmp/gg-contract-wt"}, {"ref", "HEAD"},
+         {{"repoId", repoId},
+          {"path", "/tmp/gg-contract-wt"},
+          {"ref", "HEAD"},
           {"createBranch", "-x"}},
          "option-like createBranch");
 
   // Empty strings never stand in for an omitted value.
   reject("mutate/fetch", {{"repoId", repoId}, {"remote", ""}}, "empty remote");
   reject("stash/push", {{"repoId", repoId}, {"message", ""}}, "empty stash message");
-  reject("patch/create",
-         {{"repoId", repoId}, {"source", {{"kind", "wip"}}}, {"summary", ""}},
+  reject("patch/create", {{"repoId", repoId}, {"source", {{"kind", "wip"}}}, {"summary", ""}},
          "empty patch summary");
   reject("mutate/commit", {{"repoId", repoId}, {"message", ""}}, "empty commit message");
   reject("blame/file", {{"repoId", repoId}, {"path", ""}, {"streamId", "s"}}, "empty path");

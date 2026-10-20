@@ -76,8 +76,7 @@ std::string classifyShared(const std::string& rel) {
 bool isRecursiveRoot(const std::string& rel) {
   return rel == "refs" || startsWith(rel, "refs/") || rel == "rebase-merge" ||
          startsWith(rel, "rebase-merge/") || rel == "rebase-apply" ||
-         startsWith(rel, "rebase-apply/") || rel == "worktrees" ||
-         startsWith(rel, "worktrees/");
+         startsWith(rel, "rebase-apply/") || rel == "worktrees" || startsWith(rel, "worktrees/");
 }
 
 // The common dir's only recursive tree is refs/.
@@ -307,10 +306,9 @@ class InotifyHub {
         for (auto& [repoId, state] : repos_) {
           if (!state.deadline) continue;
           if (now >= *state.deadline) {
-            due.emplace_back(repoId,
-                             std::make_pair(++state.generation,
-                                            std::vector<std::string>(state.pending.begin(),
-                                                                     state.pending.end())));
+            due.emplace_back(repoId, std::make_pair(++state.generation,
+                                                    std::vector<std::string>(state.pending.begin(),
+                                                                             state.pending.end())));
             state.pending.clear();
             state.deadline.reset();
             continue;

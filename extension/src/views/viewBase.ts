@@ -27,9 +27,7 @@ export async function activeWorkspaceRepo(
 }
 
 /** Resolves the active repo, reporting when there is none. */
-export async function requireRepo(
-  repos: RepositoryService,
-): Promise<ActiveRepo | undefined> {
+export async function requireRepo(repos: RepositoryService): Promise<ActiveRepo | undefined> {
   let repo: ActiveRepo | undefined;
   try {
     repo = await activeWorkspaceRepo(repos);

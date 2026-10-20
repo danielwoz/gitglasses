@@ -282,11 +282,11 @@ TEST(RebaseService, RepoStateReportsThePausedRebase) {
   EXPECT_EQ(idle["result"]["sequencer"]["operation"], "none");
   EXPECT_FALSE(idle["result"]["sequencer"]["conflicted"].get<bool>());
 
-  Json start = session.request(req(11, "rebase/start",
-                                   {{"repoId", repoId},
-                                    {"upstream", shas.base},
-                                    {"plan", Json::array({entry("pick", shas.c1, "c1"),
-                                                          entry("pick", shas.c3, "c3")})}}));
+  Json start = session.request(
+      req(11, "rebase/start",
+          {{"repoId", repoId},
+           {"upstream", shas.base},
+           {"plan", Json::array({entry("pick", shas.c1, "c1"), entry("pick", shas.c3, "c3")})}}));
   ASSERT_TRUE(start["result"]["conflicts"].get<bool>()) << start.dump();
 
   Json state = session.request(req(12, "repo/state", {{"repoId", repoId}}));

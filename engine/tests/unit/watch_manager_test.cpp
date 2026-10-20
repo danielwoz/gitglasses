@@ -124,8 +124,8 @@ TEST_P(WatchManagerTest, ReportsWorktreeChanges) {
   WatchManager manager(collector.callback(), GetParam());
   manager.watch("r1", (fixture.root() / ".git").string());
 
-  const std::filesystem::path linked = fixture.root().parent_path() /
-                                       (fixture.root().filename().string() + "-wt");
+  const std::filesystem::path linked =
+      fixture.root().parent_path() / (fixture.root().filename().string() + "-wt");
   fixture.run("git worktree add -q -b wt \"" + linked.string() + "\"");
   auto event = collector.waitFor({"worktrees"}, 0);
   std::error_code ec;

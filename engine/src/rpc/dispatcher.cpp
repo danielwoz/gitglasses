@@ -20,12 +20,16 @@ bool exceedsDepthLimit(const std::string& payload) {
   bool escaped = false;
   for (const char c : payload) {
     if (inString) {
-      if (escaped) escaped = false;
-      else if (c == '\\') escaped = true;
-      else if (c == '"') inString = false;
+      if (escaped)
+        escaped = false;
+      else if (c == '\\')
+        escaped = true;
+      else if (c == '"')
+        inString = false;
       continue;
     }
-    if (c == '"') inString = true;
+    if (c == '"')
+      inString = true;
     else if (c == '[' || c == '{') {
       if (++depth > kMaxParseDepth) return true;
     } else if (c == ']' || c == '}') {
@@ -169,8 +173,7 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
     CancelSource& source = inflight_[numericId];
     // A cancel that arrived while this payload was waiting to be parsed
     // applies to it.
-    if (const auto early = earlyCancelled_.find(numericId);
-        early != earlyCancelled_.end()) {
+    if (const auto early = earlyCancelled_.find(numericId); early != earlyCancelled_.end()) {
       source.cancel();
       earlyCancelled_.erase(early);
     }

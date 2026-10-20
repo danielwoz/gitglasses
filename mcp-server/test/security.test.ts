@@ -189,17 +189,13 @@ describe('symlinked repository containment', () => {
   it('blocks a symlink pointing out of a root', () => {
     const roots = parseAllowedRoots(jail);
     expect(isWithinAllowedRoots(canonicalPath(escaping), roots)).toBe(false);
-    expect(isWithinAllowedRoots(canonicalPath(path.join(escaping, 'inner')), roots)).toBe(
-      false,
-    );
+    expect(isWithinAllowedRoots(canonicalPath(path.join(escaping, 'inner')), roots)).toBe(false);
   });
 
   it('allows a symlink that stays inside a root', () => {
     const roots = parseAllowedRoots(jail);
     expect(isWithinAllowedRoots(canonicalPath(internal), roots)).toBe(true);
-    expect(isWithinAllowedRoots(canonicalPath(path.join(internal, 'inner')), roots)).toBe(
-      true,
-    );
+    expect(isWithinAllowedRoots(canonicalPath(path.join(internal, 'inner')), roots)).toBe(true);
   });
 
   it('canonicalises the roots too, so a symlinked root still matches', () => {
@@ -237,9 +233,7 @@ describe('symlinked repository containment', () => {
       } as never,
       env: { GITGLASSES_ALLOWED_ROOTS: jail },
     });
-    await expect(handlers.git_status({ repoPath: internal })).rejects.toThrow(
-      'reached the engine',
-    );
+    await expect(handlers.git_status({ repoPath: internal })).rejects.toThrow('reached the engine');
     expect(requested).toEqual([path.join(jail, 'other')]);
   });
 });

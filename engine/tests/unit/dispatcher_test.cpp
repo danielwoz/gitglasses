@@ -356,9 +356,8 @@ TEST_F(DispatcherTest, LargePayloadDoesNotDelayTheNextMessage) {
         cv.wait_for(lock, 5s, [&] { return release; });
       },
       NotificationMode::Queued);
-  dispatcher.method("ping", [](const Json&, const CancelToken&, const NotifyFn&) {
-    return Json::object();
-  });
+  dispatcher.method(
+      "ping", [](const Json&, const CancelToken&, const NotifyFn&) { return Json::object(); });
 
   send({{"jsonrpc", "2.0"},
         {"method", "bulk"},

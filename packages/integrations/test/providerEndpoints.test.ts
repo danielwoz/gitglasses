@@ -34,7 +34,7 @@ describe('GitHub host validation', () => {
 
   it('sends the token only to the configured enterprise host', async () => {
     const { fetchFn, requests } = stubFetch(() =>
-      jsonResponse({ data: { search: { nodes: [] } } })
+      jsonResponse({ data: { search: { nodes: [] } } }),
     );
     const provider = createGitHubEnterpriseProvider('github.corp.example', fetchFn);
     await provider.getMyPullRequests(auth);
@@ -43,7 +43,7 @@ describe('GitHub host validation', () => {
 
   it('accepts a hostname with a port', () => {
     expect(new GitHubProvider({ host: 'github.corp.example:8443' }).host).toBe(
-      'github.corp.example:8443'
+      'github.corp.example:8443',
     );
   });
 });
@@ -57,13 +57,14 @@ describe('Azure DevOps organization and base URL validation', () => {
 
   it('rejects a plaintext base URL', () => {
     expect(
-      () => new AzureDevOpsProvider({ organization: 'contoso', baseUrl: 'http://ado.corp.example' })
+      () =>
+        new AzureDevOpsProvider({ organization: 'contoso', baseUrl: 'http://ado.corp.example' }),
     ).toThrow(/must use https/);
   });
 
   it('allows http on loopback', () => {
     expect(
-      () => new AzureDevOpsProvider({ organization: 'contoso', baseUrl: 'http://localhost:8080' })
+      () => new AzureDevOpsProvider({ organization: 'contoso', baseUrl: 'http://localhost:8080' }),
     ).not.toThrow();
   });
 
@@ -78,7 +79,7 @@ describe('Azure DevOps organization and base URL validation', () => {
 describe('Bitbucket Data Center base URL validation', () => {
   it('rejects a plaintext base URL', () => {
     expect(() => new BitbucketDCProvider({ baseUrl: 'http://git.corp.example' })).toThrow(
-      /must use https/
+      /must use https/,
     );
   });
 
@@ -91,7 +92,7 @@ describe('Bitbucket Data Center base URL validation', () => {
 describe('Jira base URL validation', () => {
   it('rejects a plaintext base URL, which basic auth would send a reversible credential to', () => {
     expect(() => new JiraProvider({ baseUrl: 'http://jira.corp.example' })).toThrow(
-      /must use https/
+      /must use https/,
     );
   });
 
@@ -104,9 +105,7 @@ describe('Jira base URL validation', () => {
     const { fetchFn, requests } = stubFetch(() => jsonResponse({ issues: [] }));
     const provider = new JiraProvider({ site: 'acme', fetchFn });
     await provider.getMyIssues(auth);
-    expect(requests.map((r) => new URL(r.url).origin)).toEqual([
-      'https://acme.atlassian.net',
-    ]);
+    expect(requests.map((r) => new URL(r.url).origin)).toEqual(['https://acme.atlassian.net']);
     expect(requests[0].init?.headers?.authorization).toMatch(/^Basic /);
   });
 });
@@ -114,7 +113,7 @@ describe('Jira base URL validation', () => {
 describe('GitLab base URL validation', () => {
   it('rejects a plaintext base URL', () => {
     expect(() => new GitLabProvider({ baseUrl: 'http://git.corp.example' })).toThrow(
-      /must use https/
+      /must use https/,
     );
   });
 

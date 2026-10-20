@@ -38,7 +38,7 @@ struct RunStatus {
 // RunStatus::exitCode for the caller to interpret (conflict-aware methods
 // treat some of them as results, not errors). Throws CancelledError when
 // `token` fires.
-Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args,
-                         const RunOpts& opts, const CancelToken& token, const GitSink& sink);
+Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args, const RunOpts& opts,
+                         const CancelToken& token, const GitSink& sink);
 
 }  // namespace gg::exec

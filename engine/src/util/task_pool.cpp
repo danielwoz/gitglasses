@@ -1,5 +1,5 @@
-#include <spdlog/spdlog.h>
 #include "util/task_pool.h"
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 

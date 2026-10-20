@@ -90,14 +90,13 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
                          std::atomic<bool>& shutdownRequested) {
   dispatcher.method(
       "initialize",
-      [&context](const rpc::Json& params, const CancelToken&,
-                 const rpc::NotifyFn&) -> rpc::Json {
+      [&context](const rpc::Json& params, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
         const std::string clientProtocol = params.value("protocolVersion", "");
         if (clientProtocol != kProtocolVersion) {
           throw rpc::HandlerError{
-              {ErrorCode::InvalidRequest,
-               std::string("protocol version mismatch: engine speaks ") + kProtocolVersion +
-                   ", client sent '" + clientProtocol + "'"}};
+              {ErrorCode::InvalidRequest, std::string("protocol version mismatch: engine speaks ") +
+                                              kProtocolVersion + ", client sent '" +
+                                              clientProtocol + "'"}};
         }
         return {{"engineVersion", kVersion},
                 {"protocolVersion", kProtocolVersion},
@@ -144,15 +143,14 @@ int runServer(std::istream& in, std::ostream& out) {
   services::ServiceContext context;
   std::atomic<bool> shutdownRequested{false};
 
-  rpc::Dispatcher dispatcher(pool, [&writer](const rpc::Json& message) {
-    writer.write(rpc::dumpForWire(message));
-  });
+  rpc::Dispatcher dispatcher(
+      pool, [&writer](const rpc::Json& message) { writer.write(rpc::dumpForWire(message)); });
 
   // Server-initiated notifications (watcher pushes) go through the same
   // serialized frame writer as dispatcher responses.
   context.broadcast = [&writer](const std::string& method, const rpc::Json& params) {
-    writer.write(rpc::dumpForWire(
-        rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}));
+    writer.write(
+        rpc::dumpForWire(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}));
   };
 
   configureDispatcher(dispatcher, context, shutdownRequested);

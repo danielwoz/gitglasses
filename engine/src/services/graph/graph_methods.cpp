@@ -195,7 +195,7 @@ struct GraphSnapshot {
   std::string headSha;  // empty when HEAD is unborn
   std::vector<std::string> tips;  // deduplicated walk roots
   std::map<std::string, rpc::Json> refsBySha;  // decoration arrays, pre-ordered
-  std::vector<GraphStash> stashes;  // newest first (stash@{0} first)
+  std::vector<GraphStash> stashes;             // newest first (stash@{0} first)
   std::uint64_t refsFingerprint = 0;
 };
 
@@ -691,8 +691,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           more = emitRow(row.sha, row.parents, "commit", nullptr);
         }
 
-        rpc::Json result = {{"rows", std::move(rows)},
-                            {"refsFingerprint", snap.refsFingerprint}};
+        rpc::Json result = {{"rows", std::move(rows)}, {"refsFingerprint", snap.refsFingerprint}};
         if (nextCursor) result["nextCursor"] = *nextCursor;
         return result;
       },

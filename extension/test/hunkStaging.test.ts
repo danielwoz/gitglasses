@@ -61,9 +61,7 @@ describe('hunksIntersectingSelection', () => {
 
   it('returns hunks in file order regardless of input order', () => {
     const shuffled = [hunk(20, 5), hunk(1, 3), hunk(10, 2)];
-    expect(hunksIntersectingSelection(shuffled, 1, 30).map((h) => h.newStart)).toEqual([
-      1, 10, 20,
-    ]);
+    expect(hunksIntersectingSelection(shuffled, 1, 30).map((h) => h.newStart)).toEqual([1, 10, 20]);
   });
 
   it('handles an empty hunk list', () => {
@@ -132,8 +130,12 @@ describe('describeHunk', () => {
 
   it('falls back to the header when a hunk has no +/- lines', () => {
     const described = describeHunk({
-      oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
-      header: '@@ -1 +1 @@', lines: [' only context'],
+      oldStart: 1,
+      oldLines: 1,
+      newStart: 1,
+      newLines: 1,
+      header: '@@ -1 +1 @@',
+      lines: [' only context'],
     });
     expect(described.detail).toBe('@@ -1 +1 @@');
   });
