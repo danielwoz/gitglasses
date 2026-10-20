@@ -137,6 +137,9 @@ class LineStoryPanel implements vscode.Disposable {
     if (!target || !this.panel) return undefined;
     const load = ++this.loads;
     const current = (): boolean => load === this.loads && this.panel !== undefined;
+    // The panel's actions belong to the story on show, which this load
+    // replaces: they act on nothing until it knows where its story lives.
+    this.shown = undefined;
     let uri: vscode.Uri;
     try {
       uri = vscode.Uri.parse(target.uri, true);
@@ -148,7 +151,7 @@ class LineStoryPanel implements vscode.Disposable {
     this.panel.title = lineStoryTitle(file, target.line);
     await this.post({ type: 'loading', state: target, file });
     try {
-      const story = await this.tell(uri, target, (view) => {
+      const story = await this.tell(uri, target, current, (view) => {
         if (current()) void this.post({ type: 'story', view, state: target });
       });
       return story;
@@ -165,12 +168,16 @@ class LineStoryPanel implements vscode.Disposable {
     }
   }
 
-  /** Assembles the story of `target`, handing each stage to `show`. */
+  /**
+   * Assembles the story of `target`, handing each stage to `show`. Undefined
+   * when a newer load (`current` turned false) took the panel over first.
+   */
   private async tell(
     uri: vscode.Uri,
     target: LineStoryPanelState,
+    current: () => boolean,
     show: (view: { story: LineStory<CommitDetails>; file: string }) => void,
-  ): Promise<LineStory<CommitDetails>> {
+  ): Promise<LineStory<CommitDetails> | undefined> {
     const { engine, integrations } = this.deps;
     const document = await vscode.workspace.openTextDocument(uri);
     const file = vscode.workspace.asRelativePath(uri, false);
@@ -222,6 +229,7 @@ class LineStoryPanel implements vscode.Disposable {
         auth: connected?.auth,
       };
     }
+    if (!current()) return undefined;
     this.shown = {
       uri,
       line: target.line,
