@@ -4,7 +4,7 @@ import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { requireRepo, ViewNode } from '../views/viewBase';
 import { errorMessage, setStatus } from '../commands/ui';
-import { openCommitDoc } from '../views/nodes';
+import { SHOW_COMMIT_DETAILS_COMMAND } from '../commitDetails/commitDetails';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { AI_PROVIDER_LABELS, AiProvider, AiProviderId, CompletionRequest } from './aiProvider';
 import { registerAiAuthCommands } from './aiAuth';
@@ -528,7 +528,12 @@ async function nlSearch(
       matchOnDescription: true,
     },
   );
-  if (picked) await openCommitDoc(picked.commit);
+  if (picked) {
+    await vscode.commands.executeCommand(SHOW_COMMIT_DETAILS_COMMAND, {
+      repoPath: repo.rootPath,
+      sha: picked.commit.sha,
+    });
+  }
 }
 
 // --- Registration -----------------------------------------------------------
