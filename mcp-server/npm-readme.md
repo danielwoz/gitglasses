@@ -18,11 +18,12 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | Tool | Description |
 | --- | --- |
 | `git_blame` | Per-hunk author/date/sha/summary for a file or single line |
-| `git_log_search` | Search commits by text/author/sha, or list recent commits |
+| `git_log_search` | Search commits by message, author, sha, code change (`git log -S`/`-G`), path or date, or list recent commits |
 | `git_file_history` | File history following renames |
 | `git_commit_show` | Commit metadata + changed files with +/- counts |
 | `git_diff` | Uncommitted changes as a unified diff, unstaged or staged, for the repository or one file |
 | `git_refs` | Branches, remote-tracking branches and tags with the sha each points at |
+| `git_compare` | A branch against another from their merge base: commits ahead and behind, changed files with +/- counts, optionally the diff |
 | `git_graph_summary` | Lane-indented text rendering of the commit graph |
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |

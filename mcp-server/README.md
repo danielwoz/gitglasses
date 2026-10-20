@@ -13,11 +13,12 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | Tool | Description |
 | --- | --- |
 | `git_blame` | Per-hunk author/date/sha/summary for a file or single line |
-| `git_log_search` | Search commits by text/author/sha, or list recent commits |
+| `git_log_search` | Search commits by message, author, sha, code change (`git log -S`/`-G`), path or date, or list recent commits |
 | `git_file_history` | File history following renames |
 | `git_commit_show` | Commit metadata + changed files with +/- counts |
 | `git_diff` | Uncommitted changes as a unified diff, unstaged or staged, for the repository or one file |
 | `git_refs` | Branches, remote-tracking branches and tags with the sha each points at |
+| `git_compare` | A branch against another from their merge base: commits ahead and behind, changed files with +/- counts, optionally the diff |
 | `git_graph_summary` | Lane-indented text rendering of the commit graph |
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
@@ -26,8 +27,9 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 
 Every tool but `apply_patch` is read-only, and each declares that through MCP
 tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
-`git_file_history`, `create_patch`, `apply_patch` and the diff of
-`git_commit_show` need git, so they work only in repositories you allow (see
+`git_file_history`, `create_patch`, `apply_patch`, the code, path and date
+filters of `git_log_search` and the diffs of `git_commit_show` and
+`git_compare` need git, so they work only in repositories you allow (see
 [Trust model](#trust-model)).
 
 Tools that render a whole commit, diff, status, ref list or patch take a
@@ -141,9 +143,11 @@ archive or a shared folder can carry any of them, and a prompt-injected agent
 can name its path. So repositories served from the client's roots are read by
 an engine started with `--restricted`, which runs no git at all: blame, log,
 search, status, diffs, refs and the commit graph come straight from the
-repository through libgit2. `git_file_history`, `create_patch` and
-`apply_patch` are refused there with a message saying how to enable them, and
-`git_commit_show` leaves out the diff with a note. Repositories inside the
+repository through libgit2, and so does `git_compare`'s merge base, commits
+and file list. `git_file_history`, `create_patch`, `apply_patch` and
+`git_log_search`'s code, path and date filters are refused there with a
+message saying how to enable them, and `git_commit_show` and `git_compare`
+leave out the diff with a note. Repositories inside the
 directories you allow are read by a full engine, where git runs with the
 repository's own configuration exactly as it does in your shell; allow only
 directories whose repositories you trust.

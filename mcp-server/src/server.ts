@@ -44,6 +44,12 @@ import {
   truncateText,
   type DiffFileEntry,
 } from './format.js';
+import {
+  COMPARE_DESCRIPTION,
+  compareInputSchema,
+  compareRevisions,
+  type CompareArgs,
+} from './tools/compare.js';
 import { SERVER_VERSION } from './version.js';
 
 /**
@@ -224,6 +230,8 @@ interface ServedRepo extends RepoInfo {
 /** What a tool's refusal in Restricted Mode needs explained. */
 const NEEDS_GIT: Record<string, string> = {
   git_file_history: 'following a file through renames',
+  git_log_search: 'searching code changes, paths and dates',
+  git_compare: 'rendering the diff',
   create_patch: 'creating a patch',
   apply_patch: 'applying a patch',
   git_commit_show: 'rendering the diff',
@@ -522,13 +530,28 @@ export function createToolHandlers(context: ToolContext) {
       text?: string;
       author?: string;
       sha?: string;
+      content?: string;
+      regex?: boolean;
+      path?: string;
+      since?: string;
+      until?: string;
       cursor?: string;
       limit: number;
     }): Promise<string> {
+      if (args.regex && args.content === undefined) {
+        throw new ToolError('regex applies to "content"; pass the expression as "content"');
+      }
       const repo = await repoFor(args.repoPath);
       const { client, repoId } = repo;
+      // Code changes, paths and dates are git log's to answer; message text,
+      // author and sha are read straight from the repository.
+      const needsLog =
+        args.content !== undefined ||
+        args.path !== undefined ||
+        args.since !== undefined ||
+        args.until !== undefined;
       const hasQuery =
-        args.text !== undefined || args.author !== undefined || args.sha !== undefined;
+        needsLog || args.text !== undefined || args.author !== undefined || args.sha !== undefined;
       if (!hasQuery) {
         const page = await client.request('log/commits', {
           repoId,
@@ -543,7 +566,12 @@ export function createToolHandlers(context: ToolContext) {
       }
       if (args.cursor !== undefined) {
         throw new ToolError(
-          'cursor only pages the unfiltered log; with text, author or sha, raise "limit" (max 500) or narrow the query',
+          'cursor only pages the unfiltered log; with filters, raise "limit" (max 500) or narrow the query',
+        );
+      }
+      if (needsLog && args.sha !== undefined) {
+        throw new ToolError(
+          'sha cannot be combined with content, path, since or until; call git_commit_show for one commit',
         );
       }
       const streamId = randomUUID();
@@ -552,17 +580,33 @@ export function createToolHandlers(context: ToolContext) {
         if (params.streamId === streamId) matches.push(...params.matches);
       });
       try {
-        const result = await client.request('search/commits', {
-          repoId,
-          streamId,
-          limit: args.limit,
-          query: { text: args.text, author: args.author, sha: args.sha },
-        });
+        const result = needsLog
+          ? await client.request('search/log', {
+              repoId,
+              streamId,
+              limit: args.limit,
+              query: {
+                text: args.text,
+                author: args.author,
+                content: args.content,
+                contentMode:
+                  args.content === undefined ? undefined : args.regex ? 'regex' : 'string',
+                path: args.path,
+                since: args.since,
+                until: args.until,
+              },
+            })
+          : await client.request('search/commits', {
+              repoId,
+              streamId,
+              limit: args.limit,
+              query: { text: args.text, author: args.author, sha: args.sha },
+            });
         const rendered = formatCommits(matches);
         // The engine caps `total` at `limit`, so the count of matches beyond
         // the limit is not available to report.
         if (result.truncated) {
-          return `${rendered}\n\n(showing the first ${matches.length} matches; more exist — raise "limit" (max 500) or add author/sha filters)`;
+          return `${rendered}\n\n(showing the first ${matches.length} matches; more exist — raise "limit" (max 500) or add filters)`;
         }
         return orEmptyRepository(repo, args.repoPath, rendered, matches.length === 0);
       } finally {
@@ -771,6 +815,19 @@ export function createToolHandlers(context: ToolContext) {
       );
     },
 
+    async git_compare(args: CompareArgs): Promise<string> {
+      const { client, repoId } = await repoFor(args.repoPath);
+      const limit = resultChars(args.maxChars);
+      return compareRevisions(args, {
+        client,
+        repoId,
+        maxChars: limit,
+        truncationHint: (narrow) => charLimitHint(limit, narrow),
+        diffUnavailable: (error) =>
+          isRestrictedRefusal(error) ? restrictedMessage('git_compare', args.repoPath) : undefined,
+      });
+    },
+
     async create_patch(args: {
       repoPath: string;
       source: string;
@@ -900,6 +957,14 @@ const maxChars = z
     `Maximum characters to return before truncation (default ${DEFAULT_RESULT_CHARS}, max ${MAX_RESULT_CHARS})`,
   );
 
+const isoDate = z
+  .string()
+  .regex(
+    /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})?)?$/,
+    'expected YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SS with an optional Z or UTC offset',
+  )
+  .optional();
+
 const cursor = z
   .string()
   .optional()
@@ -989,8 +1054,11 @@ export function createServer(context: ToolContext): McpServer {
     'git_log_search',
     {
       description:
-        'Search commits by message text, author or sha; without filters, list recent commits newest first. ' +
-        'Filters are combined with AND.',
+        "Search the current branch's commits by message text, author, sha, code change " +
+        '(content, like git log -S/-G), path or date; without filters, list recent commits ' +
+        'newest first. Filters are combined with AND. content, path, since and until run git, ' +
+        'so they work only in repositories inside the directories the server was started ' +
+        'with (--allow).',
       inputSchema: {
         repoPath,
         text: z.string().optional().describe('Case-insensitive substring of the commit message'),
@@ -999,6 +1067,30 @@ export function createServer(context: ToolContext): McpServer {
           .optional()
           .describe('Case-insensitive substring of the author name or email'),
         sha: z.string().optional().describe('Commit sha, or a prefix of one'),
+        content: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Code a commit added or removed: commits that change how often this exact string ' +
+              'occurs (git log -S), or with regex:true, commits whose added or removed lines ' +
+              'match this extended regular expression (git log -G). Use it to find when a ' +
+              'function, setting or message was introduced or removed.',
+          ),
+        regex: z
+          .boolean()
+          .optional()
+          .describe('Treat "content" as an extended regular expression (default false)'),
+        path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Only commits that touch this path, relative to the repository root (a git ' +
+              'pathspec: a file, a directory or a glob such as "src/*.ts")',
+          ),
+        since: isoDate.describe('Only commits committed on or after this date (YYYY-MM-DD)'),
+        until: isoDate.describe('Only commits committed before this date (YYYY-MM-DD)'),
         cursor: cursor.describe(
           'Opaque cursor from a previous unfiltered call\'s "(more commits ...)" footer. ' +
             'Filtered searches cannot be paged; raise "limit" instead.',
@@ -1092,6 +1184,16 @@ export function createServer(context: ToolContext): McpServer {
       annotations: readOnly,
     },
     asToolResult(handlers.git_refs),
+  );
+
+  server.registerTool(
+    'git_compare',
+    {
+      description: COMPARE_DESCRIPTION,
+      inputSchema: compareInputSchema({ repoPath, maxChars }),
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_compare),
   );
 
   server.registerTool(

@@ -35,7 +35,7 @@ export function isoDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
-interface ChangeLineOptions {
+export interface ChangeLineOptions {
   /** Render "(binary)" in place of counts git reports as +0 -0 for binaries. */
   binary?: boolean;
   /** Drop "(+0 -0)" where the source does not compute counts at all. */
@@ -46,7 +46,7 @@ interface ChangeLineOptions {
  * One changed file: status, path (with the pre-rename path when there is one)
  * and line counts.
  */
-function changeLine(change: FileChange, options: ChangeLineOptions = {}): string {
+export function changeLine(change: FileChange, options: ChangeLineOptions = {}): string {
   const rename = change.origPath ? `${change.origPath} -> ` : '';
   const path = `${change.status}  ${rename}${change.path}`;
   if (options.binary) return `${path} (binary)`;

@@ -72,6 +72,27 @@ describe('tool registration', () => {
     expect(description).toContain('branch or tag');
   });
 
+  // Every tool's schema rides along in the agent's context, so the list stays
+  // short: composite tools rather than one per git command.
+  it('keeps the tool list short', () => {
+    expect(tools.size).toBeLessThanOrEqual(15);
+  });
+
+  it('compares branches read-only, from a named base to HEAD by default', () => {
+    const compare = tools.get('git_compare')!;
+    expect(compare.annotations).toMatchObject({ readOnlyHint: true });
+    expect(compare.inputSchema.required).toEqual(['repoPath', 'base']);
+    expect(compare.description).toContain('merge base');
+    expect(compare.inputSchema.properties?.head?.description).toContain('default HEAD');
+  });
+
+  it('searches code changes, paths and dates through git_log_search', () => {
+    const properties = tools.get('git_log_search')!.inputSchema.properties ?? {};
+    expect(properties.content?.description).toContain('git log -S');
+    expect(properties.regex?.description).toContain('regular expression');
+    for (const name of ['path', 'since', 'until']) expect(properties[name], name).toBeDefined();
+  });
+
   it('offers a cursor wherever the engine returns one', () => {
     for (const name of ['git_log_search', 'git_file_history', 'git_graph_summary']) {
       expect(tools.get(name)?.inputSchema.properties?.cursor, name).toBeDefined();
