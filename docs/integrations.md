@@ -25,10 +25,17 @@ GitHub Enterprise Server. An entry a provider cannot serve, such as
 `bitbucket` on a domain other than bitbucket.org, is ignored with a warning.
 
 Pull request chips and Suggest Change look for the pull request opened from
-the remote the branch is pushed to. When the repository has an `upstream`
-remote, as a fork usually does, the pull request is looked for there first.
-A pull request from someone else's fork never matches, even when its branch
-has the same name.
+the remote the branch is pushed to, under the branch's own name. The
+`upstream` remote, as a fork usually has, is asked first, then `origin`,
+then the remotes the branch tracks and pushes to. A pull request from
+someone else's fork never matches, even when its branch has the same name.
+
+A branch checked out for review is matched to its pull request too: one
+made by `gh pr checkout` (from a fork, or from `refs/pull/<n>/head`) or by
+the GitHub Pull Requests extension. A new branch started from another
+branch, such as `git checkout -b fix origin/develop`, has no pull request
+until it is pushed under its own name. Of the user's own git config, only
+`remote.pushDefault` is read; `include` files are not followed.
 
 ## Issue trackers (Start Work)
 

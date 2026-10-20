@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   AuthError,
@@ -14,7 +15,9 @@ import {
 } from '@gitglasses/integrations';
 import { AuthManager, type AuthInfo } from './auth';
 import { applyAutolinks, jiraPattern, repoIssuePatterns, userPatterns } from './autolinks';
+import { findBranchPullRequest, type FoundPullRequest } from './branchPullRequest';
 import {
+  globalGitConfigPaths,
   orderedRemoteUrls,
   parseGitConfig,
   parseGitConfigRemotes,
@@ -40,6 +43,7 @@ import {
   buildHostingEntries,
   buildIssueEntries,
   detectHosts,
+  hostingForUrl,
   issueCredentialHost,
   toAuthContext,
   type DetectedHost,
@@ -64,11 +68,7 @@ export interface ConnectedHosting extends HostingInfo {
 }
 
 /** A branch's open pull request and the connection that found it. */
-export interface BranchPullRequest {
-  /** The repository the pull request lives in, with its credentials. */
-  hosting: ConnectedHosting;
-  pr: PullRequest;
-}
+export type BranchPullRequest = FoundPullRequest;
 
 /** What a connection is being set up for. */
 interface ConnectTarget {
@@ -123,6 +123,22 @@ async function readGitConfig(repoRoot: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * `remote.pushDefault` from the user's own git config files, which a
+ * repository's config overrides. Git reads the later file over the earlier.
+ */
+async function userPushDefault(): Promise<string | undefined> {
+  let pushDefault: string | undefined;
+  for (const file of globalGitConfigPaths(process.env, process.env.HOME || os.homedir())) {
+    try {
+      pushDefault = parseGitConfig(await fs.readFile(file, 'utf8')).pushDefault ?? pushDefault;
+    } catch {
+      // A missing user config file sets nothing.
+    }
+  }
+  return pushDefault;
 }
 
 /**
@@ -260,15 +276,7 @@ export class IntegrationService implements vscode.Disposable {
 
   /** The provider serving a remote URL's host, with the repository it names. */
   private hostingForUrl(url: string): HostingInfo | undefined {
-    const parsed = parseRemoteUrl(url);
-    const entry = parsed && this.hostingEntries.get(parsed.host);
-    if (!parsed || !entry) return undefined;
-    return {
-      providerId: entry.providerId,
-      host: entry.host,
-      provider: entry.provider,
-      repo: entry.provider.matchesRemote(url) ?? { provider: entry.providerId, ...parsed },
-    };
+    return hostingForUrl(this.hostingEntries, url);
   }
 
   /** Like getHostingFor, but only when credentials are available. */
@@ -285,9 +293,10 @@ export class IntegrationService implements vscode.Disposable {
 
   /**
    * The open pull request for `branch`, opened from the remote the branch is
-   * pushed to. A fork's pull request lives in the repository it was forked
-   * from, so `upstream` is asked before the push remote's own repository; a
-   * pull request whose head is in any other fork never matches.
+   * pushed to, or the one its config says it was checked out for. A fork's
+   * pull request lives in the repository it was forked from, so `upstream`
+   * and `origin` are asked before the branch's own remotes; a pull request
+   * whose head is in any other fork never matches.
    */
   async findPullRequestForBranch(
     repoRoot: string,
@@ -296,33 +305,14 @@ export class IntegrationService implements vscode.Disposable {
   ): Promise<BranchPullRequest | undefined> {
     const text = await readGitConfig(repoRoot);
     if (text === undefined) return undefined;
-    const plan = pullRequestRemotes(parseGitConfig(text), branch);
-    const headUrl = plan && (plan.headRemote.pushUrl ?? plan.headRemote.url);
-    const head = headUrl ? this.hostingForUrl(headUrl) : undefined;
-    if (!plan || !head) return undefined;
-
-    const credential = await this.auth.getAuth(head.providerId, head.host, { interactive });
-    if (!credential) return undefined;
-    const auth = toAuthContext(credential, head.host);
-
-    let failure: unknown;
-    for (const remote of plan.baseRemotes) {
-      const base = this.baseHostingFor(remote);
-      if (!base || base.host !== head.host) continue;
-      try {
-        const pr = await base.provider.getPullRequestForBranch(auth, base.repo, plan.headBranch, {
-          owner: head.repo.owner,
-          name: head.repo.name,
-        });
-        if (pr) {
-          return { hosting: { ...base, auth, username: credential.username }, pr };
-        }
-      } catch (error) {
-        failure ??= error;
-      }
-    }
-    if (failure !== undefined) throw failure;
-    return undefined;
+    const config = parseGitConfig(text);
+    config.pushDefault ??= await userPushDefault();
+    const plan = pullRequestRemotes(config, branch);
+    if (!plan) return undefined;
+    return findBranchPullRequest(plan, {
+      hostingFor: (remote) => this.baseHostingFor(remote),
+      credentialFor: (providerId, host) => this.auth.getAuth(providerId, host, { interactive }),
+    });
   }
 
   private baseHostingFor(remote: RemoteConfig): HostingInfo | undefined {

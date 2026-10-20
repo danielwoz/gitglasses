@@ -12,6 +12,7 @@ import {
   type FetchLike,
   type HostingProvider,
   type IssueProvider,
+  type RepoDescriptor,
 } from '@gitglasses/integrations';
 
 /** One `gitglasses.integrations.hosts` entry. */
@@ -115,6 +116,22 @@ export function buildHostingEntries(
     }
   }
   return { entries, problems };
+}
+
+/** The provider serving a remote URL's host, with the repository the URL names. */
+export function hostingForUrl(
+  entries: ReadonlyMap<string, HostingEntry>,
+  url: string,
+): { providerId: string; host: string; provider: HostingProvider; repo: RepoDescriptor } | undefined {
+  const parsed = parseRemoteUrl(url);
+  const entry = parsed && entries.get(parsed.host);
+  if (!parsed || !entry) return undefined;
+  return {
+    providerId: entry.providerId,
+    host: entry.host,
+    provider: entry.provider,
+    repo: entry.provider.matchesRemote(url) ?? { provider: entry.providerId, ...parsed },
+  };
 }
 
 /** Issue trackers from settings; entries no tracker can serve go to `problems`. */
