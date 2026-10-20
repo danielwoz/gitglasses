@@ -1,0 +1,15 @@
+/* Commit Details panel chrome; the details view brings its own styles. */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+button {
+  font: inherit;
+}

@@ -54,7 +54,8 @@
     }
   },
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:gitglasses.commitDetails"
   ],
   "main": "./dist/extension.js",
   "browser": "./dist/web/extension.js",

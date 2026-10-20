@@ -1,21 +1,34 @@
-// The gitglasses.showCommitDetails command: shows one commit, as the
-// engine's commit/details reports it, in a read-only virtual document. Any
-// surface that opens a commit goes through the command, so a richer details
-// view can take it over without touching the callers.
+// The gitglasses.showCommitDetails command: shows one commit, as the engine's
+// commit/details reports it, in the Commit Details panel, the same view the
+// commit graph's details pane renders. Any surface that opens a commit goes
+// through the command. It never touches the clipboard; copying is an explicit
+// button in the view.
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import type { CommitDetails } from '@gitglasses/protocol';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { errorMessage } from '../commands/ui';
-import { renderCommitDetails } from './commitDetailsLogic';
+import { renderWebviewHtml } from '../webviews/webviewHtml';
+import type {
+  CommitPanelState,
+  HostToCommitPanelMessage,
+  DetailsToHostMessage,
+} from '../../webviews-src/graph/ipc';
+import {
+  copyText,
+  errorView,
+  loadCommitView,
+  openAllChanges,
+  openFileDiff,
+  registerEmptyDocuments,
+} from './commitViews';
 
 export const SHOW_COMMIT_DETAILS_COMMAND = 'gitglasses.showCommitDetails';
 
-/** gitglasses-commit:/Commit <short sha>.md?repoPath=<root>&sha=<full sha> */
-export const COMMIT_DETAILS_SCHEME = 'gitglasses-commit';
+/** The panel type, also its serializer's key. */
+export const COMMIT_DETAILS_VIEW_TYPE = 'gitglasses.commitDetails';
 
 /** Arguments of gitglasses.showCommitDetails. */
 export interface ShowCommitDetailsArgs {
@@ -24,9 +37,6 @@ export interface ShowCommitDetailsArgs {
   /** Any revision naming the commit: a full or short sha, HEAD, a branch, a tag. */
   sha: string;
 }
-
-/** Rendered documents kept for reopening without asking the engine again. */
-const MAX_CACHED_DOCUMENTS = 50;
 
 /** A child name that never exists. locateOrDiscover asks about a file's
  *  directory, so probing this child asks about the directory itself. */
@@ -42,14 +52,6 @@ function isArgs(value: unknown): value is ShowCommitDetailsArgs {
   );
 }
 
-function documentUri(repoPath: string, sha: string): vscode.Uri {
-  return vscode.Uri.from({
-    scheme: COMMIT_DETAILS_SCHEME,
-    path: `/Commit ${shortSha(sha)}.md`,
-    query: new URLSearchParams({ repoPath, sha }).toString(),
-  });
-}
-
 /** The engine's id for the repository at `repoPath`, registering it when the
  *  repository service does not know it yet. */
 async function repoIdFor(repos: RepositoryService, repoPath: string): Promise<string | undefined> {
@@ -59,69 +61,145 @@ async function repoIdFor(repos: RepositoryService, repoPath: string): Promise<st
   return (await repos.locateOrDiscover(probe, { watch: false }))?.repoId;
 }
 
-class CommitDetailsDocuments implements vscode.TextDocumentContentProvider, vscode.Disposable {
-  private readonly contents = new Map<string, string>();
-  private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
-  readonly onDidChange = this.emitter.event;
+/** The single Commit Details panel; showing another commit retargets it. */
+class CommitDetailsPanel implements vscode.Disposable {
+  private panel: vscode.WebviewPanel | undefined;
+  private panelDisposables: vscode.Disposable[] = [];
+  private target: CommitPanelState | undefined;
+  /** Bumped per load, so a slow answer for an earlier commit is dropped. */
+  private loads = 0;
 
   constructor(
+    private readonly context: vscode.ExtensionContext,
     private readonly engine: EngineClient,
     private readonly repos: RepositoryService,
   ) {}
 
-  /** Asks the engine for the commit; throws when the repository or the
-   *  commit cannot be found. */
-  async fetch(repoPath: string, sha: string): Promise<CommitDetails> {
-    const repoId = await repoIdFor(this.repos, repoPath);
-    if (!repoId) throw new Error(`no git repository at ${repoPath}`);
-    return this.engine.request('commit/details', { repoId, sha });
-  }
-
   async show(args: ShowCommitDetailsArgs): Promise<void> {
-    const details = await this.fetch(args.repoPath, args.sha);
-    const uri = documentUri(args.repoPath, details.sha);
-    const key = uri.toString();
-    this.contents.delete(key);
-    if (this.contents.size >= MAX_CACHED_DOCUMENTS) {
-      const oldest = this.contents.keys().next().value;
-      if (oldest !== undefined) this.contents.delete(oldest);
+    this.target = { repoPath: args.repoPath, sha: args.sha };
+    if (this.panel) {
+      this.panel.reveal(undefined, false);
+      await this.load();
+      return;
     }
-    this.contents.set(key, renderCommitDetails(details));
-    // An open document re-reads its content: refs may have moved since.
-    this.emitter.fire(uri);
-    await vscode.window.showTextDocument(uri, { preview: true });
+    const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webviews');
+    this.adopt(
+      vscode.window.createWebviewPanel(
+        COMMIT_DETAILS_VIEW_TYPE,
+        `Commit ${shortSha(args.sha)}`,
+        vscode.ViewColumn.Active,
+        { enableScripts: true, localResourceRoots: [distRoot] },
+      ),
+    );
   }
 
-  async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
-    const cached = this.contents.get(uri.toString());
-    if (cached !== undefined) return cached;
-    // A document restored with the window, or evicted from the cache.
-    const query = new URLSearchParams(uri.query);
-    const repoPath = query.get('repoPath');
-    const sha = query.get('sha');
-    if (!repoPath || !sha) return 'Not a GitGlasses commit document.\n';
+  /** Wires a panel, new or restored after a reload. */
+  adopt(panel: vscode.WebviewPanel, restored?: CommitPanelState): void {
+    if (restored && isArgs(restored)) this.target ??= restored;
+    if (this.panel && this.panel !== panel) this.panel.dispose();
+    const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webviews');
+    this.panel = panel;
+    panel.webview.options = { enableScripts: true, localResourceRoots: [distRoot] };
+    panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'gitglasses.svg');
+    panel.webview.html = renderWebviewHtml(panel.webview, distRoot, {
+      script: 'commitDetails.js',
+      style: 'commitDetails.css',
+      title: 'Commit Details',
+    });
+    this.panelDisposables.push(
+      panel.webview.onDidReceiveMessage((message: DetailsToHostMessage | { type: 'ready' }) =>
+        this.onMessage(message),
+      ),
+      panel.onDidDispose(() => this.onPanelDisposed(panel)),
+    );
+  }
+
+  private async post(message: HostToCommitPanelMessage): Promise<void> {
+    await this.panel?.webview.postMessage(message);
+  }
+
+  private async load(): Promise<void> {
+    const target = this.target;
+    if (!target || !this.panel) return;
+    const load = ++this.loads;
+    this.panel.title = `Commit ${shortSha(target.sha)}`;
+    await this.post({ type: 'loading' });
+    let view;
+    let shown = target;
     try {
-      return renderCommitDetails(await this.fetch(repoPath, sha));
+      const repoId = await repoIdFor(this.repos, target.repoPath);
+      if (!repoId) throw new Error(`no git repository at ${target.repoPath}`);
+      view = await loadCommitView(this.engine, repoId, target.sha);
+      // Name the panel by the full sha a branch or tag resolved to.
+      if (view.kind === 'commit') shown = { ...target, sha: view.details.sha };
     } catch (error) {
-      return `Could not load commit ${sha}: ${errorMessage(error)}\n`;
+      view = errorView(`commit ${shortSha(target.sha)}`, error);
     }
+    if (load !== this.loads) return;
+    this.target = shown;
+    if (this.panel) this.panel.title = `Commit ${shortSha(shown.sha)}`;
+    await this.post({ type: 'show', view, state: shown });
+  }
+
+  private async onMessage(message: DetailsToHostMessage | { type: 'ready' }): Promise<void> {
+    const target = this.target;
+    try {
+      switch (message.type) {
+        case 'ready':
+          await this.load();
+          break;
+        case 'showCommit':
+          if (target) await this.show({ repoPath: target.repoPath, sha: message.sha });
+          break;
+        case 'copy':
+          await copyText(message.text, message.label);
+          break;
+        case 'openFile':
+        case 'openChanges': {
+          if (!target) return;
+          const repoId = await repoIdFor(this.repos, target.repoPath);
+          if (!repoId) return;
+          if (message.type === 'openFile') {
+            await openFileDiff(repoId, target.repoPath, message.target);
+          } else {
+            await openAllChanges(this.engine, repoId, message.target);
+          }
+          break;
+        }
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(`GitGlasses: ${errorMessage(error)}`);
+    }
+  }
+
+  private onPanelDisposed(panel: vscode.WebviewPanel): void {
+    if (this.panel !== panel) return;
+    for (const disposable of this.panelDisposables.splice(0)) disposable.dispose();
+    this.panel = undefined;
+    this.target = undefined;
   }
 
   dispose(): void {
-    this.contents.clear();
-    this.emitter.dispose();
+    this.panel?.dispose();
   }
 }
 
-/** Registers the commit document scheme and the command that opens it. */
+/** Registers the command that opens the Commit Details panel, and the
+ *  serializer that brings the panel back after a reload. */
 export function registerCommitDetails(
+  context: vscode.ExtensionContext,
   engine: EngineClient,
   repos: RepositoryService,
 ): vscode.Disposable[] {
-  const documents = new CommitDetailsDocuments(engine, repos);
+  const panel = new CommitDetailsPanel(context, engine, repos);
   return [
-    documents,
-    vscode.workspace.registerTextDocumentContentProvider(COMMIT_DETAILS_SCHEME, documents),
+    panel,
+    registerEmptyDocuments(),
+    vscode.window.registerWebviewPanelSerializer(COMMIT_DETAILS_VIEW_TYPE, {
+      deserializeWebviewPanel: async (webviewPanel, state: unknown) => {
+        panel.adopt(webviewPanel, isArgs(state) ? state : undefined);
+      },
+    }),
     vscode.commands.registerCommand(SHOW_COMMIT_DETAILS_COMMAND, async (args?: unknown) => {
       if (!isArgs(args)) {
         void vscode.window.showWarningMessage(
@@ -130,7 +208,7 @@ export function registerCommitDetails(
         return;
       }
       try {
-        await documents.show(args);
+        await panel.show(args);
       } catch (error) {
         void vscode.window.showErrorMessage(
           `GitGlasses: cannot show commit ${shortSha(args.sha)}: ${errorMessage(error)}`,

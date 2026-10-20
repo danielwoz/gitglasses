@@ -301,7 +301,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     ),
     vscode.languages.registerCodeLensProvider(deps.documentSelector, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
-    ...registerCommitDetails(engine, repos),
+    ...registerCommitDetails(context, engine, repos),
     vscode.commands.registerCommand('gitglasses.diffWithHead', async () => {
       const editor = deps.activeEditor();
       if (!editor) return;
