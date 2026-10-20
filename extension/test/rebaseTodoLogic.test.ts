@@ -1,5 +1,12 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { editorAssociationsFor, parseTodo, serializeTodo } from '../src/webviews/rebaseTodoLogic';
+import {
+  editorAssociationsFor,
+  parseTodo,
+  rebaseEditorEnabled,
+  serializeTodo,
+} from '../src/webviews/rebaseTodoLogic';
 
 const TODO = [
   'pick 1111111 first subject',
@@ -106,5 +113,30 @@ describe('editorAssociationsFor', () => {
   it('changes nothing that is already right', () => {
     expect(editorAssociationsFor({ 'git-rebase-todo': VIEW }, true, VIEW)).toBe(undefined);
     expect(editorAssociationsFor(undefined, false, VIEW)).toBe(undefined);
+  });
+});
+
+describe('rebaseEditorEnabled', () => {
+  it('follows the user setting and never a workspace value', () => {
+    expect(rebaseEditorEnabled({ globalValue: true })).toBe(true);
+    expect(rebaseEditorEnabled({ globalValue: false })).toBe(false);
+    expect(rebaseEditorEnabled(undefined)).toBe(false);
+    const fromRepository = { workspaceValue: true, workspaceFolderValue: true };
+    expect(rebaseEditorEnabled(fromRepository)).toBe(false);
+  });
+
+  it('is declared as a user-level setting that Restricted Mode ignores in workspaces', () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+    ) as {
+      capabilities: { untrustedWorkspaces: { restrictedConfigurations: string[] } };
+      contributes: { configuration: { properties: Record<string, { scope?: string }> } };
+    };
+    const setting =
+      manifest.contributes.configuration.properties['gitglasses.rebaseEditor.enabled'];
+    expect(setting.scope).toBe('application');
+    expect(manifest.capabilities.untrustedWorkspaces.restrictedConfigurations).toContain(
+      'gitglasses.rebaseEditor.enabled',
+    );
   });
 });

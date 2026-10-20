@@ -49,7 +49,8 @@
         "gitglasses.ai.model",
         "gitglasses.ai.openai.baseUrl",
         "gitglasses.ai.ollama.host",
-        "gitglasses.autolinks"
+        "gitglasses.autolinks",
+        "gitglasses.rebaseEditor.enabled"
       ]
     }
   },
@@ -1395,9 +1396,9 @@
       "properties": {
         "gitglasses.rebaseEditor.enabled": {
           "type": "boolean",
-          "scope": "window",
+          "scope": "application",
           "default": false,
-          "markdownDescription": "Open the todo list of an interactive rebase started outside GitGlasses, such as `git rebase -i` in a terminal, in the GitGlasses rebase editor. Git must use VS Code as its editor, for example `git config --global sequence.editor \"code --wait\"`. The editor is always available through **Reopen Editor With…**."
+          "markdownDescription": "Open the todo list of an interactive rebase started outside GitGlasses, such as `git rebase -i` in a terminal, in the GitGlasses rebase editor. Git must use VS Code as its editor, for example `git config --global sequence.editor \"code --wait\"`. The editor is always available through **Reopen Editor With…**. Read from user settings only."
         },
         "gitglasses.mode": {
           "type": "string",

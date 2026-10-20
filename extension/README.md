@@ -49,4 +49,5 @@ your platform.
 - `gitglasses.engine.logLevel` — engine logging to the GitGlasses output channel
 - `gitglasses.rebaseEditor.enabled` — open the todo of a `git rebase -i` started
   outside GitGlasses in the rebase editor (git must use VS Code as its editor,
-  e.g. `git config --global sequence.editor "code --wait"`); off by default
+  e.g. `git config --global sequence.editor "code --wait"`); off by default, and
+  read from user settings only

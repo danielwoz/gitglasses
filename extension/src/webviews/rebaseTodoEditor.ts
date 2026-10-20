@@ -10,7 +10,12 @@
 
 import * as vscode from 'vscode';
 import { renderWebviewHtml } from './webviewHtml';
-import { editorAssociationsFor, parseTodo, serializeTodo } from './rebaseTodoLogic';
+import {
+  editorAssociationsFor,
+  parseTodo,
+  rebaseEditorEnabled,
+  serializeTodo,
+} from './rebaseTodoLogic';
 import type { HostToWebviewMessage, WebviewToHostMessage } from '../../webviews-src/rebase/ipc';
 import type { LogFn } from '../views/errorReport';
 import { errorMessage } from '../commands/ui';
@@ -100,9 +105,9 @@ class RebaseTodoEditorProvider implements vscode.CustomTextEditorProvider {
 }
 
 function enabled(): boolean {
-  return vscode.workspace
-    .getConfiguration('gitglasses')
-    .get<boolean>('rebaseEditor.enabled', false);
+  return rebaseEditorEnabled(
+    vscode.workspace.getConfiguration('gitglasses').inspect<boolean>('rebaseEditor.enabled'),
+  );
 }
 
 // Keeps the user's editor association for git's todo in line with the

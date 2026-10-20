@@ -115,6 +115,14 @@ export function serializeTodo(
   return [...lines, ...drops].map((line) => `${line}\n`).join('');
 }
 
+/** gitglasses.rebaseEditor.enabled as the user set it in their user
+ *  settings. It drives an editor association in the user settings, so a
+ *  workspace's value never counts: a repository's .vscode/settings.json
+ *  must not be able to change the user's own settings. */
+export function rebaseEditorEnabled(setting: { globalValue?: boolean } | undefined): boolean {
+  return setting?.globalValue === true;
+}
+
 /** The workbench.editorAssociations key for git's todo file. */
 export const TODO_ASSOCIATION = 'git-rebase-todo';
 
