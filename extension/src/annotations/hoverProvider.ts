@@ -99,7 +99,9 @@ export class BlameHoverRenderer {
         listItem: block.listItem,
       })),
     );
-    const number = pullRequestNumber(subject, details?.body ?? '');
+    const number = hosting
+      ? pullRequestNumber(hosting.providerId, subject, details?.body ?? '')
+      : undefined;
     const prUrl =
       number !== undefined && hosting
         ? pullRequestUrl(hosting.providerId, hosting.repo, number)

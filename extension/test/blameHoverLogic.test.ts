@@ -182,15 +182,35 @@ describe('commit message body', () => {
 
 describe('pull request links', () => {
   it('reads the numbers forges write into merge messages', () => {
-    expect(pullRequestNumber('Merge pull request #12 from a/b', '')).toBe(12);
-    expect(pullRequestNumber('Fix the parser (#345)', '')).toBe(345);
-    expect(pullRequestNumber('Merged PR 77: Fix', '')).toBe(77);
-    expect(pullRequestNumber('Merged in feature (pull request #9)', '')).toBe(9);
+    expect(pullRequestNumber('github', 'Merge pull request #12 from a/b', '')).toBe(12);
+    expect(pullRequestNumber('github', 'Fix the parser (#345)', '')).toBe(345);
+    expect(pullRequestNumber('github-enterprise', 'Fix the parser (#345)', '')).toBe(345);
+    expect(pullRequestNumber('azuredevops', 'Merged PR 77: Fix', '')).toBe(77);
+    expect(pullRequestNumber('bitbucket', 'Merged in feature (pull request #9)', '')).toBe(9);
+    expect(pullRequestNumber('bitbucketDC', 'Pull request #5: Fix', '')).toBe(5);
     expect(
-      pullRequestNumber("Merge branch 'x' into 'main'", 'Body\n\nSee merge request group/proj!31'),
+      pullRequestNumber('bitbucketDC', 'Merge pull request #6 in P/r from f to main', ''),
+    ).toBe(6);
+    expect(
+      pullRequestNumber(
+        'gitlab',
+        "Merge branch 'x' into 'main'",
+        'Body\n\nSee merge request group/proj!31',
+      ),
     ).toBe(31);
-    expect(pullRequestNumber('Fix #345 in the middle', '')).toBeUndefined();
-    expect(pullRequestNumber('Plain subject', 'Refs #8')).toBeUndefined();
+    expect(pullRequestNumber('github', 'Fix #345 in the middle', '')).toBeUndefined();
+    expect(pullRequestNumber('github', 'Plain subject', 'Refs #8')).toBeUndefined();
+  });
+
+  it("reads only the hosting forge's own pull request messages", () => {
+    // On GitLab "#345" names an issue; merge requests are "!345".
+    expect(pullRequestNumber('gitlab', 'Fix crash (#345)', '')).toBeUndefined();
+    expect(pullRequestNumber('gitlab', 'Merge pull request #12 from a/b', '')).toBeUndefined();
+    expect(pullRequestNumber('azuredevops', 'Fix crash (#345)', '')).toBeUndefined();
+    expect(
+      pullRequestNumber('github', 'Merge branch', 'See merge request group/proj!31'),
+    ).toBeUndefined();
+    expect(pullRequestNumber('gitea', 'Fix crash (#345)', '')).toBeUndefined();
   });
 
   it("builds each forge's pull request URL", () => {

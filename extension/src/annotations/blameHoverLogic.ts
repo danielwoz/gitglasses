@@ -94,23 +94,43 @@ export function previousRevisionArgs(
 
 // --- Pull requests ----------------------------------------------------------
 
-/**
- * The pull request number a commit message names, from the messages the
- * forges write themselves: GitHub merge commits ("Merge pull request #12
- * from …") and squash merges ("Subject (#12)"), GitLab merge commits ("See
- * merge request group/project!12"), Bitbucket ("Merged in branch (pull
- * request #12)") and Azure DevOps ("Merged PR 12: …").
- */
-export function pullRequestNumber(subject: string, body: string): number | undefined {
-  const patterns: [RegExp, string][] = [
-    [/^Merge pull request #(\d+) from /, subject],
-    [/^Merged PR (\d+):/, subject],
-    [/\(pull request #(\d+)\)/, subject],
-    [/\(#(\d+)\)\s*$/, subject],
-    [/^See merge request \S+!(\d+)\s*$/m, body],
-  ];
-  for (const [pattern, text] of patterns) {
-    const match = pattern.exec(text);
+type MessagePart = 'subject' | 'body';
+
+const GITHUB_PULL_REQUESTS: [RegExp, MessagePart][] = [
+  // Merge commits: "Merge pull request #12 from owner/branch".
+  [/^Merge pull request #(\d+) from /, 'subject'],
+  // Squash merges: "Subject (#12)".
+  [/\(#(\d+)\)\s*$/, 'subject'],
+];
+
+/** What each forge writes into the commits its pull requests produce. A
+ *  pattern applies only to its own forge: "#12" names an issue on GitLab,
+ *  for one. */
+const PULL_REQUEST_MESSAGES: Record<string, [RegExp, MessagePart][]> = {
+  github: GITHUB_PULL_REQUESTS,
+  'github-enterprise': GITHUB_PULL_REQUESTS,
+  // "See merge request group/project!12" closes a merge commit's message.
+  gitlab: [[/^See merge request \S+!(\d+)\s*$/m, 'body']],
+  // "Merged in branch (pull request #12)".
+  bitbucket: [[/\(pull request #(\d+)\)/, 'subject']],
+  // "Pull request #12: Title", or "Merge pull request #12 in PROJ/repo from …".
+  bitbucketDC: [
+    [/^Pull request #(\d+): /, 'subject'],
+    [/^Merge pull request #(\d+) in /, 'subject'],
+  ],
+  // "Merged PR 12: Title".
+  azuredevops: [[/^Merged PR (\d+):/, 'subject']],
+};
+
+/** The pull request number a commit message names, in the words the forge
+ *  hosting the repository (`providerId`) writes itself. */
+export function pullRequestNumber(
+  providerId: string,
+  subject: string,
+  body: string,
+): number | undefined {
+  for (const [pattern, part] of PULL_REQUEST_MESSAGES[providerId] ?? []) {
+    const match = pattern.exec(part === 'subject' ? subject : body);
     if (match) {
       const value = Number(match[1]);
       if (Number.isSafeInteger(value) && value > 0) return value;
