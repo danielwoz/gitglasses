@@ -127,6 +127,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(...core.disposables);
   const { blame, fileAnnotations, integrations } = core;
 
+  // The engine binary and its log level are fixed when the engine process is
+  // set up, so a change takes a window reload.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration('gitglasses.engine.path') &&
+        !e.affectsConfiguration('gitglasses.engine.logLevel')
+      ) {
+        return;
+      }
+      void vscode.window
+        .showInformationMessage(
+          'GitGlasses: reload the window to apply the engine setting.',
+          'Reload Window',
+        )
+        .then((choice) => {
+          if (choice === 'Reload Window') {
+            void vscode.commands.executeCommand('workbench.action.reloadWindow');
+          }
+        });
+    }),
+  );
+
   const onTrustGranted = createTrustGrantHandler(engine, () => core.reload());
   context.subscriptions.push(
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
