@@ -535,9 +535,14 @@ Result<bool> workdirDirty(const core::Repo& repo, bool cliAvailable, const Cance
   return std::find(changed.begin(), changed.end(), true) != changed.end();
 }
 
+// Paging state between pages of one snapshot: the next row's position in the
+// sequence, the active lanes, the fingerprint of the walk the positions index
+// into, and whether that sequence opened with the WIP row.
 struct Cursor {
   std::size_t pos = 0;
   LaneState lanes;
+  std::optional<std::uint64_t> fingerprint;
+  bool wip = false;
 };
 
 Cursor decodeCursor(const std::string& encoded) {
@@ -557,18 +562,53 @@ Cursor decodeCursor(const std::string& encoded) {
           throw rpc::HandlerError{{ErrorCode::InvalidParams, "invalid cursor"}};
         }
       }
+      if (const auto fp = parsed.find("fp"); fp != parsed.end()) {
+        if (!fp->is_number_unsigned()) {
+          throw rpc::HandlerError{{ErrorCode::InvalidParams, "invalid cursor"}};
+        }
+        cursor.fingerprint = fp->get<std::uint64_t>();
+      }
+      cursor.wip = parsed.value("wip", false);
       return cursor;
     }
   }
   throw rpc::HandlerError{{ErrorCode::InvalidParams, "invalid cursor"}};
 }
 
-std::string encodeCursor(std::size_t pos, const LaneState& state) {
+std::string encodeCursor(std::size_t pos, const LaneState& state, std::uint64_t fingerprint,
+                         bool wip) {
   rpc::Json lanes = rpc::Json::array();
   for (const auto& lane : state.lanes) {
     lanes.push_back(lane ? rpc::Json(*lane) : rpc::Json());
   }
-  return base64Encode(rpc::Json{{"pos", pos}, {"lanes", std::move(lanes)}}.dump());
+  return base64Encode(rpc::Json{
+      {"pos", pos},
+      {"lanes", std::move(lanes)},
+      {"fp", fingerprint},
+      {"wip", wip}}.dump());
+}
+
+// The walk roots a `refs` filter names, resolved to commits, deduplicated and
+// sorted. Revisions that no longer resolve (a branch deleted since the filter
+// was chosen) are skipped.
+std::vector<std::string> filteredTips(const core::Repo& repo,
+                                      const std::vector<std::string>& revisions) {
+  std::set<std::string> tips;
+  for (const auto& revision : revisions) {
+    auto commit = status_detail::resolveCommit(repo, revision);
+    if (commit) tips.insert(core::oidToHex(*git_commit_id(commit.value().get())));
+  }
+  return {tips.begin(), tips.end()};
+}
+
+// A filtered walk is a different sequence from the full one, so its
+// fingerprint also covers the roots it starts from.
+std::uint64_t filteredFingerprint(std::uint64_t refsFingerprint,
+                                  const std::vector<std::string>& tips) {
+  std::uint64_t hash = 1469598103934665603ull;
+  fnvMix(hash, "refs:" + std::to_string(refsFingerprint));
+  for (const auto& tip : tips) fnvMix(hash, "f:" + tip);
+  return hash & ((1ull << 53) - 1);
 }
 
 }  // namespace
@@ -582,6 +622,9 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         const rpc::Json include = optionalObject(params, "include");
         const bool includeStashes = include.value("stashes", false);
         const bool includeWip = include.value("wip", false);
+        const bool filtered = params.contains("refs");
+        const std::vector<std::string> filter =
+            filtered ? requireStringArray(params, "refs") : std::vector<std::string>{};
         Cursor cursor;
         if (const std::string encoded = optionalString(params, "cursor"); !encoded.empty()) {
           cursor = decodeCursor(encoded);
@@ -593,19 +636,32 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (!snapshot) throw rpc::HandlerError{{snapshot.error()}};
         const GraphSnapshot& snap = snapshot.value();
 
-        rpc::Json rows = rpc::Json::array();
-        if (snap.tips.empty()) {
-          // Unborn HEAD: no tips to walk.
-          return {{"rows", std::move(rows)}, {"refsFingerprint", snap.refsFingerprint}};
+        const std::vector<std::string> tips =
+            filtered ? filteredTips(repo.value(), filter) : snap.tips;
+        const std::uint64_t fingerprint =
+            filtered ? filteredFingerprint(snap.refsFingerprint, tips) : snap.refsFingerprint;
+        // Positions in a cursor index into one walk; once any ref moves they
+        // would name other rows, with lane state that no longer fits them.
+        if (cursor.fingerprint && *cursor.fingerprint != fingerprint) {
+          throw rpc::HandlerError{
+              {ErrorCode::InvalidParams,
+               "stale cursor: the refs changed since the first page; request it again"}};
         }
 
-        // The whole walk depends only on the refs, which `refsFingerprint`
-        // hashes, so page 0 builds it and later pages slice it.
+        rpc::Json rows = rpc::Json::array();
+        if (tips.empty()) {
+          // Unborn HEAD, or a filter naming nothing that exists: no tips to
+          // walk.
+          return {{"rows", std::move(rows)}, {"refsFingerprint", fingerprint}};
+        }
+
+        // The whole walk depends only on the refs (and the filter), which the
+        // fingerprint hashes, so page 0 builds it and later pages slice it.
         const std::string cacheKey =
-            cache::GraphCache::makeKey(params.value("repoId", ""), snap.refsFingerprint);
+            cache::GraphCache::makeKey(params.value("repoId", ""), fingerprint);
         std::shared_ptr<const cache::GraphPlan> plan = context.graphCache.get(cacheKey);
         if (!plan) {
-          auto nodes = collectNodes(repo.value(), snap.tips, token);
+          auto nodes = collectNodes(repo.value(), tips, token);
           if (!nodes) throw rpc::HandlerError{{nodes.error()}};
 
           auto built = std::make_shared<cache::GraphPlan>();
@@ -635,9 +691,12 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         }
 
         // Only page 0 can carry the WIP row, so only page 0 pays for the
-        // status scan.
-        bool wantWip = false;
-        if (includeWip && cursor.pos == 0 && !snap.headSha.empty()) {
+        // status scan; later pages learn from the cursor whether the sequence
+        // opened with it. The row hangs off HEAD, so a filtered walk carries it
+        // only when HEAD is one of its roots.
+        bool wantWip = cursor.wip;
+        if (includeWip && cursor.pos == 0 && !snap.headSha.empty() &&
+            std::binary_search(tips.begin(), tips.end(), snap.headSha)) {
           auto dirty = workdirDirty(repo.value(), context.cliAvailable, token);
           if (!dirty) throw rpc::HandlerError{{dirty.error()}};
           wantWip = dirty.value();
@@ -668,7 +727,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
             return true;
           }
           if (static_cast<std::int64_t>(rows.size()) >= limit) {
-            nextCursor = encodeCursor(pos, laneState);
+            nextCursor = encodeCursor(pos, laneState, fingerprint, wantWip);
             return false;
           }
           RowLayout layout = layoutRow(laneState, sha, parents);
@@ -723,7 +782,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
           more = emitRow(row.sha, row.parents, "commit", nullptr);
         }
 
-        rpc::Json result = {{"rows", std::move(rows)}, {"refsFingerprint", snap.refsFingerprint}};
+        rpc::Json result = {{"rows", std::move(rows)}, {"refsFingerprint", fingerprint}};
         if (nextCursor) result["nextCursor"] = *nextCursor;
         return result;
       },

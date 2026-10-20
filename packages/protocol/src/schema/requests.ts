@@ -414,8 +414,21 @@ export const RequestSchemas = {
     params: Type.Object(
       {
         repoId: Type.String(),
-        cursor: Cursor,
+        cursor: Type.Optional(
+          Type.String({
+            minLength: 1,
+            description:
+              'nextCursor of the previous page. A cursor is valid for one ref set only: once any ref moves (or with another `refs` filter) it fails with InvalidParams, and the first page has to be requested again.',
+          }),
+        ),
         limit: Limit,
+        refs: Type.Optional(
+          Type.Array(Type.String({ minLength: 1 }), {
+            minItems: 1,
+            description:
+              'Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.',
+          }),
+        ),
         include: Type.Optional(
           Type.Object(
             { stashes: Type.Optional(Type.Boolean()), wip: Type.Optional(Type.Boolean()) },

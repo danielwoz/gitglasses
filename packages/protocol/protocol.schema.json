@@ -1456,6 +1456,7 @@
           },
           "cursor": {
             "minLength": 1,
+            "description": "nextCursor of the previous page. A cursor is valid for one ref set only: once any ref moves (or with another `refs` filter) it fails with InvalidParams, and the first page has to be requested again.",
             "type": "string"
           },
           "limit": {
@@ -1464,6 +1465,15 @@
             "default": 100,
             "description": "Maximum entries in the page. Omitted means 100.",
             "type": "integer"
+          },
+          "refs": {
+            "minItems": 1,
+            "description": "Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.",
+            "type": "array",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            }
           },
           "include": {
             "additionalProperties": false,

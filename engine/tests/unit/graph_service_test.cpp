@@ -630,6 +630,130 @@ TEST(GraphService, EdgesFormAnUnbrokenGraph) {
   expectContinuous(graphRows(session, 11, repoId)["rows"]);
 }
 
+// The WIP row counts as a row of the sequence on every page, so pages that
+// follow the one carrying it neither skip nor repeat a commit.
+TEST(GraphService, PagingKeepsEveryRowWhenTheWipRowLeads) {
+  FixtureRepo fixture;
+  buildTangledHistory(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const Json include = {{"stashes", true}, {"wip", true}};
+  Json all = graphRows(session, 10, repoId, {{"include", include}});
+  ASSERT_EQ(all["rows"][0]["kind"], "wip");
+
+  for (const int limit : {1, 2, 5}) {
+    Json paged = Json::array();
+    Json params = {{"limit", limit}, {"include", include}};
+    std::int64_t id = 100 * limit;
+    for (;;) {
+      Json page = graphRows(session, ++id, repoId, params);
+      for (const auto& row : page["rows"]) paged.push_back(row);
+      if (!page.contains("nextCursor")) break;
+      params["cursor"] = page["nextCursor"];
+    }
+    EXPECT_EQ(paged.dump(), all["rows"].dump()) << "limit " << limit;
+  }
+}
+
+// A cursor indexes into one walk; once a ref moves it would resume at the
+// wrong row with lanes that do not fit, so the engine refuses it.
+TEST(GraphService, CursorFromBeforeARefMovedIsRejected) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+  commitTick(fixture, "c2", 2);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json first = graphRows(session, 10, repoId, {{"limit", 1}});
+  ASSERT_TRUE(first.contains("nextCursor"));
+  // Unchanged refs: the cursor still resumes.
+  Json second = graphRows(session, 11, repoId, {{"limit", 1}, {"cursor", first["nextCursor"]}});
+  EXPECT_EQ(second["rows"][0]["sha"], rev(fixture, "HEAD~1"));
+
+  commitTick(fixture, "c3", 3);
+  Json stale = session.request(req(12, "graph/rows",
+                                   {{"repoId", repoId},
+                                    {"limit", 1},
+                                    {"cursor", first["nextCursor"]},
+                                    {"include", {{"stashes", false}, {"wip", false}}}}));
+  ASSERT_TRUE(stale.contains("error")) << stale.dump();
+  EXPECT_EQ(stale["error"]["code"], -32602);
+  EXPECT_NE(stale["error"]["message"].get<std::string>().find("stale cursor"), std::string::npos);
+}
+
+TEST(GraphService, RefsFilterWalksOnlyTheNamedBranches) {
+  FixtureRepo fixture;
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  commitTick(fixture, "f1", 2);
+  commitTick(fixture, "f2", 3);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "m1", 4);
+  fixture.run("git checkout -q -b other main~1");
+  commitTick(fixture, "o1", 5);
+  fixture.run("git checkout -q main");
+  fixture.writeFile("README.md", "fixture\ndirty\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  const Json withWip = {{"stashes", true}, {"wip", true}};
+  Json full = graphRows(session, 10, repoId, {{"include", withWip}});
+
+  // HEAD is on main, which the filter leaves out: no WIP row, and only
+  // feature's history, in rev-list --topo-order order.
+  Json feature =
+      graphRows(session, 11, repoId, {{"include", withWip}, {"refs", {"refs/heads/feature"}}});
+  std::vector<std::string> shas;
+  for (const auto& row : feature["rows"]) shas.push_back(row["sha"]);
+  EXPECT_EQ(shas, gitLines(fixture.root(), "rev-list --topo-order feature"));
+  EXPECT_NE(feature["refsFingerprint"], full["refsFingerprint"]);
+  expectContinuous(feature["rows"]);
+  // Decorations still name every ref at a shown commit.
+  bool sawMainAtBase = false;
+  for (const auto& row : feature["rows"]) {
+    for (const auto& ref : row["refs"]) {
+      if (ref["name"] == "feature") EXPECT_EQ(row["sha"], rev(fixture, "feature"));
+    }
+    if (row["sha"] == rev(fixture, "main~1")) sawMainAtBase = true;
+  }
+  EXPECT_TRUE(sawMainAtBase);
+
+  // Naming HEAD's branch brings the WIP row back; a branch that no longer
+  // exists is skipped.
+  Json withMain = graphRows(
+      session, 12, repoId,
+      {{"include", withWip}, {"refs", {"refs/heads/main", "refs/heads/deleted-meanwhile"}}});
+  EXPECT_EQ(withMain["rows"][0]["kind"], "wip");
+  EXPECT_EQ(withMain["rows"][1]["sha"], rev(fixture, "main"));
+  EXPECT_EQ(withMain["rows"].size(), 1 + gitLines(fixture.root(), "rev-list main").size());
+
+  // Paging a filtered walk resumes inside the same filtered walk.
+  Json paged = Json::array();
+  Json params = {{"limit", 1}, {"include", withWip}, {"refs", {"refs/heads/feature"}}};
+  std::int64_t id = 20;
+  for (;;) {
+    Json page = graphRows(session, ++id, repoId, params);
+    for (const auto& row : page["rows"]) paged.push_back(row);
+    if (!page.contains("nextCursor")) break;
+    params["cursor"] = page["nextCursor"];
+  }
+  EXPECT_EQ(paged.dump(), feature["rows"].dump());
+
+  // A filter naming nothing that exists walks nothing.
+  Json none = graphRows(session, 40, repoId, {{"refs", {"refs/heads/nope"}}});
+  EXPECT_TRUE(none["rows"].empty());
+
+  // A cursor from the full walk does not resume a filtered one.
+  Json firstFull = graphRows(session, 41, repoId, {{"limit", 1}});
+  Json mixed = session.request(req(42, "graph/rows",
+                                   {{"repoId", repoId},
+                                    {"limit", 1},
+                                    {"cursor", firstFull["nextCursor"]},
+                                    {"refs", {"refs/heads/feature"}}}));
+  EXPECT_EQ(mixed["error"]["code"], -32602) << mixed.dump();
+}
+
 // Commits come out in the order `git rev-list --topo-order` gives them.
 TEST(GraphService, OrderMatchesGitTopoOrder) {
   FixtureRepo fixture;
