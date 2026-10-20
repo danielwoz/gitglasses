@@ -5,23 +5,24 @@ on:
     branches: [main]
   pull_request:
 
+# Each platform's release engine is built and tested once, then shared with
+# the jobs that need it as an artifact named after the engine source key
+# (node scripts/fetch-engine.mjs --print-key). The builds of main stay
+# available for a month, which is what `pnpm fetch-engine` downloads for
+# TypeScript-only work.
 jobs:
   engine:
+    name: engine (${{ matrix.preset }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            preset: debug
-          - os: ubuntu-22.04
-            preset: asan
-          - os: ubuntu-22.04
-            preset: tsan
+          - preset: debug
+          - preset: asan
+          - preset: tsan
             cc: clang
             cxx: clang++
-          - os: ubuntu-22.04
-            preset: release
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -41,8 +42,44 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }} --parallel 4 --timeout 300
 
+  engine-linux:
+    runs-on: ubuntu-22.04
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-vcpkg
+        with:
+          triplet: x64-linux
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Test
+        run: ctest --preset release --parallel 4 --timeout 300
+
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-engine-linux-x64-${{ steps.key.outputs.key }}
+          path: build/release/engine/gitglasses-engine
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
+
   engine-windows:
     runs-on: windows-2022
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
@@ -52,19 +89,26 @@ jobs:
           triplet: x64-windows-static
 
       - name: Configure
-        shell: bash
-        run: |
-          cmake --preset release \
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static \
-            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed"
+        run: cmake --preset windows-release
 
       - name: Build
-        shell: bash
-        run: cmake --build --preset release
+        run: cmake --build --preset windows-release
 
       - name: Test
-        shell: bash
-        run: ctest --preset release --parallel 4 --timeout 300
+        run: ctest --preset windows-release --parallel 4 --timeout 300
+
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      # Only the executable: the build directory also holds the linker's
+      # import library and debug symbols under similar names.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-engine-win32-x64-${{ steps.key.outputs.key }}
+          path: build/release/engine/gitglasses-engine.exe
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   engine-macos:
     runs-on: macos-14
@@ -76,18 +120,24 @@ jobs:
           triplet: arm64-osx-gg
 
       - name: Configure
-        run: |
-          cmake --preset release \
-            -DVCPKG_TARGET_TRIPLET=arm64-osx-gg \
-            -DVCPKG_OVERLAY_TRIPLETS=ci/triplets \
-            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+        run: cmake --preset macos-release
 
       - name: Build
-        run: cmake --build --preset release
+        run: cmake --build --preset macos-release
 
       - name: Test
-        run: ctest --preset release --parallel 4 --timeout 300
+        run: ctest --preset macos-release --parallel 4 --timeout 300
+
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-engine-darwin-arm64-${{ steps.key.outputs.key }}
+          path: build/release/engine/gitglasses-engine
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   engine-wasm:
     runs-on: ubuntu-22.04
@@ -118,6 +168,7 @@ jobs:
         run: node engine/wasm-test/run.mjs
 
   extension:
+    needs: engine-linux
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -128,11 +179,12 @@ jobs:
           cache: pnpm
 
       # The TS integration tests exercise the real engine binary.
-      - uses: ./.github/actions/setup-vcpkg
+      - uses: actions/download-artifact@v4
         with:
-          triplet: x64-linux
-      - name: Build engine
-        run: cmake --preset release && cmake --build --preset release
+          name: ci-engine-linux-x64-${{ needs.engine-linux.outputs.key }}
+          path: build/release/engine
+      - name: Make the engine executable
+        run: chmod +x build/release/engine/gitglasses-engine
 
       - name: Install workspace
         run: pnpm install --frozen-lockfile
@@ -159,10 +211,13 @@ jobs:
   # nothing here and leave every path-dependent feature silently inert. Runs
   # the unit suite and the real-VS-Code e2e suite on Windows for that reason.
   extension-windows:
+    needs: engine-windows
     runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -170,42 +225,32 @@ jobs:
           cache: pnpm
 
       # The unit suite's engine-client tests and the whole e2e suite drive the
-      # real binary, so it has to be built here too.
-      - uses: ./.github/actions/setup-vcpkg
+      # real binary.
+      - uses: actions/download-artifact@v4
         with:
-          triplet: x64-windows-static
-      - name: Build engine
-        shell: bash
-        run: |
-          cmake --preset release \
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static \
-            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed"
-          cmake --build --preset release
+          name: ci-engine-win32-x64-${{ needs.engine-windows.outputs.key }}
+          path: build/release/engine
 
       - name: Install workspace
-        shell: bash
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        shell: bash
         run: pnpm build
 
       - name: Typecheck extension
-        shell: bash
         working-directory: extension
         run: npx tsc -p tsconfig.json
 
       - name: Test
-        shell: bash
         run: pnpm test
 
       # No xvfb wrapper: the runner has a desktop session, and headless.cjs
       # passes straight through to node when a display is present.
       - name: E2E test
-        shell: bash
         run: pnpm --filter gitglasses run test:e2e
 
   extension-e2e:
+    needs: engine-linux
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -216,11 +261,12 @@ jobs:
           cache: pnpm
 
       # The e2e suite launches real VS Code against the real engine binary.
-      - uses: ./.github/actions/setup-vcpkg
+      - uses: actions/download-artifact@v4
         with:
-          triplet: x64-linux
-      - name: Build engine
-        run: cmake --preset release && cmake --build --preset release
+          name: ci-engine-linux-x64-${{ needs.engine-linux.outputs.key }}
+          path: build/release/engine
+      - name: Make the engine executable
+        run: chmod +x build/release/engine/gitglasses-engine
 
       - name: Install workspace
         run: pnpm install --frozen-lockfile
