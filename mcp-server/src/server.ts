@@ -17,13 +17,7 @@ import type {
   RepoInfo,
 } from '@gitglasses/protocol';
 import { ErrorCodes, patchEnvelopeError } from '@gitglasses/protocol';
-import {
-  GitHubProvider,
-  createGitHubEnterpriseProvider,
-  groupItems,
-  type FetchLike,
-  type HostingProvider,
-} from '@gitglasses/integrations';
+import type { FetchLike } from '@gitglasses/integrations';
 import type { EngineClient } from '@gitglasses/rpc';
 import {
   binaryPathsInPatch,
@@ -36,7 +30,6 @@ import {
   formatGraph,
   formatHistory,
   formatLineHistory,
-  formatLaunchpad,
   formatPatchEnvelope,
   formatRefs,
   formatStatus,
@@ -51,34 +44,15 @@ import {
   compareRevisions,
   type CompareArgs,
 } from './tools/compare.js';
+import {
+  HOST_SETTINGS,
+  configuredHosts,
+  fetchMyPullRequests,
+  formatHostResults,
+} from './tools/myPrs.js';
 import { SERVER_VERSION } from './version.js';
 
-/**
- * A bare hostname, optionally with a port: letters, digits, hyphens and dots.
- *
- * Anything that could redirect an authenticated request elsewhere is rejected:
- * userinfo ("api.github.com@attacker.example" reads as GitHub but resolves to
- * the attacker), a scheme, a path, or whitespace.
- */
-export function isPlainHostname(value: string): boolean {
-  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(
-    value,
-  );
-}
-
-/**
- * The GitHub host this server talks to, from operator configuration only.
- * The host pairs with the token, so both come from the environment and
- * neither is something a caller can name.
- */
-export function configuredGitHubHost(env: Record<string, string | undefined>): string | undefined {
-  const host = env.GITGLASSES_GITHUB_HOST?.trim();
-  if (!host || host === 'github.com') return undefined;
-  if (!isPlainHostname(host)) {
-    throw new Error(`GITGLASSES_GITHUB_HOST is not a plain hostname: ${JSON.stringify(host)}`);
-  }
-  return host;
-}
+export { configuredGitHubHost, isPlainHostname } from './tools/myPrs.js';
 
 /**
  * The working directory as the workspace root of a client that offers no MCP
@@ -950,22 +924,27 @@ export function createToolHandlers(context: ToolContext) {
       return lines.join('\n');
     },
 
-    // Takes no arguments: the provider is GitHub, and the token and host both
-    // come from the environment (see configuredGitHubHost).
+    // Takes no arguments: the hosts and their tokens all come from the
+    // environment (see configuredHosts).
     async list_my_prs(_args?: Record<string, never>): Promise<string> {
-      const token = env.GITHUB_TOKEN ?? env.GITGLASSES_GITHUB_TOKEN;
-      if (!token) {
+      const hosts = configuredHosts(env, context.fetchFn);
+      if (hosts.length === 0) {
         throw new ToolError(
-          'No GitHub token; set GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN in the server environment',
+          `No hosting service is configured; set ${HOST_SETTINGS} in the server environment`,
         );
       }
-      const host = configuredGitHubHost(env);
-      const provider: HostingProvider = host
-        ? createGitHubEnterpriseProvider(host, context.fetchFn)
-        : new GitHubProvider({ fetchFn: context.fetchFn });
-      const prs = await provider.getMyPullRequests({ token });
-      const viewer = prs.find((pr) => pr.viewerRole === 'author')?.author.username ?? '';
-      return formatLaunchpad(groupItems(prs, viewer));
+      const results = await fetchMyPullRequests(hosts);
+      const failures = results.filter((result) => 'error' in result);
+      if (failures.length === results.length) {
+        throw new ToolError(
+          failures
+            .map((failure) =>
+              results.length > 1 ? `${failure.label}: ${failure.error}` : failure.error,
+            )
+            .join('; '),
+        );
+      }
+      return formatHostResults(results);
     },
   };
 
@@ -1341,7 +1320,10 @@ export function createServer(context: ToolContext): McpServer {
     'list_my_prs',
     {
       description:
-        'Open GitHub pull requests involving you, grouped into launchpad buckets (blocked, needs-your-review, ...). Takes no arguments: the token comes from GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN and the GitHub Enterprise host from GITGLASSES_GITHUB_HOST.',
+        'Open pull requests involving you on each hosting service the server environment has a ' +
+        'token for (GitHub, GitLab, Bitbucket, Azure DevOps), grouped into launchpad buckets ' +
+        '(blocked, needs-your-review, ...). Takes no arguments: hosts and tokens come only from ' +
+        'the environment.',
       inputSchema: {},
       annotations: readOnly,
     },

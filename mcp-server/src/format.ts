@@ -516,14 +516,18 @@ export function parsePatchEnvelopeText(text: string): PatchEnvelope {
 
 // --- launchpad ---------------------------------------------------------------
 
-export function formatLaunchpad(groups: readonly LaunchpadGroup[]): string {
-  if (groups.length === 0) return 'No open pull requests involve you';
+/**
+ * Pull requests by launchpad bucket, each line indented by `indent`. Titles
+ * are the forge's free text, so they are quoted as data.
+ */
+export function formatLaunchpad(groups: readonly LaunchpadGroup[], indent = ''): string {
+  if (groups.length === 0) return `${indent}No open pull requests involve you`;
   const lines: string[] = [];
   for (const group of groups) {
-    lines.push(`${group.bucket} (${group.items.length}):`);
+    lines.push(`${indent}${group.bucket} (${group.items.length}):`);
     for (const pr of group.items) {
       lines.push(
-        `  #${pr.number} ${pr.title} [${pr.repo.owner}/${pr.repo.name}] by ${pr.author.username} ${pr.url}`,
+        `${indent}  #${pr.number} ${JSON.stringify(pr.title)} [${pr.repo.owner}/${pr.repo.name}] by ${pr.author.username} ${pr.url}`,
       );
     }
   }

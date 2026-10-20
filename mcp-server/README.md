@@ -23,7 +23,7 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<revision>` |
 | `apply_patch` | Apply a patch to the working tree (**writes**) |
-| `list_my_prs` | Open PRs involving you, grouped into launchpad buckets |
+| `list_my_prs` | Open PRs involving you on GitHub, GitLab, Bitbucket and Azure DevOps, grouped into launchpad buckets |
 
 Every tool but `apply_patch` is read-only, and each declares that through MCP
 tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
@@ -146,6 +146,11 @@ claude mcp add gitglasses \
 | `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
 | `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
+| `GITLAB_TOKEN` | GitLab token used by `list_my_prs` (`GITGLASSES_GITLAB_TOKEN` also works). |
+| `GITGLASSES_GITLAB_HOST` | Self-managed GitLab hostname. Must be a bare hostname. Defaults to `gitlab.com`. |
+| `GITGLASSES_BITBUCKET_TOKEN` | Bitbucket Cloud access token, or app password with `GITGLASSES_BITBUCKET_USERNAME`. Cloud lists the pull requests you authored. |
+| `GITGLASSES_BITBUCKET_DC_TOKEN` | Bitbucket Data Center token; needs `GITGLASSES_BITBUCKET_DC_HOST`, a bare hostname. |
+| `GITGLASSES_AZURE_DEVOPS_TOKEN` | Azure DevOps personal access token; needs `GITGLASSES_AZURE_DEVOPS_ORG`, the organization. |
 | `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server reads and, via `apply_patch`, writes, with git allowed to run there. Same as passing each with `--allow`; `*` allows every path. Unset means the client's workspace roots, read without git (see [Trust model](#trust-model)). |
 
 ## Trust model
@@ -202,10 +207,10 @@ runs no git cannot download them, so it reports those files' line counts as
 unknown. Code searches (`content`) never download. `list_my_prs` is the only
 tool that calls a hosting service's API.
 
-The GitHub host is deliberately **not** a tool argument. A token and the host
-it authenticates to are inseparable, so both come from the environment; if the
-agent could name the host, a prompt injection would be enough to have the
-token sent somewhere else.
+Hosts are deliberately **not** tool arguments. A token and the host it
+authenticates to are inseparable, so both come from the environment, and each
+token is only ever sent to its own host; if the agent could name the host, a
+prompt injection would be enough to have the token sent somewhere else.
 
 ## Development
 

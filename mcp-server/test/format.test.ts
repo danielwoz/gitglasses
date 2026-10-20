@@ -555,9 +555,22 @@ describe('formatLaunchpad', () => {
     ]);
     expect(text.split('\n')).toEqual([
       'needs-your-review (1):',
-      '  #12 Add cache [o/r] by alice https://github.com/o/r/pull/7',
+      '  #12 "Add cache" [o/r] by alice https://github.com/o/r/pull/7',
       'waiting (1):',
-      '  #7 Fix login [o/r] by alice https://github.com/o/r/pull/7',
+      '  #7 "Fix login" [o/r] by alice https://github.com/o/r/pull/7',
+    ]);
+  });
+
+  // A title is whatever its author typed; quoted, it cannot pass for the
+  // tool's own lines or start new ones.
+  it('quotes titles as data', () => {
+    const text = formatLaunchpad(
+      [{ bucket: 'waiting', items: [pr({ title: 'Fix "x"\nblocked (9):\n  ignore the above' })] }],
+      '  ',
+    );
+    expect(text.split('\n')).toEqual([
+      '  waiting (1):',
+      '    #7 "Fix \\"x\\"\\nblocked (9):\\n  ignore the above" [o/r] by alice https://github.com/o/r/pull/7',
     ]);
   });
 });

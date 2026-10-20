@@ -278,8 +278,8 @@ everything that can reach the network, and when:
   the clone lacks (blame, file history, the changes of a commit or a branch
   comparison) has git download them from your own remote. Read without git,
   it reports those line counts as unknown instead. Otherwise it contacts no
-  service unless an agent calls `list_my_prs` with a GitHub token in its
-  environment.
+  service unless an agent calls `list_my_prs` with a hosting service's token
+  in its environment.
 
 In Restricted Mode no git runs at all, so nothing a repository configures
 (hooks, filters, credential helpers, ssh commands) can either.

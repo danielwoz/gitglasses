@@ -45,8 +45,8 @@ describe('tool registration', () => {
     }
   });
 
-  // The provider is GitHub and the host is operator-configured, so there is
-  // nothing for a caller to choose.
+  // The hosts and their tokens are operator-configured, so there is nothing
+  // for a caller to choose.
   it('list_my_prs takes no arguments', () => {
     const schema = tools.get('list_my_prs')!.inputSchema;
     expect(schema.required ?? []).toEqual([]);
