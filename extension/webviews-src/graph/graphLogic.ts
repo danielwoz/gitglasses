@@ -552,6 +552,22 @@ export function findCountLabel(state: {
   return state.position > 0 ? `${state.position} of ${total}` : `${total} found`;
 }
 
+// --- Restore ----------------------------------------------------------------
+
+/** What a restore after a reload does once a page has arrived: load more rows
+ *  while the commit that was at the top is not loaded yet (as many as were
+ *  loaded before, then a page at a time while newer commits push it further
+ *  down), or apply the saved position. */
+export function restoreStep(
+  saved: { topSha?: string; loaded?: number },
+  state: { loadedRows: number; topLoaded: boolean; hasMore: boolean; pagesLeft: number },
+): { kind: 'apply' } | { kind: 'load'; rows: number } {
+  if (!saved.topSha || state.topLoaded || !state.hasMore || state.pagesLeft <= 0) {
+    return { kind: 'apply' };
+  }
+  return { kind: 'load', rows: Math.max(state.loadedRows + 1, saved.loaded ?? 0) };
+}
+
 // --- Menus ------------------------------------------------------------------
 
 /** Actions the row context menu offers. */

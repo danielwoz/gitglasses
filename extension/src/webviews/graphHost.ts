@@ -87,6 +87,9 @@ export class GraphWebviewHost implements vscode.Disposable {
   private pendingRefresh: RefreshKind = 'none';
   /** The webview's saved state after a reload, applied to the first reset. */
   private restored: GraphViewState | undefined;
+  /** The graph shows the repository the webview's saved state came from, so
+   *  the webview may still apply that state. */
+  private restorable = false;
   private findSeq = 0;
   /** Cancels the search the find box no longer waits for. */
   private findCancel: vscode.CancellationTokenSource | undefined;
@@ -234,6 +237,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     const same =
       this.repo !== undefined && this.deps.repos.isRootOf(repo.repoId, this.repo.rootPath);
     this.repo = repo;
+    if (!same) this.restorable = false;
     this.generations.clear();
     this.kinds.clear();
     if (!same) this.filter = undefined;
@@ -258,6 +262,7 @@ export class GraphWebviewHost implements vscode.Disposable {
       refManagement: REF_MANAGEMENT,
       maxLanes: this.maxLanes(),
       filter: this.filter,
+      restore: this.restorable,
     });
     await Promise.all([this.fetchFirstPage(generation), this.postBranches()]);
   }
@@ -274,6 +279,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     // The next show() resolves the repository again.
     this.repo = undefined;
     this.filter = undefined;
+    this.restorable = false;
     this.kinds.clear();
     this.generations.clear();
   }
@@ -395,11 +401,12 @@ export class GraphWebviewHost implements vscode.Disposable {
     this.restored = undefined;
     this.repo = repo;
     if (this.panel) this.panel.title = this.title();
-    // A reloaded graph keeps its branch filter when it shows the same
-    // repository again.
-    if (saved?.filter && saved.repoRoot && this.deps.repos.isRootOf(repo.repoId, saved.repoRoot)) {
-      this.filter = saved.filter;
-    }
+    // A reloaded graph keeps its place, selection and branch filter when it
+    // shows the same repository again.
+    const same =
+      saved?.repoRoot !== undefined && this.deps.repos.isRootOf(repo.repoId, saved.repoRoot);
+    if (same && saved?.filter) this.filter = saved.filter;
+    this.restorable = same;
     await this.reset();
   }
 

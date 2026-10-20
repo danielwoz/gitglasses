@@ -83,6 +83,8 @@ export interface GraphViewState {
   repoRoot?: string;
   /** The commit at the top of the viewport. */
   topSha?: string;
+  /** How many rows were loaded, so a restore can load as many at once. */
+  loaded?: number;
   selected?: string[];
   /** Full ref names the graph is filtered to; absent for every branch. */
   filter?: string[];
@@ -106,6 +108,9 @@ export type HostToWebviewMessage =
       refManagement: boolean;
       maxLanes: number;
       filter?: string[];
+      /** The webview's saved state belongs to this repository: apply it, if
+       *  not applied yet, once its rows are loaded. */
+      restore?: boolean;
     }
   /** A page of rows. `replace` swaps out every loaded row (a refresh) and
    *  keeps the selection and scroll position on the same commits. */

@@ -29,6 +29,7 @@ import {
   refMenu,
   relativeTime,
   remapSelection,
+  restoreStep,
   rowAtY,
   rowDate,
   rowMatchesQuery,
@@ -537,6 +538,26 @@ describe('findCountLabel', () => {
     expect(label(12)).toBe('12 found');
     expect(label(12, 3)).toBe('3 of 12');
     expect(label(1000, 0, true)).toBe('1000+ found');
+  });
+});
+
+describe('restoreStep', () => {
+  const saved = { topSha: 'a'.repeat(40), loaded: 600 };
+  const state = { loadedRows: 200, topLoaded: false, hasMore: true, pagesLeft: 4 };
+
+  it('loads as many rows as before at once while the top row is missing', () => {
+    expect(restoreStep(saved, state)).toEqual({ kind: 'load', rows: 600 });
+  });
+
+  it('keeps loading a page at a time when newer commits pushed it down', () => {
+    expect(restoreStep(saved, { ...state, loadedRows: 600 })).toEqual({ kind: 'load', rows: 601 });
+  });
+
+  it('applies once the top row is loaded, the rows end, or the pages run out', () => {
+    expect(restoreStep(saved, { ...state, topLoaded: true })).toEqual({ kind: 'apply' });
+    expect(restoreStep(saved, { ...state, hasMore: false })).toEqual({ kind: 'apply' });
+    expect(restoreStep(saved, { ...state, pagesLeft: 0 })).toEqual({ kind: 'apply' });
+    expect(restoreStep({}, state)).toEqual({ kind: 'apply' });
   });
 });
 

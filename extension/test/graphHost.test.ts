@@ -56,7 +56,11 @@ function graphEngine() {
             refsFingerprint: 1,
           };
         case 'refs/list':
-          return { branches: [], remotes: [], tags: [] };
+          return {
+            branches: [{ name: 'main', current: true, sha: COMMIT }],
+            remotes: [],
+            tags: [],
+          };
         case 'status/summary':
           return { staged: [], unstaged: [], untracked: [], conflicted: [] };
         case 'repo/state':
@@ -248,6 +252,28 @@ describe('GraphWebviewHost', () => {
       { method: 'mutate/switch', params: { repoId: 'r2', ref: COMMIT } },
     ]);
     host.dispose();
+  });
+
+  it('tells a reloaded webview to restore its place only in the same repository', async () => {
+    const lastReset = (panel: FakeWebviewPanel) =>
+      panel.postedOfType<{ type: 'reset'; restore?: boolean; filter?: string[] }>('reset').at(-1);
+    const same = setup();
+    await same.panel.deliver({
+      type: 'ready',
+      state: { repoRoot: '/repos/one', topSha: COMMIT, loaded: 600, filter: ['refs/heads/main'] },
+    });
+    expect(lastReset(same.panel)).toMatchObject({ restore: true, filter: ['refs/heads/main'] });
+    same.host.dispose();
+
+    const other = setup();
+    await other.panel.deliver({
+      type: 'ready',
+      state: { repoRoot: '/repos/two', topSha: COMMIT, filter: ['refs/heads/main'] },
+    });
+    const reset = lastReset(other.panel);
+    expect(reset?.restore).toBe(false);
+    expect(reset?.filter).toBeUndefined();
+    other.host.dispose();
   });
 
   it('refuses a commit action on a stash shown in the graph', async () => {

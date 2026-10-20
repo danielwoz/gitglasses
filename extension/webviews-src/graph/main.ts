@@ -33,6 +33,7 @@ import {
   rowDate,
   rowAtY,
   rowMatchesQuery,
+  restoreStep,
   rowMenu,
   visibleRange,
 } from './graphLogic';
@@ -136,6 +137,8 @@ const view = {
   refManagement: false,
   maxLanes: 24,
   filter: undefined as string[] | undefined,
+  /** The host confirmed the saved state belongs to the shown repository. */
+  restoring: false,
   branches: [] as BranchOption[],
   /** False until the first page of the current generation arrives. */
   loaded: false,
@@ -149,6 +152,9 @@ let headSha: string | undefined;
 const saved = (vscode.getState() ?? undefined) as GraphViewState | undefined;
 /** State to re-apply once the repository it belongs to has loaded. */
 let pendingRestore: GraphViewState | undefined = saved;
+/** Further pages a restore may load while its top row is still further down. */
+const RESTORE_EXTRA_PAGES = 3;
+let restorePagesLeft = 0;
 let stateTimer: ReturnType<typeof setTimeout> | undefined;
 
 function topSha(): string | undefined {
@@ -159,9 +165,15 @@ function saveState(): void {
   if (stateTimer !== undefined) return;
   stateTimer = setTimeout(() => {
     stateTimer = undefined;
+    // Until a restore has reached its rows, the state to keep is its own.
+    if (view.restoring && pendingRestore) {
+      vscode.setState(pendingRestore);
+      return;
+    }
     const state: GraphViewState = {
       repoRoot: view.repoRoot || undefined,
       topSha: topSha(),
+      loaded: store.rows.length,
       selected: [...store.selection.selected].slice(0, 50),
       filter: view.filter,
       detailsOpen: details.open,
@@ -1084,8 +1096,20 @@ document.addEventListener('keydown', (event) => {
 
 function applyRestore(): void {
   const restore = pendingRestore;
-  if (!restore || restore.repoRoot !== view.repoRoot || store.rows.length === 0) return;
+  if (!restore || !view.restoring || store.rows.length === 0) return;
+  const step = restoreStep(restore, {
+    loadedRows: store.rows.length,
+    topLoaded: restore.topSha !== undefined && store.indexOf(restore.topSha) >= 0,
+    hasMore: store.nextCursor !== undefined,
+    pagesLeft: restorePagesLeft,
+  });
+  if (step.kind === 'load') {
+    restorePagesLeft--;
+    maybeLoadMore(true, step.rows);
+    return;
+  }
   pendingRestore = undefined;
+  view.restoring = false;
   if (restore.selected?.length) {
     const present = restore.selected.filter((sha) => store.indexOf(sha) >= 0);
     if (present.length > 0) {
@@ -1155,6 +1179,8 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       view.refManagement = message.refManagement;
       view.maxLanes = message.maxLanes;
       view.filter = message.filter;
+      view.restoring = message.restore === true && pendingRestore !== undefined;
+      restorePagesLeft = 1 + RESTORE_EXTRA_PAGES;
       view.loaded = false;
       repoNameEl.textContent = message.repoName;
       repoNameEl.title = message.repoRoot;
