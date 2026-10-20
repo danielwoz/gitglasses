@@ -154,6 +154,8 @@ const CONTEXT_LINES = 3;
 /** A path as git writes it in a diff header, C-quoted when it has to be. */
 function diffPath(prefix: string, path: string): string {
   const full = `${prefix}${path}`;
+  // Control characters, quotes, backslashes and non-ASCII bytes force quoting.
+  // eslint-disable-next-line no-control-regex
   if (!/[\x00-\x1f"\\\x7f]|[^\x00-\x7f]/.test(full)) return full;
   let quoted = '';
   for (const byte of new TextEncoder().encode(full)) {

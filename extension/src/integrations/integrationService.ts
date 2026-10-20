@@ -6,11 +6,9 @@ import {
   AuthError,
   CredentialScopeError,
   DEFAULT_HOSTING_HOSTS,
-  parseRemoteUrl,
   type AuthContext,
   type AutolinkPattern,
   type HostingProvider,
-  type PullRequest,
   type RepoDescriptor,
 } from '@gitglasses/integrations';
 import { AuthManager, type AuthInfo } from './auth';

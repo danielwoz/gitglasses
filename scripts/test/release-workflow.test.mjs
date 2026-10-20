@@ -12,7 +12,7 @@ const workflow = readFileSync(fileURLToPath(new URL('../../.github/workflows/rel
 const jobs = new Map(
   workflow
     .slice(workflow.indexOf('\njobs:\n'))
-    .split(/^(?=  [a-z][\w-]*:$)/m)
+    .split(/^(?= {2}[a-z][\w-]*:$)/m)
     .map((text) => [/^ {2}([a-z][\w-]*):$/m.exec(text)?.[1], text])
     .filter(([id]) => id),
 );

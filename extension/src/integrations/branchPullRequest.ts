@@ -95,6 +95,8 @@ export async function findBranchPullRequest(
       failure ??= error;
     }
   }
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) {
+    throw failure instanceof Error ? failure : new Error(String(failure));
+  }
   return undefined;
 }
