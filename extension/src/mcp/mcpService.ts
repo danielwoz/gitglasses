@@ -35,10 +35,23 @@ function hasGit(dir: string): boolean {
   }
 }
 
+/**
+ * `dir` with symlinks and Windows 8.3 short names resolved, as the server
+ * compares paths: the home directory must be recognised however a folder
+ * spells it.
+ */
+function canonical(dir: string): string {
+  try {
+    return fs.realpathSync.native(dir);
+  } catch {
+    return dir;
+  }
+}
+
 function localFolders(): string[] {
   return (vscode.workspace.workspaceFolders ?? [])
     .filter((folder) => folder.uri.scheme === 'file')
-    .map((folder) => folder.uri.fsPath);
+    .map((folder) => canonical(folder.uri.fsPath));
 }
 
 export function startMcpService(
@@ -72,7 +85,7 @@ export function startMcpService(
     cliPath: fs.existsSync(cli) ? cli : undefined,
     enginePath: options.enginePath,
     version: String(context.extension.packageJSON.version ?? ''),
-    home: os.homedir(),
+    home: canonical(os.homedir()),
     hasGit,
     toUri: (fsPath) => vscode.Uri.file(fsPath),
     log: options.log,

@@ -1,4 +1,5 @@
 import * as assert from 'node:assert';
+import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 import { FIXTURE } from '../fixture';
 import { activateExtension, poll, workspaceRoot } from './helpers';
@@ -26,7 +27,7 @@ describe('bundled MCP server', () => {
       assert.deepStrictEqual(state.status, {
         state: 'registered',
         host: 'vscode',
-        gitRoots: [workspaceRoot().fsPath],
+        gitRoots: [fs.realpathSync.native(workspaceRoot().fsPath)],
         folders: 1,
         trusted: true,
       });
@@ -37,7 +38,12 @@ describe('bundled MCP server', () => {
     assert.strictEqual(launch.command, process.execPath, "not the editor's own binary");
     assert.strictEqual(launch.env.ELECTRON_RUN_AS_NODE, '1');
     assert.match(launch.args[0], /dist[\\/]mcp[\\/]cli\.js$/);
-    assert.strictEqual(launch.env.GITGLASSES_ALLOWED_ROOTS, workspaceRoot().fsPath);
+    // The workspace is opened through a symlink; the roots are spelled as
+    // the server compares them, with links resolved.
+    assert.strictEqual(
+      launch.env.GITGLASSES_ALLOWED_ROOTS,
+      fs.realpathSync.native(workspaceRoot().fsPath),
+    );
     assert.ok(launch.env.GITGLASSES_ENGINE, 'no engine path');
   });
 
