@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "exec/git_process.h"
@@ -140,6 +141,19 @@ std::shared_ptr<AskpassSession> openAskpassSession();
 // "NAME=value" entries that point git, ssh and the signing shim at the
 // broker for this session.
 std::vector<std::string> askpassEnvironment(const AskpassSession& session);
+
+// True when `version`, the first line `ssh -V` prints, names an OpenSSH
+// older than 8.4. Those ignore SSH_ASKPASS_REQUIRE and run SSH_ASKPASS only
+// while DISPLAY is set.
+bool sshNeedsDisplayForAskpass(std::string_view version);
+
+// The first line `ssh -V` prints for the ssh on PATH, or empty when none
+// runs. Empty where askpassEnvironment never sets DISPLAY (Windows, macOS,
+// the web build).
+std::string sshVersionOnPath();
+
+// sshNeedsDisplayForAskpass for the ssh on PATH, checked once per process.
+bool localSshNeedsDisplay();
 
 // The session's prompt bookkeeping, which the git process it belongs to
 // reads (see AskpassPromptStats in git_process.h).

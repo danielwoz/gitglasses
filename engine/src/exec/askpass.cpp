@@ -21,10 +21,12 @@
 #else
 #include <fcntl.h>
 #include <poll.h>
+#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -32,6 +34,10 @@
 
 #include "exec/sequence_editor.h"
 #include "util/request_context.h"
+
+#ifndef _WIN32
+extern char** environ;
+#endif
 
 namespace gg::exec {
 
@@ -841,12 +847,81 @@ std::vector<std::string> askpassEnvironment(const AskpassSession& session) {
       std::string(kAskpassTokenVar) + "=" + session.state().token,
   };
 #if !defined(_WIN32) && !defined(__APPLE__)
-  // Older OpenSSH reads SSH_ASKPASS only with DISPLAY set, which a headless
-  // host (a remote or container session) lacks.
+  // OpenSSH before 8.4 runs SSH_ASKPASS only with DISPLAY set, which a
+  // headless host (a remote or container session) lacks. The placeholder
+  // reaches every program git starts, and a graphical one (a pinentry, a
+  // credential manager) would try to open a window on it, so it is set only
+  // where that ssh needs it.
   const char* display = std::getenv("DISPLAY");
-  if (!display || !*display) env.emplace_back("DISPLAY=:0");
+  if ((!display || !*display) && localSshNeedsDisplay()) env.emplace_back("DISPLAY=:0");
 #endif
   return env;
+}
+
+bool sshNeedsDisplayForAskpass(std::string_view version) {
+  const size_t start = version.find("OpenSSH_");
+  if (start == std::string_view::npos) return false;
+  // "OpenSSH_8.2p1 Ubuntu-4ubuntu0.5, OpenSSL ...": the version is in the
+  // first word.
+  const std::string_view word = version.substr(start, version.find_first_of(" ,", start) - start);
+  size_t at = word.find_first_of("0123456789");
+  if (at == std::string_view::npos) return false;
+  const auto number = [&](int& out) {
+    const size_t first = at;
+    out = 0;
+    while (at < word.size() && word[at] >= '0' && word[at] <= '9' && at - first < 4) {
+      out = out * 10 + (word[at++] - '0');
+    }
+    return at > first;
+  };
+  int major = 0;
+  int minor = 0;
+  if (!number(major) || at >= word.size() || word[at++] != '.' || !number(minor)) return false;
+  return major < 8 || (major == 8 && minor < 4);
+}
+
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(GG_WASM)
+std::string sshVersionOnPath() {
+  int fds[2];
+  if (::pipe(fds) != 0) return {};
+  ::fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+  ::fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+  posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+  posix_spawn_file_actions_adddup2(&actions, fds[1], STDERR_FILENO);
+  char program[] = "ssh";
+  char flag[] = "-V";
+  char* argv[] = {program, flag, nullptr};
+  pid_t pid = -1;
+  const int spawned = ::posix_spawnp(&pid, "ssh", &actions, nullptr, argv, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  ::close(fds[1]);
+  std::string output;
+  if (spawned == 0) {
+    char buffer[256];
+    for (;;) {
+      const ssize_t got = ::read(fds[0], buffer, sizeof buffer);
+      if (got > 0 && output.size() < 4096) {
+        output.append(buffer, static_cast<size_t>(got));
+      } else if (got == 0 || (got < 0 && errno != EINTR)) {
+        break;
+      }
+    }
+    while (::waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {
+    }
+  }
+  ::close(fds[0]);
+  return output.substr(0, output.find('\n'));
+}
+#else
+std::string sshVersionOnPath() { return {}; }
+#endif
+
+bool localSshNeedsDisplay() {
+  static const bool needs = sshNeedsDisplayForAskpass(sshVersionOnPath());
+  return needs;
 }
 
 std::shared_ptr<const AskpassPromptStats> askpassPromptStats(const AskpassSession& session) {

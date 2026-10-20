@@ -99,6 +99,22 @@ TEST(AskpassPrompt, HintsFromTheShimDecideTheKind) {
   EXPECT_TRUE(unknown.secret);
 }
 
+TEST(AskpassEnvironment, OnlyOpenSshBefore84NeedsADisplay) {
+  EXPECT_TRUE(exec::sshNeedsDisplayForAskpass(
+      "OpenSSH_8.2p1 Ubuntu-4ubuntu0.5, OpenSSL 1.1.1f  31 Mar 2020"));
+  EXPECT_TRUE(exec::sshNeedsDisplayForAskpass("OpenSSH_8.0p1, OpenSSL 1.1.1k  FIPS 25 Mar 2021"));
+  EXPECT_TRUE(exec::sshNeedsDisplayForAskpass("OpenSSH_7.4p1, OpenSSL 1.0.2k-fips  26 Jan 2017"));
+  EXPECT_TRUE(exec::sshNeedsDisplayForAskpass("OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2"));
+  EXPECT_FALSE(exec::sshNeedsDisplayForAskpass(
+      "OpenSSH_8.4p1 Debian-5+deb11u3, OpenSSL 1.1.1w  11 Sep 2023"));
+  EXPECT_FALSE(exec::sshNeedsDisplayForAskpass(
+      "OpenSSH_9.6p1 Ubuntu-3ubuntu13.5, OpenSSL 3.0.13 30 Jan 2024"));
+  EXPECT_FALSE(exec::sshNeedsDisplayForAskpass("OpenSSH_10.0p2, OpenSSL 3.5.0 8 Apr 2025"));
+  EXPECT_FALSE(exec::sshNeedsDisplayForAskpass(""));
+  EXPECT_FALSE(exec::sshNeedsDisplayForAskpass("Dropbear v2022.83"));
+  EXPECT_FALSE(exec::sshNeedsDisplayForAskpass("OpenSSH_x, OpenSSL 1.1.1"));
+}
+
 TEST(AskpassPrompt, OnlyUserActionsPromptInteractively) {
   EXPECT_TRUE(exec::askpassInteractiveMethod("mutate/push"));
   EXPECT_TRUE(exec::askpassInteractiveMethod("mutate/commit"));
@@ -237,6 +253,35 @@ TEST(AskpassBroker, ListensInADirectoryOnlyTheUserCanEnter) {
   const std::filesystem::path directory = socket.parent_path();
   broker.reset();
   EXPECT_FALSE(std::filesystem::exists(directory)) << "the endpoint outlived the broker";
+}
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+TEST(AskpassEnvironment, ReadsTheVersionOfTheSshOnPath) {
+  FixtureRepo fixture;
+  fixture.writeFile("bin/ssh",
+                    "#!/bin/sh\necho 'OpenSSH_8.2p1 Ubuntu-4ubuntu0.5, OpenSSL 1.1.1f' >&2\n");
+  std::filesystem::permissions(fixture.root() / "bin" / "ssh", std::filesystem::perms::owner_all);
+  const ScopedEnv path("PATH", (fixture.root() / "bin").string() + ":/usr/bin:/bin");
+  EXPECT_EQ(exec::sshVersionOnPath(), "OpenSSH_8.2p1 Ubuntu-4ubuntu0.5, OpenSSL 1.1.1f");
+  const ScopedEnv nothing("PATH", (fixture.root() / "nowhere").string());
+  EXPECT_EQ(exec::sshVersionOnPath(), "");
+}
+
+// Without a display, git gets the placeholder DISPLAY only when the ssh it
+// runs needs one: anything else git starts (a pinentry, a credential
+// manager) must not be pointed at a display that is not the user's.
+TEST(AskpassEnvironment, SetsADisplayOnlyForAnSshThatNeedsOne) {
+  auto broker =
+      AskpassBroker::start([](const auto&, const auto&, const auto&) { return AskpassAnswer{}; });
+  ASSERT_NE(broker, nullptr);
+  const ScopedEnv display("DISPLAY", "");
+  const auto session = broker->openSession({});
+  bool hasDisplay = false;
+  for (const std::string& entry : exec::askpassEnvironment(*session)) {
+    hasDisplay = hasDisplay || entry.rfind("DISPLAY=", 0) == 0;
+  }
+  EXPECT_EQ(hasDisplay, exec::localSshNeedsDisplay()) << exec::sshVersionOnPath();
 }
 #endif
 
