@@ -25,11 +25,14 @@ import {
   explainCommitPrompt,
   EXPLAIN_WIP_SYSTEM,
   explainWipPrompt,
-  NL_SEARCH_SYSTEM,
   nlSearchPrompt,
+  nlSearchSystem,
 } from './prompts';
 import { escapeMarkdownText, sanitizeAiMarkdown } from './sanitize';
-import { CommitSearchQuery, describeQuery, isoDay, needsGitLog } from '../views/searchQuery';
+import { CommitSearchQuery, describeQuery, isoDay } from '../views/searchQuery';
+import { searchCommitHistory } from '../views/commitSearch';
+import { searchRefusal } from '../views/searchView';
+import { isMethodAvailable } from '../engine/capabilityGate';
 
 const CONTEXT_BUDGET_TOKENS = 6000;
 const MAX_CONTEXT_FILES = 30;
@@ -199,7 +202,10 @@ async function diffFromVersions(
           : unifiedDiff(before, after);
       files.push({ path: change.path, patch: `${header}\n${hunks}` });
     } catch (error) {
-      files.push({ path: change.path, patch: `${header}\n(diff unavailable: ${errorMessage(error)})` });
+      files.push({
+        path: change.path,
+        patch: `${header}\n(diff unavailable: ${errorMessage(error)})`,
+      });
     }
   }
   return files;
@@ -225,16 +231,16 @@ async function collectCommitDiff(
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     if (code !== ErrorCodes.Restricted && code !== ErrorCodes.MethodNotSupported) {
-      log(`AI: patch/create for ${details.sha} failed; diffing the file versions instead: ${errorMessage(error)}`);
+      log(
+        `AI: patch/create for ${details.sha} failed; diffing the file versions instead: ${errorMessage(error)}`,
+      );
     }
   }
   return diffFromVersions(engine, repoId, details);
 }
 
 function refsLabel(details: CommitDetails): string {
-  return details.refs
-    .map((ref) => (ref.kind === 'tag' ? `tag ${ref.name}` : ref.name))
-    .join(', ');
+  return details.refs.map((ref) => (ref.kind === 'tag' ? `tag ${ref.name}` : ref.name)).join(', ');
 }
 
 async function explainCommit(
@@ -263,7 +269,9 @@ async function explainCommit(
     details = await engine.request('commit/details', { repoId: repo.repoId, sha: ref });
     files = await collectCommitDiff(engine, repo.repoId, details, log);
   } catch (error) {
-    void vscode.window.showWarningMessage(`GitGlasses: cannot read commit "${ref}": ${errorMessage(error)}`);
+    void vscode.window.showWarningMessage(
+      `GitGlasses: cannot read commit "${ref}": ${errorMessage(error)}`,
+    );
     return;
   }
   const omitted = details.truncated || details.files.length > files.length;
@@ -485,7 +493,10 @@ async function commitThroughEditor(
   repo: ActiveRepo,
   message: string,
 ): Promise<void> {
-  const document = await vscode.workspace.openTextDocument({ content: message, language: 'git-commit' });
+  const document = await vscode.workspace.openTextDocument({
+    content: message,
+    language: 'git-commit',
+  });
   await vscode.window.showTextDocument(document);
   const commit = 'Commit Staged Changes';
   const choice = await vscode.window.showInformationMessage(
@@ -530,8 +541,10 @@ async function nlSearch(
   });
   if (!request) return;
 
+  // Code and file criteria need git log; dates work on every engine.
+  const codeAndPaths = isMethodAvailable(engine.capabilities(), 'search/log');
   const raw = await ai.complete(ready, 'GitGlasses: translating search…', {
-    system: NL_SEARCH_SYSTEM,
+    system: nlSearchSystem(codeAndPaths),
     prompt: nlSearchPrompt(request, isoDay(new Date())),
     maxTokens: 300,
   });
@@ -552,25 +565,21 @@ async function nlSearch(
     return;
   }
 
-  const streamId = nextStreamId();
   const matches: CommitSummaryInfo[] = [];
-  const sub = engine.onNotification('search/matches', (params) => {
-    if (params.streamId === streamId) matches.push(...params.matches);
-  });
   let truncated: boolean;
   try {
-    const params = { repoId: repo.repoId, streamId, limit: NL_SEARCH_LIMIT };
-    const { sha, ...logQuery } = parsed.query;
-    const { text, author } = parsed.query;
-    const result = needsGitLog(parsed.query)
-      ? await engine.request('search/log', { ...params, query: logQuery })
-      : await engine.request('search/commits', { ...params, query: { text, author, sha } });
-    truncated = result.truncated;
+    const request = {
+      repoId: repo.repoId,
+      streamId: nextStreamId(),
+      limit: NL_SEARCH_LIMIT,
+      query: parsed.query,
+    };
+    ({ truncated } = await searchCommitHistory(engine, request, (found) => matches.push(...found)));
   } catch (error) {
-    void vscode.window.showWarningMessage(`GitGlasses: commit search failed: ${errorMessage(error)}`);
+    void vscode.window.showWarningMessage(
+      `GitGlasses: ${searchRefusal(error) ?? `commit search failed: ${errorMessage(error)}`}`,
+    );
     return;
-  } finally {
-    sub.dispose();
   }
 
   const queryLabel = describeQuery(parsed.query);

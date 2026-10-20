@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   describeQuery,
+  inDateWindow,
+  isoDateSeconds,
   needsGitLog,
   parseSearchInput,
   resolveDay,
@@ -130,6 +132,27 @@ describe('needsGitLog', () => {
     expect(needsGitLog({ path: 'src' })).toBe(true);
     expect(needsGitLog({ since: '2025-01-01' })).toBe(true);
     expect(needsGitLog({ until: '2025-01-01' })).toBe(true);
+  });
+});
+
+describe('inDateWindow', () => {
+  const at = (iso: string): number => Math.floor(new Date(iso).getTime() / 1000);
+
+  it('reads a bare day as its start in local time, as git log does', () => {
+    expect(isoDateSeconds('2025-02-01')).toBe(at('2025-02-01T00:00:00'));
+    expect(isoDateSeconds('2025-02-01T10:30:00')).toBe(at('2025-02-01T10:30:00'));
+    expect(isoDateSeconds('2025-02-01T10:30:00Z')).toBe(Date.UTC(2025, 1, 1, 10, 30) / 1000);
+    expect(isoDateSeconds('2025-02-01T10:30:00+02:00')).toBe(Date.UTC(2025, 1, 1, 8, 30) / 1000);
+  });
+
+  it('keeps commits from the start of since through until', () => {
+    const query = { since: '2025-02-01', until: '2025-03-01' };
+    expect(inDateWindow(query, at('2025-01-31T23:59:59'))).toBe(false);
+    expect(inDateWindow(query, at('2025-02-01T00:00:00'))).toBe(true);
+    expect(inDateWindow(query, at('2025-02-28T23:59:59'))).toBe(true);
+    expect(inDateWindow(query, at('2025-03-01T00:00:01'))).toBe(false);
+    expect(inDateWindow({ since: '2025-02-01' }, at('2030-01-01T00:00:00'))).toBe(true);
+    expect(inDateWindow({}, 0)).toBe(true);
   });
 });
 

@@ -40,6 +40,7 @@ const CLI_METHODS = [
   'patch/apply',
   'history/file',
   'history/line',
+  'search/log',
 ];
 
 const PURE_METHODS = [

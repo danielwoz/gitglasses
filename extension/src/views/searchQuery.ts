@@ -184,6 +184,27 @@ export function needsGitLog(query: CommitSearchQuery): boolean {
   );
 }
 
+/** Seconds since the epoch at an engine IsoDate, read as git log reads its
+ *  --since and --until: a bare day is the start of that day in local time,
+ *  and so is a date-time without an offset. */
+export function isoDateSeconds(value: string): number | undefined {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const ms = day
+    ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])).getTime()
+    : Date.parse(value);
+  return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
+}
+
+/** Whether a commit date (Unix seconds) falls in the query's window, compared
+ *  as git log compares them: not before `since` and not after `until`. */
+export function inDateWindow(query: CommitSearchQuery, commitTime: number): boolean {
+  const since = query.since !== undefined ? isoDateSeconds(query.since) : undefined;
+  const until = query.until !== undefined ? isoDateSeconds(query.until) : undefined;
+  return (
+    (since === undefined || commitTime >= since) && (until === undefined || commitTime <= until)
+  );
+}
+
 /** A short description of the criteria that reads after "commits", for
  *  result headers: 'matching "crash" by alice since 2025-01-01'. */
 export function describeQuery(query: CommitSearchQuery): string {

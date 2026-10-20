@@ -3,7 +3,8 @@ import { CommitSummaryInfo, ErrorCodes } from '@gitglasses/protocol';
 import { ActiveRepo, ViewBase, ViewNode, activeWorkspaceRepo, messageNode } from './viewBase';
 import { commitNode } from './nodes';
 import { errorMessage } from '../commands/ui';
-import { CommitSearchQuery, describeQuery, needsGitLog, parseSearchInput } from './searchQuery';
+import { CommitSearchQuery, describeQuery, parseSearchInput } from './searchQuery';
+import { searchCommitHistory } from './commitSearch';
 
 const SEARCH_LIMIT = 200;
 const VIEW_ID = 'gitglasses.views.searchCompare';
@@ -21,10 +22,10 @@ type SearchState = 'idle' | 'running' | 'done';
 export function searchRefusal(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | undefined)?.code;
   if (code === ErrorCodes.Restricted) {
-    return 'Searching by code change, file or date runs git, which GitGlasses does not do in Restricted Mode. Trust this folder to use it; message, author and sha searches still work.';
+    return 'Searching by code change or file runs git, which GitGlasses does not do in Restricted Mode. Trust this folder to use it; message, author, date and sha searches still work.';
   }
   if (code === ErrorCodes.MethodNotSupported) {
-    return 'Searching by code change, file or date needs the git command line, which is not available here. Message, author and sha searches still work.';
+    return 'Searching by code change or file needs the git command line, which is not available here. Message, author, date and sha searches still work.';
   }
   return undefined;
 }
@@ -38,6 +39,8 @@ export class SearchViewProvider extends ViewBase {
   private lastLabel: string | undefined;
   private results: CommitSummaryInfo[] = [];
   private truncated = false;
+  /** Only recent history was searched (a date window applied here). */
+  private partial = false;
   private state: SearchState = 'idle';
   private failure: string | undefined;
   private streamCounter = 0;
@@ -64,10 +67,11 @@ export class SearchViewProvider extends ViewBase {
       header.item.iconPath = new vscode.ThemeIcon('loading~spin');
     } else {
       const count = this.results.length;
+      const recent = this.partial ? ' in recent history (older commits were not searched)' : '';
       header = messageNode(
         count === 0
-          ? `No commits ${label}`
-          : `${count}${this.truncated ? '+' : ''} commit${count === 1 ? '' : 's'} ${label}`,
+          ? `No commits ${label}${recent}`
+          : `${count}${this.truncated ? '+' : ''} commit${count === 1 ? '' : 's'} ${label}${recent}`,
       );
       header.item.iconPath = new vscode.ThemeIcon('search');
     }
@@ -125,6 +129,7 @@ export class SearchViewProvider extends ViewBase {
     this.lastLabel = label;
     this.results = [];
     this.truncated = false;
+    this.partial = false;
     this.failure = undefined;
     this.state = 'running';
     this.fireChange();
@@ -132,29 +137,20 @@ export class SearchViewProvider extends ViewBase {
 
     const streamId = `search-${this.streamCounter++}`;
     let lastRender = 0;
-    const sub = this.engine.onNotification('search/matches', (params) => {
-      if (params.streamId !== streamId || cancel.token.isCancellationRequested) return;
-      this.results.push(...params.matches);
-      const now = Date.now();
-      if (now - lastRender >= RENDER_INTERVAL_MS) {
-        lastRender = now;
-        this.fireChange();
-      }
-    });
-
-    const search = (async () => {
-      const params = { repoId: repo.repoId, streamId, limit: SEARCH_LIMIT };
-      if (needsGitLog(query)) {
-        const { sha: _sha, ...logQuery } = query;
-        return this.engine.request('search/log', { ...params, query: logQuery }, cancel.token);
-      }
-      const { text, author, sha } = query;
-      return this.engine.request(
-        'search/commits',
-        { ...params, query: { text, author, sha } },
-        cancel.token,
-      );
-    })();
+    const search = searchCommitHistory(
+      this.engine,
+      { repoId: repo.repoId, streamId, limit: SEARCH_LIMIT, query },
+      (matches) => {
+        if (this.running !== cancel) return;
+        this.results.push(...matches);
+        const now = Date.now();
+        if (now - lastRender >= RENDER_INTERVAL_MS) {
+          lastRender = now;
+          this.fireChange();
+        }
+      },
+      cancel.token,
+    );
 
     // Long searches (the pickaxe over a big history) get a notification
     // with a Cancel button; quick ones only show the view's progress bar.
@@ -180,6 +176,7 @@ export class SearchViewProvider extends ViewBase {
       );
       if (this.running !== cancel) return;
       this.truncated = result.truncated;
+      this.partial = result.partial;
     } catch (error) {
       if (this.running !== cancel) return;
       if (cancel.token.isCancellationRequested) {
@@ -190,7 +187,6 @@ export class SearchViewProvider extends ViewBase {
       }
     } finally {
       clearTimeout(notifyTimer);
-      sub.dispose();
       if (this.running === cancel) {
         this.running = undefined;
         this.state = 'done';

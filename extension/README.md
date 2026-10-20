@@ -97,10 +97,12 @@ remove that code, `diff:"regex"` for changed lines matching a pattern,
 `6m`, `1y`). A lone hex string is a commit id. Results stream into Search &
 Compare, and a long search shows a notification you can cancel.
 
-*Limits:* code, file and date criteria run `git log`, so they need git and a
-trusted workspace; message, author and sha searches work everywhere,
-including the web. In a partial (blobless) clone, code searches do not
-download missing file contents, and say so.
+*Limits:* code and file criteria run `git log`, so they need git and a
+trusted workspace; message, author, date and sha searches work everywhere,
+including the web. Without git, a date search reads the newest 5,000 commits
+that match its other criteria, and says so when older history was not
+searched. In a partial (blobless) clone, code searches do not download
+missing file contents, and say so.
 
 ### Interactive rebase, branches and worktrees
 

@@ -7,6 +7,7 @@ import {
   PROMPT_VERSION,
   explainCommitPrompt,
   nlSearchPrompt,
+  nlSearchSystem,
 } from '../src/ai/prompts';
 
 describe('prompt templates', () => {
@@ -66,6 +67,16 @@ describe('prompt templates', () => {
     for (const field of ['"since"', '"until"', '"content"', '"path"']) {
       expect(NL_SEARCH_SYSTEM).toContain(field);
     }
+  });
+
+  it('nl search offers code and path criteria only where git log can answer them', () => {
+    const withoutGit = nlSearchSystem(false);
+    for (const field of ['"since"', '"until"', '"text"', '"author"']) {
+      expect(withoutGit).toContain(field);
+    }
+    expect(withoutGit).not.toContain('"content"');
+    expect(withoutGit).not.toContain('"path"');
+    expect(nlSearchSystem(true)).toBe(NL_SEARCH_SYSTEM);
   });
 
   it('every system prompt treats repository text as data', () => {
