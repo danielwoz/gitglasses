@@ -66,6 +66,12 @@ export interface HostingProvider {
   getMyPullRequests(auth: AuthContext, opts?: PullRequestQueryOptions): Promise<PullRequest[]>;
 
   /**
+   * The username of the account `auth` belongs to, as `PullRequest.author`
+   * reports it, for providers whose tokens do not come with one.
+   */
+  getViewerLogin?(auth: AuthContext): Promise<string>;
+
+  /**
    * The open pull request in `repo` whose head is `branch` in the `head`
    * repository, if any. `head` defaults to `repo` itself, so without it only
    * same-repository pull requests match: a fork's pull request from a branch

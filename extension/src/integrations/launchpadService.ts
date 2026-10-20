@@ -1,6 +1,8 @@
 import {
   TtlCache,
   groupItems,
+  type AuthContext,
+  type HostingProvider,
   type LaunchpadBucket,
   type LaunchpadGroup,
   type PullRequest,
@@ -33,12 +35,27 @@ export interface LaunchpadModel {
   attentionCount: number;
 }
 
+/**
+ * The login a connection's pull request authors are compared with: the
+ * account name stored with the credential, else the provider's answer for the
+ * token (cached per token), else '' when neither is known.
+ */
+async function viewerLogin(
+  entry: { provider: HostingProvider; auth: { username?: string } },
+  auth: AuthContext,
+): Promise<string> {
+  if (entry.auth.username) return entry.auth.username;
+  if (!entry.provider.getViewerLogin) return '';
+  // A failed lookup only leaves the Changes Requested group empty; the
+  // connection's pull requests still show.
+  return entry.provider.getViewerLogin(auth).catch(() => '');
+}
+
 // Fetches "my PRs" across every connected hosting provider, classifies them
 // into launchpad buckets, and layers snooze state on top. Results are cached
 // 60s with stale-while-revalidate so view refreshes stay cheap.
 export class LaunchpadService {
   private readonly cache = new TtlCache<PullRequest[]>();
-  private readonly viewerByHost = new Map<string, string>();
 
   constructor(
     private readonly integrations: IntegrationService,
@@ -55,11 +72,14 @@ export class LaunchpadService {
     const results = await Promise.allSettled(
       entries.map(async (entry) => {
         if (force) this.cache.delete(entry.host);
-        this.viewerByHost.set(entry.host, entry.auth.username ?? '');
-        const { value } = await this.cache.getOrFetch(entry.host, FRESH_MS, STALE_MS, () =>
-          entry.provider.getMyPullRequests(toAuthContext(entry.auth, entry.host), { limit: 50 }),
-        );
-        return { host: entry.host, items: value };
+        const auth = toAuthContext(entry.auth, entry.host);
+        const [{ value }, viewer] = await Promise.all([
+          this.cache.getOrFetch(entry.host, FRESH_MS, STALE_MS, () =>
+            entry.provider.getMyPullRequests(auth, { limit: 50 }),
+          ),
+          viewerLogin(entry, auth),
+        ]);
+        return { items: value, viewer };
       }),
     );
 
@@ -70,10 +90,9 @@ export class LaunchpadService {
     // One dead provider never blanks the list: rejected entries are skipped.
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
-      const viewer = this.viewerByHost.get(result.value.host) ?? '';
       const { active, snoozed } = partitionSnoozed(result.value.items, snoozes, nowMs);
       snoozedItems.push(...snoozed);
-      perProvider.push(groupItems(active, viewer));
+      perProvider.push(groupItems(active, result.value.viewer));
     }
 
     const groups: LaunchpadModel['groups'] = mergeGroups(perProvider);
