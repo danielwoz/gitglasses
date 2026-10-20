@@ -141,7 +141,8 @@ where the worktree lives, its branch name or the trailers on its commits).
 base, uncommitted work included, and **Remove Worktree and Branch…** deletes
 both after one confirmation that lists what goes. The base is the branch
 checked out in the main worktree unless you pick another with **Choose Base
-for Worktrees…**.
+for Worktrees…**. Statuses are read again on git activity in any worktree,
+every minute while the view is open and when you come back to the window.
 
 *Limits:* everything that changes the repository needs git and a trusted
 workspace, and none of it is available on the web.

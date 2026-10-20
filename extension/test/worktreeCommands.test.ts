@@ -1,14 +1,33 @@
 // The Worktrees view's rows and actions against a scripted engine: rows that
-// fill in as statuses load, Remove Worktree and Branch with its one (or, for
-// uncommitted work, two) confirmations, Compare with Base, and the chosen
-// base reaching every status request.
+// fill in as statuses load and are read again while on screen, Remove
+// Worktree and Branch with its one (or, for uncommitted work, two)
+// confirmations, Compare with Base, and the chosen base reaching every
+// status request.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/** The window focus events the view listens to. */
+const windowState = vi.hoisted(() => {
+  const listeners = new Set<(state: { focused: boolean }) => void>();
+  return {
+    listeners,
+    fire(focused: boolean) {
+      for (const listener of [...listeners]) listener({ focused });
+    },
+  };
+});
 
 vi.mock('vscode', async () => {
   const fake = await import('./support/fakeVscodeUi');
   return {
     ...fake,
+    window: {
+      ...fake.window,
+      onDidChangeWindowState(listener: (state: { focused: boolean }) => void) {
+        windowState.listeners.add(listener);
+        return { dispose: () => windowState.listeners.delete(listener) };
+      },
+    },
     Uri: {
       ...fake.Uri,
       from: (parts: { scheme: string; path: string; query?: string }) => ({
@@ -154,12 +173,22 @@ function harness(
         ): Promise<{ item: { label: string; description: string; contextValue: string } }[]>;
       }
     ).getRootNodes(REPO);
-  return { view, run, node, sent, requests, log, render };
+  /** Root refreshes the view asked VS Code for. */
+  const reloads: unknown[] = [];
+  view.onDidChangeTreeData((node) => {
+    if (node === undefined) reloads.push(node);
+  });
+  return { view, run, node, sent, requests, log, render, reloads };
 }
 
 beforeEach(() => {
   ui.reset();
+  windowState.listeners.clear();
   setActiveRepoResolver(async () => REPO);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('worktree rows', () => {
@@ -191,6 +220,39 @@ describe('worktree rows', () => {
     );
     expect(rows[2].item.description).toBe('missing · locked');
     expect(rows[2].item.contextValue).toBe('gitglassesMissingWorktree');
+  });
+
+  it('read their status again every minute while the view renders', async () => {
+    vi.useFakeTimers();
+    const { render, sent, reloads } = harness();
+    await render();
+    await vi.waitFor(() => expect(sent('worktree/status')).toHaveLength(2));
+
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(reloads).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reloads).toHaveLength(1);
+    // A hidden view is not rendered, so no further reread is scheduled.
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(reloads).toHaveLength(1);
+
+    // Rendered again, every row reads its status afresh.
+    await render();
+    await vi.waitFor(() => expect(sent('worktree/status')).toHaveLength(4));
+  });
+
+  it('read their status again when the window regains focus', async () => {
+    vi.useFakeTimers();
+    const { render, reloads } = harness();
+    await render();
+    // Just listed: nothing to catch up on.
+    windowState.fire(true);
+    expect(reloads).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(15_000);
+    windowState.fire(false);
+    expect(reloads).toHaveLength(0);
+    windowState.fire(true);
+    expect(reloads).toHaveLength(1);
   });
 });
 

@@ -1,8 +1,10 @@
 // Worktrees sidebar view plus its commands. Each row shows a worktree's
 // status at a glance (uncommitted paths, ahead/behind the base, whether it
 // merges cleanly, the coding agent working in it), loaded lazily a few rows
-// at a time. The provider refreshes itself on worktree, HEAD and ref changes;
-// commands refresh it after mutations as well since the watcher may lag.
+// at a time. The provider refreshes itself on worktree, HEAD, ref and index
+// changes, every minute while it is on screen (file edits send no event) and
+// when the window regains focus; commands refresh it after mutations as well
+// since the watcher may lag.
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
@@ -43,6 +45,16 @@ const BASE_KEY_PREFIX = 'gitglasses.worktrees.base:';
  *  worktree) settle into one reload. */
 const REFRESH_SETTLE_MS = 1000;
 
+/** While the view is on screen, how often its rows read their status again:
+ *  editing a worktree's files sends no repository event, so the uncommitted
+ *  count would otherwise wait for the next stage, commit or checkout. VS
+ *  Code renders a hidden view only once it is shown again, so the reread
+ *  waits for that too. */
+const STATUS_REREAD_MS = 60_000;
+
+/** Coming back to the window rereads statuses at least this old. */
+const FOCUS_REREAD_MS = 10_000;
+
 /** One file a comparison opened: the label URI and the left and right
  *  sides (undefined where the file does not exist). */
 export type ComparedFile = [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
@@ -66,6 +78,9 @@ export class WorktreesViewProvider extends ViewBase {
   /** The repository the rows were listed for. */
   private listedRepo: ActiveRepo | undefined;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
+  private rereadTimer: ReturnType<typeof setTimeout> | undefined;
+  /** When the rows were last listed. */
+  private listedAt = 0;
 
   constructor(
     engine: EngineClient,
@@ -83,7 +98,17 @@ export class WorktreesViewProvider extends ViewBase {
         const relevant = ['worktrees', 'HEAD', 'refs', 'index'];
         if (params.changed.some((change) => relevant.includes(change))) this.settleThenRefresh();
       }),
-      { dispose: () => clearTimeout(this.settleTimer) },
+      vscode.window.onDidChangeWindowState((state) => {
+        if (state.focused && this.listedRepo && Date.now() - this.listedAt >= FOCUS_REREAD_MS) {
+          this.refresh();
+        }
+      }),
+      {
+        dispose: () => {
+          clearTimeout(this.settleTimer);
+          clearTimeout(this.rereadTimer);
+        },
+      },
     );
   }
 
@@ -141,6 +166,9 @@ export class WorktreesViewProvider extends ViewBase {
       return node;
     });
     this.nodes = nodes;
+    this.listedAt = Date.now();
+    clearTimeout(this.rereadTimer);
+    this.rereadTimer = setTimeout(() => this.refresh(), STATUS_REREAD_MS);
     return rows;
   }
 
