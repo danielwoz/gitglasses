@@ -5,10 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-env:
-  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-  VCPKG_INSTALLED_DIR: ~/.cache/gitglasses/vcpkg_installed
-
 jobs:
   engine:
     strategy:
@@ -29,27 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Install dependencies
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          triplet: x64-linux
 
       - name: Configure
         env:
@@ -68,34 +46,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
-      # VsDevCmd exports its own VCPKG_ROOT (VS-bundled vcpkg); re-point ours.
-      - name: Restore VCPKG_ROOT
-        shell: bash
-        run: echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
 
-      - name: Bootstrap vcpkg
-        shell: bash
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-windows-${{ hashFiles('vcpkg.json') }}
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          triplet: x64-windows-static
 
       - name: Configure
         shell: bash
@@ -117,28 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-macos-${{ hashFiles('vcpkg.json', 'ci/triplets/arm64-osx-gg.cmake') }}
-
-      - name: Install dependencies
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet arm64-osx-gg \
-            --overlay-triplets=ci/triplets \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          triplet: arm64-osx-gg
 
       - name: Configure
         run: |
@@ -165,34 +100,13 @@ jobs:
         with:
           version: 6.0.3
 
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Cache vcpkg wasm packages
-        uses: actions/cache@v4
+      # The wasm build needs only libgit2 and nlohmann-json; pcre2 and zlib
+      # arrive transitively.
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_wasm
-            ~/.cache/vcpkg/archives
-          key: vcpkg-wasm-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'ci/triplets/wasm32-emscripten-gg.cmake') }}
-
-      # Classic-mode install (run outside the manifest dir): the wasm build
-      # needs only libgit2 and nlohmann-json; pcre2/zlib arrive transitively.
-      - name: Install wasm dependencies
-        run: |
-          # Neutral cwd: classic-mode install; vcpkg finds the repo manifest
-          # from any cwd inside the checkout and then rejects package args.
-          cd "$RUNNER_TEMP"
-          "$VCPKG_ROOT/vcpkg" install 'libgit2[core,pcre2]' nlohmann-json \
-            --triplet wasm32-emscripten-gg \
-            --overlay-triplets="$GITHUB_WORKSPACE/ci/triplets" \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_wasm"
+          triplet: wasm32-emscripten-gg
+          install-dir: vcpkg_wasm
+          packages: libgit2[core,pcre2] nlohmann-json
 
       - name: Configure
         run: cmake --preset wasm
@@ -214,26 +128,11 @@ jobs:
           cache: pnpm
 
       # The TS integration tests exercise the real engine binary.
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          triplet: x64-linux
       - name: Build engine
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
-          cmake --preset release && cmake --build --preset release
+        run: cmake --preset release && cmake --build --preset release
 
       - name: Install workspace
         run: pnpm install --frozen-lockfile
@@ -264,41 +163,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
-      # VsDevCmd exports its own VCPKG_ROOT (VS-bundled vcpkg); re-point ours.
-      - name: Restore VCPKG_ROOT
-        shell: bash
-        run: echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
 
-      - name: Bootstrap vcpkg
-        shell: bash
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-windows-${{ hashFiles('vcpkg.json') }}
-
       # The unit suite's engine-client tests and the whole e2e suite drive the
       # real binary, so it has to be built here too.
+      - uses: ./.github/actions/setup-vcpkg
+        with:
+          triplet: x64-windows-static
       - name: Build engine
         shell: bash
         run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
           cmake --preset release \
             -DVCPKG_TARGET_TRIPLET=x64-windows-static \
             -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed"
@@ -338,26 +216,11 @@ jobs:
           cache: pnpm
 
       # The e2e suite launches real VS Code against the real engine binary.
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          triplet: x64-linux
       - name: Build engine
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
-          cmake --preset release && cmake --build --preset release
+        run: cmake --preset release && cmake --build --preset release
 
       - name: Install workspace
         run: pnpm install --frozen-lockfile
