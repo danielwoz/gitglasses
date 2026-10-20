@@ -25,6 +25,7 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `git_refs` | Branches, remote-tracking branches and tags with the sha each points at |
 | `git_graph_summary` | Lane-indented text rendering of the commit graph |
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
+| `git_worktrees` | Every worktree with its uncommitted count, ahead/behind a base, whether it merges cleanly, last activity and the coding agent working in it |
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
 | `apply_patch` | Apply a patch to the working tree (**writes**) |
 | `list_my_prs` | Open PRs involving you, grouped into launchpad buckets |

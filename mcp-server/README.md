@@ -20,6 +20,7 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `git_refs` | Branches, remote-tracking branches and tags with the sha each points at |
 | `git_graph_summary` | Lane-indented text rendering of the commit graph |
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
+| `git_worktrees` | Every worktree with its uncommitted count, ahead/behind a base, whether it merges cleanly, last activity and the coding agent working in it |
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
 | `apply_patch` | Apply a patch to the working tree (**writes**) |
 | `list_my_prs` | Open PRs involving you, grouped into launchpad buckets |
@@ -28,7 +29,9 @@ Every tool but `apply_patch` is read-only, and each declares that through MCP
 tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
 `git_file_history`, `create_patch`, `apply_patch` and the diff of
 `git_commit_show` need git, so they work only in repositories you allow (see
-[Trust model](#trust-model)).
+[Trust model](#trust-model)); elsewhere `git_worktrees` reports its merge
+check as not run, and it reads only the worktrees inside the directories the
+server serves.
 
 Tools that render a whole commit, diff, status, ref list or patch take a
 `maxChars` argument and truncate with a footer naming the limit; `git_blame`
