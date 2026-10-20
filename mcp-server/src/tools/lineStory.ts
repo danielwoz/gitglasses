@@ -25,6 +25,7 @@ import {
   type StoryForge,
   type StoryPullRequest,
   type StoryVersion,
+  UNCOMMITTED,
 } from '@gitglasses/integrations';
 import type { EngineClient } from '@gitglasses/rpc';
 import { isoDate } from '../format.js';
@@ -421,14 +422,21 @@ export function formatLineStory(
 ): string {
   const head: string[] = [`# Line story: ${story.file}:${story.line}`];
   if (story.lineText !== undefined) head.push(fence(story.lineText));
-  const sections: string[][] = [blameSection(story, options)];
-  if (story.blame.sha === '0000000000000000000000000000000000000000') {
-    sections.push([
-      'This line has uncommitted changes; it has no commit, pull request or history yet.',
-    ]);
-  } else {
-    sections.push(commitSection(story), pullRequestSection(story, options), issueSection(story));
-  }
+  const sections: string[][] =
+    story.blame.sha === UNCOMMITTED
+      ? [
+          [
+            '## Blame',
+            '- not committed yet: the working tree changes this line, so it has no commit, ' +
+              'pull request or earlier versions to show',
+          ],
+        ]
+      : [
+          blameSection(story, options),
+          commitSection(story),
+          pullRequestSection(story, options),
+          issueSection(story),
+        ];
   let text = [
     head.join('\n\n'),
     ...sections.filter((s) => s.length > 0).map((s) => s.join('\n')),

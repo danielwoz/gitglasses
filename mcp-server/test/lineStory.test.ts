@@ -208,6 +208,23 @@ describe('formatLineStory', () => {
     expect(text).toContain('… (diff cut short)');
   });
 
+  it('says a line that is not committed has no story yet', () => {
+    const uncommitted = { state: 'unavailable', reason: 'uncommitted' } as const;
+    const text = formatLineStory(
+      story({
+        blame: { ...story().blame, sha: '0'.repeat(40) },
+        commit: uncommitted,
+        pullRequests: uncommitted,
+        issues: uncommitted,
+        history: uncommitted,
+      }),
+      { maxChars: 20_000 },
+    );
+    expect(text).toContain('- not committed yet: the working tree changes this line');
+    expect(text).not.toContain('0000000');
+    expect(text).not.toContain('## Earlier versions');
+  });
+
   it('says what is missing and why', () => {
     const text = formatLineStory(
       story({
