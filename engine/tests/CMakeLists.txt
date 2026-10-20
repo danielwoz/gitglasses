@@ -29,6 +29,7 @@ add_executable(engine_tests
   unit/watch_manager_test.cpp
   unit/protocol_contract_test.cpp
   unit/version_test.cpp
+  unit/task_pool_test.cpp
   ../src/server.cpp
 )
 target_include_directories(engine_tests PRIVATE ../src)
