@@ -55,6 +55,12 @@ bool onPath(const std::string& tool) {
   return std::system(("command -v " + tool + " > /dev/null 2>&1").c_str()) == 0;
 }
 
+// Whether git can serve smart HTTP; some distributions package
+// git-http-backend on its own (Alpine's git-daemon).
+bool hasHttpBackend() {
+  return std::system("test -x \"$(git --exec-path)/git-http-backend\"") == 0;
+}
+
 std::string slurp(const std::filesystem::path& file) {
   std::ifstream in(file, std::ios::binary);
   std::ostringstream buffer;
@@ -147,6 +153,7 @@ class BasicAuthRemote : public ::testing::Test {
  protected:
   void SetUp() override {
     if (!onPath("python3")) GTEST_SKIP() << "python3 is not installed";
+    if (!hasHttpBackend()) GTEST_SKIP() << "git http-backend is not installed";
     root_ = gg::testing::makeTempDir("gg-basicauth-");
     gg::testing::runGit(root_, "git init -q --bare -b main proj.git");
     gg::testing::runGit(root_ / "proj.git", "git config http.receivepack true");
