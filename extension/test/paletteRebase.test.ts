@@ -106,11 +106,12 @@ const lib = { repoId: 'r2', rootPath: '/w/lib', workspacePath: '/w/lib', name: '
 const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
 const engine = {
   capabilities: () => undefined,
+  onNotification: () => ({ dispose: () => undefined }),
   async request(method: string, params: Record<string, unknown>) {
     requests.push({ method, params });
     switch (method) {
       case 'status/summary':
-        return { conflicted: [] };
+        return { branch: 'feature', conflicted: [], staged: [], unstaged: [] };
       case 'refs/list':
         return {
           branches: [
@@ -119,9 +120,14 @@ const engine = {
           ],
         };
       case 'rebase/preview':
-        return { entries: [{ sha: 'c'.repeat(40), summary: 'work' }] };
+        return {
+          entries: [{ sha: 'c'.repeat(40), summary: 'work' }],
+          headSha: 'a'.repeat(40),
+          upstreamSha: 'b'.repeat(40),
+          mergeCount: 0,
+        };
       case 'repo/state':
-        return { head: { branch: 'feature', detached: false } };
+        return { head: { branch: 'feature', detached: false }, sequencer: { operation: 'none' } };
       default:
         throw new Error(`unexpected ${method}`);
     }
@@ -174,16 +180,18 @@ describe('Rebase from the Git Commands palette', () => {
 
 describe('RebaseWebviewHost', () => {
   it('previews, confirms and names the repository it was given', async () => {
-    const host = new RebaseWebviewHost(context, engine, repos);
+    const host = new RebaseWebviewHost(context, engine, repos, () => undefined);
     await host.open('main', lib);
 
     const previews = requests.filter((request) => request.method === 'rebase/preview');
     expect(previews.map((request) => request.params.repoId)).toEqual([lib.repoId]);
 
     await panelMessages[0]({ type: 'start', plan: [] });
-    expect(requests.filter((r) => r.method === 'repo/state').map((r) => r.params.repoId)).toEqual([
-      lib.repoId,
-    ]);
+    const inspected = requests.filter(
+      (r) => r.method === 'repo/state' || r.method === 'status/summary',
+    );
+    expect(inspected.length).toBeGreaterThan(0);
+    expect(new Set(inspected.map((r) => r.params.repoId))).toEqual(new Set([lib.repoId]));
     expect(warnings).toEqual([
       {
         message: "Rebase 'feature' onto main in lib?",
@@ -194,7 +202,7 @@ describe('RebaseWebviewHost', () => {
   });
 
   it('falls back to the repository the views follow', async () => {
-    const host = new RebaseWebviewHost(context, engine, repos);
+    const host = new RebaseWebviewHost(context, engine, repos, () => undefined);
     await host.open('main');
     const previews = requests.filter((request) => request.method === 'rebase/preview');
     expect(previews.map((request) => request.params.repoId)).toEqual([app.repoId]);
