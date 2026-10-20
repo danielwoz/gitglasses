@@ -34,10 +34,10 @@ import { REF_MANAGEMENT, runRefAction, runRowAction } from './graphActions';
 import {
   RefreshKind,
   branchOptions,
-  findQueries,
   isStaleCursorError,
   liveFilter,
   maxLanesSetting,
+  pageLimit,
   refreshFor,
   replaceLimit,
 } from './graphHostLogic';
@@ -88,6 +88,8 @@ export class GraphWebviewHost implements vscode.Disposable {
   /** The webview's saved state after a reload, applied to the first reset. */
   private restored: GraphViewState | undefined;
   private findSeq = 0;
+  /** Cancels the search the find box no longer waits for. */
+  private findCancel: vscode.CancellationTokenSource | undefined;
   private attaching: Promise<void> | undefined;
   private resolveTimer: ReturnType<typeof setTimeout> | undefined;
   private resolveAttempts = 0;
@@ -265,6 +267,7 @@ export class GraphWebviewHost implements vscode.Disposable {
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
     this.refreshTimer = undefined;
     clearTimeout(this.resolveTimer);
+    this.findCancel?.cancel();
     this.pendingRefresh = 'none';
     for (const disposable of this.panelDisposables.splice(0)) disposable.dispose();
     this.panel = undefined;
@@ -301,7 +304,7 @@ export class GraphWebviewHost implements vscode.Disposable {
           await this.onReady(message.state);
           break;
         case 'loadMore':
-          await this.loadMore(message.generation, message.cursor);
+          await this.loadMore(message.generation, message.cursor, message.limit);
           break;
         case 'refresh':
           await this.replaceRows();
@@ -441,12 +444,12 @@ export class GraphWebviewHost implements vscode.Disposable {
     }
   }
 
-  private async loadMore(generation: number, cursor: string): Promise<void> {
+  private async loadMore(generation: number, cursor: string, limit?: number): Promise<void> {
     // A refresh or reset since the request was made: the webview drops the
     // old rows anyway, and a newer snapshot is on its way.
     if (generation !== this.generation) return;
     try {
-      const result = await this.request(graphPageSize(), cursor);
+      const result = await this.request(pageLimit(limit, graphPageSize()), cursor);
       if (generation !== this.generation) return;
       this.remember(result.rows);
       this.loadedRows += result.rows.length;
@@ -590,39 +593,45 @@ export class GraphWebviewHost implements vscode.Disposable {
     }
   }
 
-  /** Searches HEAD's history for the find box: message, author and sha
-   *  matches, joined. Loaded rows on other branches match in the webview. */
+  /** Searches the walk the graph shows (every branch, or the filtered ones,
+   *  with stashes) for the find box, so every match is a row it can reach. */
   private async find(query: string): Promise<void> {
     const repo = this.repo;
     const seq = ++this.findSeq;
-    if (!repo) return;
-    const queries = findQueries(query);
-    let truncated = false;
-    const shas = new Set<string>();
-    await Promise.all(
-      queries.map(async (search, i) => {
-        const streamId = `graph-find-${seq}-${i}`;
-        const sub = this.deps.engine.onNotification('search/matches', (params) => {
-          if (params.streamId !== streamId) return;
-          for (const match of params.matches) shas.add(match.sha);
-        });
-        try {
-          const result = await this.deps.engine.request('search/commits', {
-            repoId: repo.repoId,
-            streamId,
-            limit: FIND_LIMIT,
-            query: search,
-          });
-          truncated ||= result.truncated;
-        } catch (error) {
-          this.deps.log(`commit graph: find failed: ${errorMessage(error)}`);
-        } finally {
-          sub.dispose();
-        }
-      }),
-    );
-    if (seq !== this.findSeq) return;
-    await this.post({ type: 'findResults', query, shas: [...shas], truncated });
+    this.findCancel?.cancel();
+    this.findCancel?.dispose();
+    this.findCancel = undefined;
+    if (!repo || !query.trim()) return;
+    const cancel = new vscode.CancellationTokenSource();
+    this.findCancel = cancel;
+    try {
+      const result = await this.deps.engine.request(
+        'graph/find',
+        {
+          repoId: repo.repoId,
+          query: query.trim(),
+          limit: FIND_LIMIT,
+          include: { stashes: true },
+          ...(this.filter ? { refs: this.filter } : {}),
+        },
+        cancel.token,
+      );
+      if (seq !== this.findSeq) return;
+      await this.post({
+        type: 'findResults',
+        query,
+        matches: result.matches,
+        truncated: result.truncated,
+      });
+    } catch (error) {
+      // A newer search replaced this one (and cancelled it).
+      if (seq !== this.findSeq) return;
+      this.deps.log(`commit graph: find failed: ${errorMessage(error)}`);
+      await this.post({ type: 'findResults', query, matches: [], truncated: false, failed: true });
+    } finally {
+      if (this.findCancel === cancel) this.findCancel = undefined;
+      cancel.dispose();
+    }
   }
 }
 

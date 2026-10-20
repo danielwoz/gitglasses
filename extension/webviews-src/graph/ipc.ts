@@ -10,9 +10,17 @@ import type {
   GraphRef,
   GraphRow,
 } from '@gitglasses/protocol';
-import type { BranchOption, RefMenuAction, RowMenuAction } from './graphLogic';
+import type { BranchOption, FindMatch, RefMenuAction, RowMenuAction } from './graphLogic';
 
-export type { BranchOption, CommitDetails, CommitFileChange, FileChange, GraphRef, GraphRow };
+export type {
+  BranchOption,
+  CommitDetails,
+  CommitFileChange,
+  FileChange,
+  FindMatch,
+  GraphRef,
+  GraphRow,
+};
 
 // --- Details --------------------------------------------------------------
 
@@ -110,7 +118,15 @@ export type HostToWebviewMessage =
     }
   | { type: 'branches'; branches: BranchOption[] }
   | { type: 'details'; requestId: number; view: DetailsView }
-  | { type: 'findResults'; query: string; shas: string[]; truncated: boolean }
+  /** Every row of the graph's walk that matches `query`, in row order.
+   *  `failed` means the search could not run; matches is then empty. */
+  | {
+      type: 'findResults';
+      query: string;
+      matches: FindMatch[];
+      truncated: boolean;
+      failed?: boolean;
+    }
   /** The working tree changed: a shown WIP details view is out of date. */
   | { type: 'wipChanged' }
   | { type: 'settings'; maxLanes: number; canMutate: boolean; refManagement: boolean }
@@ -139,7 +155,9 @@ export type GraphActionId = Extract<
 export type WebviewToHostMessage =
   | DetailsToHostMessage
   | { type: 'ready'; state?: GraphViewState }
-  | { type: 'loadMore'; generation: number; cursor: string }
+  /** The next page; `limit` asks for more rows than a page at once, to
+   *  reach a row further down. */
+  | { type: 'loadMore'; generation: number; cursor: string; limit?: number }
   | { type: 'refresh' }
   /** The repository name was clicked: offer Select Repository. */
   | { type: 'selectRepository' }

@@ -1,6 +1,6 @@
 // Pure decisions behind the commit graph host (no vscode imports), so they
 // are unit-testable: what a repository change refreshes, how many rows a
-// refresh reloads, the branch filter's options and the find queries.
+// refresh or a page loads, and the branch filter's options.
 
 import type { RequestResult } from '@gitglasses/protocol';
 import type { BranchOption } from '../../webviews-src/graph/ipc';
@@ -67,17 +67,12 @@ export function liveFilter(
   return kept.length > 0 ? kept : undefined;
 }
 
-export type SearchQuery = { text?: string; author?: string; sha?: string };
-
-/** search/commits ANDs its criteria, so the find box runs one search per
- *  field and joins the matches: message, author, and sha when the text could
- *  be one. */
-export function findQueries(query: string): SearchQuery[] {
-  const text = query.trim();
-  if (!text) return [];
-  const queries: SearchQuery[] = [{ text }, { author: text }];
-  if (/^[0-9a-f]{4,40}$/i.test(text)) queries.push({ sha: text.toLowerCase() });
-  return queries;
+/** Rows one loadMore asks for: a page, or more when the webview wants to
+ *  reach a row further down (a find match, a restored position), up to
+ *  MAX_REPLACE_ROWS at once. */
+export function pageLimit(requested: number | undefined, pageSize: number): number {
+  if (requested === undefined || !Number.isFinite(requested)) return pageSize;
+  return Math.min(MAX_REPLACE_ROWS, Math.max(pageSize, Math.ceil(requested)));
 }
 
 /** stash@{n} of a stash row's refs, or undefined. */

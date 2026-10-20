@@ -14,10 +14,13 @@ import {
   edgePath,
   emptySelection,
   filterLabel,
+  findCountLabel,
+  findTargets,
   laneCap,
   laneColor,
   laneX,
   navigateIndex,
+  nextFindTarget,
   nextMatch,
   parseColor,
   readableOn,
@@ -490,6 +493,50 @@ describe('find helpers', () => {
     expect(nextMatch(matches, 5, true)).toBe(2);
     expect(nextMatch(matches, 2, true)).toBe(9);
     expect(nextMatch([], 0, false)).toBeUndefined();
+  });
+});
+
+describe('findTargets / nextFindTarget', () => {
+  const shaAt = (i: number): string => String(i).padStart(40, '0');
+  const loaded = new Map([shaAt(1), shaAt(2), shaAt(3)].map((sha, i) => [sha, i + 1]));
+  const indexOf = (sha: string): number => loaded.get(sha) ?? -1;
+  // The host counts rows after the uncommitted-changes row, which leads here.
+  const matches = [
+    { sha: shaAt(900), index: 899 },
+    { sha: shaAt(2), index: 1 },
+  ];
+
+  it('places loaded matches on their rows and the rest where they will load', () => {
+    expect(findTargets(matches, indexOf, 1)).toEqual([
+      { sha: shaAt(2), row: 2, loaded: true },
+      { sha: shaAt(900), row: 900, loaded: false },
+    ]);
+  });
+
+  it('goes to the next match below, then wraps around', () => {
+    const targets = findTargets(matches, indexOf, 1);
+    expect(nextFindTarget(targets, 0, false)?.row).toBe(2);
+    expect(nextFindTarget(targets, 2, false)?.sha).toBe(shaAt(900));
+    expect(nextFindTarget(targets, 900, false)?.row).toBe(2);
+    expect(nextFindTarget(targets, 2, true)?.row).toBe(900);
+    expect(nextFindTarget([], 0, false)).toBeUndefined();
+  });
+});
+
+describe('findCountLabel', () => {
+  const label = (total: number | undefined, position = 0, truncated = false): string =>
+    findCountLabel({ query: 'x', total, position, truncated });
+
+  it('says when it is searching and when nothing matched', () => {
+    expect(label(undefined)).toBe('Searching…');
+    expect(label(0)).toBe('No results');
+    expect(findCountLabel({ query: '', total: 3, position: 1, truncated: false })).toBe('');
+  });
+
+  it('counts every match, loaded or not', () => {
+    expect(label(12)).toBe('12 found');
+    expect(label(12, 3)).toBe('3 of 12');
+    expect(label(1000, 0, true)).toBe('1000+ found');
   });
 });
 

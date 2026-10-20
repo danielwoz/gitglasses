@@ -3,11 +3,11 @@ import {
   DEFAULT_MAX_LANES,
   MAX_REPLACE_ROWS,
   branchOptions,
-  findQueries,
   isStaleCursorError,
   liveFilter,
   localNameFor,
   maxLanesSetting,
+  pageLimit,
   refreshFor,
   replaceLimit,
   stashIndexOf,
@@ -91,15 +91,13 @@ describe('branchOptions', () => {
   });
 });
 
-describe('findQueries', () => {
-  it('searches message and author, and sha when the text looks like one', () => {
-    expect(findQueries(' parser ')).toEqual([{ text: 'parser' }, { author: 'parser' }]);
-    expect(findQueries('ABC123')).toEqual([
-      { text: 'ABC123' },
-      { author: 'ABC123' },
-      { sha: 'abc123' },
-    ]);
-    expect(findQueries('   ')).toEqual([]);
+describe('pageLimit', () => {
+  it('loads a page unless more rows are asked for, up to the cap', () => {
+    expect(pageLimit(undefined, 200)).toBe(200);
+    expect(pageLimit(50, 200)).toBe(200);
+    expect(pageLimit(4321.5, 200)).toBe(4322);
+    expect(pageLimit(10 * MAX_REPLACE_ROWS, 200)).toBe(MAX_REPLACE_ROWS);
+    expect(pageLimit(Number.NaN, 200)).toBe(200);
   });
 });
 

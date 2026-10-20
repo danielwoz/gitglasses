@@ -8,6 +8,7 @@ import type {
   BranchOption,
   DetailsTarget,
   DetailsView,
+  FindMatch,
   GraphActionId,
   GraphRef,
   GraphRow,
@@ -16,13 +17,16 @@ import type {
   WebviewToHostMessage,
 } from './ipc';
 import {
+  FindTarget,
   MenuItem,
   RefMenuAction,
   RowMenuAction,
   anchoredScrollTop,
   filterLabel,
+  findCountLabel,
+  findTargets,
   navigateIndex,
-  nextMatch,
+  nextFindTarget,
   reduceSelection,
   refChipAtPoint,
   refMenu,
@@ -282,8 +286,9 @@ function paintA11y(): void {
 }
 
 /** Requests the next page once the viewport nears the end of what is loaded,
- *  or right away while a reveal or find is waiting for rows. */
-function maybeLoadMore(force = false): void {
+ *  or right away while a reveal, find or restore is waiting for rows.
+ *  `wantRows` asks for enough rows to have that many loaded in one go. */
+function maybeLoadMore(force = false, wantRows?: number): void {
   const range = visibleRange(
     scroller.scrollTop,
     scroller.clientHeight,
@@ -292,7 +297,14 @@ function maybeLoadMore(force = false): void {
     OVERSCAN_ROWS,
   );
   const cursor = store.beginLoadMore(force ? store.rows.length : range.end);
-  if (cursor !== undefined) post({ type: 'loadMore', generation: store.generation, cursor });
+  if (cursor === undefined) return;
+  const limit = wantRows === undefined ? undefined : wantRows - store.rows.length;
+  post({
+    type: 'loadMore',
+    generation: store.generation,
+    cursor,
+    ...(limit !== undefined && limit > 0 ? { limit } : {}),
+  });
 }
 
 /** Shows the host's explanation over the list, or clears it. */
@@ -525,103 +537,126 @@ detailsButton.addEventListener('click', () => setDetailsOpen(!details.open));
 
 const find = {
   query: '',
-  /** Matches the host found across HEAD's history, loaded or not. */
-  hostShas: new Set<string>(),
+  /** The host's matches for the query: every row of the graph's walk that
+   *  matches, loaded or not. Undefined until they arrive. */
+  results: undefined as FindMatch[] | undefined,
   truncated: false,
-  /** Loaded rows that match. */
+  /** Rows to highlight: loaded rows among the results, or, until the results
+   *  arrive (or when the search failed), loaded rows that match locally. */
   matchSet: new Set<string>() as ReadonlySet<string>,
-  matchIndices: [] as number[],
   current: undefined as string | undefined,
   timer: undefined as ReturnType<typeof setTimeout> | undefined,
-  /** Pages still allowed while looking for the next match. */
-  pagesLeft: 0,
-  searchingBackwards: false,
+  /** A match further down that rows are being loaded for. */
+  pending: undefined as { sha: string; pagesLeft: number } | undefined,
 };
 
+/** Rows loaded past a match further down, so it can be shown mid-viewport
+ *  with what follows it. */
+const FIND_CONTEXT_ROWS = 100;
+
+/** Rows the host's positions leave out at the top: the uncommitted-changes
+ *  row. */
+function wipOffset(): number {
+  return store.rows[0]?.kind === 'wip' ? 1 : 0;
+}
+
+/** Every match in row order: the host's, or the loaded rows that match
+ *  locally while there are none. */
+function currentTargets(): FindTarget[] {
+  if (find.results) return findTargets(find.results, (sha) => store.indexOf(sha), wipOffset());
+  const targets: FindTarget[] = [];
+  store.rows.forEach((row, i) => {
+    if (rowMatchesQuery(row, find.query)) targets.push({ sha: row.sha, row: i, loaded: true });
+  });
+  return targets;
+}
+
 function recomputeMatches(): void {
-  const indices: number[] = [];
   const set = new Set<string>();
   if (find.query) {
-    store.rows.forEach((row, i) => {
-      if (find.hostShas.has(row.sha) || rowMatchesQuery(row, find.query)) {
-        indices.push(i);
-        set.add(row.sha);
-      }
-    });
+    for (const target of currentTargets()) if (target.loaded) set.add(target.sha);
   }
-  find.matchIndices = indices;
   find.matchSet = set;
   updateFindCount();
 }
 
-function unloadedHostMatches(): number {
-  let count = 0;
-  for (const sha of find.hostShas) if (store.indexOf(sha) < 0) count++;
-  return count;
+function updateFindCount(): void {
+  const targets = find.query && find.results ? currentTargets() : [];
+  const position = find.current ? targets.findIndex((t) => t.sha === find.current) + 1 : 0;
+  findCount.textContent = findCountLabel({
+    query: find.query,
+    total: find.results?.length,
+    position,
+    truncated: find.truncated,
+  });
 }
 
-function updateFindCount(): void {
-  if (!find.query) {
-    findCount.textContent = '';
-    return;
-  }
-  const total = find.matchIndices.length;
-  const more = unloadedHostMatches() > 0 || find.truncated ? '+' : '';
-  if (total === 0) {
-    findCount.textContent = more ? 'Searching…' : 'No results';
-    return;
-  }
-  const position = find.current ? find.matchIndices.indexOf(store.indexOf(find.current)) + 1 : 0;
-  findCount.textContent = position > 0 ? `${position} of ${total}${more}` : `${total}${more} found`;
+/** Asks the host to search the graph's current walk. */
+function requestFind(): void {
+  clearTimeout(find.timer);
+  if (find.query) find.timer = setTimeout(() => post({ type: 'find', query: find.query }), 250);
 }
 
 function setQuery(query: string): void {
   find.query = query.trim();
-  find.hostShas = new Set();
+  find.results = undefined;
   find.truncated = false;
   find.current = undefined;
+  find.pending = undefined;
   recomputeMatches();
-  clearTimeout(find.timer);
-  if (find.query) find.timer = setTimeout(() => post({ type: 'find', query: find.query }), 250);
+  requestFind();
   saveState();
   render();
 }
 
-/** Moves to the next (or previous) match after the selected row, loading
- *  further pages while the host knows of matches that are not loaded yet. */
+/** Moves to the next (or previous) match from the selected row, loading the
+ *  rows down to it when it is not loaded yet. */
 function gotoMatch(backwards: boolean): void {
   if (!find.query) return;
-  const from = store.selection.anchor;
-  const forwardEnd =
-    find.matchIndices.length > 0 && find.matchIndices[find.matchIndices.length - 1] > from;
-  if (!backwards && !forwardEnd && store.nextCursor !== undefined && unloadedHostMatches() > 0) {
-    find.pagesLeft = REVEAL_MAX_PAGES;
-    find.searchingBackwards = false;
-    findCount.textContent = 'Searching…';
-    maybeLoadMore(true);
-    return;
-  }
-  const index = nextMatch(find.matchIndices, from, backwards);
-  if (index === undefined) {
+  const target = nextFindTarget(currentTargets(), store.selection.anchor, backwards);
+  if (!target) {
     updateFindCount();
     return;
   }
-  find.current = store.rows[index].sha;
-  selectIndex(index);
-  scrollRowIntoView(index, true);
+  if (!target.loaded) {
+    if (store.nextCursor === undefined) {
+      updateFindCount();
+      return;
+    }
+    find.pending = { sha: target.sha, pagesLeft: REVEAL_MAX_PAGES };
+    findCount.textContent = 'Loading…';
+    maybeLoadMore(true, target.row + 1 + FIND_CONTEXT_ROWS);
+    return;
+  }
+  find.pending = undefined;
+  find.current = target.sha;
+  selectIndex(target.row);
+  scrollRowIntoView(target.row, true);
   updateFindCount();
 }
 
+/** After a page: selects the match rows were loaded for, or loads more while
+ *  it is still further down. */
 function continueFind(): void {
-  if (find.pagesLeft <= 0) return;
-  const from = store.selection.anchor;
-  if (find.matchIndices.some((i) => i > from) || store.nextCursor === undefined) {
-    find.pagesLeft = 0;
-    gotoMatch(find.searchingBackwards);
+  const pending = find.pending;
+  if (!pending) return;
+  const target = currentTargets().find((t) => t.sha === pending.sha);
+  if (target?.loaded) {
+    find.pending = undefined;
+    find.current = target.sha;
+    selectIndex(target.row);
+    scrollRowIntoView(target.row, true);
+    updateFindCount();
     return;
   }
-  find.pagesLeft--;
-  maybeLoadMore(true);
+  if (!target || store.nextCursor === undefined || pending.pagesLeft <= 0) {
+    // The refs moved since the search: it is no longer where it was.
+    find.pending = undefined;
+    updateFindCount();
+    return;
+  }
+  pending.pagesLeft--;
+  maybeLoadMore(true, target.row + 1 + FIND_CONTEXT_ROWS);
 }
 
 findInput.addEventListener('input', () => setQuery(findInput.value));
@@ -1080,10 +1115,12 @@ function onRows(message: Extract<HostToWebviewMessage, { type: 'rows' }>): void 
     store.replaceAll(message.rows, message.nextCursor);
     spacer.style.height = `${store.rows.length * ROW_HEIGHT}px`;
     scroller.scrollTop = scrollTop;
-    // Refs and stash entries may have moved: details must be asked again.
+    // Refs and stash entries may have moved: details must be asked again,
+    // and the matches' positions with them.
     details.cache.clear();
     details.key = '';
     updateDetails();
+    requestFind();
   } else {
     store.appendPage(message.rows, message.nextCursor);
     // Size the content now: a restored or revealed position is set below,
@@ -1125,8 +1162,12 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       scroller.scrollTop = 0;
       headSha = undefined;
       pendingReveal = undefined;
-      find.pagesLeft = 0;
       headPagesLeft = 0;
+      // Another walk: the matches and their positions are searched again.
+      find.results = undefined;
+      find.current = undefined;
+      find.pending = undefined;
+      requestFind();
       details.cache.clear();
       details.key = '';
       details.explicit = undefined;
@@ -1151,9 +1192,11 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       break;
     case 'findResults':
       if (message.query !== find.query) break;
-      find.hostShas = new Set(message.shas);
+      // A failed search leaves the loaded rows' own matches.
+      find.results = message.failed ? undefined : message.matches;
       find.truncated = message.truncated;
       recomputeMatches();
+      if (message.failed) findCount.textContent = 'Search failed';
       render();
       break;
     case 'wipChanged':

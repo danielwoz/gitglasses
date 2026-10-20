@@ -490,6 +490,68 @@ export function nextMatch(
   return matches[0];
 }
 
+/** A find match from the host, at its position in the graph's walk (rows
+ *  after the uncommitted-changes row). */
+export interface FindMatch {
+  sha: string;
+  index: number;
+}
+
+/** A find match placed in the list: the row it is on once loaded, or the row
+ *  it will be on when enough rows are. */
+export interface FindTarget {
+  sha: string;
+  row: number;
+  loaded: boolean;
+}
+
+/** Every match in row order. `wipOffset` is 1 when the uncommitted-changes
+ *  row leads the list, which the host's positions leave out. */
+export function findTargets(
+  matches: readonly FindMatch[],
+  indexOf: (sha: string) => number,
+  wipOffset: number,
+): FindTarget[] {
+  return matches
+    .map((match) => {
+      const at = indexOf(match.sha);
+      return at >= 0
+        ? { sha: match.sha, row: at, loaded: true }
+        : { sha: match.sha, row: match.index + wipOffset, loaded: false };
+    })
+    .sort((a, b) => a.row - b.row);
+}
+
+/** The match to go to from row `from`: the next one below it (above it,
+ *  backwards), wrapping around. */
+export function nextFindTarget(
+  targets: readonly FindTarget[],
+  from: number,
+  backwards: boolean,
+): FindTarget | undefined {
+  const at = nextMatch(
+    targets.map((target) => target.row),
+    from,
+    backwards,
+  );
+  return at === undefined ? undefined : targets.find((target) => target.row === at);
+}
+
+/** The find box's counter. `total` is undefined while the host searches;
+ *  `position` is the 1-based number of the selected match, or 0. */
+export function findCountLabel(state: {
+  query: string;
+  total: number | undefined;
+  position: number;
+  truncated: boolean;
+}): string {
+  if (!state.query) return '';
+  if (state.total === undefined) return 'Searching…';
+  if (state.total === 0) return 'No results';
+  const total = `${state.total}${state.truncated ? '+' : ''}`;
+  return state.position > 0 ? `${state.position} of ${total}` : `${total} found`;
+}
+
 // --- Menus ------------------------------------------------------------------
 
 /** Actions the row context menu offers. */
