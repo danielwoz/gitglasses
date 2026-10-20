@@ -57,3 +57,34 @@ describe('parseNlSearchQuery', () => {
     expect(parseNlSearchQuery('{"text": "   "}').ok).toBe(false);
   });
 });
+
+describe('parseNlSearchQuery: content, path and dates', () => {
+  it('keeps code, path and day fields the search can run', () => {
+    const result = parseNlSearchQuery(
+      '{"text": "login", "content": "parseConfig", "path": "src/config", "since": "2026-02-01", "until": "2026-03-01"}',
+    );
+    expect(result).toEqual({
+      ok: true,
+      query: {
+        text: 'login',
+        content: 'parseConfig',
+        contentMode: 'string',
+        path: 'src/config',
+        since: '2026-02-01',
+        until: '2026-03-01',
+      },
+    });
+  });
+
+  it('drops dates that are not plain days, rather than guessing', () => {
+    const result = parseNlSearchQuery(
+      '{"text": "fix", "since": "last month", "until": "2026-3-1"}',
+    );
+    expect(result).toEqual({ ok: true, query: { text: 'fix' } });
+  });
+
+  it('lets a sha stand alone', () => {
+    const result = parseNlSearchQuery('{"sha": "1a2b3c4d", "path": "src", "since": "2026-01-01"}');
+    expect(result).toEqual({ ok: true, query: { sha: '1a2b3c4d' } });
+  });
+});

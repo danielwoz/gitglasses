@@ -23,6 +23,7 @@ const CLI_METHODS = new Set([
   'worktree/remove',
   'history/file',
   'history/line',
+  'search/log',
 ]);
 
 /** True when the method needs the gitCli capability to work. */

@@ -41,7 +41,8 @@ export const EngineNotificationSchemas = {
     ),
   },
   'search/matches': {
-    description: 'A batch of matches for the search/commits request carrying this streamId.',
+    description:
+      'A batch of matches for the search/commits or search/log request carrying this streamId.',
     params: Type.Object(
       { streamId: Type.String({ minLength: 1 }), matches: Type.Array(CommitSummaryInfo) },
       strict,

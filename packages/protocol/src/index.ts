@@ -135,6 +135,7 @@ export interface Requests {
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };
   'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };
+  'search/log': { params: P<'search/log'>; result: R<'search/log'> };
   'rev/fileAtRev': { params: P<'rev/fileAtRev'>; result: R<'rev/fileAtRev'> };
   'refs/list': { params: P<'refs/list'>; result: R<'refs/list'> };
   'stash/list': { params: P<'stash/list'>; result: R<'stash/list'> };

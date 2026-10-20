@@ -1,7 +1,7 @@
 {
   "name": "gitglasses",
   "displayName": "GitGlasses",
-  "description": "Open-source git supercharger: inline blame, history, and more — powered by a native engine",
+  "description": "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, file and line history, commit search, interactive rebase and worktrees. Works on private repos with no account, and your AI agents can use it over MCP.",
   "version": "0.2.0",
   "publisher": "gitglasses",
   "license": "MIT",
@@ -10,10 +10,12 @@
     "color": "#1b1f2a",
     "theme": "dark"
   },
+  "preview": false,
   "homepage": "https://github.com/danielwoz/gitglasses#readme",
   "bugs": {
     "url": "https://github.com/danielwoz/gitglasses/issues"
   },
+  "qna": "https://github.com/danielwoz/gitglasses/discussions",
   "repository": {
     "type": "git",
     "url": "https://github.com/danielwoz/gitglasses.git"
@@ -24,14 +26,39 @@
   "categories": [
     "SCM Providers",
     "Visualization",
-    "Education"
+    "AI"
   ],
   "keywords": [
     "git",
-    "blame",
+    "git graph",
     "commit graph",
+    "blame",
+    "git blame",
+    "inline blame",
+    "annotations",
+    "heatmap",
+    "codelens",
     "history",
-    "worktrees"
+    "file history",
+    "line history",
+    "search",
+    "rebase",
+    "interactive rebase",
+    "worktree",
+    "stash",
+    "branches",
+    "pull requests",
+    "code review",
+    "scm",
+    "ai commit message",
+    "mcp",
+    "agents",
+    "open vsx",
+    "open source",
+    "free",
+    "private repositories",
+    "self-hosted",
+    "multi-root"
   ],
   "extensionKind": [
     "workspace"
@@ -47,6 +74,11 @@
         "gitglasses.integrations.issues",
         "gitglasses.ai.provider",
         "gitglasses.ai.model",
+        "gitglasses.ai.anthropic.model",
+        "gitglasses.ai.openai.model",
+        "gitglasses.ai.gemini.model",
+        "gitglasses.ai.ollama.model",
+        "gitglasses.ai.vscodeLm.model",
         "gitglasses.ai.openai.baseUrl",
         "gitglasses.ai.ollama.host",
         "gitglasses.autolinks"
@@ -99,7 +131,8 @@
       },
       {
         "command": "gitglasses.searchCommits",
-        "title": "GitGlasses: Search Commits…",
+        "title": "Search Commits…",
+        "category": "GitGlasses",
         "icon": "$(search)"
       },
       {
@@ -214,32 +247,43 @@
       },
       {
         "command": "gitglasses.ai.explainCommit",
-        "title": "GitGlasses: AI Explain Commit",
+        "title": "AI Explain Commit",
+        "category": "GitGlasses",
         "icon": "$(sparkle)"
       },
       {
         "command": "gitglasses.ai.explainWip",
-        "title": "GitGlasses: AI Explain Working Changes",
+        "title": "AI Explain Working Changes",
+        "category": "GitGlasses",
         "icon": "$(sparkle)"
       },
       {
         "command": "gitglasses.ai.generateCommitMessage",
-        "title": "GitGlasses: AI Generate Commit Message",
+        "title": "AI Generate Commit Message",
+        "category": "GitGlasses",
         "icon": "$(sparkle)",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.ai.nlSearch",
-        "title": "GitGlasses: AI Search Commits (Natural Language)",
+        "title": "AI Search Commits (Natural Language)",
+        "category": "GitGlasses",
         "icon": "$(sparkle)"
       },
       {
+        "command": "gitglasses.ai.chooseProvider",
+        "title": "Choose AI Provider…",
+        "category": "GitGlasses"
+      },
+      {
         "command": "gitglasses.ai.setApiKey",
-        "title": "GitGlasses: Set AI API Key…"
+        "title": "Set AI API Key…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.ai.clearApiKey",
-        "title": "GitGlasses: Clear AI API Key…"
+        "title": "Clear AI API Key…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.createPatch",
@@ -390,7 +434,7 @@
     "viewsWelcome": [
       {
         "view": "gitglasses.views.searchCompare",
-        "contents": "Search commits by message text or SHA.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)",
+        "contents": "Search commits by message, author, code change, file or date.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)",
         "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
@@ -558,7 +602,7 @@
       {
         "id": "gitglasses.getStarted",
         "title": "Get Started with GitGlasses",
-        "description": "Every feature is free and works offline. There is no account to create and nothing to sign in to.",
+        "description": "Every feature is free, with no account to create and no telemetry. History, blame and the graph work offline; only integrations you connect, fetch, pull and push, and AI commands go online.",
         "steps": [
           {
             "id": "graph",
@@ -618,13 +662,15 @@
           {
             "id": "ai",
             "title": "Bring your own AI key, or none at all",
-            "description": "Explain a commit or draft a commit message using your own API key or a local Ollama model. Nothing is metered and nothing is sent to us.\n[Set AI API Key…](command:gitglasses.ai.setApiKey)",
+            "description": "Explain a commit, or draft a commit message with the sparkle button in Source Control. Use a model your editor already provides, a local Ollama model, or your own API key. Nothing is metered and nothing is sent to GitGlasses.\n[Choose AI Provider…](command:gitglasses.ai.chooseProvider)",
             "media": {
               "markdown": "media/walkthrough/ai.md"
             },
             "completionEvents": [
+              "onCommand:gitglasses.ai.chooseProvider",
               "onCommand:gitglasses.ai.setApiKey",
-              "onCommand:gitglasses.ai.explainCommit"
+              "onCommand:gitglasses.ai.explainCommit",
+              "onCommand:gitglasses.ai.generateCommitMessage"
             ]
           },
           {
@@ -724,6 +770,13 @@
         {
           "command": "gitglasses.showFileHistory",
           "when": "resourceScheme == file && isWorkspaceTrusted",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "gitglasses.ai.generateCommitMessage",
+          "when": "scmProvider == git && isWorkspaceTrusted",
           "group": "navigation"
         }
       ],
@@ -1025,6 +1078,7 @@
           "type": "string",
           "scope": "machine-overridable",
           "enum": [
+            "none",
             "vscode-lm",
             "anthropic",
             "openai",
@@ -1032,20 +1086,52 @@
             "ollama"
           ],
           "enumDescriptions": [
-            "VS Code Language Model API (GitHub Copilot) — zero configuration when available",
+            "Not chosen yet: the first AI command asks which provider to use",
+            "A language model another extension provides to the editor, such as GitHub Copilot (VS Code only)",
             "Anthropic Claude API (bring your own key)",
             "OpenAI API or any compatible endpoint (bring your own key)",
             "Google Gemini API (bring your own key)",
-            "Local Ollama server — no key, data stays on your machine"
+            "Ollama: on this machine, no key, nothing sent over the network"
           ],
-          "default": "vscode-lm",
-          "description": "AI provider used by the GitGlasses AI commands"
+          "default": "none",
+          "markdownDescription": "Where GitGlasses AI requests go. Until a provider is chosen, the first AI command offers the ones this editor can use; change it any time with **GitGlasses: Choose AI Provider…**. Saving an API key with **GitGlasses: Set AI API Key…** switches to that provider."
         },
         "gitglasses.ai.model": {
           "type": "string",
           "scope": "machine-overridable",
           "default": "",
-          "description": "Model id for the selected AI provider (empty = provider default)"
+          "description": "Model id for the selected AI provider (empty = provider default)",
+          "markdownDeprecationMessage": "Use the per-provider model settings instead, such as `#gitglasses.ai.anthropic.model#`; GitGlasses moves this value there when it switches provider."
+        },
+        "gitglasses.ai.anthropic.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Anthropic model id, such as claude-sonnet-5-5 or claude-haiku-5-5 (empty = claude-opus-5-5)"
+        },
+        "gitglasses.ai.openai.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "OpenAI model id, or the model name an OpenAI-compatible endpoint expects (empty = gpt-6-luna)"
+        },
+        "gitglasses.ai.gemini.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Gemini model id (empty = gemini-3.8-flash)"
+        },
+        "gitglasses.ai.ollama.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Ollama model name (empty = gemma4 when installed, otherwise the first installed model)"
+        },
+        "gitglasses.ai.vscodeLm.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "",
+          "description": "Id, family or name of the editor language model to use (empty = the first available, preferring GitHub Copilot)"
         },
         "gitglasses.ai.openai.baseUrl": {
           "type": "string",

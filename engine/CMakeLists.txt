@@ -43,6 +43,7 @@ if(EMSCRIPTEN)
     src/services/mutate/stash_worktree_methods.cpp
     src/services/patch/patch_methods.cpp
     src/services/refs/refs_methods.cpp
+    src/services/search/search_methods.cpp
     src/services/status/diff_common.cpp
     src/services/status/diff_methods.cpp
     src/services/status/stage_methods.cpp
@@ -165,6 +166,7 @@ add_library(gg_services STATIC
   src/services/mutate/stash_worktree_methods.cpp
   src/services/patch/patch_methods.cpp
   src/services/refs/refs_methods.cpp
+  src/services/search/search_methods.cpp
   src/services/status/diff_common.cpp
   src/services/status/diff_methods.cpp
   src/services/status/stage_methods.cpp
