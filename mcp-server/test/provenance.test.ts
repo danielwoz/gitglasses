@@ -118,6 +118,33 @@ describe('formatProvenance', () => {
     expect(text).toContain('(showing the first 1 hunks; pass startLine: 4 for the rest)');
   });
 
+  it('labels a known human in a note by identity, not as a session', () => {
+    const text = formatProvenance(
+      report({
+        hunks: [{ sha: A, resultLine: 1, originalLine: 1, lineCount: 3, path: 'src/a.ts' }],
+        provenance: {
+          [A]: {
+            declared: 'human',
+            declarations: [
+              {
+                source: 'notes',
+                kind: 'human',
+                name: 'Jane <jane@example.com>',
+                via: 'refs/notes/ai-remote/origin',
+                value: 'Jane <jane@example.com>',
+              },
+            ],
+            note: { read: true, ref: 'refs/notes/ai-remote/origin' },
+          },
+        },
+      }),
+    );
+    expect(text.split('\n')).toContain(
+      '  - human "Jane <jane@example.com>" via git-ai note in refs/notes/ai-remote/origin',
+    );
+    expect(text).not.toContain('session');
+  });
+
   it('says when no hunk covers the range', () => {
     expect(formatProvenance(report({ hunks: [] }))).toMatch(/No blame hunks cover this range\.$/);
   });

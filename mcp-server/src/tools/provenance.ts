@@ -122,12 +122,18 @@ function declarationLine(declaration: CommitProvenance['declarations'][number]):
       ? `agent ${JSON.stringify(declaration.name)}`
       : `human ${JSON.stringify(declaration.name)}`;
   const model = declaration.model ? ` model ${JSON.stringify(declaration.model)}` : '';
+  // A note's agent declarations carry the session id; a known human's carry
+  // the identity already shown as the name.
+  const session =
+    declaration.kind === 'agent' && declaration.value
+      ? ` (session ${JSON.stringify(declaration.value)})`
+      : '';
   const source =
     declaration.source === 'notes'
-      ? `git-ai note in ${declaration.via}${declaration.value ? ` (session ${JSON.stringify(declaration.value)})` : ''}`
+      ? `git-ai note in ${declaration.via}${session}`
       : `${declaration.source} ${declaration.via}: ${JSON.stringify(declaration.value)}`;
-  const session = declaration.url ? `; session link ${declaration.url} (not fetched)` : '';
-  return `  - ${who}${model} via ${source}${session}`;
+  const link = declaration.url ? `; session link ${declaration.url} (not fetched)` : '';
+  return `  - ${who}${model} via ${source}${link}`;
 }
 
 export function formatProvenance(report: ProvenanceReport): string {
