@@ -51,6 +51,33 @@ Result<core::IndexPtr> readIndex(git_repository* repo);
 // an entry as unchanged whatever the working tree holds.
 bool skipWorktree(git_index* index, const char* path);
 
+// Whether git leaves this status entry's working-tree side out of what can
+// be staged. libgit2 reports a skip-worktree entry missing from the working
+// tree as deleted, and a submodule whose checked-out commit still matches
+// the index as modified when it only has local edits or untracked files,
+// which the parent repository has nothing to stage for.
+bool workdirSideHidden(git_index* index, const git_status_entry& entry);
+
+// Whether libgit2's "modified" verdict for this entry's working-tree side
+// rests on raw bytes that git would clean first: a regular file with a
+// filter driver or working-tree-encoding.
+bool needsCleanRecheck(git_repository* repo, const git_status_entry& entry);
+
+// A working-tree file libgit2 reports as modified, with the index blob it was
+// compared against.
+struct CleanRecheck {
+  std::string path;
+  git_oid indexId;
+};
+
+// For each candidate, whether git sees the working-tree file as different
+// from the index once its clean filter and working-tree-encoding have run
+// (`git hash-object`, which only reads). A candidate git cannot hash (a
+// failing filter, a vanished file) counts as changed.
+std::vector<bool> confirmCleanChanges(const core::Repo& repo,
+                                      const std::vector<CleanRecheck>& candidates,
+                                      const CancelToken& token);
+
 // Runs `git <args>` in the working tree and returns its stdout verbatim. A
 // spawn failure, a timeout, or an exit code other than 0 and `alsoOk` fails
 // the request with git's stderr, naming the command as `what`.

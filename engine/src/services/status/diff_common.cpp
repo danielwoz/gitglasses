@@ -1,6 +1,7 @@
 #include "services/status/diff_common.h"
 
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -16,6 +17,10 @@ namespace {
 // than UTF-16 takes code units, so this bounds the Windows command line too,
 // leaving room for the executable, the working directory and the options.
 constexpr size_t kArgvBudget = 16 * 1024;
+
+bool isRegularFileMode(std::uint32_t mode) {
+  return mode == GIT_FILEMODE_BLOB || mode == GIT_FILEMODE_BLOB_EXECUTABLE;
+}
 
 std::string lowercase(std::string text) {
   for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -144,6 +149,59 @@ Result<core::IndexPtr> readIndex(git_repository* repo) {
 bool skipWorktree(git_index* index, const char* path) {
   const git_index_entry* entry = git_index_get_bypath(index, path, 0);
   return entry && (entry->flags_extended & GIT_INDEX_ENTRY_SKIP_WORKTREE) != 0;
+}
+
+bool workdirSideHidden(git_index* index, const git_status_entry& entry) {
+  const git_diff_delta* delta = entry.index_to_workdir;
+  if (!delta) return false;
+  const char* path = delta->old_file.path ? delta->old_file.path : delta->new_file.path;
+  if (path && index && skipWorktree(index, path)) return true;
+  // A dirty submodule carries its checked-out commit as the new id; when that
+  // is still the recorded commit, only the submodule's own tree changed.
+  return (entry.status & GIT_STATUS_WT_MODIFIED) != 0 &&
+         delta->old_file.mode == GIT_FILEMODE_COMMIT &&
+         delta->new_file.mode == GIT_FILEMODE_COMMIT && !git_oid_is_zero(&delta->new_file.id) &&
+         git_oid_equal(&delta->old_file.id, &delta->new_file.id);
+}
+
+bool needsCleanRecheck(git_repository* repo, const git_status_entry& entry) {
+  const git_diff_delta* delta = entry.index_to_workdir;
+  if (!delta || (entry.status & GIT_STATUS_WT_MODIFIED) == 0 || !delta->new_file.path) {
+    return false;
+  }
+  if (!isRegularFileMode(delta->old_file.mode) || !isRegularFileMode(delta->new_file.mode)) {
+    return false;
+  }
+  return pathFilter(repo, delta->new_file.path).any();
+}
+
+std::vector<bool> confirmCleanChanges(const core::Repo& repo,
+                                      const std::vector<CleanRecheck>& candidates,
+                                      const CancelToken& token) {
+  std::vector<bool> changed(candidates.size(), true);
+  std::vector<std::string> paths;
+  paths.reserve(candidates.size());
+  for (const auto& candidate : candidates) paths.push_back(candidate.path);
+
+  size_t offset = 0;
+  for (auto& batch : argvBatches(paths)) {
+    const size_t size = batch.size();
+    std::vector<std::string> args = {"hash-object", "--"};
+    for (auto& path : batch) args.push_back(std::move(path));
+    std::vector<std::string> ids;
+    auto status =
+        exec::runGit(repo.workdir(), std::move(args), {}, token, [&ids](std::string line) {
+          if (!line.empty() && line.back() == '\r') line.pop_back();
+          ids.push_back(std::move(line));
+        });
+    if (status && status.value().exitCode == 0 && ids.size() == size) {
+      for (size_t i = 0; i < size; ++i) {
+        changed[offset + i] = ids[i] != core::oidToHex(candidates[offset + i].indexId);
+      }
+    }
+    offset += size;
+  }
+  return changed;
 }
 
 std::string runGitChecked(const core::Repo& repo, std::vector<std::string> args,

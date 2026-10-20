@@ -21,6 +21,7 @@
 #include "core/git2.h"
 #include "core/git2_json.h"
 #include "services/params.h"
+#include "services/status/diff_common.h"
 
 namespace gg::services {
 
@@ -456,24 +457,50 @@ std::vector<cache::GraphPlanRow> buildOrder(NodeMap& nodes, const CancelToken& t
 }
 
 // Any staged, unstaged, or untracked change makes the workdir "dirty" for the
-// synthetic WIP row. Stops at the first entry: one changed path settles the
-// question, and untracked directories are not descended into for the same
-// reason.
-Result<bool> workdirDirty(const core::Repo& repo) {
+// synthetic WIP row, judged the way status/summary judges it: skip-worktree
+// entries and submodules with only local edits do not count, and filtered
+// files libgit2 calls modified count only when git, which cleans them first,
+// agrees. Untracked directories are not descended into: one untracked entry
+// settles the question.
+Result<bool> workdirDirty(const core::Repo& repo, bool cliAvailable, const CancelToken& token) {
   if (repo.workdir().empty()) return false;
   git_status_options opts;
   git_status_options_init(&opts, GIT_STATUS_OPTIONS_VERSION);
   opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
   opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED;
-  bool dirty = false;
-  const auto callback = [](const char*, unsigned int, void* payload) -> int {
-    *static_cast<bool*>(payload) = true;
-    return 1;  // nonzero stops the iteration
-  };
-  const int rc = git_status_foreach_ext(repo.raw(), &opts, callback, &dirty);
-  // The early stop is reported as the callback's return value, not an error.
-  if (rc != 0 && rc != 1) return core::gitError("workdir status");
-  return dirty;
+  git_status_list* rawList = nullptr;
+  if (git_status_list_new(&rawList, repo.raw(), &opts) != 0) {
+    return core::gitError("workdir status");
+  }
+  core::StatusListPtr list(rawList);
+  auto index = status_detail::readIndex(repo.raw());
+  if (!index) return index.error();
+
+  // Staged changes, conflicts and untracked files need no second opinion.
+  constexpr unsigned int kAlwaysDirty = GIT_STATUS_INDEX_NEW | GIT_STATUS_INDEX_MODIFIED |
+                                        GIT_STATUS_INDEX_DELETED | GIT_STATUS_INDEX_RENAMED |
+                                        GIT_STATUS_INDEX_TYPECHANGE | GIT_STATUS_CONFLICTED |
+                                        GIT_STATUS_WT_NEW;
+  std::vector<status_detail::CleanRecheck> rechecks;
+  const size_t count = git_status_list_entrycount(list.get());
+  for (size_t i = 0; i < count; ++i) {
+    token.throwIfCancelled();
+    const git_status_entry* entry = git_status_byindex(list.get(), i);
+    if (!entry || entry->status == GIT_STATUS_CURRENT) continue;
+    if (entry->status & kAlwaysDirty) return true;
+    if (!entry->index_to_workdir || status_detail::workdirSideHidden(index.value().get(), *entry)) {
+      continue;
+    }
+    if (cliAvailable && status_detail::needsCleanRecheck(repo.raw(), *entry)) {
+      rechecks.push_back(
+          {entry->index_to_workdir->new_file.path, entry->index_to_workdir->old_file.id});
+      continue;
+    }
+    return true;
+  }
+  if (rechecks.empty()) return false;
+  const std::vector<bool> changed = status_detail::confirmCleanChanges(repo, rechecks, token);
+  return std::find(changed.begin(), changed.end(), true) != changed.end();
 }
 
 struct Cursor {
@@ -579,7 +606,7 @@ void registerGraphMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         // status scan.
         bool wantWip = false;
         if (includeWip && cursor.pos == 0 && !snap.headSha.empty()) {
-          auto dirty = workdirDirty(repo.value());
+          auto dirty = workdirDirty(repo.value(), context.cliAvailable, token);
           if (!dirty) throw rpc::HandlerError{{dirty.error()}};
           wantWip = dirty.value();
         }

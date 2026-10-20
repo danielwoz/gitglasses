@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -509,6 +510,73 @@ TEST(GraphService, UnbornHeadAndBadParams) {
   Json badCursor = session.request(
       req(12, "graph/rows", {{"repoId", repoId}, {"limit", 10}, {"cursor", "!!!not-base64!!!"}}));
   EXPECT_EQ(badCursor["error"]["code"], -32602);
+}
+
+bool hasWipRow(InteractiveSession& session, std::int64_t id, const std::string& repoId) {
+  Json rows = graphRows(session, id, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  return !rows["rows"].empty() && rows["rows"][0]["kind"] == "wip";
+}
+
+// The WIP row follows git's verdict for files behind a clean filter: a new
+// mtime alone (a touch, a checkout, a racy timestamp) is not a change.
+TEST(GraphService, WipRowIgnoresTouchedFilteredFile) {
+  FixtureRepo fixture;
+  fixture.run("git config filter.scrub.clean \"sed -e s/SECRET/REDACTED/\"");
+  fixture.run("git config filter.scrub.smudge cat");
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.run("git add .gitattributes app.env");
+  commitTick(fixture, "seed", 1);
+  const auto file = fixture.root() / "app.env";
+  std::filesystem::last_write_time(
+      file, std::filesystem::last_write_time(file) + std::chrono::seconds(5));
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_FALSE(hasWipRow(session, 10, repoId));
+
+  fixture.writeFile("app.env", "token=SECRET\nport=2\n");
+  EXPECT_TRUE(hasWipRow(session, 11, repoId));
+}
+
+// Out-of-cone files of a sparse checkout are absent by design.
+TEST(GraphService, WipRowIgnoresSparseCheckoutExclusions) {
+  FixtureRepo fixture;
+  fixture.writeFile("keep/k.txt", "keep\n");
+  fixture.writeFile("other/f1.txt", "one\n");
+  fixture.run("git add keep other");
+  commitTick(fixture, "seed", 1);
+  fixture.run("git sparse-checkout set --cone keep");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_FALSE(hasWipRow(session, 10, repoId));
+
+  fixture.writeFile("keep/k.txt", "keep\nedited\n");
+  EXPECT_TRUE(hasWipRow(session, 11, repoId));
+}
+
+// Edits inside a submodule are the submodule's to commit; the parent only
+// changes when the submodule's commit does.
+TEST(GraphService, WipRowIgnoresSubmoduleLocalEdits) {
+  FixtureRepo library;
+  library.writeFile("lib.txt", "one\n");
+  library.run("git add lib.txt");
+  commitTick(library, "lib one", 1);
+
+  FixtureRepo fixture;
+  fixture.run("git -c protocol.file.allow=always submodule --quiet add \"" +
+              library.root().generic_string() + "\" sub");
+  commitTick(fixture, "add submodule", 2);
+  fixture.writeFile("sub/lib.txt", "one\nlocal\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_FALSE(hasWipRow(session, 10, repoId));
+
+  gg::testing::runGit(fixture.root() / "sub",
+                      "git -c user.name=F -c user.email=f@example.invalid commit -q -a -m local");
+  EXPECT_TRUE(hasWipRow(session, 11, repoId));
 }
 
 }  // namespace

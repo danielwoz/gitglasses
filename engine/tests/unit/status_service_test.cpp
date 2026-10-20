@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -518,6 +519,14 @@ std::string utf16le(const std::string& text) {
   return out;
 }
 
+// Moves a file's mtime forward without changing its bytes, so the index's
+// stat data no longer vouches for it and status has to look at the content.
+void touch(const FixtureRepo& fixture, const std::string& path) {
+  const auto file = fixture.root() / path;
+  std::filesystem::last_write_time(
+      file, std::filesystem::last_write_time(file) + std::chrono::seconds(5));
+}
+
 Json rangeOf(const Json& hunk) {
   return {{"oldStart", hunk["oldStart"]},
           {"oldLines", hunk["oldLines"]},
@@ -769,6 +778,32 @@ TEST(StatusService, StageHunksRejectsSubmodule) {
   EXPECT_EQ(changeFor(summary["unstaged"], "sub")["status"], "M");
 }
 
+TEST(StatusService, SummaryIgnoresTouchedFilteredFiles) {
+  FixtureRepo fixture;
+  configureScrubFilter(fixture);
+  FakeLfs lfs(fixture);
+  fixture.writeFile(".gitattributes",
+                    "*.env filter=scrub\n*.bin filter=lfs -text\n"
+                    "*.txt working-tree-encoding=UTF-16LE-BOM\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.writeFile("edited.env", "token=SECRET\nport=1\n");
+  fixture.writeFile("big.bin", std::string(5000, '\x02'));
+  fixture.writeFile("notes.txt", utf16le("hello\n"));
+  fixture.run("git add .gitattributes app.env edited.env big.bin notes.txt");
+  commitTick(fixture, "seed", 1);
+  // Same bytes, new mtimes: only content can settle these.
+  for (const char* path : {"app.env", "big.bin", "notes.txt"}) touch(fixture, path);
+  fixture.writeFile("edited.env", "token=SECRET\nport=2\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json summary = statusSummary(session, 10, repoId);
+  // A filtered file with a real change is still reported.
+  ASSERT_EQ(summary["unstaged"].size(), 1u) << summary.dump();
+  EXPECT_EQ(changeFor(summary["unstaged"], "edited.env")["status"], "M");
+  EXPECT_EQ(gitOut(fixture.root(), "status --porcelain"), " M edited.env\n");
+}
+
 TEST(StatusService, PathsAreLiteralNotGlobs) {
   FixtureRepo fixture;
   fixture.writeFile("app/[id]/page.tsx", "x\ny\nz\n");
@@ -799,6 +834,69 @@ TEST(StatusService, PathsAreLiteralNotGlobs) {
   Json unstage = stageFiles(session, 14, repoId, {"app/[id]/page.tsx"}, "unstage");
   ASSERT_TRUE(unstage.contains("result")) << unstage.dump();
   EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-only"), "app/i/page.tsx\n");
+}
+
+TEST(StatusService, SparseCheckoutLeavesOutOfConeFilesAlone) {
+  FixtureRepo fixture;
+  fixture.writeFile("keep/k.txt", "keep\n");
+  fixture.writeFile("other/f1.txt", "one\n");
+  fixture.writeFile("other/deep/d.txt", "deep\n");
+  fixture.run("git add keep other");
+  commitTick(fixture, "seed", 1);
+  fixture.run("git sparse-checkout set --cone keep");
+  ASSERT_FALSE(std::filesystem::exists(fixture.root() / "other" / "f1.txt"));
+  fixture.writeFile("keep/k.txt", "keep\nedited\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  // Out-of-cone files are absent by design, not deleted.
+  Json summary = statusSummary(session, 10, repoId);
+  ASSERT_EQ(summary["unstaged"].size(), 1u) << summary.dump();
+  EXPECT_EQ(changeFor(summary["unstaged"], "keep/k.txt")["status"], "M");
+
+  // The commit palette's "Stage All" stages what status listed, and only
+  // that: no deletion of the out-of-cone tree.
+  std::vector<std::string> stageable;
+  for (const auto& change : summary["unstaged"]) stageable.push_back(change["path"]);
+  Json stage = stageFiles(session, 11, repoId, stageable, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-status"), "M\tkeep/k.txt\n");
+
+  // Naming an out-of-cone path explicitly is refused before anything changes.
+  Json sparse = stageFiles(session, 12, repoId, {"other/f1.txt"}, "stage");
+  ASSERT_TRUE(sparse.contains("error")) << sparse.dump();
+  EXPECT_NE(sparse["error"]["message"].get<std::string>().find("sparse"), std::string::npos);
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-status"), "M\tkeep/k.txt\n");
+}
+
+TEST(StatusService, DirtySubmoduleIsNotStageable) {
+  FixtureRepo library;
+  library.writeFile("lib.txt", "one\n");
+  library.run("git add lib.txt");
+  commitTick(library, "lib one", 1);
+
+  FixtureRepo fixture;
+  fixture.run("git -c protocol.file.allow=always submodule --quiet add \"" +
+              library.root().generic_string() + "\" sub");
+  commitTick(fixture, "add submodule", 2);
+  // Local edits inside the submodule: nothing the parent can stage.
+  fixture.writeFile("sub/lib.txt", "one\nlocal\n");
+  fixture.writeFile("sub/scratch.txt", "untracked\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json summary = statusSummary(session, 10, repoId);
+  EXPECT_TRUE(summary["unstaged"].empty()) << summary.dump();
+  EXPECT_TRUE(summary["untracked"].empty()) << summary.dump();
+
+  // A new commit in the submodule is a change the parent records.
+  gg::testing::runGit(fixture.root() / "sub",
+                      "git -c user.name=F -c user.email=f@example.invalid commit -q -a -m local");
+  Json moved = statusSummary(session, 11, repoId);
+  EXPECT_EQ(changeFor(moved["unstaged"], "sub")["status"], "M");
+  Json stage = stageFiles(session, 12, repoId, {"sub"}, "stage");
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-only"), "sub\n");
 }
 
 TEST(StatusService, StageFilesHandlesNonAsciiNames) {
