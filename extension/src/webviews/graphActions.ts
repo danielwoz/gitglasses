@@ -158,7 +158,7 @@ type ProtocolDefines<M extends string> = [M] extends [RequestMethod] ? true : fa
  *  Its type is true exactly when the protocol defines all of them, so the
  *  compiler requires it to be switched on as soon as they exist. Until then
  *  the menus leave out the actions that need them. */
-export const REF_MANAGEMENT: ProtocolDefines<RefManagementMethod> = false;
+export const REF_MANAGEMENT: ProtocolDefines<RefManagementMethod> = true;
 
 /** The protocol's params and result for a method it defines; the shapes
  *  above while it does not. */

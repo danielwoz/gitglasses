@@ -299,6 +299,7 @@ Every setting, generated from the extension manifest:
 | `gitglasses.blame.useIgnoreRevsFile` | `true` | Look through the commits listed in the files `blame.ignoreRevsFile` names, or in the repository's `.git-blame-ignore-revs` when that git setting is unset, as GitHub does. A file that does not exist, or that git cannot read (an abbreviated sha, say), is skipped with a note in the GitGlasses output. Needs the git CLI. |
 | `gitglasses.views.pageSize` | `50` | Commits loaded per page in the Commits and File History views |
 | `gitglasses.graph.pageSize` | `200` | Rows loaded per page in the Commit Graph and Visual File History |
+| `gitglasses.graph.maxLanes` | `20` | Most branch lanes the Commit Graph draws side by side. Lanes past it fold into one column marked +N, so commit messages stay readable on merge-heavy repositories. The graph also never takes more than 40% of the panel's width. |
 | `gitglasses.codeLens.enabled` | `true` | Show git blame CodeLens above files and top-level symbols |
 | `gitglasses.engine.path` | `""` | Path to gitglasses-engine (defaults to the bundled binary) |
 | `gitglasses.web.maxRepoBytes` | `209715200` | Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB) |
