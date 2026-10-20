@@ -296,17 +296,80 @@ function assignedKey(line: string): string[] | undefined {
   return match ? parseKeyPath(match[1]) : undefined;
 }
 
-/** Whether a line opens or closes a multi-line string, toggling the state. */
-function multilineToggles(line: string): number {
-  return (line.match(/"""|'''/g) ?? []).length;
+/**
+ * Where a TOML line leaves the parser: inside a multi-line string (and which
+ * delimiter closes it), or inside an array or inline table that continues on
+ * the next line. Only a line that starts outside both can be a table header
+ * or a key.
+ */
+interface TomlScan {
+  string?: '"""' | "'''";
+  depth: number;
+}
+
+/** Closes a multi-line string at `index`, where `quote` repeats three times. */
+function closeMultiline(line: string, index: number, quote: string): number {
+  // Up to two more quotes right before the delimiter belong to the string.
+  let end = index + 3;
+  while (end < line.length && line[end] === quote && end - index < 5) end++;
+  return end;
+}
+
+/** The scan state after `line`, given the state before it. */
+function scanTomlLine(line: string, before: TomlScan): TomlScan {
+  let open = before.string;
+  let depth = before.depth;
+  let i = 0;
+  while (i < line.length) {
+    if (open === '"""') {
+      if (line[i] === '\\') i += 2;
+      else if (line.startsWith('"""', i)) {
+        i = closeMultiline(line, i, '"');
+        open = undefined;
+      } else i++;
+      continue;
+    }
+    if (open === "'''") {
+      if (line.startsWith("'''", i)) {
+        i = closeMultiline(line, i, "'");
+        open = undefined;
+      } else i++;
+      continue;
+    }
+    const ch = line[i];
+    if (ch === '#') break;
+    if (line.startsWith('"""', i) || line.startsWith("'''", i)) {
+      open = line.startsWith('"""', i) ? '"""' : "'''";
+      i += 3;
+    } else if (ch === '"') {
+      for (i++; i < line.length && line[i] !== '"'; i++) if (line[i] === '\\') i++;
+      i++;
+    } else if (ch === "'") {
+      const close = line.indexOf("'", i + 1);
+      i = close < 0 ? line.length : close + 1;
+    } else {
+      if (ch === '[' || ch === '{') depth++;
+      else if ((ch === ']' || ch === '}') && depth > 0) depth--;
+      i++;
+    }
+  }
+  return { string: open, depth };
+}
+
+/** A line that holds nothing but whitespace or a comment. */
+function isCommentOrBlank(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === '' || trimmed.startsWith('#');
 }
 
 /**
  * `existing` (Codex's config.toml) with the gitglasses server set to
  * `launch`: an existing [mcp_servers.gitglasses] table and its sub-tables are
  * replaced where they stand, or the table is appended. Everything else is
- * kept byte for byte. A definition in another form (a dotted key or an inline
- * table) cannot be replaced safely and raises CodexConfigConflict.
+ * kept byte for byte, including the comments that end the old table, which
+ * usually introduce the next one. A definition in another form (a dotted key
+ * or an inline table) cannot be replaced safely and raises
+ * CodexConfigConflict.
  */
 export function mergeCodexConfig(
   existing: string,
@@ -320,17 +383,33 @@ export function mergeCodexConfig(
   let insertAt: number | undefined;
   let inServer = false;
   let table: string[] = [];
-  let inMultiline = false;
+  let scan: TomlScan = { depth: 0 };
+  // The server table's lines since its last header, and whether each one
+  // starts outside any string, array or inline table.
+  let dropped: { line: string; topLevel: boolean }[] = [];
+  const keepTrailingComments = (): void => {
+    let start = dropped.length;
+    while (start > 0 && dropped[start - 1].topLevel && isCommentOrBlank(dropped[start - 1].line)) {
+      start--;
+    }
+    kept.push(...dropped.slice(start).map((entry) => entry.line));
+    dropped = [];
+  };
   for (const line of lines) {
-    if (!inMultiline) {
+    const topLevel = scan.string === undefined && scan.depth === 0;
+    scan = scanTomlLine(line, scan);
+    if (topLevel) {
       const header = tableHeader(line);
       if (header) {
         table = header.keys;
-        inServer =
+        const server =
           !header.array &&
           header.keys.length >= 2 &&
           header.keys[0] === 'mcp_servers' &&
           header.keys[1] === MCP_SERVER_NAME;
+        if (inServer && !server) keepTrailingComments();
+        dropped = [];
+        inServer = server;
         if (inServer && insertAt === undefined) insertAt = kept.length;
         if (inServer) continue;
       } else if (!inServer) {
@@ -344,9 +423,10 @@ export function mergeCodexConfig(
         }
       }
     }
-    if (multilineToggles(line) % 2 === 1) inMultiline = !inMultiline;
-    if (!inServer) kept.push(line);
+    if (inServer) dropped.push({ line, topLevel });
+    else kept.push(line);
   }
+  if (inServer) keepTrailingComments();
 
   const replaced = insertAt !== undefined;
   let result: string[];

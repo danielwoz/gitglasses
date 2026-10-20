@@ -312,6 +312,68 @@ describe('mergeCodexConfig', () => {
     expect(content.startsWith(existing)).toBe(true);
   });
 
+  // Only the delimiter that opened a multi-line string closes it: ''' inside
+  // """ (or """ inside ''') is part of the string.
+  it('tells the two multi-line string delimiters apart', () => {
+    for (const existing of [
+      `[x]\ns = """ it's '''here\n[mcp_servers.gitglasses]\n"""\n`,
+      `[x]\ns = ''' say """hi\n[mcp_servers.gitglasses]\n'''\n`,
+      `[x]\ns = """ escaped \\""" still open\n[mcp_servers.gitglasses]\n"""\n`,
+      `[x]\ns = "''' in a one-line string" # and """ in a comment\n`,
+    ]) {
+      const { content, replaced } = mergeCodexConfig(existing, launch);
+      expect(replaced, existing).toBe(false);
+      expect(content, existing).toBe(`${existing}\n${codexServerToml(launch)}`);
+    }
+  });
+
+  it('closes a multi-line string that ends in extra quotes', () => {
+    const existing = `s = """a ""quoted"""""\n[mcp_servers.gitglasses]\ncommand = "old"\n`;
+    const { content, replaced } = mergeCodexConfig(existing, launch);
+    expect(replaced).toBe(true);
+    expect(content).toBe(`s = """a ""quoted"""""\n${codexServerToml(launch)}`);
+  });
+
+  it('leaves a header-like line inside a multi-line array alone', () => {
+    const existing = 'matrix = [\n  [1],\n  [2]\n]\n[mcp_servers.gitglasses]\ncommand = "old"\n';
+    const { content, replaced } = mergeCodexConfig(existing, launch);
+    expect(replaced).toBe(true);
+    expect(content).toBe(`matrix = [\n  [1],\n  [2]\n]\n${codexServerToml(launch)}`);
+  });
+
+  it('keeps the comments that end the old table, which introduce the next one', () => {
+    const existing = [
+      '[mcp_servers.gitglasses]',
+      '# about gitglasses',
+      'command = "old"',
+      '',
+      '# My other server, keep this comment',
+      '[mcp_servers.other]',
+      'command = "y"',
+      '',
+    ].join('\n');
+    const { content } = mergeCodexConfig(existing, launch);
+    expect(content).toBe(
+      [
+        codexServerToml(launch),
+        '# My other server, keep this comment',
+        '[mcp_servers.other]',
+        'command = "y"',
+        '',
+      ].join('\n'),
+    );
+    expect(mergeCodexConfig(content, launch).content).toBe(content);
+
+    const unspaced = '[mcp_servers.gitglasses]\ncommand = "old"\n# next\n[tui]\n';
+    expect(mergeCodexConfig(unspaced, launch).content).toBe(
+      `${codexServerToml(launch)}\n# next\n[tui]\n`,
+    );
+    const atEnd = 'model = "o3"\n[mcp_servers.gitglasses]\ncommand = "old"\n# the end\n';
+    expect(mergeCodexConfig(atEnd, launch).content).toBe(
+      `model = "o3"\n${codexServerToml(launch)}\n# the end\n`,
+    );
+  });
+
   it('refuses a definition it cannot replace line by line', () => {
     for (const existing of [
       '[mcp_servers]\ngitglasses = { command = "x" }\n',
