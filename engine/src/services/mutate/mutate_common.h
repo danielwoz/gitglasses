@@ -88,14 +88,10 @@ struct SequencerState {
   std::optional<std::int64_t> total;
 };
 
-// Reads the repository's sequencer state. An idle repository reports
-// operation "none" with no conflicts.
+// Reads the repository's sequencer state as it is on disk now, including
+// changes git made after `repo` first loaded its index. An idle repository
+// reports operation "none" with no conflicts.
 SequencerState sequencerState(const core::Repo& repo);
-
-// True when the repository is mid-conflict: sequencer heads present
-// (MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD / rebase dirs) or conflict
-// entries in the index.
-bool inConflictState(const core::Repo& repo);
 
 // The repository's effective value for a config key (every config file git
 // reads, the most specific winning), or empty when unset.

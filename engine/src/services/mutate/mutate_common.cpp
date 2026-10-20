@@ -231,27 +231,17 @@ SequencerState sequencerState(const core::Repo& repo) {
     state.operation = "merge";
   }
 
+  // The repository keeps the index it loaded first; git may have rewritten
+  // the file since (a merge, an abort, the next rebase step), so reload it
+  // when it changed on disk.
   git_index* rawIndex = nullptr;
   if (git_repository_index(&rawIndex, repo.raw()) == 0) {
-    state.conflicted = git_index_has_conflicts(rawIndex) != 0;
+    if (git_index_read(rawIndex, /*force=*/0) == 0) {
+      state.conflicted = git_index_has_conflicts(rawIndex) != 0;
+    }
     git_index_free(rawIndex);
   }
   return state;
-}
-
-bool inConflictState(const core::Repo& repo) {
-  namespace fs = std::filesystem;
-  const fs::path gitdir(repo.gitdir());
-  std::error_code ec;
-  for (const char* marker : {"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"}) {
-    if (fs::exists(gitdir / marker, ec)) return true;
-  }
-  if (rebaseInProgress(repo)) return true;
-  git_index* rawIndex = nullptr;
-  if (git_repository_index(&rawIndex, repo.raw()) != 0) return false;
-  const bool conflicts = git_index_has_conflicts(rawIndex) != 0;
-  git_index_free(rawIndex);
-  return conflicts;
 }
 
 std::string configString(const core::Repo& repo, const std::string& key) {

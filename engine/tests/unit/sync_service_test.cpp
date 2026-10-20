@@ -375,6 +375,98 @@ TEST(StoppedOperation, ContinuingWaitsForConflictsToBeResolved) {
   EXPECT_EQ(skipMerge["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
 }
 
+// `left` and `main` both change c.txt; returns the sha of the commit on
+// `left`, with `main` checked out.
+std::string conflictingBranches(FixtureRepo& fixture) {
+  commitFile(fixture, "c.txt", "base\n", "base");
+  fixture.run("git switch -q -c left");
+  commitFile(fixture, "c.txt", "left\n", "left");
+  const std::string left = rev(fixture.root(), "HEAD");
+  fixture.run("git switch -q main");
+  commitFile(fixture, "c.txt", "right\n", "right");
+  return left;
+}
+
+// The result describes the repository after git ran: an abandoned
+// conflicted merge has no conflicts left.
+TEST(StoppedOperation, AbortingAConflictedMergeLeavesNoConflicts) {
+  FixtureRepo fixture;
+  conflictingBranches(fixture);
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+  const Json merge = session.request(req(3, "mutate/merge", {{"repoId", repoId}, {"ref", "left"}}));
+  ASSERT_TRUE(merge["result"]["conflicts"].get<bool>()) << merge.dump();
+
+  const Json abort =
+      session.request(req(4, "mutate/sequencer", {{"repoId", repoId}, {"action", "abort"}}));
+  ASSERT_TRUE(abort.contains("result")) << abort.dump();
+  EXPECT_EQ(abort["result"]["operation"], "merge");
+  EXPECT_FALSE(abort["result"]["conflicts"].get<bool>()) << abort.dump();
+  EXPECT_TRUE(abort["result"]["completed"].get<bool>()) << abort.dump();
+  EXPECT_FALSE(std::filesystem::exists(fixture.root() / ".git" / "MERGE_HEAD"));
+}
+
+TEST(StoppedOperation, SkippingAConflictedCherryPickLeavesNoConflicts) {
+  FixtureRepo fixture;
+  const std::string left = conflictingBranches(fixture);
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+  const Json pick = session.request(
+      req(3, "mutate/cherryPick", {{"repoId", repoId}, {"shas", Json::array({left})}}));
+  ASSERT_TRUE(pick["result"]["conflicts"].get<bool>()) << pick.dump();
+
+  const Json skip =
+      session.request(req(4, "mutate/sequencer", {{"repoId", repoId}, {"action", "skip"}}));
+  ASSERT_TRUE(skip.contains("result")) << skip.dump();
+  EXPECT_EQ(skip["result"]["operation"], "cherry-pick");
+  EXPECT_FALSE(skip["result"]["conflicts"].get<bool>()) << skip.dump();
+  EXPECT_TRUE(skip["result"]["completed"].get<bool>()) << skip.dump();
+  EXPECT_FALSE(std::filesystem::exists(fixture.root() / ".git" / "CHERRY_PICK_HEAD"));
+}
+
+// Continuing a rebase whose next step conflicts too is a new set of
+// conflicts to resolve, not a failure.
+TEST(StoppedOperation, ContinuingIntoAnotherConflictingStepReportsConflicts) {
+  FixtureRepo fixture;
+  commitFile(fixture, "c.txt", "base\n", "base");
+  fixture.run("git switch -q -c topic");
+  commitFile(fixture, "c.txt", "one\n", "t1");
+  commitFile(fixture, "c.txt", "two\n", "t2");
+  const std::string t1 = rev(fixture.root(), "HEAD~1");
+  const std::string t2 = rev(fixture.root(), "HEAD");
+  fixture.run("git switch -q main");
+  commitFile(fixture, "c.txt", "main\n", "main");
+  fixture.run("git switch -q topic");
+
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+  const Json start = session.request(
+      req(3, "rebase/start",
+          {{"repoId", repoId},
+           {"upstream", "main"},
+           {"plan", Json::array({{{"action", "pick"}, {"sha", t1}, {"summary", "t1"}},
+                                 {{"action", "pick"}, {"sha", t2}, {"summary", "t2"}}})}}));
+  ASSERT_TRUE(start.contains("result")) << start.dump();
+  ASSERT_TRUE(start["result"]["conflicts"].get<bool>()) << start.dump();
+
+  fixture.writeFile("c.txt", "first resolution\n");
+  fixture.run("git add c.txt");
+  const Json next =
+      session.request(req(4, "mutate/sequencer", {{"repoId", repoId}, {"action", "continue"}}));
+  ASSERT_TRUE(next.contains("result")) << next.dump();
+  EXPECT_EQ(next["result"]["operation"], "rebase");
+  EXPECT_TRUE(next["result"]["conflicts"].get<bool>()) << next.dump();
+  EXPECT_FALSE(next["result"]["completed"].get<bool>()) << next.dump();
+
+  fixture.writeFile("c.txt", "second resolution\n");
+  fixture.run("git add c.txt");
+  const Json done =
+      session.request(req(5, "mutate/sequencer", {{"repoId", repoId}, {"action", "continue"}}));
+  ASSERT_TRUE(done.contains("result")) << done.dump();
+  EXPECT_TRUE(done["result"]["completed"].get<bool>()) << done.dump();
+  EXPECT_FALSE(done["result"]["conflicts"].get<bool>()) << done.dump();
+}
+
 TEST(StoppedOperation, ARebaseStoppedBySigningIsNotReportedAsConflicts) {
   FailingSigner repo;
   InteractiveSession session;
