@@ -46,6 +46,7 @@ import {
 } from './tools/compare.js';
 import {
   HOST_SETTINGS,
+  configuredGitHubHost,
   configuredHosts,
   fetchMyPullRequests,
   formatHostResults,
