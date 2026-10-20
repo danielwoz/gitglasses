@@ -417,8 +417,11 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
         exec::HistoryLogParser parser(
             exec::HistoryLogParser::Stats::Numstat, startPath,
             [&parsed](const exec::HistoryEntry& entry) { parsed.push_back(entry); });
-        std::vector<std::string> args = {"log", "--follow", "--numstat", kLogFormat,
-                                         "--max-count=" + std::to_string(limit + 1)};
+        // The path is literal: `app/[id]/page.tsx` must not match
+        // `app/i/page.tsx`.
+        std::vector<std::string> args = {
+            "--literal-pathspecs", "log",      "--follow",
+            "--numstat",           kLogFormat, "--max-count=" + std::to_string(limit + 1)};
         if (!startRev.empty()) {
           // Precedes the "--" separator; reject option-looking revs.
           if (exec::looksLikeGitOption(startRev)) {

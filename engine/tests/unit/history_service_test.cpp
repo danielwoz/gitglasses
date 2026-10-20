@@ -465,6 +465,30 @@ TEST(HistoryService, FileHistoryHandlesPathsWithSpaces) {
   EXPECT_EQ(entries[0]["additions"], 1);
 }
 
+TEST(HistoryService, FileHistoryTreatsThePathLiterally) {
+  FixtureRepo fixture;
+  fixture.writeFile("a1.txt", "one\n");
+  fixture.run("git add .");
+  commitTick(fixture, "add a1", 1);
+  fixture.writeFile("a[1].txt", "literal\n");
+  fixture.run("git add .");
+  commitTick(fixture, "add the bracketed file", 2);
+  fixture.writeFile("a1.txt", "one\ntwo\n");
+  fixture.run("git add .");
+  commitTick(fixture, "edit a1", 3);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  // As a glob, "a[1].txt" would also match a1.txt and list its commits.
+  Json history = session.request(
+      req(10, "history/file", {{"repoId", repoId}, {"path", "a[1].txt"}, {"limit", 10}}));
+  ASSERT_TRUE(history.contains("result")) << history.dump();
+  const Json& entries = history["result"]["entries"];
+  ASSERT_EQ(entries.size(), 1u) << history.dump();
+  EXPECT_EQ(entries[0]["summary"], "add the bracketed file");
+  EXPECT_EQ(entries[0]["path"], "a[1].txt");
+}
+
 TEST(HistoryService, LineHistoryReportsCommitsTouchingRange) {
   FixtureRepo fixture;
   fixture.writeFile("lines.txt", "alpha\nbeta\ngamma\n");
