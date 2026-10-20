@@ -1015,9 +1015,6 @@ export const RequestSchemas = {
       strict,
     ),
     result: RebaseRunResult,
-});
-
-    result: Type.Object({ conflicts: Type.Boolean(), completed: Type.Boolean() }, strict),
   },
   'rebase/continue': {
     description:
@@ -1029,9 +1026,6 @@ export const RequestSchemas = {
     description: 'Resumes a paused rebase without the commit it stopped at (--skip).',
     params: Type.Object({ repoId: Type.String() }, strict),
     result: RebaseRunResult,
-});
-
-    result: Type.Object({ conflicts: Type.Boolean(), completed: Type.Boolean() }, strict),
   },
   'rebase/abort': {
     description: 'Restores the pre-rebase state.',
