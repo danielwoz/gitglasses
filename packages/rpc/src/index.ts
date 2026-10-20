@@ -12,5 +12,6 @@ export {
   MAX_CRASHES_IN_WINDOW,
   type CancellationLike,
   type EngineClientOptions,
+  type EngineRequestHandler,
 } from './engineClient.js';
 export type { EngineTransport } from './transport.js';

@@ -1,8 +1,12 @@
 import {
+  ClientCapabilities,
   ClientNotifications,
   EngineCapabilities,
   EngineNotificationMethod,
   EngineNotificationParams,
+  EngineRequestMethod,
+  EngineRequestParams,
+  EngineRequestResult,
   ErrorCodes,
   PROTOCOL_VERSION,
   RequestMethod,
@@ -41,11 +45,23 @@ interface Pending {
   method: string;
   /** Deadline for this request; cleared wherever it settles. */
   timer: ReturnType<typeof setTimeout> | undefined;
-  /** When the deadline passes (Date.now() time). */
+  /** When the deadline passes (Date.now() time), while it runs. */
   deadline: number;
+  /** Engine requests (prompts) open on this request's behalf; its deadline
+   *  stands still while any is. */
+  pauses: number;
+  /** Time left on the deadline when it was paused. */
+  remaining: number;
   /** Cancellation listener for this request; disposed wherever it settles. */
   cancelSub?: { dispose(): void };
 }
+
+/** Answers a request the engine sends (see EngineRequests in the protocol).
+ *  `token` fires when the engine withdraws the request. */
+export type EngineRequestHandler<M extends EngineRequestMethod> = (
+  params: EngineRequestParams<M>,
+  token: CancellationLike,
+) => Promise<EngineRequestResult<M>>;
 
 export interface EngineClientOptions {
   onLog?: (line: string) => void;
@@ -68,6 +84,9 @@ export interface EngineClientOptions {
   /** Spawns the engine on the first request, so callers need not call start()
    *  themselves. Off by default: requests before start() reject instead. */
   autoStart?: boolean;
+  /** What this client can do for the engine, sent with initialize. Declare
+   *  `askpass` only with a ui/askpass handler registered (onRequest). */
+  clientCapabilities?: ClientCapabilities;
 }
 
 const BACKOFF_START_MS = 250;
@@ -110,8 +129,37 @@ export const LONG_REQUEST_TIMEOUT_MS: Partial<Record<RequestMethod, number>> = {
   'rebase/continue': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
 };
 
+/** Notifications that withdraw an engine request, keyed by its params.id. */
+const ENGINE_REQUEST_CANCELLATIONS = new Set(['ui/askpassCancelled']);
+
+/** A cancellation source for the token handed to engine request handlers. */
+class Cancellation implements CancellationLike {
+  private cancelled = false;
+  private listeners = new Set<() => void>();
+
+  get isCancellationRequested(): boolean {
+    return this.cancelled;
+  }
+
+  onCancellationRequested(listener: () => void): { dispose(): void } {
+    if (this.cancelled) {
+      queueMicrotask(listener);
+      return { dispose: () => undefined };
+    }
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  cancel(): void {
+    if (this.cancelled) return;
+    this.cancelled = true;
+    for (const listener of [...this.listeners]) listener();
+    this.listeners.clear();
+  }
+}
+
 interface InboundMessage {
-  id?: number | null;
+  id?: number | string | null;
   method?: string;
   params?: unknown;
   result?: unknown;
@@ -123,7 +171,9 @@ interface InboundMessage {
 // counter guarantees no stale result ever resolves), and callers re-query.
 // Each respawn gets a fresh transport from the injected factory; an engine
 // that keeps crashing is given up on (onGiveUp) until restart(). Every request
-// carries a deadline so a wedged engine cannot hold a caller forever.
+// carries a deadline so a wedged engine cannot hold a caller forever. The
+// engine can also send requests of its own (ui/askpass), answered by the
+// handlers registered with onRequest().
 export class EngineClient {
   private transport: EngineTransport | undefined;
   private transportAlive = false;
@@ -136,6 +186,9 @@ export class EngineClient {
   private gaveUp = false;
   private disposed = false;
   private notificationHandlers = new Map<string, Set<(params: unknown) => void>>();
+  private requestHandlers = new Map<string, EngineRequestHandler<EngineRequestMethod>>();
+  /** Engine requests being answered, by their (string) id. */
+  private inbound = new Map<string, Cancellation>();
   private capabilityHandlers = new Set<() => void>();
   private caps: EngineCapabilities | undefined;
   private ready: Promise<void> | undefined;
@@ -199,6 +252,7 @@ export class EngineClient {
       if (this.disposed || generation !== this.generation) return;
       this.transportAlive = false;
       this.failAllPending(new EngineRestartedError());
+      this.cancelInbound();
       const error = new Error(`engine exited with code ${code}`);
       this.options.onCrash?.(error);
       this.scheduleRespawn(error);
@@ -211,7 +265,11 @@ export class EngineClient {
     try {
       // send(), not request(): request() may await start(), which is this
       // very promise.
-      init = await this.send('initialize', { protocolVersion: PROTOCOL_VERSION });
+      const params: RequestParams<'initialize'> = { protocolVersion: PROTOCOL_VERSION };
+      if (this.options.clientCapabilities) {
+        params.clientCapabilities = this.options.clientCapabilities;
+      }
+      init = await this.send('initialize', params);
       if (init.protocolVersion !== PROTOCOL_VERSION) {
         throw new EngineError(
           ErrorCodes.InvalidRequest,
@@ -274,6 +332,11 @@ export class EngineClient {
     this.pending.clear();
   }
 
+  private cancelInbound(): void {
+    for (const cancellation of this.inbound.values()) cancellation.cancel();
+    this.inbound.clear();
+  }
+
   private handleMessage(payload: string): void {
     let message: InboundMessage;
     try {
@@ -283,6 +346,14 @@ export class EngineClient {
       return;
     }
     if (message.method !== undefined) {
+      if (message.id !== undefined && message.id !== null) {
+        void this.answerEngineRequest(message.id, message.method, message.params);
+        return;
+      }
+      if (ENGINE_REQUEST_CANCELLATIONS.has(message.method)) {
+        const id = (message.params as { id?: unknown } | undefined)?.id;
+        if (typeof id === 'string') this.inbound.get(id)?.cancel();
+      }
       const handlers = this.notificationHandlers.get(message.method);
       if (handlers) for (const handler of [...handlers]) handler(message.params);
       return;
@@ -307,6 +378,67 @@ export class EngineClient {
     } else {
       pending.resolve(message.result);
     }
+  }
+
+  /** Runs the handler for a request the engine sent and sends its answer
+   *  back on the transport it came from. */
+  private async answerEngineRequest(
+    id: number | string,
+    method: string,
+    params: unknown,
+  ): Promise<void> {
+    const transport = this.transport;
+    const generation = this.generation;
+    const reply = (body: { result: unknown } | { error: RpcError }): void => {
+      if (this.disposed || generation !== this.generation || !this.transportAlive) return;
+      transport?.send(JSON.stringify({ jsonrpc: '2.0', id, ...body }));
+    };
+    const handler = this.requestHandlers.get(method);
+    if (!handler) {
+      reply({ error: { code: ErrorCodes.MethodNotFound, message: `no handler for ${method}` } });
+      return;
+    }
+    const cancellation = new Cancellation();
+    const key = String(id);
+    this.inbound.set(key, cancellation);
+    // The client request whose git is asking: its deadline stands still while
+    // the user answers.
+    const requestId = (params as { requestId?: unknown } | undefined)?.requestId;
+    const resume = typeof requestId === 'number' ? this.pauseDeadline(requestId) : undefined;
+    try {
+      const result = await handler(params as never, cancellation);
+      reply({ result });
+    } catch (error) {
+      reply({
+        error: {
+          code: ErrorCodes.Internal,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    } finally {
+      if (this.inbound.get(key) === cancellation) this.inbound.delete(key);
+      resume?.();
+    }
+  }
+
+  /** Stops the deadline of request `id` until the returned function runs. */
+  private pauseDeadline(id: number): () => void {
+    const pending = this.pending.get(id);
+    if (!pending) return () => undefined;
+    pending.pauses += 1;
+    if (pending.pauses === 1 && pending.timer !== undefined) {
+      clearTimeout(pending.timer);
+      pending.timer = undefined;
+      pending.remaining = Math.max(0, pending.deadline - Date.now());
+    }
+    let resumed = false;
+    return () => {
+      if (resumed) return;
+      resumed = true;
+      if (this.pending.get(id) !== pending) return;
+      pending.pauses -= 1;
+      if (pending.pauses === 0) this.armDeadline(id, pending, pending.remaining);
+    };
   }
 
   /** Starts (or restarts) request `id`'s deadline, `ms` from now. */
@@ -361,6 +493,8 @@ export class EngineClient {
         method,
         timer: undefined,
         deadline: 0,
+        pauses: 0,
+        remaining: 0,
       };
       this.pending.set(id, pending);
       this.armDeadline(id, pending, timeoutMs);
@@ -408,6 +542,21 @@ export class EngineClient {
     return { dispose: () => this.notificationHandlers.get(method)?.delete(untyped) };
   }
 
+  /** Answers the engine's `method` requests; one handler per method, the
+   *  latest registered winning. Unanswerable requests get MethodNotFound. */
+  onRequest<M extends EngineRequestMethod>(
+    method: M,
+    handler: EngineRequestHandler<M>,
+  ): { dispose(): void } {
+    const untyped = handler as unknown as EngineRequestHandler<EngineRequestMethod>;
+    this.requestHandlers.set(method, untyped);
+    return {
+      dispose: () => {
+        if (this.requestHandlers.get(method) === untyped) this.requestHandlers.delete(method);
+      },
+    };
+  }
+
   /** True after the engine crashed too often and respawning stopped. */
   hasGivenUp(): boolean {
     return this.gaveUp;
@@ -423,6 +572,7 @@ export class EngineClient {
     this.generation += 1; // orphan the old transport's exit handler
     this.transportAlive = false;
     this.failAllPending(new EngineRestartedError());
+    this.cancelInbound();
     transport?.kill();
     this.crashTimes = [];
     this.gaveUp = false;
@@ -445,6 +595,7 @@ export class EngineClient {
     this.disposed = true;
     this.clearRespawn();
     this.failAllPending(new EngineRestartedError());
+    this.cancelInbound();
     this.transport?.kill();
   }
 }

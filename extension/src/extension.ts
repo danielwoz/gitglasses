@@ -33,6 +33,7 @@ import {
   toHunkRange,
 } from './scm/hunkStaging';
 import { registerPatchCommands } from './patches/patchCommands';
+import { AskpassService, integrationCredential } from './auth/askpassService';
 import { createEngineHealth } from './engine/engineHealth';
 import { configureSync, registerSyncCommands } from './sync/syncCommands';
 
@@ -106,6 +107,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       onMethodNotSupported: (_method, message) => showMethodNotSupported(message),
       onRestricted: () => showRestricted(),
       onRestarted: () => core.handleEngineRestarted(),
+      // Credential, passphrase and host-key prompts from the engine's git are
+      // answered here (AskpassService below).
+      clientCapabilities: { askpass: true },
     },
   );
   context.subscriptions.push({ dispose: () => engine.dispose() });
@@ -138,8 +142,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(...core.disposables);
   const { blame, fileAnnotations, integrations } = core;
 
-  configureSync({ log, showLog });
-  context.subscriptions.push(...registerSyncCommands(engine, repos));
+  const askpass = new AskpassService(engine, {
+    log,
+    credentialFor: (host, interactive) => integrationCredential(integrations, host, interactive),
+    // Blame and history that failed for want of a credential run again.
+    onBackgroundAllowed: () => core.refreshAll(),
+  });
+  configureSync({ log, showLog, askpass });
+  context.subscriptions.push(askpass, ...registerSyncCommands(engine, repos));
 
   const onTrustGranted = createTrustGrantHandler(engine, () => core.reload());
   context.subscriptions.push(

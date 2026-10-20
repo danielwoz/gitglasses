@@ -567,3 +567,102 @@ describe('EngineClient crash handling', () => {
     client.dispose();
   });
 });
+
+describe('EngineClient answering the engine', () => {
+  const prompt = (requestId?: number) => ({
+    kind: 'password',
+    prompt: "Password for 'https://example.com': ",
+    secret: true,
+    interactive: true,
+    ...(requestId !== undefined ? { requestId } : {}),
+  });
+
+  it('declares what it can answer in initialize', async () => {
+    const { client, transports } = makeClient({ clientCapabilities: { askpass: true } });
+    await client.start();
+    expect(transports[0].sent[0].params).toMatchObject({ clientCapabilities: { askpass: true } });
+    client.dispose();
+  });
+
+  it('answers an engine request with the registered handler', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    const seen: unknown[] = [];
+    client.onRequest('ui/askpass', async (params) => {
+      seen.push(params);
+      return { value: 's3cret' };
+    });
+    transports[0].requestClient('e1', 'ui/askpass', prompt());
+    await sleep(0);
+    await sleep(0);
+    expect(seen).toEqual([prompt()]);
+    expect(transports[0].answerTo('e1')).toMatchObject({ result: { value: 's3cret' } });
+    client.dispose();
+  });
+
+  it('refuses a request it has no handler for', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    transports[0].requestClient('e2', 'ui/askpass', prompt());
+    await sleep(0);
+    expect(transports[0].answerTo('e2')?.error?.code).toBe(ErrorCodes.MethodNotFound);
+    client.dispose();
+  });
+
+  it('withdraws the handler when the engine cancels the request', async () => {
+    const { client, transports } = makeClient();
+    await client.start();
+    let withdrawn = false;
+    client.onRequest(
+      'ui/askpass',
+      (_params, token) =>
+        new Promise((resolve) => {
+          token.onCancellationRequested(() => {
+            withdrawn = true;
+            resolve({ cancelled: true });
+          });
+        }),
+    );
+    transports[0].requestClient('e3', 'ui/askpass', prompt());
+    await sleep(0);
+    transports[0].notifyClient('ui/askpassCancelled', { id: 'e3' });
+    await sleep(0);
+    await sleep(0);
+    expect(withdrawn).toBe(true);
+    client.dispose();
+  });
+
+  // The user may take minutes to type a password; the push waiting on it must
+  // not time out in the meantime.
+  it('stops the deadline of the request a prompt belongs to while it is open', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, transports } = makeClient({ requestTimeoutMs: 1000 });
+      await client.start();
+      let answer: (value: { value: string }) => void = () => undefined;
+      client.onRequest(
+        'ui/askpass',
+        () => new Promise((resolve) => (answer = resolve as typeof answer)),
+      );
+      let settled: unknown;
+      const push = client
+        .request('repo/list', {})
+        .then((value) => (settled = value))
+        .catch((error: Error) => (settled = error));
+      const id = transports[0].sent.find((m) => m.method === 'repo/list')!.id as number;
+      // The prompt arrives at once, with the whole second still to run.
+      transports[0].requestClient('e4', 'ui/askpass', prompt(id));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBeUndefined();
+      answer({ value: 'pw' });
+      await vi.advanceTimersByTimeAsync(900);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(String(settled)).toMatch(/timed out/);
+      await push;
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
