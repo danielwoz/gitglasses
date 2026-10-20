@@ -223,7 +223,10 @@ void registerRefMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& conte
         requireGitCli(context);
         const std::string name = requirePositional(requireString(params, "name"), "name");
         auto repo = openRepo(context, params);
-        runGitOrThrow(repo, {"remote", "remove", "--", name}, token, "git remote remove");
+        // No "--": git before 2.38 takes `remote remove` arguments without
+        // option parsing and would read it as the name. requirePositional
+        // keeps the name from being read as an option.
+        runGitOrThrow(repo, {"remote", "remove", name}, token, "git remote remove");
         return rpc::Json::object();
       },
       rpc::Mode::Serial);
