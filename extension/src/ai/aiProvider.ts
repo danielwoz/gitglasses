@@ -58,7 +58,7 @@ export type FetchFn = (
   init: {
     method: string;
     headers: Record<string, string>;
-    body: string;
+    body?: string;
     signal?: AbortSignal;
   },
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
