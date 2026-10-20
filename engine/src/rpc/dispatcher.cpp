@@ -67,6 +67,24 @@ void Dispatcher::notification(const std::string& name, NotificationHandler handl
 
 void Dispatcher::setErrorData(ErrorDataFn errorData) { errorData_ = std::move(errorData); }
 
+void Dispatcher::cancelAll() {
+  std::lock_guard lock(inflightMutex_);
+  for (auto& [id, source] : inflight_) source.cancel();
+}
+
+bool Dispatcher::waitIdle(std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  std::unique_lock lock(inflightMutex_);
+  // Deferred parses register their request only once parsed, so the parse
+  // budget in use counts as work outstanding too. Its counter is not guarded
+  // by this mutex, hence the bounded waits.
+  for (;;) {
+    if (inflight_.empty() && deferredBytes_.load(std::memory_order_relaxed) == 0) return true;
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    idle_.wait_for(lock, std::chrono::milliseconds(20));
+  }
+}
+
 std::vector<std::string> Dispatcher::methodNames() const {
   std::vector<std::string> names;
   names.reserve(methods_.size());
@@ -222,6 +240,7 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
 
     std::lock_guard lock(inflightMutex_);
     inflight_.erase(numericId);
+    if (inflight_.empty()) idle_.notify_all();
   };
 
   if (strand) {

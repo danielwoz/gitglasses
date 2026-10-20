@@ -35,6 +35,11 @@ inline bool looksLikeGitOption(std::string_view value) {
   return !value.empty() && value.front() == '-';
 }
 
+// How long a cancelled or timed-out git gets to exit after SIGTERM before its
+// process group is killed outright. git removes its lock files on SIGTERM, so
+// a stopped commit or rebase leaves no index.lock behind.
+inline constexpr std::chrono::milliseconds kTerminateGrace{1000};
+
 // Options for GitProcess::spawn beyond the defaults every caller wants.
 struct SpawnOpts {
   // "NAME=value" entries applied on top of the inherited environment. An
@@ -73,10 +78,11 @@ bool makeCloexecPipe(int fds[2]);
 #endif
 
 // A spawned `git` child process. Stdout is line-buffered for parsing; stderr
-// is captured for error reporting. Cancellation kills the whole process
-// group, so a blame of a huge file stops costing CPU the moment the client
-// scrolls away. A child that outlives SpawnOpts::timeout is killed the same
-// way and reported through timedOut().
+// is captured for error reporting. Cancellation stops the whole process
+// group (SIGTERM, then SIGKILL after kTerminateGrace), so a blame of a huge
+// file stops costing CPU the moment the client scrolls away. A child that
+// outlives SpawnOpts::timeout is stopped the same way and reported through
+// timedOut().
 class GitProcess {
  public:
   // Spawns `git <args...>` with `cwd` as working directory and the

@@ -6,10 +6,14 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <thread>
 
+#include "exec/git_runner.h"
 #include "test_fixtures.h"
 #include "test_session.h"
 
@@ -385,6 +389,62 @@ TEST(StoppedOperation, AFailureExplainedOnStdoutKeepsTheExplanation) {
             std::string::npos)
       << commit.dump();
 }
+
+#ifndef _WIN32
+// A cancelled git gets SIGTERM first, so it removes its lock files: the
+// repository is usable right after a cancelled commit.
+TEST(Cancellation, ACancelledCommitLeavesNoIndexLock) {
+  FixtureRepo fixture;
+  fixture.writeFile(".git/hooks/pre-commit", "#!/bin/sh\nsleep 30\n");
+  std::filesystem::permissions(fixture.root() / ".git" / "hooks" / "pre-commit",
+                               std::filesystem::perms::owner_all);
+  fixture.writeFile("README.md", "changed\n");
+  const std::filesystem::path lock = fixture.root() / ".git" / "index.lock";
+
+  // `commit -a` holds the index lock while its hooks run.
+  CancelSource source;
+  std::thread canceller([&] {
+    const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!std::filesystem::exists(lock) && std::chrono::steady_clock::now() < giveUp) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    source.cancel();
+  });
+  bool cancelled = false;
+  try {
+    (void)exec::runGit(fixture.root().string(), {"commit", "-a", "-q", "-m", "slow"}, {},
+                       source.token(), [](std::string) {});
+  } catch (const CancelledError&) {
+    cancelled = true;
+  }
+  canceller.join();
+  EXPECT_TRUE(cancelled);
+  EXPECT_FALSE(std::filesystem::exists(lock)) << "the cancelled commit left its lock behind";
+}
+
+// When the client goes away the engine stops the git it runs instead of
+// waiting for a fetch that may take minutes.
+TEST(EngineExit, ClosingStdinStopsAHungFetchPromptly) {
+  FixtureRepo fixture;
+  fixture.run("git clone --bare -q . upstream.git");
+  fixture.writeFile("slow-upload-pack", "#!/bin/sh\nsleep 60\nexec git-upload-pack \"$@\"\n");
+  std::filesystem::permissions(fixture.root() / "slow-upload-pack",
+                               std::filesystem::perms::owner_all);
+  fixture.run("git remote add origin upstream.git");
+  fixture.run("git config remote.origin.uploadpack \"" +
+              (fixture.root() / "slow-upload-pack").string() + "\"");
+
+  auto session = std::make_unique<InteractiveSession>();
+  const std::string repoId = discover(*session, fixture.root());
+  session->notify(req(3, "mutate/fetch", {{"repoId", repoId}}));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  const auto closed = std::chrono::steady_clock::now();
+  session.reset();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - closed);
+  EXPECT_LT(elapsed.count(), 10000) << "the engine waited for the fetch to finish";
+}
+#endif
 
 }  // namespace
 }  // namespace gg

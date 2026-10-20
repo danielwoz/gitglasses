@@ -9,6 +9,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <thread>
 
 #include "exec/cli_detect.h"
 
@@ -191,7 +192,22 @@ GitProcess::~GitProcess() {
 }
 
 void GitProcess::killGroup() {
-  if (pid_ != -1) kill(-pid_, SIGKILL);
+  if (pid_ == -1 || reaped_) return;
+  // git (and ssh, hooks) clean up on SIGTERM: lock files go, so the
+  // repository is left usable.
+  kill(-pid_, SIGTERM);
+  const auto giveUp = std::chrono::steady_clock::now() + kTerminateGrace;
+  while (std::chrono::steady_clock::now() < giveUp) {
+    // WNOWAIT leaves git unreaped, so its process group id cannot be reused
+    // before the SIGKILL below reaches whatever git left running.
+    siginfo_t info{};
+    if (waitid(P_PID, static_cast<id_t>(pid_), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+        info.si_pid == pid_) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  kill(-pid_, SIGKILL);
 }
 
 void GitProcess::drainStderr(bool blocking) {

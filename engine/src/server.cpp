@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <string_view>
 
 #include "core/git2.h"
@@ -33,6 +34,10 @@ namespace gg {
 namespace {
 
 constexpr const char* kProtocolVersion = "0.1.0";
+
+// How long requests in flight when stdin closes may run on before they are
+// cancelled.
+constexpr std::chrono::milliseconds kDrainOnClose{2000};
 
 // watch/threads are static truths of the build: single-threaded builds
 // (wasm, debug-st) have no watcher threads and no worker pool.
@@ -162,12 +167,21 @@ int runServer(std::istream& in, std::ostream& out) {
 
   configureDispatcher(dispatcher, context, shutdownRequested);
 
+  // Requests still running after `drain` are cancelled, which stops their
+  // git: the engine exits promptly instead of when the slowest git finishes
+  // or times out, while requests a client wrote just before closing its end
+  // still get their answers.
+  const auto stop = [&](std::chrono::milliseconds drain) {
+    if (!dispatcher.waitIdle(drain)) dispatcher.cancelAll();
+    pool.shutdown();
+  };
+
   while (!shutdownRequested) {
     auto payload = reader.read();
     if (!payload) {
       if (reader.failed()) {
         spdlog::error("malformed frame; the stream cannot be resynchronized");
-        pool.shutdown();
+        stop(std::chrono::milliseconds(0));
         return 1;
       }
       break;  // stdin closed: exit cleanly, never orphan
@@ -175,7 +189,9 @@ int runServer(std::istream& in, std::ostream& out) {
     dispatcher.dispatch(*payload);
   }
 
-  pool.shutdown();
+  // A shutdown request asked for an exit; a closed stdin may still have
+  // requests in flight that a scripted client is waiting for.
+  stop(shutdownRequested ? std::chrono::milliseconds(0) : kDrainOnClose);
   spdlog::info("engine exiting");
   return 0;
 }

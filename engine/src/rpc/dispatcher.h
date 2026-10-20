@@ -3,6 +3,8 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
@@ -114,6 +116,15 @@ class Dispatcher {
   // Installs the hook that describes errors thrown without data.
   void setErrorData(ErrorDataFn errorData);
 
+  // Cancels every request in flight, as if the client had cancelled each
+  // one. Used when the client is gone, so nothing keeps git running for an
+  // answer no one will read.
+  void cancelAll();
+
+  // Waits until no request is in flight or waiting to be parsed, or until
+  // `timeout` passes. Returns true when idle.
+  bool waitIdle(std::chrono::milliseconds timeout);
+
   // Entry point for every inbound payload. Never throws; protocol-level
   // failures produce JSON-RPC error responses. Payloads over
   // kInlineParseLimit are parsed and routed on a worker, keeping arrival
@@ -162,6 +173,7 @@ class Dispatcher {
   std::atomic<size_t> deferredBytes_{0};
 
   mutable std::mutex inflightMutex_;
+  std::condition_variable idle_;
   std::map<std::int64_t, CancelSource> inflight_;
   // Ids cancelled before their request reached the inflight map, which a
   // deferred parse makes possible. Bounded so a client cannot grow it by
