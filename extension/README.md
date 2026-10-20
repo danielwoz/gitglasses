@@ -130,6 +130,19 @@ and pull from the Home view and **GitGlasses: Git Commands…** too, keep
 several branches checked out at once with worktrees, and stage or unstage
 single hunks from the editor.
 
+The Worktrees view shows each worktree's state at a glance, which helps when
+several coding agents work in parallel worktrees: uncommitted changes,
+commits ahead of and behind a base branch, whether it would merge cleanly
+into the base (checked with `git merge-tree`, git 2.38 or later, without
+touching any checkout), its last activity, and the agent it appears to belong
+to (Claude Code, Cursor, Codex, Copilot and VS Code agent sessions, going by
+where the worktree lives, its branch name or the trailers on its commits).
+**Compare with Base** opens everything a worktree changed since it left the
+base, uncommitted work included, and **Remove Worktree and Branch…** deletes
+both after one confirmation that lists what goes. The base is the branch
+checked out in the main worktree unless you pick another with **Choose Base
+for Worktrees…**.
+
 *Limits:* everything that changes the repository needs git and a trusted
 workspace, and none of it is available on the web.
 
@@ -367,6 +380,7 @@ in Restricted Mode.
 | GitGlasses: Git Commands… | `gitglasses.gitCommands` | trusted workspace |
 | GitGlasses: Interactive Rebase… | `gitglasses.interactiveRebase` | trusted workspace |
 | GitGlasses: Add Worktree… | `gitglasses.worktrees.add` | trusted workspace |
+| GitGlasses: Choose Base for Worktrees… | `gitglasses.worktrees.chooseBase` |  |
 | GitGlasses: Stage Selected Hunk(s) | `gitglasses.stageSelectedHunks` | trusted workspace |
 | GitGlasses: Unstage Selected Hunk(s) | `gitglasses.unstageSelectedHunks` | trusted workspace |
 | GitGlasses: Create Tag… | `gitglasses.tag.create` | trusted workspace |

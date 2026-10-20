@@ -206,7 +206,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
 
   // Sidebar views (activity bar container "gitglasses").
   const searchView = new SearchViewProvider(engine, repos);
-  const worktreesView = new WorktreesViewProvider(engine, repos);
+  const worktreesView = new WorktreesViewProvider(engine, repos, context.workspaceState);
   const branchesView = new BranchesViewProvider(engine, repos, refsModel);
   branchesView.setPrChipProvider(prChips);
   const homeView = new HomeViewProvider(engine, repos, launchpad, context.globalState);
@@ -552,7 +552,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       listRepos: () => activeRepo.all(),
       activeEditorUri: () => deps.activeEditor()?.document.uri,
     }),
-    ...registerWorktreeCommands(engine, repos, worktreesView),
+    ...registerWorktreeCommands(engine, repos, worktreesView, deps.log),
   );
 
   return {

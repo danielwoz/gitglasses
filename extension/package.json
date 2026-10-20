@@ -268,6 +268,24 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
+        "command": "gitglasses.worktrees.removeWithBranch",
+        "title": "Remove Worktree and Branch…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.worktrees.compareWithBase",
+        "title": "Compare with Base",
+        "category": "GitGlasses",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "gitglasses.worktrees.chooseBase",
+        "title": "Choose Base for Worktrees…",
+        "category": "GitGlasses",
+        "icon": "$(target)"
+      },
+      {
         "command": "gitglasses.connectIntegration",
         "title": "Connect Integration…",
         "category": "GitGlasses"
@@ -924,6 +942,11 @@
           "group": "navigation"
         },
         {
+          "command": "gitglasses.worktrees.chooseBase",
+          "when": "view == gitglasses.views.worktrees",
+          "group": "navigation"
+        },
+        {
           "command": "gitglasses.showFileHistory",
           "when": "view == gitglasses.views.fileHistory && isWorkspaceTrusted",
           "group": "navigation"
@@ -1027,17 +1050,34 @@
           "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|Stash)$/ && isWorkspaceTrusted"
         },
         {
-          "command": "gitglasses.worktrees.open",
+          "command": "gitglasses.worktrees.compareWithBase",
           "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current)?Worktree$/",
           "group": "inline"
         },
         {
           "command": "gitglasses.worktrees.open",
-          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current)?Worktree$/"
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current|Main)?Worktree$/",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.worktrees.open",
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current|Main)?Worktree$/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "gitglasses.worktrees.compareWithBase",
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current|Main)?Worktree$/",
+          "group": "2_compare@1"
         },
         {
           "command": "gitglasses.worktrees.remove",
-          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree && isWorkspaceTrusted"
+          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree && isWorkspaceTrusted",
+          "group": "3_remove@1"
+        },
+        {
+          "command": "gitglasses.worktrees.removeWithBranch",
+          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree && isWorkspaceTrusted && gitglasses.engineFullCapabilities",
+          "group": "3_remove@2"
         },
         {
           "command": "gitglasses.launchpad.open",
@@ -1294,6 +1334,18 @@
         {
           "command": "gitglasses.worktrees.remove",
           "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.removeWithBranch",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.compareWithBase",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.chooseBase",
+          "when": "gitglasses.hasRepository"
         },
         {
           "command": "gitglasses.startWork",
