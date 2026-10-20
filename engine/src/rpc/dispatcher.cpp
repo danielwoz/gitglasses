@@ -65,6 +65,8 @@ void Dispatcher::notification(const std::string& name, NotificationHandler handl
   notifications_[name] = {std::move(handler), mode};
 }
 
+void Dispatcher::setErrorData(ErrorDataFn errorData) { errorData_ = std::move(errorData); }
+
 std::vector<std::string> Dispatcher::methodNames() const {
   std::vector<std::string> names;
   names.reserve(methods_.size());
@@ -204,7 +206,9 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
     } catch (const CancelledError&) {
       sendError(id, {ErrorCode::Cancelled, "request cancelled"});
     } catch (const HandlerError& e) {
-      sendError(id, e.error);
+      Json data = e.data;
+      if (data.is_null() && errorData_) data = errorData_(e.error);
+      sendError(id, e.error, data);
     } catch (const Json::type_error& e) {
       // nlohmann's value()/get<>() throw this on a param of the wrong JSON
       // type, which is the caller's mistake, so it maps to InvalidParams.
@@ -246,10 +250,10 @@ void Dispatcher::sendResult(const Json& id, const Json& result) {
   send_({{"jsonrpc", "2.0"}, {"id", id}, {"result", result}});
 }
 
-void Dispatcher::sendError(const Json& id, const Error& error) {
-  send_({{"jsonrpc", "2.0"},
-         {"id", id},
-         {"error", {{"code", static_cast<int>(error.code)}, {"message", error.message}}}});
+void Dispatcher::sendError(const Json& id, const Error& error, const Json& data) {
+  Json body = {{"code", static_cast<int>(error.code)}, {"message", error.message}};
+  if (!data.is_null()) body["data"] = data;
+  send_({{"jsonrpc", "2.0"}, {"id", id}, {"error", std::move(body)}});
 }
 
 size_t Dispatcher::inflight() const {

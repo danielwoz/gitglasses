@@ -15,6 +15,7 @@
 #include "services/context.h"
 #include "services/graph/graph_methods.h"
 #include "services/history/history_methods.h"
+#include "services/mutate/git_errors.h"
 #include "services/mutate/mutate_methods.h"
 #include "services/mutate/rebase_methods.h"
 #include "services/mutate/stash_worktree_methods.h"
@@ -133,6 +134,10 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
   services::registerStashWorktreeMethods(dispatcher, context);
   services::registerRebaseMethods(dispatcher, context);
   services::registerPatchMethods(dispatcher, context);
+
+  // A GitError thrown without data gets it from git's output, whichever
+  // method threw it.
+  dispatcher.setErrorData(services::gitErrorData);
 
   if (context.restricted) refuseOutsideRestrictedMode(dispatcher);
 }

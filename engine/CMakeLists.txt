@@ -37,6 +37,7 @@ if(EMSCRIPTEN)
     src/services/commit/commit_methods.cpp
     src/services/graph/graph_methods.cpp
     src/services/history/history_methods.cpp
+    src/services/mutate/git_errors.cpp
     src/services/mutate/mutate_common.cpp
     src/services/mutate/mutate_methods.cpp
     src/services/mutate/rebase_methods.cpp
@@ -159,6 +160,7 @@ add_library(gg_services STATIC
   src/services/commit/commit_methods.cpp
   src/services/graph/graph_methods.cpp
   src/services/history/history_methods.cpp
+  src/services/mutate/git_errors.cpp
   src/services/mutate/mutate_common.cpp
   src/services/mutate/mutate_methods.cpp
   src/services/mutate/rebase_methods.cpp

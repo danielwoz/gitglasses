@@ -15,11 +15,17 @@ namespace {
 
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
+using mutate_detail::repoCwd;
 using mutate_detail::requirePositional;
 using mutate_detail::requirePositionals;
 using mutate_detail::runConflictAware;
 using mutate_detail::runGit;
 using mutate_detail::runGitOrThrow;
+using mutate_detail::runGitWithEnv;
+using mutate_detail::sequencerState;
+using mutate_detail::SequencerState;
+using mutate_detail::throwGitFailure;
+
 
 }  // namespace
 
@@ -211,6 +217,55 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         return rpc::Json::object();
       },
       rpc::Mode::SerialNetwork);
+
+  dispatcher.method(
+      "mutate/sequencer",
+      [&context](const rpc::Json& params, const CancelToken& token,
+                 const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
+        const std::string action = requireString(params, "action");
+        if (action != "continue" && action != "skip" && action != "abort") {
+          throw rpc::HandlerError{
+              {ErrorCode::InvalidParams, "'action' must be 'continue', 'skip' or 'abort'"}};
+        }
+        auto repo = openRepo(context, params);
+        const SequencerState before = sequencerState(repo);
+        if (before.operation == "none") {
+          throw rpc::HandlerError{
+              {ErrorCode::GitError,
+               "no merge, rebase, cherry-pick or revert is in progress to " + action}};
+        }
+        const auto report = [&](bool completed, bool conflicts) -> rpc::Json {
+          return {
+              {"operation", before.operation}, {"completed", completed}, {"conflicts", conflicts}};
+        };
+        // Continuing over unresolved files would only fail; say so instead.
+        if (action == "continue" && before.conflicted) return report(false, true);
+
+        std::vector<std::string> args;
+        if (before.operation == "merge") {
+          if (action == "skip") {
+            throw rpc::HandlerError{
+                {ErrorCode::InvalidParams, "a merge cannot be skipped; continue or abort it"}};
+          }
+          // Continuing a merge is committing it, with the message git prepared.
+          args = action == "abort" ? std::vector<std::string>{"merge", "--abort"}
+                                   : std::vector<std::string>{"commit", "--no-edit"};
+        } else {
+          args = {before.operation, "--" + action};
+        }
+        const std::string what = "git " + args[0] + " " + args[1];
+        // GIT_EDITOR=true keeps the message git prepared for the resumed step;
+        // an editor must never block a headless engine.
+        auto output =
+            runGitWithEnv(repoCwd(repo), std::move(args), {{"GIT_EDITOR", "true"}}, token);
+        if (!output) throw rpc::HandlerError{{output.error()}};
+        const SequencerState after = sequencerState(repo);
+        if (after.conflicted) return report(false, true);
+        if (output.value().exitCode != 0) throwGitFailure(what, output.value(), after.operation);
+        return report(after.operation == "none", false);
+      },
+      rpc::Mode::Serial);
 }
 
 }  // namespace gg::services

@@ -43,6 +43,8 @@ export interface RpcNotification {
 export interface RpcError {
   code: number;
   message: string;
+  /** Structured detail; for GitError, a GitErrorData. */
+  data?: unknown;
 }
 
 export interface RpcResponse {
@@ -96,6 +98,9 @@ export type DiffHunk = Static<typeof models.DiffHunk>;
 export type RebaseEntry = Static<typeof models.RebaseEntry>;
 export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
 export type SequencerState = Static<typeof models.SequencerState>;
+export type SequencerOperation = Static<typeof models.SequencerOperation>;
+export type GitErrorKind = Static<typeof models.GitErrorKind>;
+export type GitErrorData = Static<typeof models.GitErrorData>;
 
 // --- Method map (derived from src/schema/requests.ts) -----------------------
 
@@ -159,6 +164,7 @@ export interface Requests {
   'mutate/fetch': { params: P<'mutate/fetch'>; result: Empty };
   'mutate/pull': { params: P<'mutate/pull'>; result: Empty };
   'mutate/push': { params: P<'mutate/push'>; result: Empty };
+  'mutate/sequencer': { params: P<'mutate/sequencer'>; result: R<'mutate/sequencer'> };
   'stash/push': { params: P<'stash/push'>; result: Empty };
   'stash/apply': { params: P<'stash/apply'>; result: R<'stash/apply'> };
   'stash/drop': { params: P<'stash/drop'>; result: Empty };

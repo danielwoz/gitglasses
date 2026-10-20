@@ -2428,6 +2428,80 @@
         "properties": {}
       }
     },
+    "mutate/sequencer": {
+      "description": "Continues, skips or aborts the merge, rebase, cherry-pick or revert the repository is stopped in the middle of. Continuing while files are still conflicted changes nothing and reports conflicts.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "action"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "const": "continue",
+                "type": "string"
+              },
+              {
+                "const": "skip",
+                "type": "string"
+              },
+              {
+                "const": "abort",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operation",
+          "completed",
+          "conflicts"
+        ],
+        "properties": {
+          "operation": {
+            "description": "Multi-step operation the repository is stopped in the middle of, read from the sequencer state in the gitdir.",
+            "anyOf": [
+              {
+                "const": "none",
+                "type": "string"
+              },
+              {
+                "const": "rebase",
+                "type": "string"
+              },
+              {
+                "const": "merge",
+                "type": "string"
+              },
+              {
+                "const": "cherry-pick",
+                "type": "string"
+              },
+              {
+                "const": "revert",
+                "type": "string"
+              }
+            ]
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "stash/push": {
       "description": "Stashes the working tree.",
       "params": {
@@ -3399,6 +3473,113 @@
             }
           }
         }
+      }
+    }
+  },
+  "errorData": {
+    "additionalProperties": false,
+    "description": "error.data of a GitError (-32001), present when the engine could tell what the failure was about.",
+    "type": "object",
+    "required": [
+      "kind"
+    ],
+    "properties": {
+      "kind": {
+        "description": "What a git failure was about, read from git's output.",
+        "anyOf": [
+          {
+            "const": "auth",
+            "type": "string"
+          },
+          {
+            "const": "hostKey",
+            "type": "string"
+          },
+          {
+            "const": "publickey",
+            "type": "string"
+          },
+          {
+            "const": "signing",
+            "type": "string"
+          },
+          {
+            "const": "rejected",
+            "type": "string"
+          },
+          {
+            "const": "divergent",
+            "type": "string"
+          },
+          {
+            "const": "noRemote",
+            "type": "string"
+          },
+          {
+            "const": "noUpstream",
+            "type": "string"
+          },
+          {
+            "const": "emptyCommit",
+            "type": "string"
+          },
+          {
+            "const": "stopped",
+            "type": "string"
+          },
+          {
+            "const": "network",
+            "type": "string"
+          },
+          {
+            "const": "timeout",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "type": "string"
+          }
+        ]
+      },
+      "operation": {
+        "description": "Multi-step operation the repository is stopped in the middle of, read from the sequencer state in the gitdir.",
+        "anyOf": [
+          {
+            "const": "none",
+            "type": "string"
+          },
+          {
+            "const": "rebase",
+            "type": "string"
+          },
+          {
+            "const": "merge",
+            "type": "string"
+          },
+          {
+            "const": "cherry-pick",
+            "type": "string"
+          },
+          {
+            "const": "revert",
+            "type": "string"
+          }
+        ]
+      },
+      "remote": {
+        "type": "string"
+      },
+      "remotes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "host": {
+        "type": "string"
+      },
+      "partialClone": {
+        "type": "boolean"
       }
     }
   },

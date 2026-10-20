@@ -5,6 +5,7 @@
 import type { TSchema } from '@sinclair/typebox';
 
 import { PROTOCOL_VERSION } from '../version.js';
+import { GitErrorData } from './models.js';
 import {
   ClientNotificationSchemas,
   EngineNotificationSchemas,
@@ -28,6 +29,8 @@ export interface SchemaArtifact {
     string,
     { direction: 'client' | 'engine'; description: string; params: unknown }
   >;
+  /** Shape of a GitError's error.data. */
+  errorData: unknown;
   /** Methods an engine in Restricted Mode serves; it refuses the rest. */
   restrictedModeMethods: string[];
 }
@@ -63,6 +66,7 @@ export function buildSchemaArtifact(): SchemaArtifact {
     protocolVersion: PROTOCOL_VERSION,
     methods,
     notifications,
+    errorData: toJson(GitErrorData),
     restrictedModeMethods: [...RESTRICTED_MODE_METHODS],
   };
 }

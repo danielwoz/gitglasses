@@ -16,6 +16,7 @@ import {
   PatchEnvelope,
   RebaseEntry,
   RepoInfo,
+  SequencerOperation,
   SequencerState,
   Sha,
   strict,
@@ -656,6 +657,32 @@ export const RequestSchemas = {
       strict,
     ),
     result: EmptyObject,
+  },
+  'mutate/sequencer': {
+    description:
+      'Continues, skips or aborts the merge, rebase, cherry-pick or revert the repository is stopped in the middle of. Continuing while files are still conflicted changes nothing and reports conflicts.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        action: Type.Union([
+          Type.Literal('continue'),
+          Type.Literal('skip'),
+          Type.Literal('abort'),
+        ]),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        /** The operation acted on. */
+        operation: SequencerOperation,
+        /** Nothing is left in progress. */
+        completed: Type.Boolean(),
+        /** The operation stopped again on conflicts. */
+        conflicts: Type.Boolean(),
+      },
+      strict,
+    ),
   },
   'stash/push': {
     description: 'Stashes the working tree.',

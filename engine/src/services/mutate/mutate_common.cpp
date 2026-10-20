@@ -8,6 +8,7 @@
 
 #include "exec/git_process.h"
 #include "exec/git_runner.h"
+#include "services/mutate/git_errors.h"
 
 namespace gg::services::mutate_detail {
 
@@ -24,6 +25,10 @@ Result<GitOutput> collectLines(const std::string& cwd, std::vector<std::string> 
   output.exitCode = status.value().exitCode;
   output.stderrText = status.value().stderrText;
   return output;
+}
+
+bool blank(const std::string& text) {
+  return text.find_first_not_of(" \t\r\n") == std::string::npos;
 }
 
 // Reads a positive counter git writes one-per-line into the sequencer
@@ -70,6 +75,21 @@ Result<GitOutput> runGitWithEnv(const std::string& cwd, std::vector<std::string>
   return collectLines(cwd, std::move(args), opts, token);
 }
 
+void throwGitFailure(const std::string& what, const GitOutput& output,
+                     const std::string& operation) {
+  std::string stdoutText;
+  for (const auto& line : output.lines) stdoutText += line + "\n";
+  const std::string& detail = blank(output.stderrText) ? stdoutText : output.stderrText;
+  rpc::Json data = describeGitFailure(output.stderrText + "\n" + stdoutText);
+  if (operation != "none") {
+    if (data.is_null()) data = {{"kind", "stopped"}};
+    data["operation"] = operation;
+  }
+  throw rpc::HandlerError{
+      {ErrorCode::GitError, what + " failed (" + std::to_string(output.exitCode) + "): " + detail},
+      std::move(data)};
+}
+
 GitOutput runGitOrThrow(const core::Repo& repo, std::vector<std::string> args,
                         const CancelToken& token, const std::string& what,
                         std::chrono::milliseconds timeout) {
@@ -77,23 +97,21 @@ GitOutput runGitOrThrow(const core::Repo& repo, std::vector<std::string> args,
   opts.timeout = timeout;
   auto output = collectLines(repoCwd(repo), std::move(args), opts, token);
   if (!output) throw rpc::HandlerError{{output.error()}};
-  if (output.value().exitCode != 0) {
-    throw rpc::HandlerError{{ErrorCode::GitError,
-                             what + " failed (" + std::to_string(output.value().exitCode) +
-                                 "): " + output.value().stderrText}};
-  }
+  if (output.value().exitCode != 0) throwGitFailure(what, output.value());
   return std::move(output.value());
 }
 
 rpc::Json runConflictAware(const core::Repo& repo, std::vector<std::string> args,
-                           const CancelToken& token, const std::string& what) {
-  auto output = runGit(repo, std::move(args), token);
+                           const CancelToken& token, const std::string& what,
+                           std::chrono::milliseconds timeout) {
+  exec::RunOpts opts;
+  opts.timeout = timeout;
+  auto output = collectLines(repoCwd(repo), std::move(args), opts, token);
   if (!output) throw rpc::HandlerError{{output.error()}};
+  const SequencerState state = sequencerState(repo);
+  if (state.conflicted) return {{"conflicts", true}};
   if (output.value().exitCode == 0) return {{"conflicts", false}};
-  if (inConflictState(repo)) return {{"conflicts", true}};
-  throw rpc::HandlerError{{ErrorCode::GitError,
-                           what + " failed (" + std::to_string(output.value().exitCode) +
-                               "): " + output.value().stderrText}};
+  throwGitFailure(what, output.value(), state.operation);
 }
 
 bool rebaseInProgress(const core::Repo& repo) {
