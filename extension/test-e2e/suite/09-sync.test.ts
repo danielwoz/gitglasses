@@ -51,7 +51,13 @@ describe('push and publish', () => {
   });
 
   after(() => {
-    fs.rmSync(scratch, { recursive: true, force: true });
+    // On Windows a git process that is still exiting can hold the remotes
+    // open for a moment; a directory left in the temp folder fails nothing.
+    try {
+      fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (error) {
+      console.warn(`could not remove ${scratch}: ${String(error)}`);
+    }
   });
 
   it('publishes a new branch to the remote its config names', async () => {
