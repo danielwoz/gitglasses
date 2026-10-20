@@ -145,6 +145,25 @@ describe('formatProvenance', () => {
     expect(text).not.toContain('session');
   });
 
+  it('says when a note is attached but its content is not in the clone', () => {
+    const text = formatProvenance(
+      report({
+        hunks: [{ sha: B, resultLine: 1, originalLine: 1, lineCount: 3, path: 'src/a.ts' }],
+        provenance: {
+          [B]: {
+            declared: 'unknown',
+            declarations: [],
+            note: { read: false, ref: 'refs/notes/ai-remote/origin', missing: true },
+          },
+        },
+      }),
+    );
+    expect(text).toContain(
+      '  a git-ai note is attached in refs/notes/ai-remote/origin, but its content is not in ' +
+        'this clone (a partial clone fetches it on demand)',
+    );
+  });
+
   it('says when no hunk covers the range', () => {
     expect(formatProvenance(report({ hunks: [] }))).toMatch(/No blame hunks cover this range\.$/);
   });

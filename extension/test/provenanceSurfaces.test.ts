@@ -28,6 +28,8 @@ import { renderCommitHover } from '../src/annotations/blameHoverLogic';
 
 const AGENT = 'a'.repeat(40);
 const PLAIN = 'b'.repeat(40);
+/** A commit whose git-ai note the clone has not fetched the content of. */
+const MISSING = 'c'.repeat(40);
 
 const DECLARED: CommitProvenance = {
   declared: 'agent',
@@ -70,6 +72,13 @@ function provenanceEngine(caps: Record<string, unknown> = { gitCli: true, watch:
           for (const sha of params.shas as string[]) {
             if (sha === AGENT) commits[sha] = DECLARED;
             if (sha === PLAIN) commits[sha] = { declared: 'unknown', declarations: [] };
+            if (sha === MISSING) {
+              commits[sha] = {
+                declared: 'unknown',
+                declarations: [],
+                note: { read: false, ref: 'refs/notes/ai', missing: true },
+              };
+            }
           }
           return { commits };
         }
@@ -136,6 +145,16 @@ describe('ProvenanceService', () => {
     fake.notify('r1', ['refs']);
     await service.get('r1', AGENT);
     expect(fake.asked().at(-1)?.params.shas).toEqual([AGENT]);
+  });
+
+  it('asks again about a commit whose note content is missing', async () => {
+    const fake = provenanceEngine();
+    const service = new ProvenanceService(fake.engine, () => undefined);
+    expect((await service.get('r1', MISSING))?.note?.missing).toBe(true);
+    await service.lookup('r1', [MISSING, PLAIN]);
+    expect(fake.asked().map((r) => r.params.shas)).toEqual([[MISSING], [MISSING, PLAIN]]);
+    await service.lookup('r1', [PLAIN]);
+    expect(fake.asked()).toHaveLength(2);
   });
 
   it('logs a failure once and answers with nothing', async () => {

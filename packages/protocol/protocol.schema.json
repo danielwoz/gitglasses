@@ -982,6 +982,10 @@
                       },
                       "schemaVersion": {
                         "type": "string"
+                      },
+                      "missing": {
+                        "description": "True when the note's content is not in the object database, as in a partial clone. The engine does not remember this, so asking again once the content is fetched reads the note.",
+                        "type": "boolean"
                       }
                     }
                   }

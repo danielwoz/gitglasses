@@ -136,6 +136,7 @@ rpc::Json commitProvenance(const core::Repo& repo, ServiceContext& context,
     rpc::Json summary = {{"read", parsed.status == notes::GitAiNoteStatus::Read}, {"ref", ref}};
     if (!parsed.schemaVersion.empty())
       summary["schemaVersion"] = parsed.schemaVersion.substr(0, 64);
+    if (note.state == notes::NoteState::Unreadable) summary["missing"] = true;
     entry["note"] = std::move(summary);
     fromNotes = provenance::noteDeclarations(parsed, ref);
   }

@@ -2,15 +2,19 @@
 // notes/addFetchRefspec, driven through the full server loop against real
 // repositories built with the git CLI.
 
+#include <git2.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "core/git2.h"
+#include "core/repo.h"
 #include "services/notes/notes_methods.h"
 #include "test_fixtures.h"
 #include "test_session.h"
@@ -72,6 +76,80 @@ void addNote(FixtureRepo& fixture, const std::string& ref, const std::string& sh
              const std::string& text) {
   fixture.writeFile(".git/GG_TEST_NOTE", text);
   fixture.run("git notes --ref=" + ref + " add -f -F .git/GG_TEST_NOTE " + sha);
+}
+
+// Writes `text` as a blob and returns its id.
+std::string blobOf(FixtureRepo& fixture, const std::string& text) {
+  fixture.writeFile(".git/GG_TEST_BLOB", text);
+  std::string id = gg::testing::gitCapture(fixture.root(), "hash-object -w .git/GG_TEST_BLOB");
+  while (!id.empty() && (id.back() == '\n' || id.back() == '\r')) id.pop_back();
+  return id;
+}
+
+struct NoteEntry {
+  std::string commit;
+  std::string blob;
+  // Stored under a two-character directory (ab/cdef...), the layout git
+  // moves a large notes tree to, instead of at the full name.
+  bool fanout;
+};
+
+// Points `ref` at a notes commit whose tree holds `entries`.
+void writeNotesTree(const FixtureRepo& fixture, const std::string& ref,
+                    const std::vector<NoteEntry>& entries) {
+  core::LibGit2 libgit2;
+  auto repo = core::Repo::open(fixture.root().string());
+  ASSERT_TRUE(repo) << repo.error().message;
+  git_repository* raw = repo.value().raw();
+  const auto oidOf = [](const std::string& hex) {
+    git_oid oid;
+    EXPECT_EQ(git_oid_fromstr(&oid, hex.c_str()), 0);
+    return oid;
+  };
+  git_treebuilder* root = nullptr;
+  ASSERT_EQ(git_treebuilder_new(&root, raw, nullptr), 0);
+  std::unique_ptr<git_treebuilder, decltype(&git_treebuilder_free)> rootOwner(root,
+                                                                              git_treebuilder_free);
+  for (const NoteEntry& entry : entries) {
+    const git_oid blob = oidOf(entry.blob);
+    if (!entry.fanout) {
+      ASSERT_EQ(
+          git_treebuilder_insert(nullptr, root, entry.commit.c_str(), &blob, GIT_FILEMODE_BLOB), 0);
+      continue;
+    }
+    git_treebuilder* inner = nullptr;
+    ASSERT_EQ(git_treebuilder_new(&inner, raw, nullptr), 0);
+    std::unique_ptr<git_treebuilder, decltype(&git_treebuilder_free)> innerOwner(
+        inner, git_treebuilder_free);
+    ASSERT_EQ(git_treebuilder_insert(nullptr, inner, entry.commit.substr(2).c_str(), &blob,
+                                     GIT_FILEMODE_BLOB),
+              0);
+    git_oid innerId;
+    ASSERT_EQ(git_treebuilder_write(&innerId, inner), 0);
+    ASSERT_EQ(git_treebuilder_insert(nullptr, root, entry.commit.substr(0, 2).c_str(), &innerId,
+                                     GIT_FILEMODE_TREE),
+              0);
+  }
+  git_oid treeId;
+  ASSERT_EQ(git_treebuilder_write(&treeId, root), 0);
+  git_tree* tree = nullptr;
+  ASSERT_EQ(git_tree_lookup(&tree, raw, &treeId), 0);
+  core::TreePtr treeOwner(tree);
+  git_signature* signature = nullptr;
+  ASSERT_EQ(git_signature_new(&signature, "Fixture", "fixture@example.invalid", 1700000000, 0), 0);
+  std::unique_ptr<git_signature, decltype(&git_signature_free)> signatureOwner(signature,
+                                                                               git_signature_free);
+  git_oid commitId;
+  ASSERT_EQ(git_commit_create(&commitId, raw, ref.c_str(), signature, signature, nullptr,
+                              "Notes added\n", tree, 0, nullptr),
+            0);
+}
+
+// Deletes a loose object from the object database.
+void removeLooseObject(const FixtureRepo& fixture, const std::string& id) {
+  const std::filesystem::path file =
+      fixture.root() / ".git" / "objects" / id.substr(0, 2) / id.substr(2);
+  ASSERT_TRUE(std::filesystem::remove(file)) << file;
 }
 
 std::string discoverRepo(InteractiveSession& session, const std::filesystem::path& root) {
@@ -332,6 +410,47 @@ TEST(NotesService, FetchedNotesLandBesideTheLocalOnesAndBothAreRead) {
   EXPECT_EQ(commits[pushed]["declared"], "human");
   EXPECT_EQ(commits[local]["note"]["ref"], "refs/notes/ai");
   EXPECT_EQ(commits[local]["declared"], "agent");
+}
+
+TEST(NotesService, ReportsANoteWhoseBlobIsMissingAndReadsItOnceItArrives) {
+  FixtureRepo fixture;
+  const std::string flat = rev(fixture, "HEAD");
+  commitMessage(fixture, "second\n");
+  const std::string fanned = rev(fixture, "HEAD");
+  commitMessage(fixture, "third\n");
+  const std::string none = rev(fixture, "HEAD");
+  const std::string flatBlob = blobOf(fixture, "Looked at in review.\n");
+  const std::string fannedBlob = blobOf(fixture, kCursorNote);
+  writeNotesTree(fixture, "refs/notes/ai", {{flat, flatBlob, false}, {fanned, fannedBlob, true}});
+  // As in a partial clone that has the notes trees but not their blobs.
+  removeLooseObject(fixture, flatBlob);
+  removeLooseObject(fixture, fannedBlob);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json read =
+      session.request(req(10, "notes/read", {{"repoId", repoId}, {"shas", {flat, fanned, none}}}));
+  ASSERT_TRUE(read.contains("result")) << read.dump();
+  EXPECT_EQ(read["result"]["notes"], Json::object());
+  EXPECT_EQ(read["result"]["omitted"], Json::array({flat, fanned}));
+
+  Json missing = provenanceOf(session, 11, repoId, {fanned, none});
+  EXPECT_EQ(missing[fanned]["note"],
+            Json({{"read", false}, {"ref", "refs/notes/ai"}, {"missing", true}}));
+  EXPECT_EQ(missing[fanned]["declared"], "unknown");
+  EXPECT_FALSE(missing[none].contains("note")) << missing.dump();
+
+  // The blob arrives; the same session reads the note.
+  EXPECT_EQ(blobOf(fixture, kCursorNote), fannedBlob);
+  Json arrived = provenanceOf(session, 12, repoId, {fanned});
+  EXPECT_EQ(
+      arrived[fanned]["note"],
+      Json({{"read", true}, {"ref", "refs/notes/ai"}, {"schemaVersion", "authorship/3.0.0"}}));
+  EXPECT_EQ(arrived[fanned]["declared"], "agent");
+  Json reread =
+      session.request(req(13, "notes/read", {{"repoId", repoId}, {"shas", {flat, fanned}}}));
+  EXPECT_EQ(reread["result"]["notes"], Json({{fanned, kCursorNote}}));
+  EXPECT_EQ(reread["result"]["omitted"], Json::array({flat}));
 }
 
 }  // namespace

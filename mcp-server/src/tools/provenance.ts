@@ -172,7 +172,12 @@ export function formatProvenance(report: ProvenanceReport): string {
       commitLines.push(...provenance.declarations.map(declarationLine));
     }
     const note = provenance?.note;
-    if (note && !note.read) {
+    if (note && note.missing) {
+      commitLines.push(
+        `  a git-ai note is attached in ${note.ref}, but its content is not in this clone ` +
+          '(a partial clone fetches it on demand)',
+      );
+    } else if (note && !note.read) {
       commitLines.push(
         `  a git-ai note is attached in ${note.ref} but not read${
           note.schemaVersion ? ` (schema ${JSON.stringify(note.schemaVersion)})` : ''

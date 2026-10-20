@@ -22,6 +22,47 @@ std::size_t entryBytes(const std::string& key, const Note& note) {
   return key.size() + note.text.size() + kEntryOverhead;
 }
 
+enum class Entry {
+  // The notes tree has no entry for the commit.
+  None,
+  // It has one.
+  Present,
+  // A tree on the way could not be read, so whether it has one is unknown.
+  Unknown,
+};
+
+// Whether the notes tree of `tip` holds an entry for `sha`. git stores a note
+// at the commit's full hex name, or under two-character fanout directories
+// ("ab/cdef...", "ab/cd/ef..."), so each level is tried both ways.
+Entry noteEntry(const core::Repo& repo, const std::string& tip, const std::string& sha) {
+  git_oid tipId;
+  git_commit* rawCommit = nullptr;
+  if (git_oid_fromstr(&tipId, tip.c_str()) != 0 ||
+      git_commit_lookup(&rawCommit, repo.raw(), &tipId) != 0) {
+    return Entry::Unknown;
+  }
+  core::CommitPtr commit(rawCommit);
+  git_tree* rawTree = nullptr;
+  if (git_commit_tree(&rawTree, commit.get()) != 0) return Entry::Unknown;
+  core::TreePtr tree(rawTree);
+  std::string_view rest = sha;
+  while (!rest.empty()) {
+    const git_tree_entry* entry = git_tree_entry_byname(tree.get(), std::string(rest).c_str());
+    if (entry && git_tree_entry_type(entry) == GIT_OBJECT_BLOB) return Entry::Present;
+    if (rest.size() <= 2) return Entry::None;
+    const git_tree_entry* fanout =
+        git_tree_entry_byname(tree.get(), std::string(rest.substr(0, 2)).c_str());
+    if (!fanout || git_tree_entry_type(fanout) != GIT_OBJECT_TREE) return Entry::None;
+    git_tree* rawSubtree = nullptr;
+    if (git_tree_lookup(&rawSubtree, repo.raw(), git_tree_entry_id(fanout)) != 0) {
+      return Entry::Unknown;
+    }
+    tree.reset(rawSubtree);
+    rest.remove_prefix(2);
+  }
+  return Entry::None;
+}
+
 }  // namespace
 
 std::string NotesCache::makeKey(const std::string& repoId, const std::string& ref,
@@ -153,7 +194,22 @@ Note readNote(const core::Repo& repo, NotesCache& cache, const std::string& repo
   git_note* raw = nullptr;
   const int rc = git_note_read(&raw, repo.raw(), ref.c_str(), &oid);
   if (rc == GIT_ENOTFOUND) {
-    cache.put(key, note);
+    // git_note_read says the same when the commit has no note and when its
+    // note's blob is missing; only the tree tells them apart.
+    switch (noteEntry(repo, tip, sha)) {
+      case Entry::None:
+        cache.put(key, note);
+        break;
+      case Entry::Present:
+        spdlog::debug("notes: the {} note of {} is not in the object database", ref, sha);
+        note.state = NoteState::Unreadable;
+        break;
+      case Entry::Unknown:
+        // Without the tree there is no telling whether a note exists, so
+        // none is claimed; nothing is cached, and the next read looks again.
+        spdlog::debug("notes: the {} tree at {} is not in the object database", ref, tip);
+        break;
+    }
     return note;
   }
   if (rc != 0) {

@@ -348,6 +348,12 @@ export const CommitProvenance = Type.Object(
               "The notes ref the note was read from: refs/notes/ai, or a remote's copy such as refs/notes/ai-remote/origin when only that has one.",
           }),
           schemaVersion: Type.Optional(Type.String()),
+          missing: Type.Optional(
+            Type.Boolean({
+              description:
+                "True when the note's content is not in the object database, as in a partial clone. The engine does not remember this, so asking again once the content is fetched reads the note.",
+            }),
+          ),
         },
         {
           ...strict,

@@ -24,8 +24,9 @@ enum class NoteState {
   Present,
   // Longer than kMaxNoteBytes.
   TooLarge,
-  // The note exists but its blob could not be read (for instance one a
-  // partial clone left out). Not cached, so a later fetch can supply it.
+  // The notes tree has an entry for the commit but its blob could not be
+  // read, as when a partial clone left it out. Not cached, so the note is
+  // read once the blob arrives.
   Unreadable,
 };
 

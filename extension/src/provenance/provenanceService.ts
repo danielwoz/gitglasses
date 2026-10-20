@@ -84,7 +84,9 @@ export class ProvenanceService implements vscode.Disposable {
       }
       for (const sha of batch) {
         const provenance = commits[sha] ?? null;
-        this.remember(this.key(repoId, sha), provenance);
+        // A note whose content a partial clone left out is read once the
+        // content arrives, which moves no ref, so that answer is not kept.
+        if (!provenance?.note?.missing) this.remember(this.key(repoId, sha), provenance);
         if (provenance) found.set(sha, provenance);
       }
     }

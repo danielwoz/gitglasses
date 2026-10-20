@@ -44,6 +44,11 @@
         "declared": "unknown",
         "declarations": [],
         "note": { "read": false, "ref": "refs/notes/ai", "schemaVersion": "authorship/4.0.0" }
+      },
+      "9a8b7c6d5e4f30211203f4e5d6c7b8a990123456": {
+        "declared": "unknown",
+        "declarations": [],
+        "note": { "read": false, "ref": "refs/notes/ai-remote/origin", "missing": true }
       }
     }
   }
