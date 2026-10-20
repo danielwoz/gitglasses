@@ -1009,7 +1009,7 @@
           "scope": "window",
           "default": true,
           "order": 19,
-          "markdownDescription": "Look through the commits listed in the files `blame.ignoreRevsFile` names (files that do not exist are skipped), or in the repository's `.git-blame-ignore-revs` when that git setting is unset, as GitHub does. Needs the git CLI."
+          "markdownDescription": "Look through the commits listed in the files `blame.ignoreRevsFile` names, or in the repository's `.git-blame-ignore-revs` when that git setting is unset, as GitHub does. A file that does not exist, or that git cannot read (an abbreviated sha, say), is skipped with a note in the GitGlasses output. Needs the git CLI."
         },
         "gitglasses.views.pageSize": {
           "type": "number",

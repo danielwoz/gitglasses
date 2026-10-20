@@ -59,7 +59,9 @@ Blame:
   `acrossFiles` (`-C`)
 - `gitglasses.blame.useIgnoreRevsFile` — honour git's `blame.ignoreRevsFile`,
   or the repository's `.git-blame-ignore-revs` when that is unset (on by
-  default)
+  default). A file that is missing, or that git cannot read (an abbreviated
+  sha, say), is skipped with a note in the GitGlasses output rather than
+  failing blame
 - `gitglasses.codeLens.enabled` — CodeLens on/off
 
 Blame follows git: `.mailmap` names, ignore-revs files, and unsaved edits
