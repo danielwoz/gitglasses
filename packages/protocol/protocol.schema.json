@@ -457,7 +457,7 @@
       }
     },
     "log/commits": {
-      "description": "Topo-ordered commit page from a ref (default HEAD).",
+      "description": "Topo-ordered commit page from a ref (default HEAD). Later pages continue the history the first page listed, even after the ref moves.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -794,13 +794,18 @@
                 "binary": {
                   "description": "Either side is binary; additions and deletions are then 0.",
                   "type": "boolean"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
           },
           "stats": {
             "additionalProperties": false,
-            "description": "`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set.",
+            "description": "`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set or a file has `statsUnavailable`.",
             "type": "object",
             "required": [
               "files",
@@ -1510,6 +1515,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -1571,6 +1581,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -2024,6 +2039,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -2119,6 +2139,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -3767,7 +3792,7 @@
       }
     },
     "patch/apply": {
-      "description": "Applies a patch envelope; 3-way when the base is missing.",
+      "description": "Applies a patch envelope with `git apply --3way`. With `dryRun`, changes nothing and lists the files git would change, read by git's own patch parser.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -3819,6 +3844,10 @@
                 "type": "string"
               }
             }
+          },
+          "dryRun": {
+            "description": "Do not apply: return the files the patch would change in `files`. A patch git cannot read fails with GitError.",
+            "type": "boolean"
           }
         }
       },
@@ -3839,6 +3868,76 @@
           },
           "baseFound": {
             "type": "boolean"
+          },
+          "files": {
+            "description": "Dry runs only: every file the patch changes, in patch order.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions",
+                "binary"
+              ],
+              "properties": {
+                "path": {
+                  "description": "Path after the patch; for a deletion, the deleted path.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "Modified, added, deleted, renamed or copied.",
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "description": "Path before the patch; renames and copies only.",
+                  "type": "string"
+                },
+                "additions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "deletions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "binary": {
+                  "type": "boolean"
+                },
+                "executable": {
+                  "description": "The patch creates the file executable or sets its executable bit.",
+                  "const": true,
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "message": {
+            "description": "git's explanation when the patch was not applied.",
+            "type": "string"
           }
         }
       }

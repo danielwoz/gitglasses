@@ -19,20 +19,18 @@ namespace {
 using status_detail::commitTree;
 using status_detail::resolveCommit;
 
-// FileChange list for a tree diff: rename detection on, per-file line stats
-// from the generated patch (0 for binary files).
-rpc::Json fileChangesJson(git_diff* diff, const CancelToken& token) {
-  std::size_t total = 0;
-  auto changes =
-      status_detail::treeFileChanges(diff, token, std::numeric_limits<std::size_t>::max(), total);
-  if (!changes) throw rpc::HandlerError{{changes.error()}};
+// FileChange list for a tree diff, with git's rename detection and per-file
+// line stats (0 for binary files; marked unavailable when a partial clone
+// lacks the content and it could not be fetched).
+rpc::Json fileChangesJson(const std::vector<status_detail::TreeFileChange>& changes) {
   rpc::Json files = rpc::Json::array();
-  for (const auto& change : changes.value()) {
+  for (const auto& change : changes) {
     rpc::Json file = {{"path", change.path},
                       {"status", std::string(1, change.status)},
                       {"additions", change.additions},
                       {"deletions", change.deletions}};
     if (!change.origPath.empty()) file["origPath"] = change.origPath;
+    if (change.statsUnavailable) file["statsUnavailable"] = true;
     files.push_back(std::move(file));
   }
   return files;
@@ -42,7 +40,9 @@ rpc::Json fileChangesJson(git_diff* diff, const CancelToken& token) {
 
 void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
   // Files changed by one commit: its tree against the first parent's tree
-  // (the empty tree for a root commit).
+  // (the empty tree for a root commit). In a partial clone with the git CLI
+  // available, blobs the line stats need are downloaded the way `git show
+  // --stat` downloads them.
   dispatcher.method(
       "diff/commit",
       [&context](const rpc::Json& params, const CancelToken& token,
@@ -53,9 +53,12 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
 
         auto commit = resolveCommit(repo.value(), sha);
         if (!commit) throw rpc::HandlerError{{commit.error()}};
-        auto diff = status_detail::commitDiff(repo.value(), commit.value().get());
-        if (!diff) throw rpc::HandlerError{{diff.error()}};
-        return {{"files", fileChangesJson(diff.value().get(), token)}};
+        std::size_t total = 0;
+        auto changes = status_detail::commitFileChanges(repo.value(), commit.value().get(), token,
+                                                        std::numeric_limits<std::size_t>::max(),
+                                                        total, context.cliAvailable);
+        if (!changes) throw rpc::HandlerError{{changes.error()}};
+        return {{"files", fileChangesJson(changes.value())}};
       },
       rpc::Mode::Concurrent);
 
@@ -78,13 +81,12 @@ void registerDiffMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         auto headTree = commitTree(headCommit.value().get());
         if (!headTree) throw rpc::HandlerError{{headTree.error()}};
 
-        git_diff* rawDiff = nullptr;
-        if (git_diff_tree_to_tree(&rawDiff, repo.value().raw(), baseTree.value().get(),
-                                  headTree.value().get(), nullptr) != 0) {
-          throw rpc::HandlerError{{core::gitError("diff " + base + ".." + head)}};
-        }
-        core::DiffPtr diff(rawDiff);
-        return {{"files", fileChangesJson(diff.get(), token)}};
+        std::size_t total = 0;
+        auto changes = status_detail::treeFileChanges(
+            repo.value(), baseTree.value().get(), headTree.value().get(), token,
+            std::numeric_limits<std::size_t>::max(), total, context.cliAvailable);
+        if (!changes) throw rpc::HandlerError{{changes.error()}};
+        return {{"files", fileChangesJson(changes.value())}};
       },
       rpc::Mode::Concurrent);
 

@@ -376,6 +376,181 @@ TEST(PatchService, RangeSourceEnvelope) {
   EXPECT_EQ(slurp(clone.root() / "r2.txt"), "second\n");
 }
 
+// Config that changes what `git diff` prints must not change the patch:
+// prefixes, colour, an external diff tool and the submodule format are all
+// pinned, and binary content travels as a binary patch.
+TEST(PatchService, PatchesIgnoreConfigThatChangesDiffOutput) {
+  FixtureRepo fixture;
+  const std::string binary1("\x89PNG\x00\x01\x02\x03 image", 14);
+  const std::string binary2("\x89PNG\x00\x07\x08\x09 image v2", 17);
+  std::string lines;
+  for (int i = 1; i <= 20; ++i) lines += "line " + std::to_string(i) + "\n";
+  std::string editedLines = lines;
+  editedLines.replace(editedLines.find("line 10\n"), 7, "line ten");
+  fixture.writeFile("a.txt", "l1\nl2\nl3\n");
+  fixture.writeFile("long.txt", lines);
+  fixture.writeFile("img.bin", binary1);
+  fixture.run("git add a.txt long.txt img.bin");
+  commitTick(fixture.root(), "base", 1);
+  CloneRepo clone(fixture);
+
+  fixture.run("git config diff.noprefix true");
+  fixture.run("git config diff.mnemonicPrefix true");
+  fixture.run("git config color.ui always");
+  fixture.run("git config color.diff always");
+  fixture.run("git config diff.external gg-no-such-diff-tool");
+  fixture.run("git config diff.submodule log");
+  // Hunks without context lines, which git apply refuses.
+  fixture.run("git config diff.context 0");
+  fixture.writeFile("a.txt", "l1\nl2 edited\nl3\n");
+  fixture.writeFile("long.txt", editedLines);
+  fixture.writeFile("img.bin", binary2);
+  fixture.writeFile("new.bin", binary1);
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  const std::string repoA = discoverRepo(session, 2, fixture.root());
+  const std::string repoB = discoverRepo(session, 3, clone.root());
+
+  Json envelope = createPatch(session, 10, repoA, {{"kind", "wip"}, {"includeUntracked", true}});
+  const std::string patchText = envelope["patch"];
+  EXPECT_EQ(patchText.find('\x1b'), std::string::npos) << "colour escapes in the patch";
+  EXPECT_NE(patchText.find("diff --git a/a.txt b/a.txt"), std::string::npos) << patchText;
+  EXPECT_NE(patchText.find("GIT binary patch"), std::string::npos) << patchText;
+
+  Json applied = applyPatch(session, 11, repoB, envelope);
+  EXPECT_TRUE(applied["applied"].get<bool>()) << applied.dump();
+  EXPECT_FALSE(applied["conflicts"].get<bool>());
+  EXPECT_EQ(slurp(clone.root() / "a.txt"), "l1\nl2 edited\nl3\n");
+  EXPECT_EQ(slurp(clone.root() / "long.txt"), editedLines);
+  EXPECT_EQ(slurp(clone.root() / "img.bin"), binary2);
+  EXPECT_EQ(slurp(clone.root() / "new.bin"), binary1);
+
+  // The commit and stash sources take the same path through git.
+  fixture.run("git add a.txt img.bin new.bin");
+  commitTick(fixture.root(), "binary work", 2);
+  runGit(clone.root(), "git reset -q --hard");
+  runGit(clone.root(), "git clean -fdq");
+  Json fromCommit =
+      createPatch(session, 12, repoA, {{"kind", "commit"}, {"sha", rev(fixture.root(), "HEAD")}});
+  Json appliedCommit = applyPatch(session, 13, repoB, fromCommit);
+  EXPECT_TRUE(appliedCommit["applied"].get<bool>()) << appliedCommit.dump();
+  EXPECT_EQ(slurp(clone.root() / "img.bin"), binary2);
+
+  fixture.writeFile("img.bin", binary1);
+  fixture.run("git stash push -q -m \"binary stash\"");
+  Json fromStash = createPatch(session, 14, repoA, {{"kind", "stash"}, {"index", 0}});
+  Json appliedStash = applyPatch(session, 15, repoA, fromStash);
+  EXPECT_TRUE(appliedStash["applied"].get<bool>()) << appliedStash.dump();
+  EXPECT_EQ(slurp(fixture.root() / "img.bin"), binary1);
+}
+
+TEST(PatchService, ApplyFailureCarriesGitsReason) {
+  FixtureRepo source;
+  source.writeFile("f.txt", "l1\nl2\nl3\n");
+  source.run("git add f.txt");
+  commitTick(source.root(), "base", 1);
+  source.writeFile("f.txt", "l1\nl2 patched\nl3\n");
+  FixtureRepo unrelated;
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  const std::string repoA = discoverRepo(session, 2, source.root());
+  const std::string repoC = discoverRepo(session, 3, unrelated.root());
+  Json envelope = createPatch(session, 10, repoA, {{"kind", "wip"}});
+  Json applied = applyPatch(session, 11, repoC, envelope);
+  EXPECT_FALSE(applied["applied"].get<bool>());
+  ASSERT_TRUE(applied.contains("message")) << applied.dump();
+  EXPECT_NE(applied["message"].get<std::string>().find("f.txt"), std::string::npos)
+      << applied.dump();
+}
+
+Json dryRun(InteractiveSession& session, std::int64_t id, const std::string& repoId,
+            const std::string& patch) {
+  Json envelope = {
+      {"format", "gitglasses-patch"}, {"version", 1},   {"baseSha", std::string(40, '0')},
+      {"summary", "Fix typo"},        {"patch", patch}, {"createdAtIso", ""}};
+  return session.request(
+      req(id, "patch/apply", {{"repoId", repoId}, {"envelope", envelope}, {"dryRun", true}}));
+}
+
+Json patchFileFor(const Json& files, const std::string& path) {
+  for (const auto& file : files) {
+    if (file["path"] == path) return file;
+  }
+  ADD_FAILURE() << "no file " << path << " in " << files.dump();
+  return {};
+}
+
+// The confirmation before applying lists what git apply will change. A
+// plain diff without `diff --git` headers counts as much as a git one.
+TEST(PatchService, DryRunListsTheFilesGitApplyWouldChange) {
+  FixtureRepo fixture;
+  fixture.writeFile("a.txt", "one\ntwo\nthree\n");
+  fixture.run("git add a.txt");
+  commitTick(fixture.root(), "base", 1);
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  const std::string repoId = discoverRepo(session, 2, fixture.root());
+
+  const std::string plain =
+      "--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"
+      "--- /dev/null\n+++ b/.vscode/settings.json\n@@ -0,0 +1 @@\n+{}\n";
+  Json listed = dryRun(session, 10, repoId, plain);
+  ASSERT_TRUE(listed.contains("result")) << listed.dump();
+  EXPECT_FALSE(listed["result"]["applied"].get<bool>());
+  const Json& files = listed["result"]["files"];
+  ASSERT_EQ(files.size(), 2u) << listed.dump();
+  const Json settings = patchFileFor(files, ".vscode/settings.json");
+  EXPECT_EQ(settings.value("status", ""), "A");
+  EXPECT_EQ(settings.value("additions", -1), 1);
+  const Json edited = patchFileFor(files, "a.txt");
+  EXPECT_EQ(edited.value("status", ""), "M");
+  EXPECT_EQ(edited.value("additions", -1), 1);
+  EXPECT_EQ(edited.value("deletions", -1), 1);
+  // Nothing was applied.
+  EXPECT_EQ(gitOut(fixture.root(), "status --porcelain"), "");
+  EXPECT_FALSE(std::filesystem::exists(fixture.root() / ".vscode"));
+
+  // A git patch with a rename, a deletion, a binary file and a new
+  // executable.
+  fixture.writeFile("b.txt", "bee\n");
+  fixture.writeFile("img.bin", std::string("\x00\x01\x02", 3));
+  fixture.run("git add b.txt img.bin");
+  commitTick(fixture.root(), "more", 2);
+  std::filesystem::create_directories(fixture.root() / "docs");
+  fixture.run("git mv a.txt docs/renamed.txt");
+  fixture.run("git rm -q b.txt");
+  fixture.writeFile("img.bin", std::string("\x00\x09\x02", 3));
+  fixture.writeFile("run.sh", "echo hi\n");
+  // Executable both in the working tree and, where the filesystem has no
+  // executable bit (core.filemode false), in the index.
+  std::filesystem::permissions(fixture.root() / "run.sh", std::filesystem::perms::owner_exec,
+                               std::filesystem::perm_options::add);
+  fixture.run("git add img.bin run.sh");
+  fixture.run("git update-index --chmod=+x run.sh");
+  Json created = createPatch(session, 11, repoId, {{"kind", "wip"}});
+  fixture.run("git reset -q --hard");
+
+  Json described = dryRun(session, 12, repoId, created["patch"]);
+  ASSERT_TRUE(described.contains("result")) << described.dump();
+  const Json& changes = described["result"]["files"];
+  ASSERT_EQ(changes.size(), 4u) << described.dump();
+  const Json renamed = patchFileFor(changes, "docs/renamed.txt");
+  EXPECT_EQ(renamed.value("status", ""), "R");
+  EXPECT_EQ(renamed.value("origPath", ""), "a.txt");
+  EXPECT_EQ(patchFileFor(changes, "b.txt").value("status", ""), "D");
+  EXPECT_TRUE(patchFileFor(changes, "img.bin").value("binary", false));
+  const Json script = patchFileFor(changes, "run.sh");
+  EXPECT_EQ(script.value("status", ""), "A");
+  EXPECT_TRUE(script.value("executable", false)) << script.dump();
+
+  Json corrupt = dryRun(session, 13, repoId, "--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n-x\n");
+  ASSERT_TRUE(corrupt.contains("error")) << corrupt.dump();
+  EXPECT_EQ(corrupt["error"]["code"], -32001);
+}
+
 TEST(PatchService, InvalidParamsRejected) {
   FixtureRepo fixture;
   InteractiveSession session;

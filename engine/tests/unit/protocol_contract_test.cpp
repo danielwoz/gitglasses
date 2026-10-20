@@ -398,7 +398,12 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   EXPECT_FALSE(file.value("truncated", true));
   EXPECT_FALSE(file.value("binary", true));
 
-  checkedRequest(session, 21, "patch/create", {{"repoId", repoId}, {"source", {{"kind", "wip"}}}});
+  Json patch = checkedRequest(session, 21, "patch/create",
+                              {{"repoId", repoId}, {"source", {{"kind", "wip"}}}});
+  Json preview =
+      checkedRequest(session, 24, "patch/apply",
+                     {{"repoId", repoId}, {"envelope", patch["envelope"]}, {"dryRun", true}});
+  EXPECT_FALSE(preview.value("files", Json::array()).empty());
 
   Json details =
       checkedRequest(session, 22, "commit/details", {{"repoId", repoId}, {"sha", "v1.0"}});
