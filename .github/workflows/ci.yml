@@ -61,10 +61,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }}
 
   engine-windows:
     runs-on: windows-2022
@@ -113,10 +110,7 @@ jobs:
 
       - name: Test
         shell: bash
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          ctest --preset release
+        run: ctest --preset release
 
   engine-macos:
     runs-on: macos-14
@@ -158,10 +152,7 @@ jobs:
         run: cmake --build --preset release
 
       - name: Test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          ctest --preset release
+        run: ctest --preset release
 
   engine-wasm:
     runs-on: ubuntu-22.04
@@ -261,10 +252,7 @@ jobs:
         run: npx tsc -p tsconfig.json
 
       - name: Test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          pnpm test
+        run: pnpm test
 
   # The extension is path-sensitive in ways only Windows exposes: the engine
   # reports repo roots with forward slashes on every platform while VS Code's
@@ -331,19 +319,13 @@ jobs:
 
       - name: Test
         shell: bash
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          pnpm test
+        run: pnpm test
 
       # No xvfb wrapper: the runner has a desktop session, and headless.cjs
       # passes straight through to node when a display is present.
       - name: E2E test
         shell: bash
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          pnpm --filter gitglasses run test:e2e
+        run: pnpm --filter gitglasses run test:e2e
 
   extension-e2e:
     runs-on: ubuntu-22.04
@@ -384,7 +366,4 @@ jobs:
         run: pnpm build
 
       - name: E2E test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          xvfb-run -a pnpm --filter gitglasses run test:e2e
+        run: xvfb-run -a pnpm --filter gitglasses run test:e2e
