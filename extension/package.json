@@ -635,13 +635,15 @@
           {
             "id": "ai",
             "title": "Bring your own AI key, or none at all",
-            "description": "Explain a commit or draft a commit message using your own API key or a local Ollama model. Nothing is metered and nothing is sent to us.\n[Set AI API Key…](command:gitglasses.ai.setApiKey)",
+            "description": "Explain a commit, or draft a commit message with the sparkle button in Source Control. Use a model your editor already provides, a local Ollama model, or your own API key. Nothing is metered and nothing is sent to GitGlasses.\n[Choose AI Provider…](command:gitglasses.ai.chooseProvider)",
             "media": {
               "markdown": "media/walkthrough/ai.md"
             },
             "completionEvents": [
+              "onCommand:gitglasses.ai.chooseProvider",
               "onCommand:gitglasses.ai.setApiKey",
-              "onCommand:gitglasses.ai.explainCommit"
+              "onCommand:gitglasses.ai.explainCommit",
+              "onCommand:gitglasses.ai.generateCommitMessage"
             ]
           },
           {
@@ -741,6 +743,13 @@
         {
           "command": "gitglasses.showFileHistory",
           "when": "resourceScheme == file && isWorkspaceTrusted",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "gitglasses.ai.generateCommitMessage",
+          "when": "scmProvider == git && isWorkspaceTrusted",
           "group": "navigation"
         }
       ],

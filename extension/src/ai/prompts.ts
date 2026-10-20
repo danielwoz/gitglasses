@@ -80,8 +80,8 @@ export function explainWipPrompt(
   );
 }
 
-export function commitMessagePrompt(context: string): string {
-  return `Write a commit message for these staged changes:\n\n${context}`;
+export function commitMessagePrompt(context: string, staged = true): string {
+  return `Write a commit message for these ${staged ? 'staged' : 'uncommitted'} changes:\n\n${context}`;
 }
 
 /** The request, with today's date so relative dates resolve. */

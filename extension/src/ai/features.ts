@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { CommitDetails, CommitSummaryInfo, DiffHunk, ErrorCodes } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
-import { requireRepo, ViewNode } from '../views/viewBase';
+import { ActiveRepo, requireRepo, ViewNode } from '../views/viewBase';
 import { errorMessage, setStatus } from '../commands/ui';
 import { SHOW_COMMIT_DETAILS_COMMAND } from '../commitDetails/commitDetails';
 import { shortSha } from '@gitglasses/protocol/sha';
@@ -190,10 +190,7 @@ async function diffFromVersions(
           : unifiedDiff(before, after);
       files.push({ path: change.path, patch: `${header}\n${hunks}` });
     } catch (error) {
-      files.push({
-        path: change.path,
-        patch: `${header}\n(diff unavailable: ${errorMessage(error)})`,
-      });
+      files.push({ path: change.path, patch: `${header}\n(diff unavailable: ${errorMessage(error)})` });
     }
   }
   return files;
@@ -217,16 +214,16 @@ async function collectCommitDiff(
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     if (code !== ErrorCodes.Restricted && code !== ErrorCodes.MethodNotSupported) {
-      log(
-        `AI: patch/create for ${details.sha} failed; diffing the file versions instead: ${errorMessage(error)}`,
-      );
+      log(`AI: patch/create for ${details.sha} failed; diffing the file versions instead: ${errorMessage(error)}`);
     }
   }
   return diffFromVersions(engine, repoId, details);
 }
 
 function refsLabel(details: CommitDetails): string {
-  return details.refs.map((ref) => (ref.kind === 'tag' ? `tag ${ref.name}` : ref.name)).join(', ');
+  return details.refs
+    .map((ref) => (ref.kind === 'tag' ? `tag ${ref.name}` : ref.name))
+    .join(', ');
 }
 
 async function explainCommit(
@@ -255,9 +252,7 @@ async function explainCommit(
     details = await engine.request('commit/details', { repoId: repo.repoId, sha: ref });
     files = await collectCommitDiff(engine, repo.repoId, details, log);
   } catch (error) {
-    void vscode.window.showWarningMessage(
-      `GitGlasses: cannot read commit "${ref}": ${errorMessage(error)}`,
-    );
+    void vscode.window.showWarningMessage(`GitGlasses: cannot read commit "${ref}": ${errorMessage(error)}`);
     return;
   }
   const omitted = details.truncated || details.files.length > files.length;
@@ -290,6 +285,24 @@ async function explainCommit(
 
 // --- Explain Working Changes -------------------------------------------------
 
+async function collectChangeHunks(
+  engine: EngineClient,
+  repoId: string,
+  paths: readonly string[],
+  staged: boolean,
+): Promise<DiffFile[]> {
+  const files: DiffFile[] = [];
+  for (const path of paths.slice(0, MAX_CONTEXT_FILES)) {
+    try {
+      const { hunks } = await engine.request('diff/fileHunks', { repoId, path, staged });
+      if (hunks.length > 0) files.push({ path, patch: hunksToPatch(hunks) });
+    } catch {
+      files.push({ path, patch: '(diff unavailable)' });
+    }
+  }
+  return files;
+}
+
 async function collectWipFiles(
   engine: EngineClient,
   repoId: string,
@@ -301,26 +314,12 @@ async function collectWipFiles(
     sections.push(section);
     patches.set(path, sections);
   };
-  const collectSide = async (paths: string[], staged: boolean): Promise<void> => {
-    for (const path of paths.slice(0, MAX_CONTEXT_FILES)) {
-      try {
-        const { hunks } = await engine.request('diff/fileHunks', { repoId, path, staged });
-        if (hunks.length > 0) {
-          add(path, `${staged ? '(staged)' : '(unstaged)'}\n${hunksToPatch(hunks)}`);
-        }
-      } catch {
-        add(path, staged ? '(staged; diff unavailable)' : '(unstaged; diff unavailable)');
-      }
+  for (const staged of [true, false]) {
+    const paths = (staged ? status.staged : status.unstaged).map((change) => change.path);
+    for (const file of await collectChangeHunks(engine, repoId, paths, staged)) {
+      add(file.path, `${staged ? '(staged)' : '(unstaged)'}\n${file.patch}`);
     }
-  };
-  await collectSide(
-    status.staged.map((change) => change.path),
-    true,
-  );
-  await collectSide(
-    status.unstaged.map((change) => change.path),
-    false,
-  );
+  }
   for (const path of status.untracked.slice(0, MAX_CONTEXT_FILES)) add(path, '(untracked file)');
   for (const path of status.conflicted) add(path, '(conflicted)');
   const files = [...patches.entries()].map(([path, sections]) => ({
@@ -366,13 +365,66 @@ async function explainWip(
   );
 }
 
+// --- Generate Commit Message --------------------------------------------------
+
+/** The slice of the built-in Git extension's API (vscode.git, API v1) that
+ *  writes the Source Control commit message box. */
+interface GitRepositoryApi {
+  readonly rootUri: vscode.Uri;
+  readonly inputBox: { value: string };
+}
+interface GitApi {
+  readonly repositories: readonly GitRepositoryApi[];
+}
+interface GitExtensionExports {
+  readonly enabled?: boolean;
+  getAPI(version: 1): GitApi;
+}
+
+async function builtInGitApi(log: Log): Promise<GitApi | undefined> {
+  const extension = vscode.extensions.getExtension<GitExtensionExports>('vscode.git');
+  if (!extension) return undefined;
+  try {
+    const exports = extension.isActive ? extension.exports : await extension.activate();
+    if (!exports || exports.enabled === false) return undefined;
+    return exports.getAPI(1);
+  } catch (error) {
+    log(`AI: the built-in Git extension's API is unavailable: ${errorMessage(error)}`);
+    return undefined;
+  }
+}
+
+/** The repository a commit message is for: the Source Control the button was
+ *  pressed in, else the active repository. */
+async function commitMessageRepo(
+  repos: RepositoryService,
+  sourceControl: { rootUri?: vscode.Uri } | undefined,
+): Promise<ActiveRepo | undefined> {
+  const rootUri = sourceControl?.rootUri;
+  if (rootUri?.scheme === 'file') {
+    // Any path directly inside the root locates the repository it belongs to.
+    const located = await repos.locateOrDiscover(vscode.Uri.joinPath(rootUri, '.gitglasses'));
+    if (located && repos.isRootOf(located.repoId, rootUri.fsPath)) {
+      return { repoId: located.repoId, rootPath: repos.rootOf(located.repoId) ?? located.rootPath };
+    }
+  }
+  return requireRepo(repos);
+}
+
 async function generateCommitMessage(
   engine: EngineClient,
   repos: RepositoryService,
   ai: AiService,
+  log: Log,
+  sourceControl?: { rootUri?: vscode.Uri },
 ): Promise<void> {
-  const repo = await requireRepo(repos);
+  const repo = await commitMessageRepo(repos, sourceControl);
   if (!repo) return;
+  const git = await builtInGitApi(log);
+  const box = git?.repositories.find((candidate) =>
+    repos.isRootOf(repo.repoId, candidate.rootUri.fsPath),
+  );
+
   let status;
   try {
     status = await engine.request('status/summary', { repoId: repo.repoId });
@@ -380,68 +432,68 @@ async function generateCommitMessage(
     void vscode.window.showWarningMessage(`GitGlasses: status failed: ${errorMessage(error)}`);
     return;
   }
-  if (status.staged.length === 0) {
+  // With nothing staged, Source Control commits every change, so the message
+  // describes those; the engine fallback commits only what is staged.
+  const staged = status.staged.length > 0;
+  if (!staged && (!box || status.unstaged.length === 0)) {
     void vscode.window.showInformationMessage(
-      'GitGlasses: nothing staged — stage changes before generating a commit message.',
+      box
+        ? 'GitGlasses: there are no changes to describe.'
+        : 'GitGlasses: nothing staged — stage changes before generating a commit message.',
     );
     return;
   }
   const ready = await ai.prepare();
   if (!ready) return;
-  const files: DiffFile[] = [];
-  for (const change of status.staged.slice(0, MAX_CONTEXT_FILES)) {
-    try {
-      const { hunks } = await engine.request('diff/fileHunks', {
-        repoId: repo.repoId,
-        path: change.path,
-        staged: true,
-      });
-      files.push({ path: change.path, patch: hunksToPatch(hunks) });
-    } catch {
-      files.push({
-        path: change.path,
-        patch: `status: ${change.status}  +${change.additions} −${change.deletions}`,
-      });
-    }
-  }
+  const paths = (staged ? status.staged : status.unstaged).map((change) => change.path);
+  const files = await collectChangeHunks(engine, repo.repoId, paths, staged);
   const context = buildDiffContext(files, CONTEXT_BUDGET_TOKENS);
+  const raw = await ai.complete(ready, 'GitGlasses: generating commit message…', {
+    system: COMMIT_MESSAGE_SYSTEM,
+    prompt: commitMessagePrompt(context.text, staged),
+    maxTokens: 400,
+  });
+  if (!raw) return;
+  const message = stripCodeFences(raw);
 
-  for (;;) {
-    const raw = await ai.complete(ready, 'GitGlasses: generating commit message…', {
-      system: COMMIT_MESSAGE_SYSTEM,
-      prompt: commitMessagePrompt(context.text),
-      maxTokens: 400,
-    });
-    if (!raw) return;
-    const message = stripCodeFences(raw);
-    const firstLine = message.split('\n', 1)[0];
-    const choice = await vscode.window.showQuickPick(
-      [
-        { label: '$(check) Use this message…', description: firstLine, action: 'use' as const },
-        { label: '$(refresh) Regenerate', action: 'regenerate' as const },
-        { label: '$(close) Cancel', action: 'cancel' as const },
-      ],
-      { placeHolder: firstLine },
-    );
-    if (!choice || choice.action === 'cancel') return;
-    if (choice.action === 'regenerate') continue;
-    // Never commit unreviewed: the message lands in an editable input first.
-    const edited = await vscode.window.showInputBox({
-      prompt: 'Commit message (Enter commits the staged changes)',
-      value: message,
-      ignoreFocusOut: true,
-    });
-    if (edited === undefined || edited.trim() === '') return;
-    try {
-      const { sha } = await engine.request('mutate/commit', {
-        repoId: repo.repoId,
-        message: edited,
-      });
-      setStatus(`committed ${shortSha(sha)}`);
-    } catch (error) {
-      void vscode.window.showErrorMessage(`GitGlasses: commit failed: ${errorMessage(error)}`);
-    }
+  if (box) {
+    // The message lands in the Source Control box, where the editor's own
+    // commit flow (amend, sign-off, hooks, multi-line editing) takes over.
+    box.inputBox.value = message;
+    void vscode.commands.executeCommand('workbench.view.scm');
+    setStatus('commit message written to the Source Control box');
     return;
+  }
+  await commitThroughEditor(engine, repo, message);
+}
+
+/** Without the built-in Git extension: the message opens in an editor, where
+ *  it keeps its line breaks, and commits the staged changes from there. */
+async function commitThroughEditor(
+  engine: EngineClient,
+  repo: ActiveRepo,
+  message: string,
+): Promise<void> {
+  const document = await vscode.workspace.openTextDocument({ content: message, language: 'git-commit' });
+  await vscode.window.showTextDocument(document);
+  const commit = 'Commit Staged Changes';
+  const choice = await vscode.window.showInformationMessage(
+    'GitGlasses: edit the generated message, then commit the staged changes with it.',
+    commit,
+    'Copy Message',
+  );
+  const edited = document.getText().trim();
+  if (choice === 'Copy Message') {
+    await vscode.env.clipboard.writeText(edited);
+    setStatus('commit message copied');
+    return;
+  }
+  if (choice !== commit || edited === '') return;
+  try {
+    const { sha } = await engine.request('mutate/commit', { repoId: repo.repoId, message: edited });
+    setStatus(`committed ${shortSha(sha)}`);
+  } catch (error) {
+    void vscode.window.showErrorMessage(`GitGlasses: commit failed: ${errorMessage(error)}`);
   }
 }
 
@@ -504,9 +556,7 @@ async function nlSearch(
       : await engine.request('search/commits', { ...params, query: { text, author, sha } });
     truncated = result.truncated;
   } catch (error) {
-    void vscode.window.showWarningMessage(
-      `GitGlasses: commit search failed: ${errorMessage(error)}`,
-    );
+    void vscode.window.showWarningMessage(`GitGlasses: commit search failed: ${errorMessage(error)}`);
     return;
   } finally {
     sub.dispose();
@@ -561,8 +611,10 @@ export function registerAiFeatures(
     vscode.commands.registerCommand('gitglasses.ai.explainWip', () =>
       explainWip(engine, repos, ai, panel),
     ),
-    vscode.commands.registerCommand('gitglasses.ai.generateCommitMessage', () =>
-      generateCommitMessage(engine, repos, ai),
+    vscode.commands.registerCommand(
+      'gitglasses.ai.generateCommitMessage',
+      (sourceControl?: { rootUri?: vscode.Uri }) =>
+        generateCommitMessage(engine, repos, ai, log, sourceControl),
     ),
     vscode.commands.registerCommand('gitglasses.ai.nlSearch', () =>
       nlSearch(engine, repos, ai, () => `ai-search-${streamCounter++}`, searchView),
