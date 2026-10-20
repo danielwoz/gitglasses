@@ -85,7 +85,7 @@ export interface McpRegistrationHost {
 
 /** Where the editor's own registration stands, for the Home view. */
 export type McpStatus =
-  | { state: 'registered'; host: McpHost; gitRoots: string[]; folders: number }
+  | { state: 'registered'; host: McpHost; gitRoots: string[]; folders: number; trusted: boolean }
   | { state: 'off'; host?: McpHost }
   | { state: 'noFolder'; host: McpHost }
   | { state: 'noHost' }
@@ -164,7 +164,13 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
     }
     const folders = host.folders();
     if (folders.length === 0) return { state: 'noFolder', host: editor };
-    return { state: 'registered', host: editor, gitRoots: gitRoots(), folders: folders.length };
+    return {
+      state: 'registered',
+      host: editor,
+      gitRoots: gitRoots(),
+      folders: folders.length,
+      trusted: host.trusted(),
+    };
   };
 
   // VS Code asks for the definitions whenever its agents may need them, and

@@ -27,6 +27,15 @@ export function mcpStatusSummary(status: McpStatus, gitRoots: readonly string[])
   switch (status.state) {
     case 'registered': {
       const agents = status.host === 'cursor' ? "Cursor's agent" : 'agents in VS Code';
+      // VS Code starts no MCP server in Restricted Mode; it asks for trust first.
+      if (status.host === 'vscode' && !status.trusted) {
+        return {
+          description: 'available to VS Code agents',
+          detail: 'VS Code starts it once you trust this folder',
+          icon: 'workspace-untrusted',
+          tooltip: `${WHAT}\n\nRegistered with ${agents}. VS Code starts MCP servers only in a trusted folder, and asks for trust when an agent needs it; git then runs in the workspace's folders.`,
+        };
+      }
       return {
         description:
           status.host === 'cursor' ? "available to Cursor's agent" : 'available to VS Code agents',

@@ -28,6 +28,7 @@ describe('bundled MCP server', () => {
         host: 'vscode',
         gitRoots: [workspaceRoot().fsPath],
         folders: 1,
+        trusted: true,
       });
     } else {
       assert.strictEqual(state.status.state, 'noHost');

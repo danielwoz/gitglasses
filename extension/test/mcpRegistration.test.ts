@@ -124,6 +124,7 @@ describe('VS Code registration', () => {
       host: 'vscode',
       gitRoots: [folderA, folderB],
       folders: 2,
+      trusted: true,
     });
   });
 
@@ -248,7 +249,7 @@ describe('editors without an MCP registration API', () => {
 describe('Home view status', () => {
   it('names where the server is available and where git runs', () => {
     const vscode = mcpStatusSummary(
-      { state: 'registered', host: 'vscode', gitRoots: [folderA], folders: 1 },
+      { state: 'registered', host: 'vscode', gitRoots: [folderA], folders: 1, trusted: true },
       [folderA],
     );
     expect(vscode.description).toBe('available to VS Code agents');
@@ -256,12 +257,21 @@ describe('Home view status', () => {
     expect(vscode.tooltip).toContain(`Git runs in: ${folderA}`);
 
     const cursorReadOnly = mcpStatusSummary(
-      { state: 'registered', host: 'cursor', gitRoots: [], folders: 1 },
+      { state: 'registered', host: 'cursor', gitRoots: [], folders: 1, trusted: false },
       [],
     );
     expect(cursorReadOnly.description).toBe("available to Cursor's agent");
     expect(cursorReadOnly.detail).toBe("Ready for Cursor's agent, read-only without git");
     expect(cursorReadOnly.tooltip).toContain('Git runs nowhere');
+  });
+
+  it('says that VS Code waits for trust before it starts the server', () => {
+    const untrusted = mcpStatusSummary(
+      { state: 'registered', host: 'vscode', gitRoots: [], folders: 1, trusted: false },
+      [],
+    );
+    expect(untrusted.detail).toBe('VS Code starts it once you trust this folder');
+    expect(untrusted.icon).toBe('workspace-untrusted');
   });
 
   it('says what to do in every other state', () => {

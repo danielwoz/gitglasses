@@ -119,20 +119,21 @@ export function registerMcpCommands(options: McpCommandOptions): vscode.Disposab
         {
           label: '$(lock) Read only, without running git',
           description: 'recommended',
-          detail:
-            'The agent reads the project it works in: blame, history, status, diffs and ' +
-            'branch comparisons. File history, patches and code search stay off.',
+          detail: "Blame, history, status, diffs and branch comparisons of the agent's project",
           roots: [] as string[],
         },
         {
           label: '$(unlock) Also run git in this workspace',
-          detail:
-            `Serves only ${roots.join(', ')}, and runs git there with each repository's ` +
-            'own configuration, hooks and filters. Adds file history, patches, code search and diffs.',
+          description: roots.map((root) => path.basename(root)).join(', '),
+          detail: 'Adds file history, patches and code search; serves only these folders',
           roots,
         },
       ],
-      { title: 'GitGlasses MCP Server: where may the agent run git?', ignoreFocusOut: true },
+      {
+        title: 'GitGlasses MCP Server: where may the agent run git?',
+        placeHolder: 'git runs repository hooks and filters: allow it only where you trust them',
+        ignoreFocusOut: true,
+      },
     );
     return picked?.roots;
   };
