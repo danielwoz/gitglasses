@@ -354,3 +354,64 @@ describe('RepositoryService discovery failures', () => {
     ]);
   });
 });
+
+describe('RepositoryService watching', () => {
+  it('lists a repository unwatched and watches it once a file in it is located', async () => {
+    const { engine, discoveries } = fakeEngine([{ id: 'r1', root: '/w/clone', match: '/w/clone' }]);
+    const repos = service(engine);
+
+    const listed = await repos.locateOrDiscover(fileUri('/w/clone/.gitglasses'), { watch: false });
+    expect(listed?.repoId).toBe('r1');
+    expect(repos.isWatched('r1')).toBe(false);
+
+    await Promise.all([
+      repos.locateOrDiscover(fileUri('/w/clone/a.txt')),
+      repos.locateOrDiscover(fileUri('/w/clone/b.txt')),
+    ]);
+    expect(repos.isWatched('r1')).toBe(true);
+    await repos.locateOrDiscover(fileUri('/w/clone/c.txt'));
+    expect(discoveries().map((request) => request.params)).toEqual([
+      { path: '/w/clone', watch: false },
+      { path: '/w/clone' },
+    ]);
+  });
+
+  it('watches a listed repository on request, once', async () => {
+    const { engine, discoveries } = fakeEngine([{ id: 'r1', root: '/w/clone', match: '/w/clone' }]);
+    const repos = service(engine);
+    await repos.locateOrDiscover(fileUri('/w/clone/.gitglasses'), { watch: false });
+
+    await repos.ensureWatched('r1');
+    await repos.ensureWatched('r1');
+    expect(repos.isWatched('r1')).toBe(true);
+    expect(discoveries()).toHaveLength(2);
+  });
+
+  it('keeps a watched repository watched when a listing finds it again', async () => {
+    const { engine, discoveries } = fakeEngine([{ id: 'r1', root: '/w/repo', match: '/w/repo' }]);
+    const repos = service(engine);
+    await repos.locateOrDiscover(fileUri('/w/repo/a.txt'));
+    await repos.locateOrDiscover(fileUri('/w/repo/src/.gitglasses'), { watch: false });
+
+    expect(repos.isWatched('r1')).toBe(true);
+    expect(discoveries()).toHaveLength(2);
+  });
+
+  it('re-registers each repository with its watch after an engine restart', async () => {
+    const { engine, discoveries } = fakeEngine([
+      { id: 'r1', root: '/w/used', match: '/w/used' },
+      { id: 'r2', root: '/w/listed', match: '/w/listed' },
+    ]);
+    const repos = service(engine);
+    await repos.locateOrDiscover(fileUri('/w/used/a.txt'));
+    await repos.locateOrDiscover(fileUri('/w/listed/.gitglasses'), { watch: false });
+
+    await repos.rediscoverAll();
+    expect(discoveries().slice(2).map((request) => request.params)).toEqual([
+      { path: '/w/used' },
+      { path: '/w/listed', watch: false },
+    ]);
+    expect(repos.isWatched('r1')).toBe(true);
+    expect(repos.isWatched('r2')).toBe(false);
+  });
+});

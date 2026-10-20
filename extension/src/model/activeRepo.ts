@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_SCAN_SETTINGS,
   DiscoveryHost,
+  MAX_WORKSPACE_REPOSITORIES,
   ScanSettings,
   collectWorkspaceRepos,
 } from './repoDiscovery';
@@ -75,8 +76,9 @@ function scanSettings(folder: string): ScanSettings {
 
 function workspaceHost(repos: RepositoryService): DiscoveryHost {
   return {
-    discover: async (dir) => {
-      const located = await repos.locateOrDiscover(vscode.Uri.file(path.join(dir, PROBE)));
+    discover: async (dir, watch) => {
+      const probe = vscode.Uri.file(path.join(dir, PROBE));
+      const located = await repos.locateOrDiscover(probe, { watch });
       return located && { repoId: located.repoId, rootPath: located.rootPath };
     },
     readDirectory: async (dir) => {
@@ -191,9 +193,9 @@ export class ActiveRepoManager implements vscode.Disposable {
 
   /** Discovers the workspace's repositories once, then answers from cache,
    *  adding any repository registered since (a file opened in a nested repo
-   *  or outside the workspace). A failed, empty or incomplete discovery is
-   *  not cached: it also happens before the engine is ready, and the next
-   *  lookup has to try again. */
+   *  or outside the workspace), up to MAX_WORKSPACE_REPOSITORIES in all. A
+   *  failed, empty or incomplete discovery is not cached: it also happens
+   *  before the engine is ready, and the next lookup has to try again. */
   async all(): Promise<readonly WorkspaceRepo[]> {
     if (!this.discovery) {
       const attempt = scanWorkspace(this.repoService).then(({ repos, complete }) => {
@@ -207,6 +209,7 @@ export class ActiveRepoManager implements vscode.Disposable {
     }
     const list = [...(await this.discovery)];
     for (const known of this.repoService.repositories()) {
+      if (list.length >= MAX_WORKSPACE_REPOSITORIES) break;
       if (list.some((repo) => repo.repoId === known.repoId)) continue;
       list.push(workspaceRepo(this.repoService, known.repoId, known.aliases[0] ?? known.rootPath));
     }
@@ -215,7 +218,8 @@ export class ActiveRepoManager implements vscode.Disposable {
   }
 
   /** The repository every repo-scoped surface acts on: the stored choice when
-   *  it is still in the workspace, else the first folder that is a repo. */
+   *  it is still in the workspace, else the first folder that is a repo. It
+   *  is watched from then on, so the views follow outside changes to it. */
   async resolve(): Promise<ActiveRepo | undefined> {
     const all = await this.all();
     if (all.length === 0) return undefined;
@@ -226,7 +230,9 @@ export class ActiveRepoManager implements vscode.Disposable {
             sameRoot(repo.rootPath, stored) || this.repoService.isRootOf(repo.repoId, stored),
         )
       : undefined;
-    return match ?? all[0];
+    const active = match ?? all[0];
+    await this.repoService.ensureWatched(active.repoId);
+    return active;
   }
 
   /** Re-discovers on the next resolve() (engine restart: repo ids are stale). */

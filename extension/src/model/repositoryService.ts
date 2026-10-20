@@ -108,6 +108,16 @@ interface Registered {
   repoId: string;
   rootPath: string;
   aliases: string[];
+  /** Whether the engine was asked to watch it. */
+  watched: boolean;
+}
+
+export interface LookupOptions {
+  /** False registers a repository found by this lookup without watching it,
+   *  until a file in it is located or ensureWatched() is called. A workspace
+   *  scan can find hundreds of repositories, and an engine without a native
+   *  watcher polls each one it watches. Default true. */
+  watch?: boolean;
 }
 
 interface DirectoryAnswer {
@@ -134,6 +144,7 @@ export class RepositoryService {
   /** The engine's answer per directory, keyed by its comparable form. */
   private directories = new Map<string, DirectoryAnswer>();
   private discovering = new Map<string, Promise<void>>();
+  private watching = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
   /** Raised while rediscoverAll re-registers, which reports one change. */
   private quiet = 0;
@@ -164,12 +175,55 @@ export class RepositoryService {
   }
 
   /** Asks the engine which repository contains the file's directory, unless
-   *  it already answered for that directory, then locates the file. */
-  async locateOrDiscover(uri: vscode.Uri): Promise<LocatedFile | undefined> {
+   *  it already answered for that directory, then locates the file. The
+   *  repository is watched from then on, unless `watch` is false. */
+  async locateOrDiscover(
+    uri: vscode.Uri,
+    options: LookupOptions = {},
+  ): Promise<LocatedFile | undefined> {
     if (uri.scheme !== 'file') return undefined;
+    const watch = options.watch ?? true;
     const dir = this.flavor.dirname(uri.fsPath);
-    if (!this.answered(dir)) await this.discoverDirectory(dir);
-    return this.locate(uri);
+    if (!this.answered(dir)) await this.discoverDirectory(dir, watch);
+    const located = this.locate(uri);
+    if (located && watch) await this.ensureWatched(located.repoId);
+    return located;
+  }
+
+  /** Has the engine watch a repository registered without a watch, so the
+   *  surfaces showing it follow changes made outside the editor. */
+  ensureWatched(repoId: string): Promise<void> {
+    const repo = this.registered.get(repoId);
+    if (!repo || repo.watched) return Promise.resolve();
+    let pending = this.watching.get(repoId);
+    if (!pending) {
+      // repo/discover on the root returns the registered id and starts the
+      // watch that registering with watch:false left out.
+      pending = this.engine
+        .request('repo/discover', { path: repo.rootPath })
+        .then(
+          (info) => {
+            const current = this.registered.get(info.repoId);
+            if (current) current.watched = true;
+          },
+          (error: unknown) => {
+            if (error instanceof EngineRestartedError) return;
+            const message = errorText(error);
+            this.logOnce(
+              `watch\0${repoId}\0${message}`,
+              `could not watch ${repo.rootPath}: ${message}`,
+            );
+          },
+        )
+        .finally(() => this.watching.delete(repoId));
+      this.watching.set(repoId, pending);
+    }
+    return pending;
+  }
+
+  /** Whether the engine was asked to watch the repository. */
+  isWatched(repoId: string): boolean {
+    return this.registered.get(repoId)?.watched ?? false;
   }
 
   /** Re-register all known repos (after an engine respawn: ids are stale). */
@@ -178,13 +232,17 @@ export class RepositoryService {
     const before = this.rootsKey();
     this.registered.clear();
     this.directories.clear();
+    this.watching.clear();
     this.rebuild();
     this.quiet++;
     try {
       for (const repo of previous) {
         try {
-          const info = await this.engine.request('repo/discover', { path: repo.rootPath });
-          this.register(info.repoId, info.rootPath);
+          const info = await this.engine.request(
+            'repo/discover',
+            repo.watched ? { path: repo.rootPath } : { path: repo.rootPath, watch: false },
+          );
+          this.register(info.repoId, info.rootPath, undefined, repo.watched);
           // The editor's spellings of the root carry over to the new id.
           const current = this.registered.get(info.repoId);
           if (current) for (const alias of repo.aliases) this.addAlias(current, alias);
@@ -299,15 +357,15 @@ export class RepositoryService {
     return undefined;
   }
 
-  private discoverDirectory(dir: string): Promise<void> {
+  private discoverDirectory(dir: string, watch: boolean): Promise<void> {
     const key = this.key(dir);
     let inflight = this.discovering.get(key);
     if (!inflight) {
       inflight = this.engine
-        .request('repo/discover', { path: dir })
+        .request('repo/discover', watch ? { path: dir } : { path: dir, watch: false })
         .then(
           (info) => {
-            this.register(info.repoId, info.rootPath, dir);
+            this.register(info.repoId, info.rootPath, dir, watch);
             this.directories.set(key, { repoId: info.repoId });
           },
           (error: unknown) => this.discoveryFailed(dir, key, error),
@@ -344,17 +402,24 @@ export class RepositoryService {
   }
 
   /** Records a repository the engine reported, learning the editor's
-   *  spelling of its root when `requestedDir` spells it differently. */
-  private register(repoId: string, reportedRoot: string, requestedDir?: string): void {
+   *  spelling of its root when `requestedDir` spells it differently.
+   *  `watched` says whether the request that reported it started a watch. */
+  private register(
+    repoId: string,
+    reportedRoot: string,
+    requestedDir: string | undefined,
+    watched: boolean,
+  ): void {
     // The engine reports the root with a trailing slash; normalize.
     const rootPath = reportedRoot.replace(/[\\/]+$/, '') || reportedRoot;
     let repo = this.registered.get(repoId);
     const added = repo === undefined;
     if (!repo) {
-      repo = { repoId, rootPath, aliases: [] };
+      repo = { repoId, rootPath, aliases: [], watched };
       this.registered.set(repoId, repo);
     } else {
       repo.rootPath = rootPath;
+      repo.watched ||= watched;
     }
     if (added) this.log(`repository ${repoId} at ${rootPath}`);
     if (requestedDir !== undefined && !this.contains(repo, requestedDir)) {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 import {
   DEFAULT_SCAN_SETTINGS,
+  MAX_WORKSPACE_REPOSITORIES,
   collectWorkspaceRepos,
   findRepositoryFolders,
   parseGitmodulePaths,
@@ -27,14 +28,17 @@ function host(
   repos: FakeRepo[],
   files: Record<string, string> = {},
   settings: Partial<ScanSettings> = {},
-): DiscoveryHost & { listed: string[]; discovered: string[] } {
+): DiscoveryHost & { listed: string[]; discovered: string[]; watched: string[] } {
   const listed: string[] = [];
   const discovered: string[] = [];
+  const watched: string[] = [];
   return {
     listed,
     discovered,
-    async discover(dir) {
+    watched,
+    async discover(dir, watch) {
       discovered.push(dir);
+      if (watch) watched.push(dir);
       // The engine's upward search: the innermost repository containing dir.
       const hit = repos
         .filter((repo) => dir === repo.root || dir.startsWith(`${repo.root}/`))
@@ -212,6 +216,60 @@ describe('collectWorkspaceRepos', () => {
       host(tree, repos, files, { submoduleLimit: 1 }),
     );
     expect(limited.map((repo) => repo.repoId)).toEqual(['r1', 'r2']);
+  });
+
+  it('watches only the folders’ own repositories', async () => {
+    const tree: Tree = {
+      '/w/main': { nested: 'dir', '.git': 'dir' },
+      '/w/main/nested': { '.git': 'dir' },
+      '/w/other': {},
+    };
+    const repos: FakeRepo[] = [
+      { id: 'r1', root: '/w/main' },
+      { id: 'r2', root: '/w/main/nested' },
+      { id: 'r3', root: '/w/main/sub' },
+    ];
+    const files = { '/w/main/.gitmodules': '\tpath = sub\n' };
+    const fake = host(tree, repos, files);
+    const found = await collectWorkspaceRepos(['/w/main', '/w/other'], fake);
+    expect(found.map((repo) => repo.repoId)).toEqual(['r1', 'r2', 'r3']);
+    expect(fake.watched).toEqual(['/w/main', '/w/other']);
+  });
+
+  it('asks the engine about no more repositories than it lists', async () => {
+    // ~/src holding far more clones than the list keeps.
+    const clones = Array.from({ length: 500 }, (_, index) => `clone${index}`);
+    const tree: Tree = { '/home/u/src': Object.fromEntries(clones.map((name) => [name, 'dir'])) };
+    for (const name of clones) tree[`/home/u/src/${name}`] = { '.git': 'dir' };
+    const repos = clones.map((name, index) => ({ id: `r${index}`, root: `/home/u/src/${name}` }));
+    const fake = host(tree, repos);
+
+    const found = await collectWorkspaceRepos(['/home/u/src'], fake);
+    expect(found).toHaveLength(MAX_WORKSPACE_REPOSITORIES);
+    // The folder itself, then one lookup per listed repository.
+    expect(fake.discovered).toHaveLength(MAX_WORKSPACE_REPOSITORIES + 1);
+  });
+
+  it('stops asking once the limit is reached, submodules included', async () => {
+    const tree: Tree = {
+      '/w/app': { a: 'dir', b: 'dir', c: 'dir', '.git': 'dir' },
+      '/w/app/a': { '.git': 'dir' },
+      '/w/app/b': {},
+      '/w/app/c': { '.git': 'dir' },
+    };
+    const repos: FakeRepo[] = [
+      { id: 'r1', root: '/w/app' },
+      { id: 'r2', root: '/w/app/a' },
+      { id: 'r3', root: '/w/app/c' },
+      { id: 'r4', root: '/w/app/s1' },
+      { id: 'r5', root: '/w/app/s2' },
+    ];
+    const files = { '/w/app/.gitmodules': '\tpath = s1\n\tpath = s2\n' };
+    const fake = host(tree, repos, files);
+
+    const found = await collectWorkspaceRepos(['/w/app'], fake, 4);
+    expect(found.map((repo) => repo.repoId)).toEqual(['r1', 'r2', 'r3', 'r4']);
+    expect(fake.discovered).toEqual(['/w/app', '/w/app/a', '/w/app/c', '/w/app/s1']);
   });
 
   it('survives a folder the engine cannot place', async () => {

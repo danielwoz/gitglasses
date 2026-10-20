@@ -38,7 +38,8 @@ export const DEFAULT_SCAN_SETTINGS: ScanSettings = {
 /** Bound on the directories one folder scan lists, whatever the depth. */
 export const MAX_SCANNED_DIRECTORIES = 10_000;
 
-/** Bound on the repositories one workspace discovery reports. */
+/** Bound on the repositories one workspace discovery registers with the
+ *  engine and reports. */
 export const MAX_WORKSPACE_REPOSITORIES = 200;
 
 /** A repository as discovery found it. */
@@ -50,8 +51,10 @@ export interface FoundRepository {
 }
 
 export interface DiscoveryHost {
-  /** The repository containing `dir`, from the engine; undefined when none. */
-  discover(dir: string): Promise<FoundRepository | undefined>;
+  /** The repository containing `dir`, from the engine; undefined when none.
+   *  `watch` is false for a repository that is only being listed: the
+   *  engine registers it without watching it. */
+  discover(dir: string, watch: boolean): Promise<FoundRepository | undefined>;
   readDirectory(dir: string): Promise<DirectoryEntry[]>;
   /** A file's text, or undefined when it cannot be read. */
   readFile(file: string): Promise<string | undefined>;
@@ -124,38 +127,53 @@ export function parseGitmodulePaths(text: string): string[] {
  * the folders are in (in folder order, so the first folder's stays the
  * default), then repositories found below the folders, then the submodules of
  * everything found so far, nested submodules included.
+ *
+ * At most `limit` repositories are registered with the engine: lookups are
+ * issued in batches no larger than the room left, so a folder holding
+ * thousands of clones costs no more than the list shows. Only the folders'
+ * own repositories are watched; the rest are watched once used.
  */
 export async function collectWorkspaceRepos(
   folders: readonly string[],
   host: DiscoveryHost,
+  limit: number = MAX_WORKSPACE_REPOSITORIES,
 ): Promise<FoundRepository[]> {
   const found: FoundRepository[] = [];
   // The workspace folder each repository was found from, whose settings
   // govern its submodules.
   const folderOf = new Map<string, string>();
   const add = (repo: FoundRepository | undefined, folder: string): void => {
-    if (!repo || folderOf.has(repo.repoId) || found.length >= MAX_WORKSPACE_REPOSITORIES) return;
+    if (!repo || folderOf.has(repo.repoId) || found.length >= limit) return;
     folderOf.set(repo.repoId, folder);
     found.push(repo);
   };
-  const discover = (dir: string): Promise<FoundRepository | undefined> =>
-    host.discover(dir).catch(() => undefined);
+  const discover = (dir: string, watch: boolean): Promise<FoundRepository | undefined> =>
+    host.discover(dir, watch).catch(() => undefined);
+  // Looks up candidate directories, never more at once than there is room
+  // left: each lookup can register a repository the engine then holds.
+  const discoverWithin = async (candidates: { dir: string; folder: string }[]): Promise<void> => {
+    for (let next = 0; next < candidates.length && found.length < limit; ) {
+      const batch = candidates.slice(next, next + limit - found.length);
+      next += batch.length;
+      const repos = await Promise.all(batch.map((candidate) => discover(candidate.dir, false)));
+      repos.forEach((repo, index) => add(repo, batch[index].folder));
+    }
+  };
 
-  const own = await Promise.all(folders.map(discover));
+  const own = await Promise.all(folders.slice(0, limit).map((folder) => discover(folder, true)));
   own.forEach((repo, index) => add(repo, folders[index]));
 
   const below = await Promise.all(
-    folders.map(async (folder) => {
-      const dirs = await findRepositoryFolders(folder, host, host.settings(folder));
-      return Promise.all(dirs.map(discover));
-    }),
+    folders.map((folder) => findRepositoryFolders(folder, host, host.settings(folder))),
   );
-  below.forEach((repos, index) => repos.forEach((repo) => add(repo, folders[index])));
+  await discoverWithin(
+    below.flatMap((dirs, index) => dirs.map((dir) => ({ dir, folder: folders[index] }))),
+  );
 
   // Submodules are read from every repository found, including the ones this
   // loop adds; an uninitialized submodule resolves to its parent, which is
   // already listed.
-  for (let index = 0; index < found.length; index++) {
+  for (let index = 0; index < found.length && found.length < limit; index++) {
     const repo = found[index];
     const folder = folderOf.get(repo.repoId) ?? repo.rootPath;
     const settings = host.settings(folder);
@@ -165,10 +183,9 @@ export async function collectWorkspaceRepos(
       .catch(() => undefined);
     if (!text) continue;
     const paths = parseGitmodulePaths(text).slice(0, Math.max(0, settings.submoduleLimit));
-    const submodules = await Promise.all(
-      paths.map((relative) => discover(host.join(repo.rootPath, ...relative.split('/')))),
+    await discoverWithin(
+      paths.map((relative) => ({ dir: host.join(repo.rootPath, ...relative.split('/')), folder })),
     );
-    for (const submodule of submodules) add(submodule, folder);
   }
   return found;
 }
