@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "services/history/log_order_cache.h"
 #include "test_fixtures.h"
 #include "test_session.h"
 
@@ -192,6 +193,188 @@ TEST(HistoryService, LogCommitsHonorsRefAndOversizedLimit) {
 
   Json badLimit = session.request(req(13, "log/commits", {{"repoId", repoId}, {"limit", 0}}));
   EXPECT_EQ(badLimit["error"]["code"], -32602);
+}
+
+// main: initial, base, a feature branch merged with --no-ff, then `after`
+// single-parent commits on top, so the newest commits form a first-parent run
+// that ends at the merge.
+void buildRunOverMerge(FixtureRepo& fixture, int after) {
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  commitTick(fixture, "feature one", 2);
+  commitTick(fixture, "feature two", 3);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "main work", 4);
+  fixture.runAt("@1700000300 +0000", "git merge -q --no-ff --no-edit feature");
+  for (int i = 0; i < after; ++i) commitTick(fixture, "after merge " + std::to_string(i), 10 + i);
+}
+
+TEST(HistoryService, LogCommitsPagesAgreeAcrossTheFirstParentRunAndTheMerge) {
+  FixtureRepo fixture;
+  buildRunOverMerge(fixture, 4);
+
+  std::vector<std::string> oneShot;
+  {
+    InteractiveSession session;
+    const std::string repoId = discoverRepo(session, fixture.root());
+    std::int64_t id = 10;
+    oneShot = pageAllCommits(session, repoId, 100, id);
+  }
+  ASSERT_EQ(oneShot.size(), 10u);
+  // The run above the merge comes first, newest first, then the merge.
+  const auto firstParents = gitLines(fixture.root(), "rev-list --first-parent -n5 HEAD");
+  EXPECT_EQ(std::vector<std::string>(oneShot.begin(), oneShot.begin() + 5), firstParents);
+
+  // Page boundaries inside the run, on the merge and past it all give the
+  // same sequence; each size starts from an empty cache.
+  for (const int limit : {1, 2, 3, 4, 5, 6, 8}) {
+    InteractiveSession session;
+    const std::string repoId = discoverRepo(session, fixture.root());
+    std::int64_t id = 10;
+    EXPECT_EQ(pageAllCommits(session, repoId, limit, id), oneShot) << "limit " << limit;
+  }
+}
+
+TEST(HistoryService, LogCommitsCursorKeepsTheSnapshotWhenTheRefMoves) {
+  FixtureRepo fixture;
+  for (int i = 1; i <= 5; ++i) commitTick(fixture, "commit " + std::to_string(i), i);
+  const auto before = gitLines(fixture.root(), "rev-list --topo-order HEAD");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  std::int64_t id = 10;
+  Json params = {{"repoId", repoId}, {"limit", 2}};
+  Json page = session.request(req(++id, "log/commits", params));
+  ASSERT_TRUE(page["result"].contains("nextCursor")) << page.dump();
+  std::vector<std::string> shas;
+  for (const auto& commit : page["result"]["commits"]) shas.push_back(commit["sha"]);
+
+  commitTick(fixture, "lands between pages", 6);
+  while (page["result"].contains("nextCursor")) {
+    params["cursor"] = page["result"]["nextCursor"];
+    page = session.request(req(++id, "log/commits", params));
+    ASSERT_TRUE(page.contains("result")) << page.dump();
+    for (const auto& commit : page["result"]["commits"]) shas.push_back(commit["sha"]);
+  }
+  // No commit skipped or repeated: the pages continue the history the first
+  // page listed.
+  EXPECT_EQ(shas, before);
+
+  // A new first page sees the moved ref.
+  Json fresh = session.request(req(++id, "log/commits", {{"repoId", repoId}, {"limit", 1}}));
+  EXPECT_EQ(fresh["result"]["commits"][0]["summary"], "lands between pages");
+}
+
+TEST(HistoryService, LogCommitsAcceptsAShaCursorAndRejectsMalformedOnes) {
+  FixtureRepo fixture;
+  buildRunOverMerge(fixture, 2);
+  const auto expected = gitLines(fixture.root(), "rev-list --topo-order HEAD");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  std::int64_t id = 10;
+  const auto all = pageAllCommits(session, repoId, 100, id);
+  ASSERT_EQ(all.size(), expected.size());
+
+  // The sha of the next commit, the cursor format of earlier engines, still
+  // resumes at that commit.
+  Json fromSha = session.request(
+      req(++id, "log/commits", {{"repoId", repoId}, {"limit", 3}, {"cursor", all[4]}}));
+  ASSERT_EQ(fromSha["result"]["commits"].size(), 3u) << fromSha.dump();
+  for (size_t i = 0; i < 3; ++i) EXPECT_EQ(fromSha["result"]["commits"][i]["sha"], all[4 + i]);
+  ASSERT_TRUE(fromSha["result"].contains("nextCursor"));
+  Json next = session.request(
+      req(++id, "log/commits",
+          {{"repoId", repoId}, {"limit", 100}, {"cursor", fromSha["result"]["nextCursor"]}}));
+  EXPECT_EQ(next["result"]["commits"].size(), all.size() - 7);
+  EXPECT_FALSE(next["result"].contains("nextCursor"));
+
+  // A sha that is not in the history ends the listing.
+  Json gone = session.request(req(
+      ++id, "log/commits", {{"repoId", repoId}, {"limit", 3}, {"cursor", std::string(40, 'e')}}));
+  EXPECT_TRUE(gone["result"]["commits"].empty());
+  EXPECT_FALSE(gone["result"].contains("nextCursor"));
+
+  const std::vector<std::string> malformed = {"not-a-cursor", all[0] + ":", all[0] + ":x1",
+                                              all[0].substr(0, 39) + ":1", "ZZ"};
+  for (const std::string& bad : malformed) {
+    Json rejected = session.request(
+        req(++id, "log/commits", {{"repoId", repoId}, {"limit", 3}, {"cursor", bad}}));
+    EXPECT_EQ(rejected["error"]["code"], -32602) << bad;
+  }
+}
+
+TEST(HistoryService, LogCommitsLaterPagesDoNotWalkTheHistoryAgain) {
+  FixtureRepo fixture;
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  commitTick(fixture, "feature work", 2);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "main work", 3);
+  fixture.runAt("@1700000240 +0000", "git merge -q --no-ff --no-edit feature");
+  std::vector<std::string> expected;
+  {
+    InteractiveSession session;
+    const std::string repoId = discoverRepo(session, fixture.root());
+    std::int64_t id = 10;
+    expected = pageAllCommits(session, repoId, 100, id);
+  }
+  ASSERT_EQ(expected.size(), 5u);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json first = session.request(req(10, "log/commits", {{"repoId", repoId}, {"limit", 2}}));
+  ASSERT_TRUE(first["result"].contains("nextCursor")) << first.dump();
+
+  // With the root commit's object gone, any walk of the whole history fails
+  // or stops early; the next page must come from the order the first page
+  // computed.
+  const std::string root = expected.back();
+  const auto object = fixture.root() / ".git" / "objects" / root.substr(0, 2) / root.substr(2);
+  ASSERT_TRUE(std::filesystem::exists(object));
+  std::filesystem::permissions(object, std::filesystem::perms::owner_write,
+                               std::filesystem::perm_options::add);
+  std::filesystem::remove(object);
+
+  Json second = session.request(
+      req(11, "log/commits",
+          {{"repoId", repoId}, {"limit", 2}, {"cursor", first["result"]["nextCursor"]}}));
+  ASSERT_TRUE(second.contains("result")) << second.dump();
+  ASSERT_EQ(second["result"]["commits"].size(), 2u) << second.dump();
+  EXPECT_EQ(second["result"]["commits"][0]["sha"], expected[2]);
+  EXPECT_EQ(second["result"]["commits"][1]["sha"], expected[3]);
+}
+
+TEST(LogOrderCache, EvictsLeastRecentlyUsedOrdersOverBudget) {
+  using services::history_detail::LogOrderCache;
+  const std::size_t perOrder =
+      sizeof(services::history_detail::LogOrder) + 1 + 100 * sizeof(git_oid);
+  LogOrderCache cache(perOrder * 2 + perOrder / 2);
+  auto a = cache.acquire("a");
+  EXPECT_EQ(cache.acquire("a"), a);
+  a->oids.resize(100);
+  cache.resized("a", *a, a->oids.size());
+  auto b = cache.acquire("b");
+  b->oids.resize(100);
+  cache.resized("b", *b, b->oids.size());
+  EXPECT_EQ(cache.size(), 2u);
+
+  // "a" is touched, so "b" is the least recently used when "c" grows.
+  EXPECT_EQ(cache.acquire("a"), a);
+  auto c = cache.acquire("c");
+  c->oids.resize(100);
+  cache.resized("c", *c, c->oids.size());
+  EXPECT_EQ(cache.size(), 2u);
+  EXPECT_EQ(cache.acquire("a"), a);
+  EXPECT_NE(cache.acquire("b"), b);  // evicted: a fresh, empty order
+  EXPECT_LE(cache.bytesUsed(), perOrder * 2 + perOrder / 2);
+
+  // An evicted order that grows later is not accounted against the fresh
+  // entry of the same key.
+  const std::size_t used = cache.bytesUsed();
+  b->oids.resize(1000);
+  cache.resized("b", *b, b->oids.size());
+  EXPECT_EQ(cache.bytesUsed(), used);
 }
 
 TEST(HistoryService, FileHistoryFollowsRenamesWithParity) {

@@ -403,7 +403,7 @@
       }
     },
     "log/commits": {
-      "description": "Topo-ordered commit page from a ref (default HEAD).",
+      "description": "Topo-ordered commit page from a ref (default HEAD). Later pages continue the history the first page listed, even after the ref moves.",
       "params": {
         "additionalProperties": false,
         "type": "object",

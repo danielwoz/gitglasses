@@ -195,7 +195,8 @@ export const RequestSchemas = {
     ),
   },
   'log/commits': {
-    description: 'Topo-ordered commit page from a ref (default HEAD).',
+    description:
+      'Topo-ordered commit page from a ref (default HEAD). Later pages continue the history the first page listed, even after the ref moves.',
     params: Type.Object(
       {
         repoId: Type.String(),
