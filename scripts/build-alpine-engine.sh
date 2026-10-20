@@ -33,8 +33,18 @@ mkdir -p "$cache" "$build"
 owner=$(stat -c %u:%g "$src")
 trap 'chown -R "$owner" "$build" "$cache"' EXIT
 
-# vcpkg runs on Alpine only with the system's cmake and ninja.
-apk add --no-cache build-base cmake samurai git curl zip unzip tar pkgconf linux-headers >/dev/null
+# vcpkg runs on Alpine only with the system's cmake and ninja. Its port
+# scripts need the CMake it pins (4.4), newer than Alpine's, so cmake comes
+# from PyPI's musl wheels, checked against these hashes (x86_64, aarch64).
+apk add --no-cache build-base python3 samurai git curl zip unzip tar pkgconf linux-headers >/dev/null
+python3 -m venv /opt/cmake
+/opt/cmake/bin/pip install --quiet --disable-pip-version-check --no-deps \
+  --only-binary=:all: --require-hashes -r /dev/stdin <<'REQUIREMENTS'
+cmake==4.4.0 \
+  --hash=sha256:842de4296c7fb651799e6e3c1f8dc2355d3539067507f5c8012d1dc4625657b2 \
+  --hash=sha256:43d07406792836dc27d3d17f0ef927aa1f07f9cabf19674bf3daf64998a1a4c1
+REQUIREMENTS
+export PATH="/opt/cmake/bin:$PATH"
 # Configured from / so git never inspects the mounted checkout's .git.
 (cd / && git config --global --add safe.directory '*' \
   && git config --global user.name CI \
