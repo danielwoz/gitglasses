@@ -27,25 +27,65 @@ tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
 Tools that render a whole commit, status or patch take a `maxChars` argument
 and truncate with a footer naming the limit; `git_blame` takes `limit` hunks.
 
+## Installation
+
+`gitglasses-mcp` is not on npm yet. Until a release publishes it, do not run
+`npx gitglasses-mcp`: npx would download and run whatever is published under
+that name, with your tokens in its environment. Build the server from a clone
+instead (Node.js 20.11 or newer, pnpm):
+
+```sh
+git clone https://github.com/danielwoz/gitglasses.git
+cd gitglasses
+pnpm install --frozen-lockfile
+pnpm --filter "gitglasses-mcp..." build
+```
+
+The server is `mcp-server/dist/cli.js` in the clone; start it with `node`.
+
+### The engine
+
+The server drives the `gitglasses-engine` binary. The GitGlasses extension
+ships one for your platform, so once the extension is installed, point
+`GITGLASSES_ENGINE` at it:
+
+| Editor | Engine |
+| --- | --- |
+| VS Code on Linux or macOS | `~/.vscode/extensions/gitglasses.gitglasses-<version>-<platform>/bin/gitglasses-engine` |
+| VS Code on Windows | `%USERPROFILE%\.vscode\extensions\gitglasses.gitglasses-<version>-win32-x64\bin\gitglasses-engine.exe` |
+| VSCodium | the same, under `~/.vscode-oss/extensions` |
+
+Alternatively build the engine in the same clone (see the repository README):
+a release build at `build/release/engine/` is found without any setting.
+
 ## Registration
+
+Replace `/path/to/gitglasses` with the clone and `/path/to/gitglasses-engine`
+with the engine.
 
 ### Claude Code
 
 ```sh
-claude mcp add gitglasses -- npx gitglasses-mcp
+claude mcp add gitglasses \
+  -e GITGLASSES_ENGINE=/path/to/gitglasses-engine \
+  -- node /path/to/gitglasses/mcp-server/dist/cli.js
 ```
 
 ### VS Code (`.vscode/mcp.json`)
 
 ```json
 {
+  "inputs": [
+    { "type": "promptString", "id": "github-token", "description": "GitHub token", "password": true }
+  ],
   "servers": {
     "gitglasses": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["gitglasses-mcp"],
+      "command": "node",
+      "args": ["/path/to/gitglasses/mcp-server/dist/cli.js"],
       "env": {
         "GITGLASSES_ENGINE": "/path/to/gitglasses-engine",
+        "GITGLASSES_ALLOWED_ROOTS": "${workspaceFolder}",
         "GITHUB_TOKEN": "${input:github-token}"
       }
     }
@@ -57,7 +97,7 @@ claude mcp add gitglasses -- npx gitglasses-mcp
 
 | Variable | Purpose |
 | --- | --- |
-| `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server looks for `../build/release/engine/gitglasses-engine` relative to this package, then searches `PATH`. |
+| `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server looks for a release build in the clone it runs from (`build/release/engine/`), then searches `PATH`. |
 | `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
 | `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
