@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 const workflow = readFileSync(
   fileURLToPath(new URL('../../.github/workflows/release.yml', import.meta.url)),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 /** The text of each job, keyed by its id. */
 const jobs = new Map(
