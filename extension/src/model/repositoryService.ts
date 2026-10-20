@@ -153,16 +153,14 @@ export class RepositoryService {
     this.now = options.now ?? Date.now;
   }
 
-  /** Synchronous lookup against already-discovered repos. */
+  /** Synchronous lookup against already-discovered repos. Once the engine
+   *  has answered for the file's directory, that answer decides; before then
+   *  the innermost known root containing the file is the best guess, which
+   *  is the parent for a file in a not yet discovered submodule, so callers
+   *  that can wait use locateOrDiscover. */
   locate(uri: vscode.Uri): LocatedFile | undefined {
     if (uri.scheme !== 'file') return undefined;
-    const fsPath = uri.fsPath;
-    for (const [repoId, rootPath] of this.sortedRoots) {
-      const relative = relativeWithinRoot(rootPath, fsPath, this.caseInsensitive);
-      if (relative === undefined) continue;
-      return { repoId, rootPath, relativePath: relative };
-    }
-    return undefined;
+    return this.match(uri.fsPath, this.flavor.dirname(uri.fsPath));
   }
 
   /** Asks the engine which repository contains the file's directory, unless
@@ -273,15 +271,32 @@ export class RepositoryService {
     return comparable(dir, this.caseInsensitive);
   }
 
-  private answered(dir: string): boolean {
+  /** The engine's unexpired answer for `dir`, if it gave one. */
+  private answerFor(dir: string): DirectoryAnswer | undefined {
     const key = this.key(dir);
     const answer = this.directories.get(key);
-    if (!answer) return false;
-    if (answer.expires !== undefined && answer.expires <= this.now()) {
+    if (answer?.expires !== undefined && answer.expires <= this.now()) {
       this.directories.delete(key);
-      return false;
+      return undefined;
     }
-    return true;
+    return answer;
+  }
+
+  private answered(dir: string): boolean {
+    return this.answerFor(dir) !== undefined;
+  }
+
+  /** Locates `target`, which lies in directory `dir` (or is it). */
+  private match(target: string, dir: string): LocatedFile | undefined {
+    const answer = this.answerFor(dir);
+    if (answer && answer.repoId === undefined) return undefined;
+    for (const [repoId, rootPath] of this.sortedRoots) {
+      if (answer && repoId !== answer.repoId) continue;
+      const relative = relativeWithinRoot(rootPath, target, this.caseInsensitive);
+      if (relative === undefined) continue;
+      return { repoId, rootPath, relativePath: relative };
+    }
+    return undefined;
   }
 
   private discoverDirectory(dir: string): Promise<void> {

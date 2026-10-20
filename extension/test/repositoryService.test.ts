@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import type * as vscode from 'vscode';
 import { ErrorCodes } from '@gitglasses/protocol';
 import { EngineError, EngineRestartedError, type EngineClient } from '@gitglasses/rpc';
+import { fakeEngine } from './support/fakeEngine';
 import {
   NO_REPOSITORY_TTL_MS,
   RepositoryService,
@@ -13,42 +14,6 @@ import { identityAliasResolver, type IdentifyPath } from '../src/model/pathAlias
 
 function fileUri(fsPath: string): vscode.Uri {
   return { scheme: 'file', fsPath } as unknown as vscode.Uri;
-}
-
-interface Repo {
-  root: string;
-  id: string;
-}
-
-/**
- * Engine stand-in for repo/discover: answers with the innermost repository
- * whose `match` prefix contains the requested path (the engine's own upward
- * search), reporting `root` with a trailing slash as libgit2 does.
- */
-function fakeEngine(
-  repos: (Repo & { match: string })[],
-  options: { fail?: (dir: string) => Error | undefined } = {},
-) {
-  const requests: { method: string; params: Record<string, string> }[] = [];
-  const engine = {
-    async request(method: string, params: Record<string, string>) {
-      requests.push({ method, params });
-      if (method === 'repo/close') return {};
-      if (method !== 'repo/discover') throw new Error(`unexpected ${method}`);
-      const failure = options.fail?.(params.path);
-      if (failure) throw failure;
-      const fold = (value: string): string => value.replace(/\\/g, '/').toLowerCase();
-      const target = fold(params.path);
-      const hit = repos
-        .filter((repo) => target === fold(repo.match) || target.startsWith(`${fold(repo.match)}/`))
-        .sort((a, b) => b.match.length - a.match.length)[0];
-      if (!hit) throw new EngineError(ErrorCodes.RepoNotFound, `could not find repository at '${params.path}'`);
-      return { repoId: hit.id, rootPath: `${hit.root}/`, bare: false };
-    },
-  };
-  const discovered = (): string[] =>
-    requests.filter((request) => request.method === 'repo/discover').map((r) => r.params.path);
-  return { engine: engine as unknown as EngineClient, requests, discovered };
 }
 
 function service(
@@ -356,6 +321,22 @@ describe('RepositoryService discovery failures', () => {
     now += NO_REPOSITORY_TTL_MS;
     await repos.locateOrDiscover(fileUri('/w/reftable/x.txt'));
     expect(discovered()).toHaveLength(2);
+  });
+
+  it('does not place a file in a known parent the engine refused for its directory', async () => {
+    const { engine } = fakeEngine([{ id: 'r1', root: '/w/p', match: '/w/p' }], {
+      fail: (dir) =>
+        dir.startsWith('/w/p/broken')
+          ? new EngineError(ErrorCodes.GitError, 'invalid gitfile format')
+          : undefined,
+    });
+    const repos = service(engine);
+    await repos.locateOrDiscover(fileUri('/w/p/a.txt'));
+
+    expect(repos.locate(fileUri('/w/p/broken/x.txt'))?.repoId).toBe('r1');
+    expect(await repos.locateOrDiscover(fileUri('/w/p/broken/x.txt'))).toBeUndefined();
+    expect(repos.locate(fileUri('/w/p/broken/x.txt'))).toBeUndefined();
+    expect(repos.locate(fileUri('/w/p/b.txt'))?.repoId).toBe('r1');
   });
 
   it('logs any other failure once and does not cache it', async () => {
