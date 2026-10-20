@@ -129,6 +129,7 @@ const view = {
   repoRoot: '',
   repoName: '',
   canMutate: false,
+  refManagement: false,
   maxLanes: 24,
   filter: undefined as string[] | undefined,
   branches: [] as BranchOption[],
@@ -842,7 +843,7 @@ function selectedCommitShas(fallback: GraphRow): string[] {
 
 function openRowMenu(row: GraphRow, x: number, y: number): void {
   const commits = row.kind === 'commit' ? selectedCommitShas(row).length : 0;
-  showMenu(rowMenu(row.kind, commits, view.canMutate), x, y, (action) => onRowMenu(action, row));
+  showMenu(rowMenu(row.kind, commits, view), x, y, (action) => onRowMenu(action, row));
 }
 
 function onRowMenu(action: RowMenuAction, row: GraphRow): void {
@@ -881,7 +882,7 @@ function openRefMenu(row: GraphRow, ref: GraphRef, x: number, y: number): void {
   const current =
     ref.kind === 'head' ||
     (ref.kind === 'branch' && row.refs.some((r) => r.kind === 'head') && isCurrentBranch(ref.name));
-  showMenu(refMenu(ref, current, view.canMutate), x, y, (action: RefMenuAction) => {
+  showMenu(refMenu(ref, current, view), x, y, (action: RefMenuAction) => {
     if (action === 'copyName') {
       post({ type: 'copy', text: ref.name, label: `'${ref.name}'` });
       return;
@@ -1114,6 +1115,7 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       view.repoRoot = message.repoRoot;
       view.repoName = message.repoName;
       view.canMutate = message.canMutate;
+      view.refManagement = message.refManagement;
       view.maxLanes = message.maxLanes;
       view.filter = message.filter;
       view.loaded = false;
@@ -1160,6 +1162,7 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
     case 'settings':
       view.maxLanes = message.maxLanes;
       view.canMutate = message.canMutate;
+      view.refManagement = message.refManagement;
       render();
       break;
     case 'error':

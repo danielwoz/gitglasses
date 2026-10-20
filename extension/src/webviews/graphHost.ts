@@ -30,7 +30,7 @@ import type {
   WebviewToHostMessage,
 } from '../../webviews-src/graph/ipc';
 import { renderWebviewHtml } from './webviewHtml';
-import { runRefAction, runRowAction } from './graphActions';
+import { REF_MANAGEMENT, runRefAction, runRowAction } from './graphActions';
 import {
   RefreshKind,
   branchOptions,
@@ -253,6 +253,7 @@ export class GraphWebviewHost implements vscode.Disposable {
       repoName: repoName(repo.workspacePath ?? repo.rootPath),
       repoRoot: repo.workspacePath ?? repo.rootPath,
       canMutate: this.canMutate(),
+      refManagement: REF_MANAGEMENT,
       maxLanes: this.maxLanes(),
       filter: this.filter,
     });
@@ -284,7 +285,12 @@ export class GraphWebviewHost implements vscode.Disposable {
   }
 
   private async postSettings(): Promise<void> {
-    await this.post({ type: 'settings', maxLanes: this.maxLanes(), canMutate: this.canMutate() });
+    await this.post({
+      type: 'settings',
+      maxLanes: this.maxLanes(),
+      canMutate: this.canMutate(),
+      refManagement: REF_MANAGEMENT,
+    });
   }
 
   private async onMessage(message: WebviewToHostMessage): Promise<void> {

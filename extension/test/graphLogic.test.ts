@@ -493,16 +493,19 @@ describe('find helpers', () => {
   });
 });
 
+const FULL = { canMutate: true, refManagement: true };
+const RESTRICTED = { canMutate: false, refManagement: true };
+
 describe('rowMenu', () => {
   const actions = (items: { action: string }[]): string[] => items.map((item) => item.action);
 
   it('offers no commit actions on the uncommitted-changes row', () => {
-    const items = actions(rowMenu('wip', 0, true));
+    const items = actions(rowMenu('wip', 0, FULL));
     expect(items).toEqual(['showDetails', 'openScm', 'stashChanges']);
   });
 
   it('offers stash actions, not reset, merge or cherry-pick, on a stash row', () => {
-    const items = actions(rowMenu('stash', 0, true));
+    const items = actions(rowMenu('stash', 0, FULL));
     expect(items).toContain('stashApply');
     expect(items).toContain('stashPop');
     expect(items).toContain('stashDrop');
@@ -512,15 +515,22 @@ describe('rowMenu', () => {
   });
 
   it('offers a comparison when two commits are selected', () => {
-    expect(actions(rowMenu('commit', 2, true))).toContain('compare');
-    expect(actions(rowMenu('commit', 1, true))).not.toContain('compare');
+    expect(actions(rowMenu('commit', 2, FULL))).toContain('compare');
+    expect(actions(rowMenu('commit', 1, FULL))).not.toContain('compare');
   });
 
   it('leaves out everything that changes the repository in Restricted Mode', () => {
-    const items = rowMenu('commit', 1, false);
+    const items = rowMenu('commit', 1, RESTRICTED);
     for (const item of items) expect(MUTATING_ROW_ACTIONS.has(item.action)).toBe(false);
     expect(actions(items)).toEqual(['showDetails', 'openChanges', 'copySha', 'copyMessage']);
     expect(items[0].group).toBeFalsy();
+  });
+
+  it('offers to create a tag only when the engine can', () => {
+    expect(actions(rowMenu('commit', 1, FULL))).toContain('createTag');
+    const items = actions(rowMenu('commit', 1, { canMutate: true, refManagement: false }));
+    expect(items).not.toContain('createTag');
+    expect(items).toContain('createBranch');
   });
 });
 
@@ -528,7 +538,7 @@ describe('refMenu', () => {
   const actions = (items: { action: string }[]): string[] => items.map((item) => item.action);
 
   it('offers the branch actions on another branch', () => {
-    expect(actions(refMenu({ kind: 'branch', name: 'feature' }, false, true))).toEqual([
+    expect(actions(refMenu({ kind: 'branch', name: 'feature' }, false, FULL))).toEqual([
       'checkout',
       'merge',
       'rebase',
@@ -541,7 +551,7 @@ describe('refMenu', () => {
   });
 
   it('does not offer to check out, merge, rebase onto or delete the current branch', () => {
-    const items = actions(refMenu({ kind: 'branch', name: 'main' }, true, true));
+    const items = actions(refMenu({ kind: 'branch', name: 'main' }, true, FULL));
     for (const action of ['checkout', 'merge', 'rebase', 'delete'])
       expect(items).not.toContain(action);
     expect(items).toContain('push');
@@ -549,14 +559,40 @@ describe('refMenu', () => {
   });
 
   it('offers push and delete on tags', () => {
-    expect(actions(refMenu({ kind: 'tag', name: 'v1.0' }, false, true))).toEqual(
+    expect(actions(refMenu({ kind: 'tag', name: 'v1.0' }, false, FULL))).toEqual(
       expect.arrayContaining(['pushTag', 'deleteTag', 'checkout']),
     );
   });
 
+  it('leaves out what needs branch and tag management when the engine lacks it', () => {
+    const limited = { canMutate: true, refManagement: false };
+    expect(actions(refMenu({ kind: 'branch', name: 'feature' }, false, limited))).toEqual([
+      'checkout',
+      'merge',
+      'rebase',
+      'createBranch',
+      'delete',
+      'copyName',
+    ]);
+    // The checked-out branch still pushes.
+    expect(actions(refMenu({ kind: 'branch', name: 'main' }, true, limited))).toEqual([
+      'createBranch',
+      'push',
+      'copyName',
+    ]);
+    expect(actions(refMenu({ kind: 'tag', name: 'v1.0' }, false, limited))).toEqual([
+      'checkout',
+      'merge',
+      'createBranch',
+      'copyName',
+    ]);
+  });
+
   it('keeps only copying in Restricted Mode', () => {
-    expect(actions(refMenu({ kind: 'tag', name: 'v1.0' }, false, false))).toEqual(['copyName']);
-    expect(actions(refMenu({ kind: 'remote', name: 'origin/main' }, false, false))).toEqual([
+    expect(actions(refMenu({ kind: 'tag', name: 'v1.0' }, false, RESTRICTED))).toEqual([
+      'copyName',
+    ]);
+    expect(actions(refMenu({ kind: 'remote', name: 'origin/main' }, false, RESTRICTED))).toEqual([
       'copyName',
     ]);
   });

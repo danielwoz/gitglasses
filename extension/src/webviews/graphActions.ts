@@ -5,10 +5,15 @@
 // conflicts before it runs, and asks before anything destructive.
 
 import * as vscode from 'vscode';
-import type { GraphRef, GraphRow } from '@gitglasses/protocol';
-import { ErrorCodes } from '@gitglasses/protocol';
+import type {
+  GraphRef,
+  GraphRow,
+  RequestMethod,
+  RequestParams,
+  RequestResult,
+} from '@gitglasses/protocol';
 import { shortSha } from '@gitglasses/protocol/sha';
-import { EngineClient, EngineError } from '@gitglasses/rpc';
+import { EngineClient } from '@gitglasses/rpc';
 import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
 import {
   confirmBranchDelete,
@@ -62,7 +67,7 @@ const REF_LABELS: Record<RefActionId, string> = {
 
 // Engine method each action leads with, for capability gating. Branch
 // renames, pushes of branches that are not checked out, and tag operations
-// are served by the branch/* and tag/* methods.
+// need the branch and tag management methods (REF_MANAGEMENT).
 const ROW_METHODS: Record<GraphActionId, string | undefined> = {
   createBranch: 'mutate/branchCreate',
   createTag: 'tag/create',
@@ -121,23 +126,70 @@ function rowKindFor(action: GraphActionId): GraphRow['kind'] | undefined {
   }
 }
 
-/** Calls an engine method by name. The branch/* and tag/* methods ship with
- *  the sidebar's branch and tag management; an engine without them answers
- *  MethodNotFound, which is reported as unsupported. */
-async function requestByName(
+/** The branch and tag management methods (branch renames, pushes of a branch
+ *  that is not checked out, tag creation, pushes and deletion), with the
+ *  params and results the sidebar's branch and tag views define for them. */
+interface RefManagementMethods {
+  'branch/rename': {
+    params: { repoId: string; name: string; newName: string };
+    result: Record<string, never>;
+  };
+  'branch/push': {
+    params: { repoId: string; name: string; setUpstream?: boolean };
+    result: { remote: string; branch: string };
+  };
+  'tag/create': {
+    params: { repoId: string; name: string; ref?: string; message?: string };
+    result: Record<string, never>;
+  };
+  'tag/delete': { params: { repoId: string; name: string }; result: Record<string, never> };
+  'tag/push': {
+    params: { repoId: string; name: string; remote: string };
+    result: Record<string, never>;
+  };
+}
+type RefManagementMethod = keyof RefManagementMethods;
+
+/** True when the protocol defines every method of `M`. */
+type ProtocolDefines<M extends string> = [M] extends [RequestMethod] ? true : false;
+
+/** Whether this build's engine serves the branch and tag management methods.
+ *  Its type is true exactly when the protocol defines all of them, so the
+ *  compiler requires it to be switched on as soon as they exist. Until then
+ *  the menus leave out the actions that need them. */
+export const REF_MANAGEMENT: ProtocolDefines<RefManagementMethod> = false;
+
+/** The protocol's params and result for a method it defines; the shapes
+ *  above while it does not. */
+type RefManagementParams<M extends RefManagementMethod> = M extends RequestMethod
+  ? RequestParams<M>
+  : RefManagementMethods[M]['params'];
+type RefManagementResult<M extends RefManagementMethod> = M extends RequestMethod
+  ? RequestResult<M>
+  : RefManagementMethods[M]['result'];
+
+/** Calls a branch or tag management method. Callers' params are checked
+ *  against the protocol's definition once it has one. */
+async function requestRefManagement<M extends RefManagementMethod>(
   engine: EngineClient,
-  method: string,
-  params: object,
-): Promise<unknown> {
-  const call = engine.request as unknown as (m: string, p: object) => Promise<unknown>;
-  try {
-    return await call.call(engine, method, params);
-  } catch (error) {
-    if (error instanceof EngineError && error.code === ErrorCodes.MethodNotFound) {
-      throw new Error('this GitGlasses engine does not support it yet', { cause: error });
-    }
-    throw error;
-  }
+  method: M,
+  params: RefManagementParams<M>,
+): Promise<RefManagementResult<M>> {
+  const request = engine.request as unknown as (
+    name: string,
+    body: unknown,
+  ) => Promise<RefManagementResult<M>>;
+  return request.call(engine, method, params);
+}
+
+/** Refuses an action that needs the branch and tag management methods when
+ *  the engine lacks them. */
+function refManagementAvailable(label: string): boolean {
+  if (REF_MANAGEMENT) return true;
+  void vscode.window.showWarningMessage(
+    `GitGlasses: cannot ${label}: this version of GitGlasses does not support it yet.`,
+  );
+  return false;
 }
 
 function gate(engine: EngineClient, method: string | undefined, label: string): boolean {
@@ -191,7 +243,7 @@ export async function runRowAction(
         await createBranchAt(ctx, sha, shortSha(sha));
         break;
       case 'createTag':
-        await createTagAt(ctx, sha);
+        if (refManagementAvailable(label)) await createTagAt(ctx, sha);
         break;
       case 'switchDetached':
         await engine.request('mutate/switch', { repoId, ref: sha });
@@ -269,13 +321,14 @@ export async function runRefAction(
         await createBranchAt(ctx, sha, ref.name);
         break;
       case 'rename': {
+        if (!refManagementAvailable(label)) return;
         const newName = await vscode.window.showInputBox({
           prompt: `Rename branch '${ref.name}'`,
           value: ref.name,
           validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
         });
         if (!newName?.trim() || newName.trim() === ref.name) return;
-        await requestByName(engine, 'branch/rename', {
+        await requestRefManagement(engine, 'branch/rename', {
           repoId,
           name: ref.name,
           newName: newName.trim(),
@@ -290,13 +343,15 @@ export async function runRefAction(
         await pushBranch(ctx, ref);
         break;
       case 'pushTag': {
+        if (!refManagementAvailable(label)) return;
         const remote = await pickRemote(ctx, `Push tag '${ref.name}' to`);
         if (!remote) return;
-        await requestByName(engine, 'tag/push', { repoId, name: ref.name, remote });
+        await requestRefManagement(engine, 'tag/push', { repoId, name: ref.name, remote });
         setStatus(`Pushed tag '${ref.name}' to ${remote}`);
         break;
       }
       case 'deleteTag': {
+        if (!refManagementAvailable(label)) return;
         const choice = await vscode.window.showWarningMessage(
           `Delete tag '${ref.name}'?`,
           {
@@ -306,7 +361,7 @@ export async function runRefAction(
           'Delete',
         );
         if (choice !== 'Delete') return;
-        await requestByName(engine, 'tag/delete', { repoId, name: ref.name });
+        await requestRefManagement(engine, 'tag/delete', { repoId, name: ref.name });
         setStatus(`Deleted tag '${ref.name}'`);
         break;
       }
@@ -345,7 +400,7 @@ async function createTagAt(ctx: GraphActionContext, sha: string): Promise<void> 
     prompt: 'Tag message (leave empty for a lightweight tag)',
   });
   if (message === undefined) return;
-  await requestByName(ctx.engine, 'tag/create', {
+  await requestRefManagement(ctx.engine, 'tag/create', {
     repoId: ctx.repoId,
     name: name.trim(),
     ref: sha,
@@ -439,12 +494,13 @@ async function pushBranch(ctx: GraphActionContext, ref: GraphRef): Promise<void>
     setStatus(`Pushed '${ref.name}'`);
     return;
   }
-  const result = (await requestByName(engine, 'branch/push', {
+  if (!refManagementAvailable(`push '${ref.name}'`)) return;
+  const result = await requestRefManagement(engine, 'branch/push', {
     repoId,
     name: ref.name,
     setUpstream: !ref.upstream,
-  })) as { remote?: string } | undefined;
-  setStatus(`Pushed '${ref.name}'${result?.remote ? ` to ${result.remote}` : ''}`);
+  });
+  setStatus(`Pushed '${ref.name}' to ${result.remote}`);
 }
 
 async function pickRemote(

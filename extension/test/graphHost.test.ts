@@ -1,6 +1,7 @@
 // The commit graph host's guards: commit actions never run on the
-// uncommitted-changes row or a stash, and actions from a snapshot of another
-// repository are dropped.
+// uncommitted-changes row or a stash, actions from a snapshot of another
+// repository are dropped, and branch and tag actions the engine cannot serve
+// are refused before anything reaches it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
@@ -9,7 +10,7 @@ vi.mock('vscode', () => import('./support/fakeWebviewVscode'));
 
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol/sha';
 import type { EngineClient } from '@gitglasses/rpc';
-import type { GraphRow } from '@gitglasses/protocol';
+import type { GraphRef, GraphRow } from '@gitglasses/protocol';
 import {
   EventEmitter,
   FakeWebviewPanel,
@@ -17,7 +18,7 @@ import {
   controls,
   recorded,
 } from './support/fakeWebviewVscode';
-import { runRefAction, runRowAction } from '../src/webviews/graphActions';
+import { REF_MANAGEMENT, runRefAction, runRowAction } from '../src/webviews/graphActions';
 import { GraphWebviewHost } from '../src/webviews/graphHost';
 import { setActiveRepoResolver, type ActiveRepo } from '../src/views/viewBase';
 import type { RepositoryService } from '../src/model/repositoryService';
@@ -117,9 +118,33 @@ describe('runRowAction', () => {
       { method: 'mutate/switch', params: { repoId: 'r1', ref: COMMIT } },
     ]);
   });
+
+  it('refuses to create a tag while the engine has no tag methods', async () => {
+    expect(REF_MANAGEMENT).toBe(false);
+    const { engine, requests } = graphEngine();
+    await runRowAction({ engine, repoId: 'r1', openRebase: vi.fn() }, 'createTag', [COMMIT], KINDS);
+    expect(requests).toEqual([]);
+    expect(controls.messages[0]).toMatch(/does not support it yet/);
+  });
 });
 
 describe('runRefAction', () => {
+  const tag: GraphRef = { name: 'v1.0', kind: 'tag' };
+  const branch: GraphRef = { name: 'feature', kind: 'branch' };
+
+  it('refuses branch and tag management the engine cannot serve', async () => {
+    const { engine, mutations } = graphEngine();
+    const ctx = { engine, repoId: 'r1', openRebase: vi.fn() };
+    await runRefAction(ctx, 'pushTag', tag, COMMIT);
+    await runRefAction(ctx, 'deleteTag', tag, COMMIT);
+    await runRefAction(ctx, 'rename', branch, COMMIT);
+    // Pushing a branch that is not checked out needs branch/push.
+    await runRefAction(ctx, 'push', branch, COMMIT);
+    expect(mutations()).toEqual([]);
+    expect(controls.messages).toHaveLength(4);
+    for (const message of controls.messages) expect(message).toMatch(/does not support it yet/);
+  });
+
   it('still pushes the checked-out branch', async () => {
     const { engine, mutations } = graphEngine();
     await runRefAction(

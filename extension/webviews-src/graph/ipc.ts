@@ -93,6 +93,9 @@ export type HostToWebviewMessage =
       repoRoot: string;
       /** False in Restricted Mode: menus leave out what changes the repository. */
       canMutate: boolean;
+      /** Whether the engine serves branch renames, pushes of a branch that is
+       *  not checked out, and tag creation, pushes and deletion. */
+      refManagement: boolean;
       maxLanes: number;
       filter?: string[];
     }
@@ -110,7 +113,7 @@ export type HostToWebviewMessage =
   | { type: 'findResults'; query: string; shas: string[]; truncated: boolean }
   /** The working tree changed: a shown WIP details view is out of date. */
   | { type: 'wipChanged' }
-  | { type: 'settings'; maxLanes: number; canMutate: boolean }
+  | { type: 'settings'; maxLanes: number; canMutate: boolean; refManagement: boolean }
   | { type: 'theme' }
   /** Why the graph is empty: no repository, or a failed graph/rows. */
   | { type: 'error'; message: string };
