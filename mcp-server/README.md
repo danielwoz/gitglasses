@@ -23,12 +23,14 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
 | `apply_patch` | Apply a patch to the working tree (**writes**) |
 | `list_my_prs` | Open PRs involving you, grouped into launchpad buckets |
+| `git_line_story` | Why a line is the way it is: its blame (ignore-revs honoured), the full commit message, the GitHub pull requests that merged it, the issues they name and the line's earlier versions with diffs, as bounded markdown with forge text quoted |
 
 Every tool but `apply_patch` is read-only, and each declares that through MCP
 tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
-`git_file_history`, `create_patch`, `apply_patch` and the diff of
-`git_commit_show` need git, so they work only in repositories you allow (see
-[Trust model](#trust-model)).
+`git_file_history`, `create_patch`, `apply_patch`, the diff of
+`git_commit_show` and the earlier versions and pull requests of
+`git_line_story` need git or the forge, so they work only in repositories you
+allow (see [Trust model](#trust-model)).
 
 Tools that render a whole commit, diff, status, ref list or patch take a
 `maxChars` argument and truncate with a footer naming the limit; `git_blame`
@@ -109,9 +111,9 @@ claude mcp add gitglasses \
 | Variable | Purpose |
 | --- | --- |
 | `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server looks for a release build in the clone it runs from (`build/release/engine/`), then searches `PATH`. |
-| `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
+| `GITHUB_TOKEN` | GitHub token used by `list_my_prs` and `git_line_story` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
-| `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
+| `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs` and `git_line_story`. Must be a bare hostname. Defaults to `github.com`. |
 | `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server reads and, via `apply_patch`, writes, with git allowed to run there. Same as passing each with `--allow`; `*` allows every path. Unset means the client's workspace roots, read without git (see [Trust model](#trust-model)). |
 
 ## Trust model

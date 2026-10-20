@@ -28,6 +28,7 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
 | `apply_patch` | Apply a patch to the working tree (**writes**) |
 | `list_my_prs` | Open PRs involving you, grouped into launchpad buckets |
+| `git_line_story` | Why a line is the way it is: its blame (ignore-revs honoured), the full commit message, the GitHub pull requests that merged it, the issues they name and the line's earlier versions with diffs, as bounded markdown with forge text quoted |
 
 Every tool but `apply_patch` is read-only, and each declares that through MCP
 tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
@@ -96,9 +97,9 @@ command, with no arguments.
 | Variable | Purpose |
 | --- | --- |
 | `GITGLASSES_ENGINE` | Absolute path to the `gitglasses-engine` binary. When unset, the server searches `PATH`. |
-| `GITHUB_TOKEN` | GitHub token used by `list_my_prs` (preferred). |
+| `GITHUB_TOKEN` | GitHub token used by `list_my_prs` and `git_line_story` (preferred). |
 | `GITGLASSES_GITHUB_TOKEN` | Fallback token when `GITHUB_TOKEN` is unset. |
-| `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs`. Must be a bare hostname. Defaults to `github.com`. |
+| `GITGLASSES_GITHUB_HOST` | GitHub Enterprise hostname for `list_my_prs` and `git_line_story`. Must be a bare hostname. Defaults to `github.com`. |
 | `GITGLASSES_ALLOWED_ROOTS` | Path-separator delimited directories the server may read and, via `apply_patch`, write. Unset means **any repository the process can reach**. |
 
 ## Security model

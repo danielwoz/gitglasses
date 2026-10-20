@@ -45,6 +45,7 @@ import {
   type DiffFileEntry,
 } from './format.js';
 import { SERVER_VERSION } from './version.js';
+import { gitLineStory, registerLineStoryTool, type LineStoryArgs } from './tools/lineStory.js';
 
 /**
  * A bare hostname, optionally with a port: letters, digits, hyphens and dots.
@@ -847,6 +848,21 @@ export function createToolHandlers(context: ToolContext) {
       const viewer = prs.find((pr) => pr.viewerRole === 'author')?.author.username ?? '';
       return formatLaunchpad(groupItems(prs, viewer));
     },
+
+    async git_line_story(args: LineStoryArgs): Promise<string> {
+      return gitLineStory(
+        {
+          repo: async (target) => {
+            const repo = await repoFor(target);
+            return { ...repo, restricted: repo.client !== context.client };
+          },
+          env,
+          githubHost: () => configuredGitHubHost(env),
+          fetchFn: context.fetchFn,
+        },
+        args,
+      );
+    },
   };
 
   // Every handler reports failures through describeFailure, so a direct caller
@@ -1163,6 +1179,8 @@ export function createServer(context: ToolContext): McpServer {
     },
     asToolResult(handlers.list_my_prs),
   );
+
+  registerLineStoryTool(server, asToolResult(handlers.git_line_story), { repoPath, maxChars });
 
   return server;
 }
