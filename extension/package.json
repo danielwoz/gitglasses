@@ -32,7 +32,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Blame, history and the commit graph work in Restricted Mode. Settings that choose an executable, a network endpoint or a link target are taken from user settings only.",
+      "description": "In Restricted Mode GitGlasses runs no git commands, so no program the repository configures (hooks, filters, fsmonitor, diff drivers, ssh commands) can run: blame, commit history and the commit graph are read straight from the repository, while file and line history, patches and every command that changes the repository or contacts a remote stay off until the folder is trusted. Settings that choose an executable, a network endpoint or a link target are read from user settings only.",
       "restrictedConfigurations": [
         "gitglasses.engine.path",
         "gitglasses.web.maxRepoBytes",
@@ -97,7 +97,8 @@
       },
       {
         "command": "gitglasses.showLineHistory",
-        "title": "GitGlasses: Show Line History for Selection"
+        "title": "GitGlasses: Show Line History for Selection",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.copySha",
@@ -115,7 +116,8 @@
       {
         "command": "gitglasses.showFileHistory",
         "title": "GitGlasses: Show Visual File History",
-        "icon": "$(graph-scatter)"
+        "icon": "$(graph-scatter)",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.groups.create",
@@ -140,17 +142,19 @@
       {
         "command": "gitglasses.gitCommands",
         "title": "GitGlasses: Git Commands…",
-        "icon": "$(source-control)"
+        "icon": "$(source-control)",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.interactiveRebase",
         "title": "GitGlasses: Interactive Rebase…",
-        "enablement": "gitglasses.engineFullCapabilities"
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.worktrees.add",
         "title": "GitGlasses: Add Worktree…",
-        "icon": "$(add)"
+        "icon": "$(add)",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.worktrees.open",
@@ -159,7 +163,8 @@
       },
       {
         "command": "gitglasses.worktrees.remove",
-        "title": "Remove Worktree"
+        "title": "Remove Worktree",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.connectIntegration",
@@ -171,7 +176,8 @@
       },
       {
         "command": "gitglasses.startWork",
-        "title": "GitGlasses: Start Work on Issue…"
+        "title": "GitGlasses: Start Work on Issue…",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.launchpad.refresh",
@@ -207,7 +213,8 @@
       {
         "command": "gitglasses.ai.generateCommitMessage",
         "title": "GitGlasses: AI Generate Commit Message",
-        "icon": "$(sparkle)"
+        "icon": "$(sparkle)",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.ai.nlSearch",
@@ -225,17 +232,17 @@
       {
         "command": "gitglasses.createPatch",
         "title": "GitGlasses: Create Patch…",
-        "enablement": "gitglasses.engineFullCapabilities"
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.applyPatch",
         "title": "GitGlasses: Apply Patch…",
-        "enablement": "gitglasses.engineFullCapabilities"
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.suggestChange",
         "title": "GitGlasses: Suggest Change for Pull Request…",
-        "enablement": "gitglasses.engineFullCapabilities"
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.switchMode",
@@ -243,19 +250,23 @@
       },
       {
         "command": "gitglasses.home.push",
-        "title": "GitGlasses: Push"
+        "title": "GitGlasses: Push",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.pull",
-        "title": "GitGlasses: Pull"
+        "title": "GitGlasses: Pull",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.switchBranch",
-        "title": "GitGlasses: Switch Branch…"
+        "title": "GitGlasses: Switch Branch…",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.createBranch",
-        "title": "GitGlasses: Create Branch…"
+        "title": "GitGlasses: Create Branch…",
+        "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.dismissGetStarted",
@@ -281,12 +292,12 @@
       {
         "command": "gitglasses.stageSelectedHunks",
         "title": "GitGlasses: Stage Selected Hunk(s)",
-        "enablement": "gitglasses.engineFullCapabilities"
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.unstageSelectedHunks",
         "title": "GitGlasses: Unstage Selected Hunk(s)",
-        "enablement": "gitglasses.engineFullCapabilities"
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.addIntegration",
@@ -688,26 +699,26 @@
         },
         {
           "command": "gitglasses.worktrees.add",
-          "when": "view == gitglasses.views.worktrees",
+          "when": "view == gitglasses.views.worktrees && isWorkspaceTrusted",
           "group": "navigation"
         },
         {
           "command": "gitglasses.showFileHistory",
-          "when": "view == gitglasses.views.fileHistory",
+          "when": "view == gitglasses.views.fileHistory && isWorkspaceTrusted",
           "group": "navigation"
         }
       ],
       "editor/title": [
         {
           "command": "gitglasses.showFileHistory",
-          "when": "resourceScheme == file",
+          "when": "resourceScheme == file && isWorkspaceTrusted",
           "group": "navigation"
         }
       ],
       "editor/context": [
         {
           "command": "gitglasses.suggestChange",
-          "when": "editorHasSelection && resourceScheme == file",
+          "when": "editorHasSelection && resourceScheme == file && isWorkspaceTrusted",
           "group": "gitglasses@1"
         },
         {
@@ -722,12 +733,12 @@
         },
         {
           "command": "gitglasses.stageSelectedHunks",
-          "when": "resourceScheme == file",
+          "when": "resourceScheme == file && isWorkspaceTrusted",
           "group": "gitglasses@4"
         },
         {
           "command": "gitglasses.unstageSelectedHunks",
-          "when": "resourceScheme == file",
+          "when": "resourceScheme == file && isWorkspaceTrusted",
           "group": "gitglasses@5"
         }
       ],
@@ -750,7 +761,7 @@
         },
         {
           "command": "gitglasses.createPatch",
-          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|Stash)$/"
+          "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|Stash)$/ && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.worktrees.open",
@@ -763,7 +774,7 @@
         },
         {
           "command": "gitglasses.worktrees.remove",
-          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree"
+          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.launchpad.open",
@@ -785,7 +796,7 @@
       "commandPalette": [
         {
           "command": "gitglasses.suggestChange",
-          "when": "editorHasSelection"
+          "when": "editorHasSelection && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.copySha",

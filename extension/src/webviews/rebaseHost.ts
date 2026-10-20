@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { RebaseEntry } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
-import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
+import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { activeWorkspaceRepo } from '../views/viewBase';
 import { renderWebviewHtml } from './webviewHtml';
@@ -37,9 +37,10 @@ export class RebaseWebviewHost implements vscode.Disposable {
 
   /** Opens the editor for `upstream`, prompting for one when not given. */
   async open(upstream?: string): Promise<void> {
-    if (!isMethodAvailable(this.engine.capabilities(), 'rebase/start')) {
+    const caps = this.engine.capabilities();
+    if (!isMethodAvailable(caps, 'rebase/start')) {
       void vscode.window.showWarningMessage(
-        `GitGlasses: cannot rebase. ${CLI_UNAVAILABLE_MESSAGE}.`,
+        `GitGlasses: cannot rebase. ${unavailableMessage(caps)}.`,
       );
       return;
     }

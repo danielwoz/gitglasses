@@ -4,8 +4,8 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { execFileSync } from 'node:child_process';
-import { runTests } from '@vscode/test-electron';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { downloadAndUnzipVSCode, runTests } from '@vscode/test-electron';
 import { FIXTURE } from './fixture';
 
 // Compiled location is extension/dist-e2e/runTests.js, so the extension root
@@ -120,16 +120,108 @@ function createFixtureWorkspace(enginePath: string): string {
   return root;
 }
 
+// A repository that names a command everywhere git looks for one: a
+// core.fsmonitor command, a clean/smudge filter and a textconv driver applied
+// to every path, and hooks around commits and checkouts. Each command drops a
+// file into `markers` when it runs. The commits are made before any of it is
+// planted, so building the fixture runs none of them.
+function createPlantedWorkspace(): { root: string; markers: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-untrusted-'));
+  const markers = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-markers-'));
+
+  git(root, 'init');
+  git(root, 'config', 'core.autocrlf', 'false');
+  git(root, 'config', 'commit.gpgsign', 'false');
+  write(root, FIXTURE.blameFile, FIXTURE.blameFileHeadContents);
+  write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileCommittedContents);
+  git(root, 'add', '.');
+  git(root, 'commit', '-m', 'add alpha and tracked');
+  write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileWorkingContents);
+
+  // Forward slashes read the same to git's config parser and to sh on every
+  // platform.
+  const marker = (name: string): string => `${markers.split(path.sep).join('/')}/${name}`;
+  fs.appendFileSync(
+    path.join(root, '.git', 'config'),
+    [
+      '[core]',
+      `\tfsmonitor = "touch ${marker('fsmonitor')}; false #"`,
+      '[filter "planted"]',
+      `\tclean = "touch ${marker('clean')}; cat"`,
+      `\tsmudge = "touch ${marker('smudge')}; cat"`,
+      '[diff "planted"]',
+      `\ttextconv = "touch ${marker('textconv')}; cat"`,
+      '',
+    ].join('\n'),
+  );
+  write(root, '.gitattributes', '* filter=planted diff=planted\n');
+  for (const hook of ['pre-commit', 'post-commit', 'post-checkout', 'post-merge', 'pre-push']) {
+    const file = path.join(root, '.git', 'hooks', hook);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `#!/bin/sh\ntouch ${marker(`hook-${hook}`)}\n`, { mode: 0o755 });
+  }
+  return { root, markers };
+}
+
+// Opens the planted workspace with workspace trust on and the startup prompt
+// off, so the folder opens in Restricted Mode, as a downloaded folder would.
+// runTests() always passes --disable-workspace-trust, so this launches the
+// same VS Code build directly. The engine path is pinned in user settings:
+// Restricted Mode ignores the workspace's own value for it.
+function runUntrusted(vscodeExecutablePath: string, enginePath: string): void {
+  const planted = createPlantedWorkspace();
+  console.log(`[e2e] Restricted Mode workspace: ${planted.root}`);
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-profile-'));
+  const userData = path.join(profile, 'user-data');
+  fs.mkdirSync(path.join(userData, 'User'), { recursive: true });
+  fs.writeFileSync(
+    path.join(userData, 'User', 'settings.json'),
+    JSON.stringify({
+      'security.workspace.trust.enabled': true,
+      'security.workspace.trust.startupPrompt': 'never',
+      'gitglasses.engine.path': enginePath,
+      'gitglasses.engine.logLevel': 'info',
+    }),
+  );
+  try {
+    const result = spawnSync(
+      vscodeExecutablePath,
+      [
+        '--no-sandbox',
+        '--disable-gpu-sandbox',
+        '--disable-updates',
+        '--skip-welcome',
+        '--skip-release-notes',
+        '--disable-extensions',
+        `--user-data-dir=${userData}`,
+        `--extensions-dir=${path.join(profile, 'extensions')}`,
+        `--extensionDevelopmentPath=${extensionDevelopmentPath}`,
+        `--extensionTestsPath=${path.resolve(__dirname, 'suite-untrusted', 'index')}`,
+        planted.root,
+      ],
+      { stdio: 'inherit', env: { ...process.env, GG_E2E_MARKERS: planted.markers } },
+    );
+    if (result.status !== 0) {
+      throw new Error(`Restricted Mode run failed: exit ${result.status ?? result.signal}`);
+    }
+  } finally {
+    for (const dir of [planted.root, planted.markers, profile]) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const enginePath = findEngineBinary();
   console.log(`[e2e] engine binary: ${enginePath}`);
+  const vscodeExecutablePath = await downloadAndUnzipVSCode('stable');
 
   const workspacePath = createFixtureWorkspace(enginePath);
   console.log(`[e2e] fixture workspace: ${workspacePath}`);
 
   try {
     await runTests({
-      version: 'stable',
+      vscodeExecutablePath,
       extensionDevelopmentPath,
       extensionTestsPath: path.resolve(__dirname, 'suite', 'index'),
       // --disable-extensions turns off every installed extension while still
@@ -139,6 +231,8 @@ async function main(): Promise<void> {
   } finally {
     fs.rmSync(workspacePath, { recursive: true, force: true });
   }
+
+  runUntrusted(vscodeExecutablePath, enginePath);
 }
 
 main().catch((error) => {

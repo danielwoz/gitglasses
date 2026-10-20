@@ -8,10 +8,16 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { EngineClient } from '@gitglasses/rpc';
 import { createProcessTransportFactory, findEngineBinary } from '@gitglasses/rpc/node';
-import { createCore, createMethodNotSupportedNotifier, HISTORY_VIEWS } from './core';
+import {
+  createCore,
+  createMethodNotSupportedNotifier,
+  createRestrictedNotifier,
+  HISTORY_VIEWS,
+} from './core';
 import { errorMessage } from './commands/ui';
 import { HeadChangeTracker } from './engine/capabilityGate';
 import { DocumentSync } from './engine/documentSync';
+import { createTrustGrantHandler } from './engine/workspaceTrust';
 import { RepositoryService } from './model/repositoryService';
 import { ViewNode, activeWorkspaceRepo, requireRepo } from './views/viewBase';
 import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
@@ -60,13 +66,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     .get<string>('engine.logLevel', 'warn');
 
   const showMethodNotSupported = createMethodNotSupportedNotifier();
+  const showRestricted = createRestrictedNotifier();
 
+  // In an untrusted workspace (Restricted Mode) the engine runs no git
+  // process: git would run whatever the repository's config, attributes and
+  // hooks name. Trust is read at each spawn, so a respawn after a crash stays
+  // restricted and the restart on a trust grant (below) lifts it.
   const engine = new EngineClient(
-    createProcessTransportFactory({ enginePath, logLevel, onLog: log }),
+    createProcessTransportFactory({
+      enginePath,
+      logLevel,
+      onLog: log,
+      restricted: () => !vscode.workspace.isTrusted,
+    }),
     {
       onLog: log,
       onCrash: (error) => log(`engine crashed: ${error.message}`),
       onMethodNotSupported: (_method, message) => showMethodNotSupported(message),
+      onRestricted: () => showRestricted(),
       onRestarted: () => core.handleEngineRestarted(),
     },
   );
@@ -93,6 +110,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push(...core.disposables);
   const { blame, fileAnnotations, integrations } = core;
+
+  const onTrustGranted = createTrustGrantHandler(engine, () => core.reload());
+  context.subscriptions.push(
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      void onTrustGranted()
+        .then(() => log('workspace trusted: engine restarted without restrictions'))
+        .catch((error) => log(`engine restart after trust was granted failed: ${error}`));
+    }),
+  );
 
   // Whether the file differs between the working tree and the index. Staged
   // hunk line numbers are only comparable to editor line numbers while this is
@@ -352,7 +378,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   try {
     await engine.start();
-    log(`engine started: ${enginePath}`);
+    log(
+      `engine started: ${enginePath}` +
+        (engine.capabilities()?.restricted ? ' (Restricted Mode: no git commands run)' : ''),
+    );
     core.lineBlame.refresh();
     // Annotation modes restored from the previous session paint once the
     // engine can answer blame.

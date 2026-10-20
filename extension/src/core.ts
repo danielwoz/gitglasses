@@ -76,6 +76,31 @@ export function createMethodNotSupportedNotifier(): (message: string) => void {
   };
 }
 
+const MANAGE_TRUST = 'Manage Workspace Trust';
+
+const RESTRICTED_NOTICE =
+  'GitGlasses runs no git commands in Restricted Mode, so file history, patches and ' +
+  'commands that change the repository are off until you trust this folder.';
+
+/** Explains a Restricted Mode refusal (-32004) once per window, with a way to
+ *  trust the folder. Reads that need git, such as file history, are refused
+ *  on every refresh, and repeating the explanation would only add noise; the
+ *  commands that change the repository are disabled in the UI instead. */
+export function createRestrictedNotifier(): () => void {
+  let shown = false;
+  return (): void => {
+    if (shown) return;
+    shown = true;
+    void vscode.window
+      .showWarningMessage(RESTRICTED_NOTICE, MANAGE_TRUST)
+      .then((choice) => {
+        if (choice === MANAGE_TRUST) {
+          void vscode.commands.executeCommand('workbench.trust.manage');
+        }
+      });
+  };
+}
+
 /** The document sync each host builds; core only drives its resync. */
 export interface DocumentSyncLike {
   resync(): void;

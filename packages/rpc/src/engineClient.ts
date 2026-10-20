@@ -52,6 +52,9 @@ export interface EngineClientOptions {
    *  (-32003); receives the engine's message verbatim, so the UI can surface
    *  it even where the call site swallows the rejection. */
   onMethodNotSupported?: (method: string, message: string) => void;
+  /** Called when a Restricted Mode engine refuses a request with Restricted
+   *  (-32004), with the engine's message verbatim. */
+  onRestricted?: (method: string, message: string) => void;
   /** Per-request ceiling; defaults to DEFAULT_REQUEST_TIMEOUT_MS. */
   requestTimeoutMs?: number;
   /** Spawns the engine on the first request, so callers need not call start()
@@ -212,6 +215,8 @@ export class EngineClient {
     if (message.error) {
       if (message.error.code === ErrorCodes.MethodNotSupported) {
         this.options.onMethodNotSupported?.(pending.method, message.error.message);
+      } else if (message.error.code === ErrorCodes.Restricted) {
+        this.options.onRestricted?.(pending.method, message.error.message);
       }
       pending.reject(new EngineError(message.error.code, message.error.message));
     } else {

@@ -3,7 +3,7 @@
 
 import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
-import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
+import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
 import { allowedDespiteConflicts } from './conflictGuard';
@@ -478,7 +478,7 @@ export function registerGitPalette(
       const items = ROOT_ITEMS.map((item) =>
         isMethodAvailable(caps, FLOW_METHODS[item.id])
           ? item
-          : { ...item, description: CLI_UNAVAILABLE_MESSAGE },
+          : { ...item, description: unavailableMessage(caps) },
       );
       const root = await showPick(items, {
         title: 'Git Commands',
@@ -487,7 +487,9 @@ export function registerGitPalette(
       if (root === 'back' || root === undefined) return;
       // Unavailable flows explain themselves instead of executing.
       if (!isMethodAvailable(engine.capabilities(), FLOW_METHODS[root.id])) {
-        void vscode.window.showInformationMessage(`GitGlasses: ${CLI_UNAVAILABLE_MESSAGE}.`);
+        void vscode.window.showInformationMessage(
+          `GitGlasses: ${unavailableMessage(engine.capabilities())}.`,
+        );
         continue;
       }
       const guarded = CONFLICT_GUARDED[root.id];

@@ -178,6 +178,28 @@ describe('EngineClient over a fake transport', () => {
     client.dispose();
   });
 
+  it('surfaces -32004 through onRestricted, not onMethodNotSupported', async () => {
+    const restricted: { method: string; message: string }[] = [];
+    const unsupported: string[] = [];
+    const { client, transports } = makeClient({
+      onRestricted: (method, message) => restricted.push({ method, message }),
+      onMethodNotSupported: (method) => unsupported.push(method),
+    });
+    await client.start();
+    transports[0].responders.set('mutate/push', (msg) =>
+      transports[0].respondError(msg.id, ErrorCodes.Restricted, 'not available in Restricted Mode'),
+    );
+
+    await expect(client.request('mutate/push', { repoId: 'r1' })).rejects.toSatisfy(
+      (e: unknown) => e instanceof EngineError && e.code === ErrorCodes.Restricted,
+    );
+    expect(restricted).toEqual([
+      { method: 'mutate/push', message: 'not available in Restricted Mode' },
+    ]);
+    expect(unsupported).toEqual([]);
+    client.dispose();
+  });
+
   it('dispatches engine notifications and supports unsubscription', async () => {
     const { client, transports } = makeClient();
     await client.start();

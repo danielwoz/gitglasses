@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { CommitSummaryInfo, GraphRow } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
-import { CLI_UNAVAILABLE_MESSAGE, isMethodAvailable } from '../engine/capabilityGate';
+import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
 import { openCommitDoc } from '../views/nodes';
@@ -206,9 +206,10 @@ export class GraphWebviewHost implements vscode.Disposable {
     const repoId = this.repoId;
     const sha = shas[0];
     if (!repoId || !sha) return;
-    if (!isMethodAvailable(this.engine.capabilities(), ACTION_METHODS[action])) {
+    const caps = this.engine.capabilities();
+    if (!isMethodAvailable(caps, ACTION_METHODS[action])) {
       void vscode.window.showWarningMessage(
-        `GitGlasses: cannot ${ACTION_LABELS[action]}. ${CLI_UNAVAILABLE_MESSAGE}.`,
+        `GitGlasses: cannot ${ACTION_LABELS[action]}. ${unavailableMessage(caps)}.`,
       );
       return;
     }
