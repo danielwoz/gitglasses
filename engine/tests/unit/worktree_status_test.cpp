@@ -126,6 +126,15 @@ class WorktreeRepo {
   std::int64_t id_ = 100;
 };
 
+// A worktree entry with its path resolved, so listings that spell a
+// directory differently (a symlinked temp directory) compare equal.
+std::string canonicalEntry(Json entry) {
+  std::error_code ec;
+  const fs::path resolved = fs::weakly_canonical(entry["path"].get<std::string>(), ec);
+  if (!ec) entry["path"] = resolved.string();
+  return entry.dump();
+}
+
 const Json* entryFor(const Json& worktrees, const fs::path& dir) {
   for (const auto& entry : worktrees) {
     std::error_code ec;
@@ -511,7 +520,7 @@ TEST(WorktreeList, RestrictedModeListsThroughLibgit2AndSkipsTheMergeCheck) {
     Json discover = session.request(req(2, "repo/discover", {{"path", fixture.root().string()}}));
     Json list =
         session.request(req(3, "worktree/list", {{"repoId", discover["result"]["repoId"]}}));
-    for (const auto& entry : list["result"]["worktrees"]) expected.insert(entry.dump());
+    for (const auto& entry : list["result"]["worktrees"]) expected.insert(canonicalEntry(entry));
   }
 
   gg::testing::ScopedRestrictedMode restricted;
@@ -522,7 +531,7 @@ TEST(WorktreeList, RestrictedModeListsThroughLibgit2AndSkipsTheMergeCheck) {
   Json list = session.request(req(3, "worktree/list", {{"repoId", repoId}}));
   ASSERT_TRUE(list.contains("result")) << list.dump();
   std::set<std::string> listed;
-  for (const auto& entry : list["result"]["worktrees"]) listed.insert(entry.dump());
+  for (const auto& entry : list["result"]["worktrees"]) listed.insert(canonicalEntry(entry));
   EXPECT_EQ(listed, expected);
   EXPECT_EQ(list["result"]["worktrees"][0]["current"], true);
 
