@@ -92,29 +92,101 @@ export function snippetProviderHost(cls: SnippetUrlClass): string | undefined {
 export const CONFIRM_MAX_LISTED_FILES = 20;
 
 /**
+ * Directories whose files configure a tool that runs code, matched at any
+ * depth: an editor or dev container opened on a subfolder of the repository
+ * reads that subfolder's.
+ */
+const TOOLING_DIRECTORIES: ReadonlyMap<string, string> = new Map([
+  ['.vscode', 'editor settings and tasks'],
+  ['.idea', 'editor settings and run configurations'],
+  ['.devcontainer', 'dev container configuration'],
+  ['.husky', 'git hooks'],
+  ['.githooks', 'git hooks'],
+  ['.github', 'CI configuration'],
+  ['.circleci', 'CI configuration'],
+]);
+
+/**
+ * File names (lowercase) that CI, git, package managers, build and test
+ * tools or container engines run or read to decide what to run.
+ */
+const TOOLING_FILES: ReadonlyMap<string, string> = new Map([
+  ...[
+    '.gitlab-ci.yml',
+    'azure-pipelines.yml',
+    'bitbucket-pipelines.yml',
+    'jenkinsfile',
+    '.travis.yml',
+    'appveyor.yml',
+    '.drone.yml',
+  ].map((name): [string, string] => [name, 'CI configuration']),
+  ['.gitattributes', 'git attributes (filters and diff drivers)'],
+  ['.gitmodules', 'submodules'],
+  ['package.json', 'package scripts'],
+  ...['.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmfile.cjs'].map((name): [string, string] => [
+    name,
+    'package manager configuration',
+  ]),
+  ['.envrc', 'shell environment (direnv)'],
+  ...[
+    'makefile',
+    'gnumakefile',
+    'cmakelists.txt',
+    'meson.build',
+    'build.rs',
+    'build.gradle',
+    'build.gradle.kts',
+    'settings.gradle',
+    'settings.gradle.kts',
+    'gradlew',
+    'gradle-wrapper.properties',
+    'pom.xml',
+    'mvnw',
+    'build.sbt',
+    'setup.py',
+    'noxfile.py',
+    'rakefile',
+    'gemfile',
+    'justfile',
+    'taskfile.yml',
+    'taskfile.yaml',
+    'sconstruct',
+    'build.bazel',
+    'workspace',
+    'workspace.bazel',
+    'vagrantfile',
+  ].map((name): [string, string] => [name, 'build script']),
+  ['conftest.py', 'test setup'],
+  ...[
+    'dockerfile',
+    'containerfile',
+    'docker-compose.yml',
+    'docker-compose.yaml',
+    'compose.yml',
+    'compose.yaml',
+  ].map((name): [string, string] => [name, 'container definition']),
+]);
+
+/**
  * Why a path deserves a second look before a patch from someone else writes
- * it: files that configure the editor, CI, git itself or the build, and so
- * can run code. Undefined for ordinary files.
+ * it: files that configure the editor, CI, git itself, package managers,
+ * the build, tests or containers, and so can run code. Undefined for
+ * ordinary files.
  */
 export function sensitivePathReason(path: string, executable = false): string | undefined {
   const segments = path.split('/');
   const name = segments[segments.length - 1].toLowerCase();
-  const top = segments[0].toLowerCase();
-  if (top === '.vscode') return 'editor settings and tasks';
-  if (top === '.github' || top === '.circleci' || name === '.gitlab-ci.yml') {
-    return 'CI configuration';
+  for (const directory of segments.slice(0, -1)) {
+    const reason = TOOLING_DIRECTORIES.get(directory.toLowerCase());
+    if (reason) return reason;
   }
-  if (name === 'azure-pipelines.yml' || name === 'jenkinsfile') return 'CI configuration';
-  if (top === '.devcontainer') return 'dev container configuration';
-  if (top === '.husky' || top === '.githooks') return 'git hooks';
-  if (name === '.gitattributes') return 'git attributes (filters and diff drivers)';
-  if (name === '.gitmodules') return 'submodules';
-  if (name === 'package.json') return 'package scripts';
-  if (name === 'makefile' || name === 'cmakelists.txt' || name.endsWith('.cmake')) {
-    return 'build script';
-  }
+  const byName = TOOLING_FILES.get(name);
+  if (byName) return byName;
+  if (/\.(cmake|bzl|gemspec)$/.test(name)) return 'build script';
+  if (name.endsWith('.dockerfile')) return 'container definition';
   if (executable) return 'made executable';
-  if (/\.(sh|bash|zsh|ps1|bat|cmd)$/.test(name)) return 'script';
+  if (/\.(sh|bash|zsh|ps1|psm1|bat|cmd)$/.test(name)) return 'script';
+  if (segments.length > 1 && segments[0].startsWith('.')) return 'tool configuration';
   if (segments.length === 1 && name.startsWith('.') && name !== '.gitignore') {
     return 'configuration file';
   }
@@ -167,15 +239,22 @@ export function confirmDetail(envelope: PatchEnvelope, files: readonly PatchFile
     '',
     `${files.length} file${files.length === 1 ? '' : 's'} changed, +${additions} −${deletions}`,
   );
-  // Flagged files first, so the cap never hides one.
+  // Flagged files first, so the cap hides an ordinary file before any
+  // flagged one; the line counting hidden files says how many are flagged.
   const ordered = [...files].sort(
     (a, b) =>
       Number(sensitivePathReason(b.path, b.executable === true) !== undefined) -
       Number(sensitivePathReason(a.path, a.executable === true) !== undefined),
   );
   for (const file of ordered.slice(0, CONFIRM_MAX_LISTED_FILES)) lines.push(fileLine(file));
-  const hidden = ordered.length - CONFIRM_MAX_LISTED_FILES;
-  if (hidden > 0) lines.push(`…and ${hidden} more ${hidden === 1 ? 'file' : 'files'}`);
+  const hidden = ordered.slice(CONFIRM_MAX_LISTED_FILES);
+  if (hidden.length > 0) {
+    const flagged = sensitiveFileCount(hidden);
+    lines.push(
+      `…and ${hidden.length} more ${hidden.length === 1 ? 'file' : 'files'}` +
+        (flagged > 0 ? `, ${flagged} of them able to run code or change tooling` : ''),
+    );
+  }
   return lines.join('\n');
 }
 

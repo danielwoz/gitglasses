@@ -171,7 +171,16 @@ describe('confirmDetail', () => {
       '⚠ .vscode/settings.json (new)  +3 −0 — editor settings and tasks',
     );
     expect(detail).toContain('…and 6 more files');
+    expect(detail).not.toContain('able to run code');
     expect(detail).toContain(`${CONFIRM_MAX_LISTED_FILES + 6} files changed`);
+  });
+
+  it('counts the flagged files the cap hides', () => {
+    const scripts = Array.from({ length: CONFIRM_MAX_LISTED_FILES + 3 }, (_, i) =>
+      file({ path: `tools/step${i}.sh`, status: 'A', additions: 1 }),
+    );
+    const detail = confirmDetail(envelope(), [file({ path: 'src/a.ts' }), ...scripts]);
+    expect(detail).toContain('…and 4 more files, 3 of them able to run code or change tooling');
   });
 });
 
@@ -186,8 +195,49 @@ describe('sensitivePathReason', () => {
     expect(sensitivePathReason('packages/app/package.json')).toBe('package scripts');
     expect(sensitivePathReason('Makefile')).toBe('build script');
     expect(sensitivePathReason('tools/setup.sh')).toBe('script');
-    expect(sensitivePathReason('.envrc')).toBe('configuration file');
+    expect(sensitivePathReason('.envrc')).toBe('shell environment (direnv)');
+    expect(sensitivePathReason('.eslintrc.js')).toBe('configuration file');
     expect(sensitivePathReason('bin/tool', true)).toBe('made executable');
+  });
+
+  it('flags tooling folders at any depth, since a subfolder may be the open workspace', () => {
+    expect(sensitivePathReason('packages/app/.vscode/tasks.json')).toBe(
+      'editor settings and tasks',
+    );
+    expect(sensitivePathReason('packages/app/.devcontainer/devcontainer.json')).toBe(
+      'dev container configuration',
+    );
+    expect(sensitivePathReason('.idea/runConfigurations/x.xml')).toBe(
+      'editor settings and run configurations',
+    );
+    expect(sensitivePathReason('web/.husky/pre-commit')).toBe('git hooks');
+    expect(sensitivePathReason('services/api/.envrc')).toBe('shell environment (direnv)');
+    expect(sensitivePathReason('services/api/.npmrc')).toBe('package manager configuration');
+  });
+
+  it('flags root tool folders and the usual build, test and container entry points', () => {
+    expect(sensitivePathReason('.cargo/config.toml')).toBe('tool configuration');
+    expect(sensitivePathReason('.yarn/plugins/p.cjs')).toBe('tool configuration');
+    for (const path of [
+      'setup.py',
+      'build.gradle',
+      'app/build.gradle.kts',
+      'gradlew',
+      'gradle/wrapper/gradle-wrapper.properties',
+      'crates/core/build.rs',
+      'pom.xml',
+      'justfile',
+      'Taskfile.yml',
+      'tools/rules.bzl',
+      'lib.gemspec',
+    ]) {
+      expect(sensitivePathReason(path), path).toBe('build script');
+    }
+    expect(sensitivePathReason('tests/conftest.py')).toBe('test setup');
+    expect(sensitivePathReason('Dockerfile')).toBe('container definition');
+    expect(sensitivePathReason('deploy/api.dockerfile')).toBe('container definition');
+    expect(sensitivePathReason('compose.yaml')).toBe('container definition');
+    expect(sensitivePathReason('bitbucket-pipelines.yml')).toBe('CI configuration');
   });
 
   it('leaves ordinary files alone', () => {
