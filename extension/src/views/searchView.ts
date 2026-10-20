@@ -30,8 +30,8 @@ export function searchRefusal(error: unknown): string | undefined {
   return undefined;
 }
 
-// Holds the last search's results; the viewsWelcome contribution shows the
-// "Search Commits…" button while the tree is empty.
+// Holds the last search's results. While the tree is empty the view shows
+// its state lines (viewStateContent.ts), which offer "Search Commits…".
 export class SearchViewProvider extends ViewBase {
   private lastInput: string | undefined;
   /** What the last search looked for, phrased to follow "commits": the
@@ -42,12 +42,13 @@ export class SearchViewProvider extends ViewBase {
   /** Only recent history was searched (a date window applied here). */
   private partial = false;
   private state: SearchState = 'idle';
-  private failure: string | undefined;
+  /** Why the last search stopped short, shown above its results. */
+  private searchFailure: string | undefined;
   private streamCounter = 0;
   private running: vscode.CancellationTokenSource | undefined;
 
   override async getChildren(node?: ViewNode): Promise<ViewNode[]> {
-    // Before any search: an empty tree lets the welcome content show.
+    // Before any search: an empty tree shows the view's state lines.
     if (!node && this.state === 'idle') return [];
     return super.getChildren(node);
   }
@@ -55,10 +56,10 @@ export class SearchViewProvider extends ViewBase {
   protected async getRootNodes(_repo: ActiveRepo): Promise<ViewNode[]> {
     const label = this.lastLabel ?? '';
     let header: ViewNode;
-    if (this.failure) {
-      header = messageNode(this.failure);
+    if (this.searchFailure) {
+      header = messageNode(this.searchFailure);
       header.item.iconPath = new vscode.ThemeIcon('warning');
-      header.item.tooltip = this.failure;
+      header.item.tooltip = this.searchFailure;
       return [header];
     }
     if (this.state === 'running') {
@@ -130,7 +131,7 @@ export class SearchViewProvider extends ViewBase {
     this.results = [];
     this.truncated = false;
     this.partial = false;
-    this.failure = undefined;
+    this.searchFailure = undefined;
     this.state = 'running';
     this.fireChange();
     void vscode.commands.executeCommand(`${VIEW_ID}.focus`);
@@ -180,10 +181,10 @@ export class SearchViewProvider extends ViewBase {
     } catch (error) {
       if (this.running !== cancel) return;
       if (cancel.token.isCancellationRequested) {
-        this.failure = `Search cancelled: commits ${label}`;
+        this.searchFailure = `Search cancelled: commits ${label}`;
       } else {
-        this.failure = searchRefusal(error) ?? `Commit search failed: ${errorMessage(error)}`;
-        void vscode.window.showWarningMessage(`GitGlasses: ${this.failure}`);
+        this.searchFailure = searchRefusal(error) ?? `Commit search failed: ${errorMessage(error)}`;
+        void vscode.window.showWarningMessage(`GitGlasses: ${this.searchFailure}`);
       }
     } finally {
       clearTimeout(notifyTimer);

@@ -10,10 +10,10 @@ import * as vscode from 'vscode';
 import type { RebaseEntry } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
-import { RepositoryService } from '../model/repositoryService';
+import { RepositoryService, repoName } from '../model/repositoryService';
 import { ActiveRepo, activeWorkspaceRepo } from '../views/viewBase';
 import { renderWebviewHtml } from './webviewHtml';
-import { confirmRebase } from '../commands/confirmations';
+import { confirmRebase, inRepository } from '../commands/confirmations';
 import { confirmDestructive, errorMessage, setStatus } from '../commands/ui';
 import { LogFn, reportGitError } from '../views/errorReport';
 import { pickRebaseTarget } from '../views/refPicker';
@@ -38,6 +38,7 @@ type ResumeAction = 'continue' | 'skip' | 'abort';
 export class RebaseWebviewHost implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private panelDisposables: vscode.Disposable[] = [];
+  /** The repository the panel works on, which the confirmation names. */
   private repo: ActiveRepo | undefined;
   private session: RebaseSession | undefined;
   /** Messages that describe the panel's state, replayed when it (re)loads. */
@@ -86,15 +87,17 @@ export class RebaseWebviewHost implements vscode.Disposable {
     return sequencer.operation === 'rebase';
   }
 
-  /** Opens the editor for `upstream`, asking for one when not given. A rebase
-   *  already under way opens in its paused state instead. */
-  async open(upstream?: string): Promise<void> {
+  /** Opens the editor for `upstream`, asking for one when not given. It acts
+   *  on `target` when given (the Git Commands palette passes the repository
+   *  it names), else on the repository the views follow. A rebase already
+   *  under way opens in its paused state instead. */
+  async open(upstream?: string, target?: ActiveRepo): Promise<void> {
     if (!this.available()) return;
     if (this.busy()) {
       this.panel?.reveal();
       return;
     }
-    const repo = await this.activeRepo();
+    const repo = target ?? (await this.activeRepo());
     if (!repo) return;
     try {
       if (await this.rebaseInProgress(repo)) {
@@ -415,7 +418,11 @@ export class RebaseWebviewHost implements vscode.Disposable {
       } catch (error) {
         this.log(`status before rebase failed: ${errorMessage(error)}`);
       }
-      if (!(await confirmDestructive(confirmRebase(session.branch, session.upstream)))) return;
+      const confirmation = inRepository(confirmRebase(session.branch, session.upstream), {
+        name: repoName(repo.workspacePath ?? repo.rootPath),
+        rootPath: repo.rootPath,
+      });
+      if (!(await confirmDestructive(confirmation))) return;
 
       await this.run(() =>
         this.engine.request('rebase/start', {

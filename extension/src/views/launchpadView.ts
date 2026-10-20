@@ -7,6 +7,10 @@ import { relativeTime } from '../system/dates';
 
 const REFRESH_INTERVAL_MS = 60_000;
 
+/** Run by the first-run welcome. Hidden from the palette, where Connect
+ *  Integration… lists GitHub first. */
+const CONNECT_GITHUB = 'gitglasses.launchpad.connectGitHub';
+
 export interface LaunchpadNode {
   item: vscode.TreeItem;
   pr?: PullRequest;
@@ -17,6 +21,34 @@ function messageNode(message: string): LaunchpadNode {
   const item = new vscode.TreeItem(message, vscode.TreeItemCollapsibleState.None);
   item.iconPath = new vscode.ThemeIcon('info');
   return { item };
+}
+
+function actionNode(label: string, icon: string, command: string, tooltip?: string): LaunchpadNode {
+  const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+  item.iconPath = new vscode.ThemeIcon(icon);
+  item.tooltip = tooltip;
+  item.command = { command, title: label };
+  return { item };
+}
+
+/** First run: what Launchpad is for, and the way to connect a provider.
+ *  Short lines, since a sidebar cuts long ones off. */
+function welcomeNodes(): LaunchpadNode[] {
+  const intro = messageNode('Pull requests waiting on you');
+  intro.item.iconPath = new vscode.ThemeIcon('rocket');
+  intro.item.tooltip =
+    'Launchpad gathers the pull requests and issues that need you, from every connected provider.';
+  return [
+    intro,
+    actionNode('Connect GitHub…', 'github', CONNECT_GITHUB, 'Sign in to github.com.'),
+    actionNode(
+      'Connect Another Provider…',
+      'plug',
+      'gitglasses.connectIntegration',
+      'GitLab, Bitbucket, Azure DevOps, GitHub Enterprise Server, Jira or Linear, cloud or ' +
+        'self-hosted, and the hosts this workspace’s remotes point at.',
+    ),
+  ];
 }
 
 function prIcon(pr: PullRequest): vscode.ThemeIcon {
@@ -45,7 +77,7 @@ function prNode(pr: PullRequest, snoozed: boolean): LaunchpadNode {
   return node;
 }
 
-class LaunchpadViewProvider implements vscode.TreeDataProvider<LaunchpadNode> {
+export class LaunchpadViewProvider implements vscode.TreeDataProvider<LaunchpadNode> {
   private readonly emitter = new vscode.EventEmitter<LaunchpadNode | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
   private model: LaunchpadModel | undefined;
@@ -81,8 +113,7 @@ class LaunchpadViewProvider implements vscode.TreeDataProvider<LaunchpadNode> {
       void this.reload();
       return [messageNode('Loading…')];
     }
-    // Empty, so the view's welcome content (with its Connect button) shows.
-    if (!this.model.connected) return [];
+    if (!this.model.connected) return welcomeNodes();
     if (this.model.groups.length === 0) {
       return [messageNode('No open pull requests involving you')];
     }
@@ -169,6 +200,7 @@ export function registerLaunchpad(
     { dispose: () => provider.dispose() },
     integrations.onDidChange(() => void provider.reload(true)),
     vscode.commands.registerCommand('gitglasses.launchpad.refresh', () => provider.reload(true)),
+    vscode.commands.registerCommand(CONNECT_GITHUB, () => integrations.connectGitHub()),
     vscode.commands.registerCommand('gitglasses.launchpad.open', (node?: LaunchpadNode) => {
       if (node?.pr) void vscode.env.openExternal(vscode.Uri.parse(node.pr.url));
     }),

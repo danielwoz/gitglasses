@@ -38,7 +38,8 @@ void registerStatusMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
 
         auto head = repo.value().head();
         if (!head) throw rpc::HandlerError{{head.error()}};
-        // Detached and unborn HEADs report an empty branch name.
+        // A detached HEAD reports an empty branch name; an unborn one names
+        // the branch its first commit creates.
         std::string branch = head.value().branch;
         std::string upstreamName;
         size_t ahead = 0, behind = 0;

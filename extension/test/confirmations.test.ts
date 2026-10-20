@@ -10,6 +10,7 @@ import {
   confirmStashDrop,
   confirmWorktreeForceRemove,
   confirmWorktreeRemove,
+  inRepository,
 } from '../src/commands/confirmations';
 
 const SHA_A = 'abc1234def0000000000000000000000000000aa';
@@ -112,6 +113,24 @@ describe('worktree confirmations', () => {
     expect(force.message).toBe('Force remove worktree at /repos/app-wt?');
     expect(force.detail).toBe(
       'git worktree remove --force /repos/app-wt\n\nRemoves the worktree even if it has modified or untracked files.',
+    );
+  });
+});
+
+describe('inRepository', () => {
+  const repo = { name: 'app', rootPath: '/work/app' };
+
+  it('ends the question with the repository and leads the detail with its path', () => {
+    const c = inRepository(confirmResetHard('main', 'HEAD~1'), repo);
+    expect(c.message).toBe("Hard reset 'main' to HEAD~1 in app?");
+    expect(c.detail).toBe(
+      "Repository: /work/app\n\ngit reset --hard HEAD~1\n\nDiscards all staged and working tree changes and moves 'main' to HEAD~1.",
+    );
+  });
+
+  it('appends the repository to a message that is not a question', () => {
+    expect(inRepository({ message: 'Drop everything', detail: 'x' }, repo).message).toBe(
+      'Drop everything (app)',
     );
   });
 });

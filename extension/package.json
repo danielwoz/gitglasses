@@ -98,39 +98,48 @@
     "commands": [
       {
         "command": "gitglasses.toggleLineBlame",
-        "title": "GitGlasses: Toggle Inline Blame"
+        "title": "Toggle Inline Blame",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.toggleFileBlame",
-        "title": "GitGlasses: Toggle File Blame Annotations"
+        "title": "Toggle File Blame Annotations",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.toggleHeatmap",
-        "title": "GitGlasses: Toggle File Heatmap Annotations"
+        "title": "Toggle File Heatmap Annotations",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.toggleChanges",
-        "title": "GitGlasses: Toggle File Changes Annotations"
+        "title": "Toggle File Changes Annotations",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.clearAnnotations",
-        "title": "GitGlasses: Clear File Annotations"
+        "title": "Clear File Annotations",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.diffWithHead",
-        "title": "GitGlasses: Open Changes with HEAD"
+        "title": "Open Changes with HEAD",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.openFileAtRevision",
-        "title": "GitGlasses: Open File at Revision"
+        "title": "Open File at Revision",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.restartEngine",
-        "title": "GitGlasses: Restart Engine"
+        "title": "Restart Engine",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.refreshViews",
-        "title": "GitGlasses: Refresh Views",
+        "title": "Refresh Views",
+        "category": "GitGlasses",
         "icon": "$(refresh)"
       },
       {
@@ -141,16 +150,19 @@
       },
       {
         "command": "gitglasses.showLineHistory",
-        "title": "GitGlasses: Show Line History for Selection",
+        "title": "Show Line History for Selection",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.copySha",
-        "title": "Copy SHA"
+        "title": "Copy SHA",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.openCommitDiff",
-        "title": "Open Commit"
+        "title": "Open Commit",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.showCommitDetails",
@@ -169,105 +181,139 @@
       },
       {
         "command": "gitglasses.showGraph",
-        "title": "GitGlasses: Show Commit Graph",
+        "title": "Show Commit Graph",
+        "category": "GitGlasses",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "gitglasses.scm.showGraph",
+        "title": "Show Commit Graph",
+        "category": "GitGlasses",
         "icon": "$(git-branch)"
       },
       {
         "command": "gitglasses.showFileHistory",
-        "title": "GitGlasses: Show Visual File History",
+        "title": "Show Visual File History",
+        "category": "GitGlasses",
         "icon": "$(graph-scatter)",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.groups.create",
-        "title": "GitGlasses: Create Repo Group from Workspace"
+        "title": "Create Repo Group from Workspace",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.groups.open",
-        "title": "GitGlasses: Open Repo Group in New Window"
+        "title": "Open Repo Group in New Window",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.groups.delete",
-        "title": "GitGlasses: Delete Repo Group"
+        "title": "Delete Repo Group",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.groups.export",
-        "title": "GitGlasses: Export Repo Group…"
+        "title": "Export Repo Group…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.groups.import",
-        "title": "GitGlasses: Import Repo Group…"
+        "title": "Import Repo Group…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.gitCommands",
-        "title": "GitGlasses: Git Commands…",
+        "title": "Git Commands…",
+        "category": "GitGlasses",
         "icon": "$(source-control)",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.interactiveRebase",
-        "title": "GitGlasses: Interactive Rebase…",
+        "title": "Interactive Rebase…",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.continueOperation",
-        "title": "GitGlasses: Continue Merge, Rebase, Cherry-pick or Revert",
+        "title": "Continue Merge, Rebase, Cherry-pick or Revert",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.abortOperation",
-        "title": "GitGlasses: Abort Merge, Rebase, Cherry-pick or Revert",
+        "title": "Abort Merge, Rebase, Cherry-pick or Revert",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.worktrees.add",
-        "title": "GitGlasses: Add Worktree…",
+        "title": "Add Worktree…",
+        "category": "GitGlasses",
         "icon": "$(add)",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.worktrees.open",
         "title": "Open in New Window",
+        "category": "GitGlasses",
         "icon": "$(empty-window)"
       },
       {
         "command": "gitglasses.worktrees.remove",
         "title": "Remove Worktree",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.connectIntegration",
-        "title": "GitGlasses: Connect Integration…"
+        "title": "Connect Integration…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.disconnectIntegration",
-        "title": "GitGlasses: Disconnect Integration…"
+        "title": "Disconnect Integration…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.startWork",
-        "title": "GitGlasses: Start Work on Issue…",
+        "title": "Start Work on Issue…",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.launchpad.refresh",
-        "title": "GitGlasses: Refresh Launchpad",
+        "title": "Refresh Launchpad",
+        "category": "GitGlasses",
         "icon": "$(refresh)"
       },
       {
+        "command": "gitglasses.launchpad.connectGitHub",
+        "title": "Connect GitHub…",
+        "category": "GitGlasses",
+        "icon": "$(github)"
+      },
+      {
         "command": "gitglasses.launchpad.open",
-        "title": "Open in Browser"
+        "title": "Open in Browser",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.launchpad.copyUrl",
-        "title": "Copy URL"
+        "title": "Copy URL",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.launchpad.snooze",
-        "title": "Snooze"
+        "title": "Snooze",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.launchpad.unsnooze",
-        "title": "Unsnooze"
+        "title": "Unsnooze",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.ai.explainCommit",
@@ -311,86 +357,141 @@
       },
       {
         "command": "gitglasses.createPatch",
-        "title": "GitGlasses: Create Patch…",
+        "title": "Create Patch…",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.applyPatch",
-        "title": "GitGlasses: Apply Patch…",
+        "title": "Apply Patch…",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.suggestChange",
-        "title": "GitGlasses: Suggest Change for Pull Request…",
+        "title": "Suggest Change for Pull Request…",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.switchMode",
-        "title": "GitGlasses: Switch Mode…"
+        "title": "Switch Mode…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.home.push",
-        "title": "GitGlasses: Push",
+        "title": "Push",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.pull",
-        "title": "GitGlasses: Pull",
+        "title": "Pull",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.switchBranch",
-        "title": "GitGlasses: Switch Branch…",
+        "title": "Switch Branch…",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.createBranch",
-        "title": "GitGlasses: Create Branch…",
+        "title": "Create Branch…",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted"
       },
       {
         "command": "gitglasses.home.dismissGetStarted",
-        "title": "Dismiss Get Started"
+        "title": "Dismiss Get Started",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.openWalkthrough",
-        "title": "GitGlasses: Get Started"
+        "title": "Get Started",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.openOnRemote",
-        "title": "GitGlasses: Open File on Remote",
+        "title": "Open File on Remote",
+        "category": "GitGlasses",
         "icon": "$(globe)"
       },
       {
         "command": "gitglasses.copyRemoteUrl",
-        "title": "GitGlasses: Copy Remote File URL"
+        "title": "Copy Remote File URL",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.openCommitOnRemote",
-        "title": "Open Commit on Remote"
+        "title": "Open Commit on Remote",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.stageSelectedHunks",
-        "title": "GitGlasses: Stage Selected Hunk(s)",
+        "title": "Stage Selected Hunk(s)",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.unstageSelectedHunks",
-        "title": "GitGlasses: Unstage Selected Hunk(s)",
+        "title": "Unstage Selected Hunk(s)",
+        "category": "GitGlasses",
         "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
       },
       {
         "command": "gitglasses.addIntegration",
-        "title": "GitGlasses: Add Integration…"
+        "title": "Add Integration…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.removeIntegration",
-        "title": "GitGlasses: Remove Integration…"
+        "title": "Remove Integration…",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.selectRepository",
-        "title": "GitGlasses: Select Repository…",
+        "title": "Select Repository…",
+        "category": "GitGlasses",
         "icon": "$(repo)"
+      },
+      {
+        "command": "gitglasses.shortcut.showGraph",
+        "title": "Show Commit Graph (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.toggleLineBlame",
+        "title": "Toggle Inline Blame (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.toggleFileBlame",
+        "title": "Toggle File Blame Annotations (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.showFileHistory",
+        "title": "Show Visual File History (Keyboard Shortcut)",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "gitglasses.shortcut.searchCommits",
+        "title": "Search Commits… (Keyboard Shortcut)",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.shortcut.gitCommands",
+        "title": "Git Commands… (Keyboard Shortcut)",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "gitglasses.comingFromGitGraph",
+        "title": "Coming from Git Graph?",
+        "category": "GitGlasses"
       },
       {
         "command": "gitglasses.branch.checkout",
@@ -607,29 +708,12 @@
           "name": "Home"
         },
         {
-          "id": "gitglasses.views.launchpad",
-          "name": "Launchpad"
-        },
-        {
           "id": "gitglasses.views.commits",
           "name": "Commits"
         },
         {
           "id": "gitglasses.views.branches",
-          "name": "Branches"
-        },
-        {
-          "id": "gitglasses.views.remotes",
-          "name": "Remotes",
-          "visibility": "collapsed"
-        },
-        {
-          "id": "gitglasses.views.stashes",
-          "name": "Stashes"
-        },
-        {
-          "id": "gitglasses.views.tags",
-          "name": "Tags",
+          "name": "Branches",
           "visibility": "collapsed"
         },
         {
@@ -637,189 +721,42 @@
           "name": "File History"
         },
         {
+          "id": "gitglasses.views.worktrees",
+          "name": "Worktrees",
+          "visibility": "collapsed"
+        },
+        {
           "id": "gitglasses.views.searchCompare",
           "name": "Search & Compare",
           "visibility": "collapsed"
         },
         {
-          "id": "gitglasses.views.contributors",
-          "name": "Contributors",
+          "id": "gitglasses.views.launchpad",
+          "name": "Launchpad",
           "visibility": "collapsed"
         },
         {
-          "id": "gitglasses.views.worktrees",
-          "name": "Worktrees",
-          "visibility": "collapsed"
+          "id": "gitglasses.views.stashes",
+          "name": "Stashes",
+          "visibility": "hidden"
+        },
+        {
+          "id": "gitglasses.views.tags",
+          "name": "Tags",
+          "visibility": "hidden"
+        },
+        {
+          "id": "gitglasses.views.remotes",
+          "name": "Remotes",
+          "visibility": "hidden"
+        },
+        {
+          "id": "gitglasses.views.contributors",
+          "name": "Contributors",
+          "visibility": "hidden"
         }
       ]
     },
-    "viewsWelcome": [
-      {
-        "view": "gitglasses.views.searchCompare",
-        "contents": "Search commits by message, author, code change, file or date.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.home",
-        "contents": "The Commit Graph is the fastest way to see how this repository fits together.\n[Show Commit Graph](command:gitglasses.showGraph)\n\nNew to GitGlasses? Take the tour.\n[Get Started](command:gitglasses.openWalkthrough)",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.worktrees",
-        "contents": "Worktrees let you check out several branches at once, without stashing.\n[Add Worktree…](command:gitglasses.worktrees.add)",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.stashes",
-        "contents": "No stashes yet. Stashes you create will appear here.",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.launchpad",
-        "contents": "Launchpad collects your pull requests and issues in one place.\n[Connect Integration…](command:gitglasses.connectIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required.",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.fileHistory",
-        "contents": "Open a file to see its history here.\n[Show Visual File History](command:gitglasses.showFileHistory)",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.commits",
-        "contents": "This repository has no commits yet.",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.branches",
-        "contents": "No branches yet.\n[Create Branch…](command:gitglasses.home.createBranch)",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.remotes",
-        "contents": "No remotes are configured for this repository.",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.tags",
-        "contents": "No tags yet. Tags you create appear here.",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.contributors",
-        "contents": "Contributors appear once this repository has commits.",
-        "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.home",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.home",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.launchpad",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.launchpad",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.commits",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.commits",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.branches",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.branches",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.remotes",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.remotes",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.stashes",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.stashes",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.tags",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.tags",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.fileHistory",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.fileHistory",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.searchCompare",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.searchCompare",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.contributors",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.contributors",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      },
-      {
-        "view": "gitglasses.views.worktrees",
-        "contents": "No git repository was found in this workspace.\n[Open Folder](command:workbench.action.files.openFolder)\n[Clone Repository](command:git.clone)",
-        "when": "gitglasses.noRepository"
-      },
-      {
-        "view": "gitglasses.views.worktrees",
-        "contents": "The GitGlasses engine is not responding, so nothing can be read from git.\n[Restart Engine](command:gitglasses.restartEngine)",
-        "when": "gitglasses.engineUnavailable"
-      }
-    ],
     "walkthroughs": [
       {
         "id": "gitglasses.getStarted",
@@ -829,7 +766,7 @@
           {
             "id": "graph",
             "title": "Read your history in the Commit Graph",
-            "description": "The graph shows branches, merges and authorship together, on public and private repositories alike.\n[Show Commit Graph](command:gitglasses.showGraph)",
+            "description": "The graph shows branches, merges and authorship together, on public and private repositories alike.\n[Show Commit Graph](command:gitglasses.showGraph)\nComing from Git Graph? [Carry your settings over](command:gitglasses.comingFromGitGraph).",
             "media": {
               "markdown": "media/walkthrough/graph.md"
             },
@@ -904,7 +841,8 @@
             },
             "completionEvents": [
               "onCommand:gitglasses.addIntegration",
-              "onCommand:gitglasses.connectIntegration"
+              "onCommand:gitglasses.connectIntegration",
+              "onCommand:gitglasses.launchpad.connectGitHub"
             ]
           }
         ]
@@ -912,37 +850,40 @@
     ],
     "keybindings": [
       {
-        "command": "gitglasses.showGraph",
-        "key": "ctrl+shift+g g",
-        "mac": "cmd+shift+g g"
+        "command": "gitglasses.shortcut.showGraph",
+        "key": "ctrl+alt+g g",
+        "mac": "cmd+alt+g g",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && !terminalFocus"
       },
       {
-        "command": "gitglasses.toggleLineBlame",
-        "key": "ctrl+shift+g b",
-        "mac": "cmd+shift+g b",
-        "when": "editorTextFocus"
+        "command": "gitglasses.shortcut.toggleLineBlame",
+        "key": "ctrl+alt+g b",
+        "mac": "cmd+alt+g b",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && editorTextFocus"
       },
       {
-        "command": "gitglasses.toggleFileBlame",
-        "key": "ctrl+shift+g shift+b",
-        "mac": "cmd+shift+g shift+b",
-        "when": "editorTextFocus"
+        "command": "gitglasses.shortcut.toggleFileBlame",
+        "key": "ctrl+alt+g shift+b",
+        "mac": "cmd+alt+g shift+b",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && editorTextFocus"
       },
       {
-        "command": "gitglasses.showFileHistory",
-        "key": "ctrl+shift+g h",
-        "mac": "cmd+shift+g h",
-        "when": "editorTextFocus"
+        "command": "gitglasses.shortcut.showFileHistory",
+        "key": "ctrl+alt+g h",
+        "mac": "cmd+alt+g h",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && editorTextFocus"
       },
       {
-        "command": "gitglasses.searchCommits",
-        "key": "ctrl+shift+g f",
-        "mac": "cmd+shift+g f"
+        "command": "gitglasses.shortcut.searchCommits",
+        "key": "ctrl+alt+g f",
+        "mac": "cmd+alt+g f",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && !terminalFocus"
       },
       {
-        "command": "gitglasses.gitCommands",
-        "key": "ctrl+shift+g c",
-        "mac": "cmd+shift+g c"
+        "command": "gitglasses.shortcut.gitCommands",
+        "key": "ctrl+alt+g c",
+        "mac": "cmd+alt+g c",
+        "when": "config.gitglasses.keyboardShortcuts.enabled && !terminalFocus"
       }
     ],
     "menus": {
@@ -1029,6 +970,11 @@
         {
           "command": "gitglasses.ai.generateCommitMessage",
           "when": "scmProvider == git && isWorkspaceTrusted",
+          "group": "navigation"
+        },
+        {
+          "command": "gitglasses.scm.showGraph",
+          "when": "scmProvider == git || scmProvider == gitglasses",
           "group": "navigation"
         }
       ],
@@ -1262,20 +1208,44 @@
       ],
       "commandPalette": [
         {
-          "command": "gitglasses.suggestChange",
-          "when": "editorHasSelection && isWorkspaceTrusted"
+          "command": "gitglasses.toggleLineBlame",
+          "when": "gitglasses.hasRepository"
         },
         {
-          "command": "gitglasses.continueOperation",
-          "when": "gitglasses.operationInProgress && isWorkspaceTrusted"
+          "command": "gitglasses.toggleFileBlame",
+          "when": "gitglasses.hasRepository && resourceScheme == file"
         },
         {
-          "command": "gitglasses.abortOperation",
-          "when": "gitglasses.operationInProgress && isWorkspaceTrusted"
+          "command": "gitglasses.toggleHeatmap",
+          "when": "gitglasses.hasRepository && resourceScheme == file"
         },
         {
-          "command": "gitglasses.addIntegration",
-          "when": "false"
+          "command": "gitglasses.toggleChanges",
+          "when": "gitglasses.hasRepository && resourceScheme == file"
+        },
+        {
+          "command": "gitglasses.clearAnnotations",
+          "when": "gitglasses.hasRepository && resourceScheme == file"
+        },
+        {
+          "command": "gitglasses.diffWithHead",
+          "when": "gitglasses.hasRepository && (resourceScheme == file || isWeb)"
+        },
+        {
+          "command": "gitglasses.openFileAtRevision",
+          "when": "gitglasses.hasRepository && (resourceScheme == file || isWeb)"
+        },
+        {
+          "command": "gitglasses.refreshViews",
+          "when": "gitglasses.hasRepository"
+        },
+        {
+          "command": "gitglasses.searchCommits",
+          "when": "gitglasses.hasRepository"
+        },
+        {
+          "command": "gitglasses.showLineHistory",
+          "when": "gitglasses.hasRepository && (resourceScheme == file || isWeb) && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.copySha",
@@ -1290,12 +1260,32 @@
           "when": "false"
         },
         {
-          "command": "gitglasses.blame.openChanges",
+          "command": "gitglasses.showGraph",
+          "when": "gitglasses.hasRepository"
+        },
+        {
+          "command": "gitglasses.scm.showGraph",
           "when": "false"
         },
         {
-          "command": "gitglasses.blame.previousRevision",
-          "when": "false"
+          "command": "gitglasses.showFileHistory",
+          "when": "gitglasses.hasRepository && (resourceScheme == file || isWeb) && isWorkspaceTrusted"
+        },
+        {
+          "command": "gitglasses.groups.create",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "gitglasses.gitCommands",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted"
+        },
+        {
+          "command": "gitglasses.interactiveRebase",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
+          "command": "gitglasses.worktrees.add",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.worktrees.open",
@@ -1304,6 +1294,10 @@
         {
           "command": "gitglasses.worktrees.remove",
           "when": "false"
+        },
+        {
+          "command": "gitglasses.startWork",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.launchpad.open",
@@ -1320,6 +1314,34 @@
         {
           "command": "gitglasses.launchpad.unsnooze",
           "when": "false"
+        },
+        {
+          "command": "gitglasses.ai.explainCommit",
+          "when": "gitglasses.hasRepository"
+        },
+        {
+          "command": "gitglasses.ai.explainWip",
+          "when": "gitglasses.hasRepository"
+        },
+        {
+          "command": "gitglasses.ai.generateCommitMessage",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted"
+        },
+        {
+          "command": "gitglasses.ai.nlSearch",
+          "when": "gitglasses.hasRepository"
+        },
+        {
+          "command": "gitglasses.createPatch",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
+          "command": "gitglasses.applyPatch",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
+          "command": "gitglasses.suggestChange",
+          "when": "gitglasses.hasRepository && editorHasSelection && resourceScheme == file && isWorkspaceTrusted"
         },
         {
           "command": "gitglasses.home.push",
@@ -1339,6 +1361,78 @@
         },
         {
           "command": "gitglasses.home.dismissGetStarted",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.openOnRemote",
+          "when": "gitglasses.hasRepository && resourceScheme == file"
+        },
+        {
+          "command": "gitglasses.copyRemoteUrl",
+          "when": "gitglasses.hasRepository && resourceScheme == file"
+        },
+        {
+          "command": "gitglasses.openCommitOnRemote",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.stageSelectedHunks",
+          "when": "gitglasses.hasRepository && resourceScheme == file && isWorkspaceTrusted"
+        },
+        {
+          "command": "gitglasses.unstageSelectedHunks",
+          "when": "gitglasses.hasRepository && resourceScheme == file && isWorkspaceTrusted"
+        },
+        {
+          "command": "gitglasses.addIntegration",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.launchpad.connectGitHub",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.selectRepository",
+          "when": "gitglasses.multiRepoWorkspace"
+        },
+        {
+          "command": "gitglasses.shortcut.showGraph",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.toggleLineBlame",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.toggleFileBlame",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.showFileHistory",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.searchCommits",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.shortcut.gitCommands",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.continueOperation",
+          "when": "gitglasses.hasRepository && gitglasses.operationInProgress && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
+          "command": "gitglasses.abortOperation",
+          "when": "gitglasses.hasRepository && gitglasses.operationInProgress && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
+          "command": "gitglasses.blame.openChanges",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.blame.previousRevision",
           "when": "false"
         },
         {
@@ -1447,27 +1541,27 @@
         },
         {
           "command": "gitglasses.tag.create",
-          "when": "!gitglasses.noRepository"
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
         },
         {
           "command": "gitglasses.remote.add",
-          "when": "!gitglasses.noRepository"
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
         },
         {
           "command": "gitglasses.rebase.show",
-          "when": "gitglasses.rebaseInProgress"
+          "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress"
         },
         {
           "command": "gitglasses.rebase.continue",
-          "when": "gitglasses.rebaseInProgress"
+          "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
         },
         {
           "command": "gitglasses.rebase.skip",
-          "when": "gitglasses.rebaseInProgress"
+          "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
         },
         {
           "command": "gitglasses.rebase.abort",
-          "when": "gitglasses.rebaseInProgress"
+          "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
         }
       ]
     },
@@ -1507,6 +1601,12 @@
           ],
           "default": "normal",
           "description": "GitGlasses mode; switch via the status bar item or the Switch Mode command"
+        },
+        "gitglasses.keyboardShortcuts.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": false,
+          "markdownDescription": "Turn on GitGlasses keyboard shortcuts: `Ctrl+Alt+G` (`Cmd+Alt+G` on macOS), then `G` Commit Graph, `B` inline blame, `Shift+B` file blame, `H` visual file history, `F` search commits or `C` Git Commands. Off by default, so none of the editor's own shortcuts are taken over. On Windows keyboard layouts where `AltGr+G` types a character, leave this off and bind the commands in Keyboard Shortcuts instead."
         },
         "gitglasses.currentLine.enabled": {
           "type": "boolean",

@@ -3,8 +3,9 @@ import { RepositoryService } from '../model/repositoryService';
 import { encodeRevisionUri } from './revisionContentProvider';
 
 // Supplies the "original" (HEAD) version of files so VS Code renders its
-// native gutter change indicators from our engine instead of the built-in
-// git extension (both can coexist; VS Code dedupes providers by URI).
+// native gutter change indicators from our engine. It serves only hosts
+// without VS Code's Git extension, which provides quick diff wherever it
+// runs (see QuickDiffSources).
 export class GitGlassesQuickDiffProvider implements vscode.QuickDiffProvider {
   constructor(private readonly repos: RepositoryService) {}
 

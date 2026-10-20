@@ -2,14 +2,7 @@ import * as vscode from 'vscode';
 import { FileHistoryEntry } from '@gitglasses/protocol';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
 import { EngineClient } from '@gitglasses/rpc';
-import {
-  ActiveRepo,
-  ViewBase,
-  ViewNode,
-  loadMoreNode,
-  messageNode,
-  setViewState,
-} from './viewBase';
+import { ActiveRepo, ViewBase, ViewNode, loadMoreNode, messageNode } from './viewBase';
 import { fileHistoryNode } from './nodes';
 import { PageState, appendPage, emptyPageState } from './viewLogic';
 import { viewPageSize } from '../system/settings';
@@ -57,13 +50,15 @@ export class FileHistoryViewProvider extends ViewBase {
 
   override async getChildren(node?: ViewNode): Promise<ViewNode[]> {
     if (node) return node.children ? ((await node.children()) ?? []) : [];
-    // No tracked file and engine failures both leave the tree empty so the
-    // view's welcome content explains the state.
+    // No tracked file and a failed request both leave the tree empty; the
+    // view's state lines explain which it is.
+    this.failure = undefined;
     if (!this.current) return [];
     try {
       return await this.buildNodes(this.current);
-    } catch {
-      return setViewState('engineUnavailable');
+    } catch (error) {
+      this.recordFailure(error);
+      return [];
     }
   }
 
