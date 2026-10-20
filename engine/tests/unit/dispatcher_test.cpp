@@ -507,6 +507,8 @@ TEST_F(DispatcherTest, PayloadsBehindADeferredParseKeepArrivalOrder) {
   dispatcher.notification(
       "store",
       [&](Json params) {
+        // Slow enough that a request routed ahead of it would win.
+        std::this_thread::sleep_for(2ms);
         std::lock_guard lock(m);
         stored = params["n"].get<int>();
       },
