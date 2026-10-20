@@ -171,6 +171,10 @@ class FixtureRepo {
     run("git config user.name Fixture");
     run("git config user.email fixture@example.invalid");
     run("git config commit.gpgsign false");
+    // No background maintenance after commits: newer git starts a detached
+    // `git maintenance run --auto` that repacks while a test looks.
+    run("git config maintenance.auto false");
+    run("git config gc.auto 0");
     writeFile("README.md", "fixture\n");
     run("git add README.md");
     commit("initial commit");
