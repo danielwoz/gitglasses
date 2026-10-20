@@ -12,9 +12,12 @@ import {
   sourceControlRoot,
 } from '../src/scm/scmGraphButton';
 
+/** The probe path the button locates a repository by, as this platform spells it. */
+const probe = (root: string) => Uri.joinPath(Uri.file(root), '.gitglasses').fsPath;
+
 const repos: Record<string, { repoId: string; rootPath: string }> = {
-  '/w/app/.gitglasses': { repoId: 'r1', rootPath: '/w/app' },
-  '/w/lib/.gitglasses': { repoId: 'r2', rootPath: '/w/lib' },
+  [probe('/w/app')]: { repoId: 'r1', rootPath: '/w/app' },
+  [probe('/w/lib')]: { repoId: 'r2', rootPath: '/w/lib' },
 };
 
 function deps(active: string, lookup?: () => never) {
@@ -41,7 +44,7 @@ describe('showGraphForSourceControl', () => {
   it('opens the graph on the clicked repository, which the views then follow', async () => {
     const { value, calls } = deps('r1');
     await showGraphForSourceControl({ id: 'git', rootUri: Uri.file('/w/lib') }, value);
-    expect(calls.located).toEqual(['/w/lib/.gitglasses']);
+    expect(calls.located).toEqual([probe('/w/lib')]);
     expect(calls.activated).toEqual(['/w/lib']);
     expect(graphOpened()).toBe(1);
   });
