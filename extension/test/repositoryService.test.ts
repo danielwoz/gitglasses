@@ -336,6 +336,28 @@ describe('RepositoryService discovery failures', () => {
     expect(repos.unansweredLookups()).toBe(1);
   });
 
+  it('keeps an error the engine answered with as an answer for a while', async () => {
+    // libgit2 cannot open a reftable repository; asking again gets the same.
+    const message = 'unsupported extension name extensions.refstorage';
+    const { engine, discovered } = fakeEngine([], {
+      fail: () => new EngineError(ErrorCodes.GitError, message),
+    });
+    let now = 1000;
+    const lines: string[] = [];
+    const repos = service(engine, { now: () => now, lines });
+
+    expect(await repos.locateOrDiscover(fileUri('/w/reftable/x.txt'))).toBeUndefined();
+    expect(await repos.locateOrDiscover(fileUri('/w/reftable/y.txt'))).toBeUndefined();
+    expect(discovered()).toEqual(['/w/reftable']);
+    // A workspace scan that met it is complete and worth keeping.
+    expect(repos.unansweredLookups()).toBe(0);
+    expect(lines).toEqual([`repository discovery failed for /w/reftable: ${message}`]);
+
+    now += NO_REPOSITORY_TTL_MS;
+    await repos.locateOrDiscover(fileUri('/w/reftable/x.txt'));
+    expect(discovered()).toHaveLength(2);
+  });
+
   it('logs any other failure once and does not cache it', async () => {
     const { engine, discovered } = fakeEngine([], {
       fail: () => new Error("engine request 'repo/discover' timed out after 60000ms"),

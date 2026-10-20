@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { ErrorCodes } from '@gitglasses/protocol';
-import { EngineClient, EngineRestartedError } from '@gitglasses/rpc';
+import { EngineClient, EngineError, EngineRestartedError } from '@gitglasses/rpc';
 import type { AliasResolver, PathFlavor } from './pathAliases';
 
 export interface LocatedFile {
@@ -256,8 +256,9 @@ export class RepositoryService {
   }
 
   /** How many directory lookups so far went unanswered (engine not started,
-   *  restarting or failing). A workspace scan during which this grows missed
-   *  repositories and is not worth keeping. */
+   *  restarting, timed out or unreachable). A workspace scan during which this
+   *  grows missed repositories and is not worth keeping. An error the engine
+   *  answered with is not counted: asking again would get the same one. */
   unansweredLookups(): number {
     return this.unanswered;
   }
@@ -303,19 +304,28 @@ export class RepositoryService {
   }
 
   private discoveryFailed(dir: string, key: string, error: unknown): void {
-    if ((error as { code?: unknown } | undefined)?.code === ErrorCodes.RepoNotFound) {
+    const code = (error as { code?: unknown } | undefined)?.code;
+    if (code === ErrorCodes.RepoNotFound) {
       this.directories.set(key, { expires: this.now() + NO_REPOSITORY_TTL_MS });
       this.logOnce(`none\0${key}`, `no repository contains ${dir}`);
       return;
     }
-    this.unanswered++;
-    // Not started yet, or restarting: the next lookup asks again.
-    if (error instanceof EngineRestartedError) return;
     const message = errorText(error);
-    this.logOnce(
-      `failed\0${key}\0${message}`,
-      `repository discovery failed for ${dir}: ${message}`,
-    );
+    const line = `repository discovery failed for ${dir}: ${message}`;
+    if (error instanceof EngineError && code !== ErrorCodes.Cancelled) {
+      // The engine looked and refused what it found: a repository format
+      // libgit2 cannot open, an owner git does not trust. That is an answer,
+      // kept as long as "no repository", so a lookup repeated on every
+      // refresh does not ask again until the user had time to fix it.
+      this.directories.set(key, { expires: this.now() + NO_REPOSITORY_TTL_MS });
+      this.logOnce(`failed\0${key}\0${message}`, line);
+      return;
+    }
+    // No answer: the engine is not started, restarting, wedged or gone. The
+    // next lookup asks again.
+    this.unanswered++;
+    if (error instanceof EngineRestartedError) return;
+    this.logOnce(`failed\0${key}\0${message}`, line);
   }
 
   /** Records a repository the engine reported, learning the editor's
