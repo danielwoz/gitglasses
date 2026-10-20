@@ -248,6 +248,21 @@ export const ELLIPSIS = '…';
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
+/** Letters of the scripts written right to left. */
+const RIGHT_TO_LEFT =
+  /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Adlam}]/u;
+
+/** A right-to-left mark. */
+const RLM = '\u200f';
+
+/** `prefix` and an ellipsis, drawn at the cut. After right-to-left text a
+ *  right-to-left mark keeps the ellipsis on that text's left, where the cut
+ *  is, rather than past its first letter. */
+function cutShort(prefix: string): string {
+  const lastLetter = /\p{L}(?=\P{L}*$)/u.exec(prefix)?.[0];
+  return prefix + ELLIPSIS + (lastLetter && RIGHT_TO_LEFT.test(lastLetter) ? RLM : '');
+}
+
 /** `text` as it fits in `maxWidth`: whole when it fits, otherwise its longest
  *  prefix that fits with an ellipsis after it, or empty when not even the
  *  ellipsis does. `measure` gives the drawn width of a string. */
@@ -261,7 +276,7 @@ export function fitText(text: string, maxWidth: number, measure: (text: string) 
   let best = measure(ELLIPSIS) <= maxWidth ? ELLIPSIS : '';
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    const candidate = chars.slice(0, mid).join('').trimEnd() + ELLIPSIS;
+    const candidate = cutShort(chars.slice(0, mid).join('').trimEnd());
     if (measure(candidate) <= maxWidth) {
       best = candidate;
       low = mid;

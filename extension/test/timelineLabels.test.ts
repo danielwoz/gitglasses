@@ -44,6 +44,17 @@ describe('fitText', () => {
     expect(fitText('👩\u200d👩\u200d👧 Family', 35, measure)).toBe('…');
   });
 
+  it('keeps the ellipsis at the cut of right-to-left text', () => {
+    // A direction mark takes no width.
+    const drawn = (text: string): number => measure(text.replace(/\p{Cf}/gu, ''));
+    // After Hebrew or Arabic, a right-to-left mark draws the ellipsis on the
+    // left of the cut text, next to the cut.
+    expect(fitText('שלום עליכם', 56, drawn)).toBe('שלום על…\u200f');
+    expect(fitText('Noa כהן לוי', 49, drawn)).toBe('Noa כה…\u200f');
+    // After Latin, it already is.
+    expect(fitText('محمد Smith', 56, drawn)).toBe('محمد Sm…');
+  });
+
   it('gives up on a width too narrow for the ellipsis', () => {
     expect(fitText('Ada', 10, measure)).toBe('…');
     expect(fitText('Ada', 5, measure)).toBe('');
