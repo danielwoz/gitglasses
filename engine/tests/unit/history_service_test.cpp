@@ -7,15 +7,21 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <future>
 #include <map>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "services/history/log_order_cache.h"
 #include "test_fixtures.h"
 #include "test_session.h"
+#include "util/cancel.h"
 
 namespace gg {
 namespace {
@@ -375,6 +381,48 @@ TEST(LogOrderCache, EvictsLeastRecentlyUsedOrdersOverBudget) {
   b->oids.resize(1000);
   cache.resized("b", *b, b->oids.size());
   EXPECT_EQ(cache.bytesUsed(), used);
+}
+
+// One request at a time holds a history's sequence: another waits until the
+// holder lets go, and stops waiting once its own request is cancelled.
+TEST(LogOrderCache, OneRequestAtATimeHoldsASequence) {
+  using namespace std::chrono_literals;
+  using services::history_detail::LogOrder;
+  using services::history_detail::OrderHold;
+  LogOrder order;
+
+  auto holder = std::make_unique<OrderHold>(order, CancelToken::none());
+  std::atomic<bool> entered{false};
+  std::thread waiter([&] {
+    const OrderHold next(order, CancelToken::none());
+    entered = true;
+  });
+  std::this_thread::sleep_for(200ms);
+  EXPECT_FALSE(entered.load()) << "a second request held the sequence alongside the first";
+  holder.reset();
+  waiter.join();
+  EXPECT_TRUE(entered.load());
+
+  holder = std::make_unique<OrderHold>(order, CancelToken::none());
+  CancelSource cancel;
+  std::promise<bool> outcome;
+  std::thread cancelled([&] {
+    try {
+      const OrderHold next(order, cancel.token());
+      outcome.set_value(false);
+    } catch (const CancelledError&) {
+      outcome.set_value(true);
+    }
+  });
+  auto gaveUp = outcome.get_future();
+  cancel.cancel();
+  const bool settled = gaveUp.wait_for(5s) == std::future_status::ready;
+  EXPECT_TRUE(settled) << "a cancelled request kept waiting for the sequence";
+  holder.reset();  // lets a waiter that missed the cancellation through
+  cancelled.join();
+  if (settled) {
+    EXPECT_TRUE(gaveUp.get()) << "a cancelled request held the sequence";
+  }
 }
 
 TEST(HistoryService, FileHistoryFollowsRenamesWithParity) {

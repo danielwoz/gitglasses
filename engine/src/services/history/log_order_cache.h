@@ -2,6 +2,8 @@
 
 #include <git2.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <list>
 #include <map>
@@ -10,6 +12,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "util/cancel.h"
 
 namespace gg::services::history_detail {
 
@@ -22,12 +26,48 @@ namespace gg::services::history_detail {
 // those, so the run is a prefix of the full order and pages inside it never
 // pay for the whole-history walk.
 struct LogOrder {
-  // Guards the members below. Held while the sequence is extended, so one
-  // request walks a given history while concurrent requests for it wait.
-  std::timed_mutex mutex;
+  // Whether a request holds the sequence, guarded by `mutex`; `released` is
+  // signalled when it lets go. Only the holder reads or extends the members
+  // below, so one request walks a given history while concurrent requests
+  // for it wait.
+  std::mutex mutex;
+  std::condition_variable released;
+  bool held = false;
   std::vector<git_oid> oids;
   bool complete = false;  // `oids` is the whole history
   bool runEnded = false;  // the forced run stops at a merge (the last oid)
+};
+
+// Holds a sequence (see LogOrder) for its lifetime, waiting in slices so a
+// cancelled request stops waiting for another request's walk. The wait is on
+// a condition variable rather than a std::timed_mutex: libstdc++ times
+// try_lock_for with pthread_mutex_clocklock, which the ThreadSanitizer
+// runtime of older clang releases does not intercept, so every unlock would
+// be reported as one of an unlocked mutex.
+class OrderHold {
+ public:
+  OrderHold(LogOrder& order, const CancelToken& token) : order_(order) {
+    std::unique_lock lock(order_.mutex);
+    while (order_.held) {
+      order_.released.wait_for(lock, std::chrono::milliseconds(50));
+      if (order_.held) token.throwIfCancelled();
+    }
+    order_.held = true;
+  }
+
+  ~OrderHold() {
+    {
+      std::lock_guard lock(order_.mutex);
+      order_.held = false;
+    }
+    order_.released.notify_all();
+  }
+
+  OrderHold(const OrderHold&) = delete;
+  OrderHold& operator=(const OrderHold&) = delete;
+
+ private:
+  LogOrder& order_;
 };
 
 // Byte-budgeted LRU of commit sequences, keyed by repository, tip commit and
