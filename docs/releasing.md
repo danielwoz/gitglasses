@@ -18,11 +18,14 @@ then:
 5. waits for the CI workflow to have passed on the tagged commit itself,
    from its push to `main` (a pull request run does not count: it tested
    the pull request merged into its base branch);
-6. publishes to the Visual Studio Marketplace, Open VSX and npm, each from
-   its own job in the `release` environment, which needs your approval;
-7. creates the GitHub release (VSIXes, `SHA256SUMS`, symbol archives, build
-   provenance attestations, and this version's changelog section as notes)
-   once both extension registries have every package.
+6. prepares the GitHub release's assets: `SHA256SUMS`, symbol archives,
+   build provenance attestations for the VSIXes, and this version's
+   changelog section as the notes;
+7. once all of the above has succeeded, publishes to the Visual Studio
+   Marketplace, Open VSX and npm, each from its own job in the `release`
+   environment, which needs your approval;
+8. creates the GitHub release once both extension registries have every
+   package.
 
 Every publish step skips versions that already exist, so re-running a failed
 job finishes a partial release. A missing credential fails the job with an
