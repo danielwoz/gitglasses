@@ -22,6 +22,7 @@ import {
   NL_SEARCH_SYSTEM,
   nlSearchPrompt,
 } from './prompts';
+import { sanitizeAiMarkdown } from './sanitize';
 
 const CONTEXT_BUDGET_TOKENS = 6000;
 const MAX_CONTEXT_FILES = 30;
@@ -57,7 +58,8 @@ function stripCodeFences(text: string): string {
 const AI_SCHEME = 'gitglasses-ai';
 
 /** Serves AI results as readonly virtual markdown docs; results open in the
- *  built-in markdown preview (falling back to a text editor). */
+ *  built-in markdown preview (falling back to a text editor). Every result is
+ *  sanitized first, so the preview never loads an image or HTML from it. */
 class AiResultContentProvider implements vscode.TextDocumentContentProvider {
   private readonly contents = new Map<string, string>();
   private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
@@ -75,7 +77,7 @@ class AiResultContentProvider implements vscode.TextDocumentContentProvider {
       const firstKey = this.contents.keys().next().value;
       if (firstKey) this.contents.delete(firstKey);
     }
-    this.contents.set(uri.path, markdown);
+    this.contents.set(uri.path, sanitizeAiMarkdown(markdown));
     this.emitter.fire(uri);
     try {
       await vscode.commands.executeCommand('markdown.showPreview', uri);
