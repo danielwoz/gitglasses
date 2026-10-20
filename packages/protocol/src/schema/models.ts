@@ -165,6 +165,27 @@ export const FileHistoryEntry = Type.Object(
   strict,
 );
 
+/** One commit in the history of a line range: a FileHistoryEntry whose
+ *  counts and path come from the diff `git log -L` shows for the range, plus
+ *  that diff when the request asks for it. */
+export const LineHistoryEntry = Type.Object(
+  {
+    ...FileHistoryEntry.properties,
+    patch: Type.Optional(
+      Type.String({
+        description:
+          "The commit's diff of the followed range, as `git log -L` prints it (diff --git, ---/+++ headers, hunks), newline-terminated. Present when the request sets `patch`.",
+      }),
+    ),
+    patchTruncated: Type.Optional(
+      Type.Literal(true, {
+        description: '`patch` was cut at a line boundary because the diff exceeded 256 KiB.',
+      }),
+    ),
+  },
+  strict,
+);
+
 export const FileChangeStatus = Type.Union([
   Type.Literal('M'),
   Type.Literal('A'),

@@ -374,6 +374,16 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
                  {{"repoId", repoId}, {"path", "src/main.txt"}, {"limit", 10}});
   checkedRequest(session, 10, "history/line",
                  {{"repoId", repoId}, {"path", "src/main.txt"}, {"startLine", 1}, {"endLine", 2}});
+  Json lineHistory = checkedRequest(session, 90, "history/line",
+                                    {{"repoId", repoId},
+                                     {"path", "src/main.txt"},
+                                     {"startLine", 1},
+                                     {"endLine", 1},
+                                     {"rev", "HEAD"},
+                                     {"limit", 5},
+                                     {"patch", true}});
+  ASSERT_FALSE(lineHistory.value("entries", Json::array()).empty());
+  EXPECT_TRUE(lineHistory["entries"][0].contains("patch"));
   checkedRequest(session, 11, "diff/commit",
                  {{"repoId", repoId}, {"sha", log["commits"][0]["sha"]}});
   checkedRequest(session, 12, "diff/refs",

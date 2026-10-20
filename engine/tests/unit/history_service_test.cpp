@@ -513,15 +513,20 @@ TEST(HistoryService, LineHistoryReportsCommitsTouchingRange) {
   ASSERT_EQ(entries.size(), expected.size());
   for (size_t i = 0; i < expected.size(); ++i) {
     EXPECT_EQ(entries[i]["sha"], expected[i]) << i;
-    EXPECT_EQ(entries[i]["additions"], 0);
-    EXPECT_EQ(entries[i]["deletions"], 0);
     EXPECT_EQ(entries[i]["path"], "lines.txt");
+    // The diff text is only sent when asked for.
+    EXPECT_FALSE(entries[i].contains("patch")) << i;
   }
   // The line-3-only edit must not appear.
   for (const auto& entry : entries) {
     EXPECT_NE(entry["summary"], "edit line three");
   }
   EXPECT_EQ(entries[0]["summary"], "edit line two");
+  // The counts are the range's: line two was replaced, then created.
+  EXPECT_EQ(entries[0]["additions"], 1);
+  EXPECT_EQ(entries[0]["deletions"], 1);
+  EXPECT_EQ(entries[1]["additions"], 1);
+  EXPECT_EQ(entries[1]["deletions"], 0);
 
   Json badRange = session.request(
       req(11, "history/line",
@@ -531,6 +536,79 @@ TEST(HistoryService, LineHistoryReportsCommitsTouchingRange) {
       req(12, "history/line",
           {{"repoId", repoId}, {"path", "lines.txt"}, {"startLine", 3}, {"endLine", 2}}));
   EXPECT_EQ(inverted["error"]["code"], -32602);
+}
+
+TEST(HistoryService, LineHistoryFromARevisionWithDiffsFollowsRenames) {
+  FixtureRepo fixture;
+  fixture.writeFile("old.txt", "a\nb\nc\n");
+  fixture.run("git add old.txt");
+  commitTick(fixture, "create", 1);
+  fixture.writeFile("old.txt", "a\nB\nc\n");
+  fixture.run("git add old.txt");
+  commitTick(fixture, "edit b", 2);
+  fixture.run("git mv old.txt new.txt");
+  commitTick(fixture, "rename", 3);
+  fixture.writeFile("new.txt", "a\nBB\nc\n");
+  fixture.run("git add new.txt");
+  commitTick(fixture, "edit again", 4);
+  fixture.writeFile("new.txt", "a\nBBB\nc\n");
+  fixture.run("git add new.txt");
+  commitTick(fixture, "edit once more", 5);
+  // Settings that would change the diff text the engine reads.
+  fixture.run("git config color.ui always");
+  fixture.run("git config diff.noprefix true");
+  const std::string editAgain = gitLines(fixture.root(), "rev-parse HEAD~1").at(0);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  // From the commit before HEAD, so the newest edit is not part of it.
+  Json history = session.request(req(10, "history/line",
+                                     {{"repoId", repoId},
+                                      {"path", "new.txt"},
+                                      {"startLine", 2},
+                                      {"endLine", 2},
+                                      {"rev", editAgain},
+                                      {"patch", true}}));
+  ASSERT_TRUE(history.contains("result")) << history.dump();
+  const Json& entries = history["result"]["entries"];
+  ASSERT_EQ(entries.size(), 3u) << history.dump();
+  EXPECT_EQ(entries[0]["summary"], "edit again");
+  EXPECT_EQ(entries[0]["path"], "new.txt");
+  EXPECT_EQ(entries[0]["patch"],
+            "diff --git a/new.txt b/new.txt\n--- a/new.txt\n+++ b/new.txt\n@@ -2,1 +2,1 @@\n"
+            "-B\n+BB\n");
+  EXPECT_EQ(entries[1]["summary"], "edit b");
+  EXPECT_EQ(entries[1]["path"], "old.txt");
+  EXPECT_EQ(entries[1]["additions"], 1);
+  EXPECT_EQ(entries[1]["deletions"], 1);
+  EXPECT_EQ(entries[2]["summary"], "create");
+  EXPECT_EQ(entries[2]["path"], "old.txt");
+  EXPECT_NE(entries[2]["patch"].get<std::string>().find("--- /dev/null\n"), std::string::npos);
+  EXPECT_FALSE(entries[0].contains("patchTruncated"));
+
+  Json limited = session.request(req(
+      11, "history/line",
+      {{"repoId", repoId}, {"path", "new.txt"}, {"startLine", 2}, {"endLine", 2}, {"limit", 2}}));
+  ASSERT_TRUE(limited.contains("result")) << limited.dump();
+  ASSERT_EQ(limited["result"]["entries"].size(), 2u);
+  EXPECT_EQ(limited["result"]["entries"][0]["summary"], "edit once more");
+  EXPECT_EQ(limited["result"]["entries"][1]["summary"], "edit again");
+
+  Json optionRev = session.request(req(12, "history/line",
+                                       {{"repoId", repoId},
+                                        {"path", "new.txt"},
+                                        {"startLine", 2},
+                                        {"endLine", 2},
+                                        {"rev", "--output=/tmp/x"}}));
+  EXPECT_EQ(optionRev["error"]["code"], -32602);
+  Json badPatch = session.request(req(13, "history/line",
+                                      {{"repoId", repoId},
+                                       {"path", "new.txt"},
+                                       {"startLine", 2},
+                                       {"endLine", 2},
+                                       {"patch", "yes"}}));
+  EXPECT_EQ(badPatch["error"]["code"], -32602);
 }
 
 TEST(HistoryService, SearchStreamsMatchesBeforeResultWithGrepParity) {

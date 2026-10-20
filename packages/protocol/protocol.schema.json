@@ -935,7 +935,7 @@
       }
     },
     "history/line": {
-      "description": "History of a line range (1-based, inclusive).",
+      "description": "History of a line range (1-based, inclusive), newest first, following the range through earlier versions and renames like `git log -L`. Each entry's additions, deletions and path describe the range's diff in that commit.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -951,7 +951,7 @@
           },
           "path": {
             "minLength": 1,
-            "description": "Path relative to the repository root.",
+            "description": "Path relative to the repository root, in `rev` when given.",
             "type": "string"
           },
           "startLine": {
@@ -961,6 +961,22 @@
           "endLine": {
             "minimum": 1,
             "type": "integer"
+          },
+          "rev": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision whose version of `path` the line numbers refer to, and where the walk starts. Omitted means HEAD.",
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "description": "Most entries to return, newest first. Omitted returns every one.",
+            "type": "integer"
+          },
+          "patch": {
+            "description": "Include each commit's diff of the range as `patch`. Default false.",
+            "type": "boolean"
           }
         }
       },
@@ -1023,6 +1039,15 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "patch": {
+                  "description": "The commit's diff of the followed range, as `git log -L` prints it (diff --git, ---/+++ headers, hunks), newline-terminated. Present when the request sets `patch`.",
+                  "type": "string"
+                },
+                "patchTruncated": {
+                  "description": "`patch` was cut at a line boundary because the diff exceeded 256 KiB.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }

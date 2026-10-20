@@ -14,6 +14,7 @@ import {
   FileHistoryEntry,
   GraphRow,
   HeadState,
+  LineHistoryEntry,
   PatchEnvelope,
   PatchFileChange,
   RebaseEntry,
@@ -331,19 +332,35 @@ export const RequestSchemas = {
     ),
   },
   'history/line': {
-    description: 'History of a line range (1-based, inclusive).',
+    description:
+      "History of a line range (1-based, inclusive), newest first, following the range through earlier versions and renames like `git log -L`. Each entry's additions, deletions and path describe the range's diff in that commit.",
     params: Type.Object(
       {
         repoId: Type.String(),
-        path: Path('Path relative to the repository root.'),
+        path: Path('Path relative to the repository root, in `rev` when given.'),
         startLine: Type.Integer({ minimum: 1 }),
         /** The engine additionally requires endLine >= startLine, which this
          * schema cannot express. */
         endLine: Type.Integer({ minimum: 1 }),
+        rev: optionalPositional(
+          'Revision whose version of `path` the line numbers refer to, and where the walk starts. Omitted means HEAD.',
+        ),
+        limit: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            maximum: MAX_LIMIT,
+            description: 'Most entries to return, newest first. Omitted returns every one.',
+          }),
+        ),
+        patch: Type.Optional(
+          Type.Boolean({
+            description: "Include each commit's diff of the range as `patch`. Default false.",
+          }),
+        ),
       },
       strict,
     ),
-    result: Type.Object({ entries: Type.Array(FileHistoryEntry) }, strict),
+    result: Type.Object({ entries: Type.Array(LineHistoryEntry) }, strict),
   },
   'search/commits': {
     description:

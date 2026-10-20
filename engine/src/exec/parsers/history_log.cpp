@@ -2,6 +2,8 @@
 
 #include <charconv>
 
+#include "exec/parsers/incremental_blame.h"
+
 namespace gg::exec {
 
 namespace {
@@ -65,9 +67,14 @@ void HistoryLogParser::feedLine(const std::string& line) {
     entry.path = defaultPath_;
     pending_ = std::move(entry);
     sawStats_ = false;
+    patchState_ = PatchState::BeforeDiff;
     return;
   }
 
+  if (stats_ == Stats::LinePatch) {
+    if (pending_) feedPatchLine(line);
+    return;
+  }
   if (stats_ != Stats::Numstat || !pending_ || sawStats_) return;
 
   // adds TAB dels TAB path. Only the followed file appears, so the first
@@ -86,6 +93,50 @@ void HistoryLogParser::feedLine(const std::string& line) {
   pending_->deletions = deletions;
   pending_->path = numstatCurrentPath(view.substr(tab2 + 1));
   sawStats_ = true;
+}
+
+void HistoryLogParser::feedPatchLine(const std::string& line) {
+  // A hunk line always starts with ' ', '+', '-' or '\\', so a "diff --git"
+  // line is a new file's diff wherever it appears.
+  if (line.rfind("diff --git ", 0) == 0) {
+    patchState_ = PatchState::Header;
+    appendPatch(line);
+    return;
+  }
+  switch (patchState_) {
+    case PatchState::BeforeDiff:
+      // The blank line between the record and its diff.
+      return;
+    case PatchState::Header:
+      if (line.rfind("+++ ", 0) == 0) {
+        std::string_view target = std::string_view(line).substr(4);
+        if (target != "/dev/null") {
+          std::string path = unquoteCPath(target);
+          if (path.rfind("b/", 0) == 0) pending_->path = path.substr(2);
+        }
+      } else if (line.rfind("@@", 0) == 0) {
+        patchState_ = PatchState::Hunk;
+      }
+      break;
+    case PatchState::Hunk:
+      if (!line.empty() && line[0] == '+') {
+        ++pending_->additions;
+      } else if (!line.empty() && line[0] == '-') {
+        ++pending_->deletions;
+      }
+      break;
+  }
+  appendPatch(line);
+}
+
+void HistoryLogParser::appendPatch(const std::string& line) {
+  if (!keepPatch_ || pending_->patchTruncated) return;
+  if (pending_->patch.size() + line.size() + 1 > maxPatchBytes_) {
+    pending_->patchTruncated = true;
+    return;
+  }
+  pending_->patch += line;
+  pending_->patch += '\n';
 }
 
 void HistoryLogParser::finish() { emitPending(); }
