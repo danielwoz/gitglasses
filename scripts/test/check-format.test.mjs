@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'vitest';
 
 import { changedFiles, checkClangFormat, checkPrettier, resolveBase } from '../check-format.mjs';
 
@@ -144,7 +144,7 @@ describe('checkPrettier', () => {
   });
 });
 
-describe('checkClangFormat', { skip: !hasClangFormat && 'clang-format is not installed' }, () => {
+describe.skipIf(!hasClangFormat)('checkClangFormat', () => {
   function clangOffenders(fix = false, committed = false) {
     const base = resolveBase(repo, 'base');
     const files = changedFiles(repo, base, { committed });

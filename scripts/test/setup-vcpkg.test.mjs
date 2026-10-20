@@ -16,7 +16,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'vitest';
 
 const installScript = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -75,7 +75,7 @@ function seedStaleInstall() {
   writeFileSync(path.join(installRoot, 'vcpkg', 'info', 'libgit2_1.9.4.list'), '');
 }
 
-describe('setup-vcpkg install.sh', { skip: process.platform === 'win32' }, () => {
+describe.skipIf(process.platform === 'win32')('setup-vcpkg install.sh', () => {
   beforeEach(() => {
     root = realpathSync(mkdtempSync(path.join(tmpdir(), 'gg-setup-vcpkg-')));
     workspace = path.join(root, 'workspace');
