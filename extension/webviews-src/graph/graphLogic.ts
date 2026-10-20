@@ -411,16 +411,6 @@ export function parseColor(text: string): Rgb | undefined {
   return undefined;
 }
 
-/** `color` painted over an opaque `background`. */
-function composite(color: Rgb, background: Rgb): Rgb {
-  const a = color.a ?? 1;
-  return {
-    r: color.r * a + background.r * (1 - a),
-    g: color.g * a + background.g * (1 - a),
-    b: color.b * a + background.b * (1 - a),
-  };
-}
-
 function channel(value: number): number {
   const c = value / 255;
   return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -445,17 +435,17 @@ function toHex(color: Rgb): string {
   return `#${part(color.r)}${part(color.g)}${part(color.b)}`;
 }
 
-/** An opaque `color` that reads on `background`: a translucent theme color
- *  (some themes define chart colors with alpha) is first painted over the
- *  background, then darkened on a light background or lightened on a dark
- *  one until it reaches `minRatio`. Colors that cannot be parsed come back
- *  unchanged. */
+/** An opaque `color` that reads on `background`, for text. Opacity is
+ *  dropped (some themes define chart colors with alpha for fills, which
+ *  would leave text faint), then the color is darkened on a light background
+ *  or lightened on a dark one until it reaches `minRatio`. Colors that cannot
+ *  be parsed come back unchanged. */
 export function readableOn(color: string, background: string, minRatio = 4.5): string {
   const parsed = parseColor(color);
   const bg = parseColor(background);
   if (!parsed || !bg) return color;
+  const fg = { r: parsed.r, g: parsed.g, b: parsed.b };
   const opaqueBg = { r: bg.r, g: bg.g, b: bg.b };
-  const fg = composite(parsed, opaqueBg);
   if (contrastRatio(fg, opaqueBg) >= minRatio) return parsed.a === undefined ? color : toHex(fg);
   const target = luminance(opaqueBg) > 0.5 ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 };
   for (let step = 1; step <= 20; step++) {

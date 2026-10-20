@@ -436,10 +436,11 @@ describe('readableOn', () => {
   });
 
   it('makes a translucent theme color opaque and readable', () => {
-    // VS Code's dark themes define charts.orange with 33% opacity.
-    const fixed = readableOn('rgba(234, 92, 0, 0.33)', '#1f1f1f');
-    expect(fixed).toMatch(/^#[0-9a-f]{6}$/);
-    expect(contrastRatio(parseColor(fixed)!, parseColor('#1f1f1f')!)).toBeGreaterThanOrEqual(4.5);
+    // VS Code's themes define charts.orange with 33% opacity, meant for fills.
+    expect(readableOn('rgba(234, 92, 0, 0.33)', '#1f1f1f')).toBe('#ea5c00');
+    const light = readableOn('rgba(234, 92, 0, 0.33)', '#ffffff');
+    expect(light).toMatch(/^#[0-9a-f]{6}$/);
+    expect(contrastRatio(parseColor(light)!, parseColor('#ffffff')!)).toBeGreaterThanOrEqual(4.5);
   });
 
   it('darkens the orange tag color until it reads on a light background', () => {
