@@ -345,6 +345,16 @@ jobs:
           git config --global user.email ci@example.invalid
           pnpm --filter gitglasses run test:e2e
 
+      # VS Code's logs from the run: the GitGlasses output channel (engine
+      # stderr included) and the extension host log.
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ runner.os }}
+          path: extension/.vscode-test/logs
+          if-no-files-found: ignore
+
   extension-e2e:
     runs-on: ubuntu-22.04
     steps:
@@ -388,3 +398,11 @@ jobs:
           git config --global user.name CI
           git config --global user.email ci@example.invalid
           xvfb-run -a pnpm --filter gitglasses run test:e2e
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ runner.os }}
+          path: extension/.vscode-test/logs
+          if-no-files-found: ignore

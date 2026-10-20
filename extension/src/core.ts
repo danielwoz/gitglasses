@@ -99,6 +99,8 @@ export interface CoreDeps {
 export interface Core {
   readonly views: Readonly<Record<string, ViewBase>>;
   readonly blame: BlameModel;
+  /** The workspace's repositories and the one the views act on. */
+  readonly activeRepo: ActiveRepoManager;
   readonly lineBlame: LineBlameController;
   readonly fileAnnotations: FileAnnotationsController;
   readonly integrations: IntegrationService;
@@ -415,6 +417,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   return {
     views,
     blame,
+    activeRepo,
     lineBlame,
     fileAnnotations,
     integrations,

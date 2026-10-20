@@ -362,6 +362,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
     }),
     ...registerPatchCommands(engine, repos, integrations),
+    // Internal: which repository a file resolves to and which repositories
+    // the views can act on, so a test or a bug report can tell a resolution
+    // failure apart from an engine failure.
+    vscode.commands.registerCommand('_gitglasses.locate', (target?: vscode.Uri | string) => {
+      const uri = typeof target === 'string' ? vscode.Uri.file(target) : target;
+      return uri ? repos.locateOrDiscover(uri) : undefined;
+    }),
+    vscode.commands.registerCommand('_gitglasses.repositories', () => core.activeRepo.all()),
   );
 
   try {
