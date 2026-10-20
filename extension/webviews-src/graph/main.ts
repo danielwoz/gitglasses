@@ -19,9 +19,11 @@ import type {
 import {
   FindTarget,
   MenuItem,
+  PointerPress,
   RefMenuAction,
   RowMenuAction,
   anchoredScrollTop,
+  contextMenuFromPointer,
   filterLabel,
   findCountLabel,
   findTargets,
@@ -995,7 +997,21 @@ scroller.addEventListener('mouseleave', () => {
 scroller.addEventListener('focus', render);
 scroller.addEventListener('blur', render);
 
+/** The last press on the list, and whether it raised a context menu (a
+ *  Ctrl-click on macOS), whose click then must not change the selection. */
+let lastPress: PointerPress | undefined;
+let pressOpenedMenu = false;
+
+scroller.addEventListener('mousedown', (event) => {
+  lastPress = { x: event.clientX, y: event.clientY, time: event.timeStamp };
+  pressOpenedMenu = false;
+});
+
 scroller.addEventListener('click', (event) => {
+  if (pressOpenedMenu) {
+    pressOpenedMenu = false;
+    return;
+  }
   hideContextMenu(false);
   const index = rowIndexFromEvent(event);
   if (index === undefined) return;
@@ -1014,12 +1030,13 @@ scroller.addEventListener('dblclick', (event) => {
 
 scroller.addEventListener('contextmenu', (event) => {
   event.preventDefault();
-  // A keyboard-raised context menu (button -1 in Chromium, or not the right
-  // button) targets the selected row, not whatever lies under the pointer.
-  if (event.button !== 2) {
+  // A keyboard-raised context menu targets the selected row, not whatever
+  // lies under the pointer.
+  if (!contextMenuFromPointer(event, lastPress)) {
     openMenuForAnchor();
     return;
   }
+  pressOpenedMenu = event.button !== 2;
   const chip = chipFromEvent(event);
   const index = chip ? store.indexOf(chip.row.sha) : rowIndexFromEvent(event);
   if (index === undefined || index < 0) {

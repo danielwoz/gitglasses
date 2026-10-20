@@ -552,6 +552,33 @@ export function findCountLabel(state: {
   return state.position > 0 ? `${state.position} of ${total}` : `${total} found`;
 }
 
+// --- Context menu origin ----------------------------------------------------
+
+/** A pointer press on the list: where and when (event timeStamp, ms). */
+export interface PointerPress {
+  x: number;
+  y: number;
+  time: number;
+}
+
+/** Whether a contextmenu event came from the pointer rather than the
+ *  keyboard. A right-click reports button 2; a Ctrl-click on macOS reports
+ *  button 0 but follows a press at the same spot. A keyboard-raised menu
+ *  (Shift+F10, the Menu key) has neither and targets the selected row. */
+export function contextMenuFromPointer(
+  event: { button: number; clientX: number; clientY: number; timeStamp: number },
+  lastPress: PointerPress | undefined,
+): boolean {
+  if (event.button === 2) return true;
+  if (!lastPress) return false;
+  return (
+    event.timeStamp - lastPress.time >= 0 &&
+    event.timeStamp - lastPress.time < 1000 &&
+    Math.abs(event.clientX - lastPress.x) <= 4 &&
+    Math.abs(event.clientY - lastPress.y) <= 4
+  );
+}
+
 // --- Restore ----------------------------------------------------------------
 
 /** What a restore after a reload does once a page has arrived: load more rows

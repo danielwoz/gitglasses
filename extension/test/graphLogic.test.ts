@@ -8,6 +8,7 @@ import {
   WIDEST_RELATIVE_DATES,
   anchoredScrollTop,
   columnLayout,
+  contextMenuFromPointer,
   contrastRatio,
   displayLane,
   edgeColorLane,
@@ -538,6 +539,32 @@ describe('findCountLabel', () => {
     expect(label(12)).toBe('12 found');
     expect(label(12, 3)).toBe('3 of 12');
     expect(label(1000, 0, true)).toBe('1000+ found');
+  });
+});
+
+describe('contextMenuFromPointer', () => {
+  const press = { x: 300, y: 120, time: 1000 };
+  const event = (button: number, x: number, y: number, timeStamp: number) => ({
+    button,
+    clientX: x,
+    clientY: y,
+    timeStamp,
+  });
+
+  it('takes a right-click as the pointer', () => {
+    expect(contextMenuFromPointer(event(2, 10, 10, 5), undefined)).toBe(true);
+  });
+
+  it('takes a macOS Ctrl-click (button 0 right after a press there) as the pointer', () => {
+    expect(contextMenuFromPointer(event(0, 301, 121, 1020), press)).toBe(true);
+  });
+
+  it('takes Shift+F10 and the Menu key as the keyboard', () => {
+    // Chromium reports button -1 (or 0) at the focused element's center.
+    expect(contextMenuFromPointer(event(-1, 400, 300, 1020), press)).toBe(false);
+    expect(contextMenuFromPointer(event(0, 400, 300, 1020), undefined)).toBe(false);
+    // A press long before, at the same spot, does not count.
+    expect(contextMenuFromPointer(event(0, 300, 120, 5000), press)).toBe(false);
   });
 });
 
