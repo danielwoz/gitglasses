@@ -70,15 +70,16 @@ RawGitOutput runGitRawOrThrow(const core::Repo& repo, std::vector<std::string> a
 // says: no colour, a/ and b/ prefixes (diff.noprefix and
 // diff.mnemonicPrefix would change them), binary content with full blob ids
 // instead of "Binary files differ", no external diff (diff.external,
-// GIT_EXTERNAL_DIFF) or textconv driver, and submodules as commit lines
-// rather than diff.submodule's log or diff formats.
+// GIT_EXTERNAL_DIFF) or textconv driver, submodules as commit lines rather
+// than diff.submodule's log or diff formats, and three lines of context
+// (git apply refuses the context-free hunks diff.context=0 makes).
 std::vector<std::string> patchCommand(std::vector<std::string> command,
                                       const std::vector<std::string>& rest) {
   std::vector<std::string> args = {"-c", "color.ui=never",           "-c", "diff.noprefix=false",
                                    "-c", "diff.mnemonicPrefix=false"};
   args.insert(args.end(), command.begin(), command.end());
   for (const char* option : {"--binary", "--no-ext-diff", "--no-textconv", "--no-color",
-                             "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short"}) {
+                             "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short", "-U3"}) {
     args.emplace_back(option);
   }
   args.insert(args.end(), rest.begin(), rest.end());

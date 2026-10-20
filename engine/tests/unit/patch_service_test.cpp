@@ -383,9 +383,14 @@ TEST(PatchService, PatchesIgnoreConfigThatChangesDiffOutput) {
   FixtureRepo fixture;
   const std::string binary1("\x89PNG\x00\x01\x02\x03 image", 14);
   const std::string binary2("\x89PNG\x00\x07\x08\x09 image v2", 17);
+  std::string lines;
+  for (int i = 1; i <= 20; ++i) lines += "line " + std::to_string(i) + "\n";
+  std::string editedLines = lines;
+  editedLines.replace(editedLines.find("line 10\n"), 7, "line ten");
   fixture.writeFile("a.txt", "l1\nl2\nl3\n");
+  fixture.writeFile("long.txt", lines);
   fixture.writeFile("img.bin", binary1);
-  fixture.run("git add a.txt img.bin");
+  fixture.run("git add a.txt long.txt img.bin");
   commitTick(fixture.root(), "base", 1);
   CloneRepo clone(fixture);
 
@@ -395,7 +400,10 @@ TEST(PatchService, PatchesIgnoreConfigThatChangesDiffOutput) {
   fixture.run("git config color.diff always");
   fixture.run("git config diff.external gg-no-such-diff-tool");
   fixture.run("git config diff.submodule log");
+  // Hunks without context lines, which git apply refuses.
+  fixture.run("git config diff.context 0");
   fixture.writeFile("a.txt", "l1\nl2 edited\nl3\n");
+  fixture.writeFile("long.txt", editedLines);
   fixture.writeFile("img.bin", binary2);
   fixture.writeFile("new.bin", binary1);
 
@@ -414,6 +422,7 @@ TEST(PatchService, PatchesIgnoreConfigThatChangesDiffOutput) {
   EXPECT_TRUE(applied["applied"].get<bool>()) << applied.dump();
   EXPECT_FALSE(applied["conflicts"].get<bool>());
   EXPECT_EQ(slurp(clone.root() / "a.txt"), "l1\nl2 edited\nl3\n");
+  EXPECT_EQ(slurp(clone.root() / "long.txt"), editedLines);
   EXPECT_EQ(slurp(clone.root() / "img.bin"), binary2);
   EXPECT_EQ(slurp(clone.root() / "new.bin"), binary1);
 
