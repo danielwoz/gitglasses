@@ -1,15 +1,16 @@
 import { governedFetch } from '../rateLimiter.js';
 import { ProviderError } from '../errors.js';
 import type { FetchLike } from '../http.js';
-import type {
-  AuthContext,
-  HostingCapability,
-  HostingProvider,
-  PrComments,
-  PullRequestHead,
-  PullRequestQueryOptions,
-  ReviewSuggestionInput,
-  ReviewSuggestions,
+import {
+  orderCommitPullRequests,
+  type AuthContext,
+  type HostingCapability,
+  type HostingProvider,
+  type PrComments,
+  type PullRequestHead,
+  type PullRequestQueryOptions,
+  type ReviewSuggestionInput,
+  type ReviewSuggestions,
 } from '../hostingProvider.js';
 import {
   parseGitLabSnippetId,
@@ -32,9 +33,12 @@ import { parseRemoteUrl } from '../remoteMatcher.js';
 import {
   AVATAR_TTL_MS,
   CachedIdentity,
+  COMMIT_PULL_REQUESTS_TTL_MS,
   FANOUT_CONCURRENCY,
   ISSUE_TTL_MS,
+  isFullSha,
   mapPooled,
+  MAX_COMMIT_PULL_REQUESTS,
   mergeByRole,
   p,
   ProviderClient,
@@ -80,6 +84,9 @@ interface GitLabMergeRequest {
   detailed_merge_status?: string;
   head_pipeline?: { status?: string } | null;
   references?: { full?: string };
+  merged_at?: string | null;
+  description?: string | null;
+  user_notes_count?: number;
 }
 
 const OPTION_KEYS = ['id', 'baseUrl', 'fetchFn'] as const;
@@ -267,6 +274,36 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     }
     const me = await this.username(auth);
     return this.enrichAndMap(auth, mr, me, false, true);
+  }
+
+  /**
+   * The merge requests containing `sha`, from GET
+   * /projects/:id/repository/commits/:sha/merge_requests, cached per commit.
+   * One call carries the description and the comment count (every note,
+   * review comments included). A commit GitLab does not have (404) has none.
+   */
+  async getPullRequestsForCommit(
+    auth: AuthContext,
+    repo: RepoDescriptor,
+    sha: string
+  ): Promise<PullRequest[]> {
+    if (!isFullSha(sha)) {
+      return [];
+    }
+    const mrs = await this.client.getJsonCached<GitLabMergeRequest[]>(
+      auth,
+      p`/projects/${projectPath(repo)}/repository/commits/${sha}/merge_requests`,
+      COMMIT_PULL_REQUESTS_TTL_MS
+    );
+    const mapped = await Promise.all(
+      (Array.isArray(mrs) ? mrs : []).map(async (mr) => ({
+        ...(await this.enrichAndMap(auth, mr, '', false, false)),
+        mergedAt: mr.merged_at ?? undefined,
+        body: mr.description ?? undefined,
+        commentCount: mr.user_notes_count,
+      }))
+    );
+    return orderCommitPullRequests(mapped).slice(0, MAX_COMMIT_PULL_REQUESTS);
   }
 
   async getIssueOrPr(

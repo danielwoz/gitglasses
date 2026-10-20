@@ -49,6 +49,15 @@ export interface PullRequest {
   mergeable?: Mergeability;
   viewerRole: ViewerRole;
   reviewRequestedFromViewer: boolean;
+  /** When it was merged; only some lookups report it. */
+  mergedAt?: string;
+  /** The description as written, Markdown or plain text; only some lookups
+   *  report it. Forge-provided text: render it as data, never as markup. */
+  body?: string;
+  /** Comments left on the diff in reviews, when the lookup counts them. */
+  reviewCommentCount?: number;
+  /** Comments on the conversation, when the lookup counts them. */
+  commentCount?: number;
 }
 
 /** A normalized issue/work item. */

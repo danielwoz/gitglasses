@@ -73,6 +73,21 @@ export const AVATAR_TTL_MS = 30 * 60_000;
 /** How long a resolved issue or pull request reference is reused. */
 export const ISSUE_TTL_MS = 60_000;
 
+/**
+ * How long the pull requests containing a commit are reused. A commit's pull
+ * requests rarely change once it is merged, and a line's story is opened
+ * again and again while code is read.
+ */
+export const COMMIT_PULL_REQUESTS_TTL_MS = 10 * 60_000;
+
+/** Most pull requests a commit lookup returns. */
+export const MAX_COMMIT_PULL_REQUESTS = 5;
+
+/** A full commit id, the only form a commit-to-pull-request lookup takes. */
+export function isFullSha(sha: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha);
+}
+
 /** Responses one client holds at once, bounding an open-ended key space. */
 const RESPONSE_CACHE_MAX_ENTRIES = 512;
 

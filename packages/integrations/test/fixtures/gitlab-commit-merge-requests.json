@@ -1,0 +1,43 @@
+[
+  {
+    "id": 549541754,
+    "iid": 7650,
+    "project_id": 250833,
+    "title": "Document that the Operator overrides the template namespace",
+    "description": "## What does this MR do?\n\nA `namespace` set in a configuration template for the GitLab Runner Operator has no effect. By default, job pods start in the namespace of the `Runner` resource. The Operator sets `KUBERNETES_NAMESPACE` on the runner pod ([where it is set](https://gitlab.com/gitlab-org/gl-openshift/gitlab-runner-operator/-/blob/v1.54.0/controllers/runner/environments.go#L94-97), [where the value comes from](https://gitlab.com/gitlab-org/gl-openshift/gitlab-runner-operator/-/blob/v1.54.0/controllers/runner/environments.go#L31-34)), and GitLab Runner prefers that value over the template at registration, as [the registration docs](https://gitlab.com/gitlab-org/gitlab-runner/-/blob/77694893f179d15714df0b01dcdfeb73c2fe558b/docs/register/_index.md#L551-554) describe.\n\nThis MR adds `kubernetes.namespace` to the known-issue table on the Operator configuration page, next to the other settings that need an environment variable. The default value is the namespace of the `Runner` resource.\n\nWith Operator v1.54.0 and GitLab Runner v19.5.0, job pods run in:\n\n- the namespace of the `Runner` resource, when the template sets `namespace` or sets nothing;\n- the namespace in `KUBERNETES_NAMESPACE`, when the ConfigMap named in `spec.env` of the `Runner` resource sets it;\n- the namespace in `spec.namespace` of the `Runner` resource, when that field is set.\n\nOutside the Operator, `gitlab-runner register` with `KUBERNETES_NAMESPACE` set also replaces the template's namespace. `gitlab-runner run` with the same `namespace` in `config.toml`, and no registration step, keeps it.\n\nThe Operator MR https://gitlab.com/gitlab-org/gl-openshift/gitlab-runner-operator/-/merge_requests/306 changes this precedence. The row can go once that ships.\n\n## Related issues\n\nhttps://gitlab.com/gitlab-org/gl-openshift/gitlab-runner-operator/-/issues/229 reports the same precedence, and the table already links it. The bot auto-closed it as stale on 21 September, and the Operator MR above still closes it.\n\n## Author's checklist\n\n- [ ] Optional. Consider taking [the GitLab Technical Writing Fundamentals course](https://university.gitlab.com/courses/gitlab-technical-writing-fundamentals).\n- [ ] Follow the:\n  - [Documentation process](https://docs.gitlab.com/development/documentation/workflow/).\n  - [Documentation guidelines](https://docs.gitlab.com/development/documentation/).\n  - [Style Guide](https:",
+    "state": "merged",
+    "created_at": "2026-10-15T17:49:17.695Z",
+    "updated_at": "2026-10-15T18:11:40.575Z",
+    "merged_at": "2026-10-15T18:11:41.366Z",
+    "closed_at": null,
+    "target_branch": "main",
+    "source_branch": "docs-operator-namespace-known-issue",
+    "user_notes_count": 3,
+    "upvotes": 0,
+    "downvotes": 0,
+    "author": {
+      "id": 28633741,
+      "username": "andunn",
+      "name": "Andrew Dunn",
+      "state": "active",
+      "avatar_url": "https://gitlab.com/uploads/-/system/user/avatar/28633741/avatar.png?v=1792457933",
+      "web_url": "https://gitlab.com/andunn"
+    },
+    "source_project_id": 250833,
+    "target_project_id": 250833,
+    "draft": false,
+    "work_in_progress": false,
+    "merge_status": "can_be_merged",
+    "detailed_merge_status": "not_open",
+    "sha": "155340e396cc9a08cc5ba881164fea255c661b1c",
+    "merge_commit_sha": "b076502955591630399963e0b63002c12f2b0d2c",
+    "squash_commit_sha": "add94e521cb381d417e8ef2e810547faa890fb7b",
+    "reference": "!7650",
+    "references": {
+      "short": "!7650",
+      "relative": "!7650",
+      "full": "gitlab-org/gitlab-runner!7650"
+    },
+    "web_url": "https://gitlab.com/gitlab-org/gitlab-runner/-/merge_requests/7650"
+  }
+]

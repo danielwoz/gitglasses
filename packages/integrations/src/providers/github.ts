@@ -1,17 +1,18 @@
 import { governedFetch } from '../rateLimiter.js';
-import { ProviderError } from '../errors.js';
+import { ProviderError, RateLimitError } from '../errors.js';
 import type { FetchLike } from '../http.js';
-import type {
-  AuthContext,
-  HostingCapability,
-  HostingProvider,
-  IssueProvider,
-  IssueQueryOptions,
-  PrComments,
-  PullRequestHead,
-  PullRequestQueryOptions,
-  ReviewSuggestionInput,
-  ReviewSuggestions,
+import {
+  orderCommitPullRequests,
+  type AuthContext,
+  type HostingCapability,
+  type HostingProvider,
+  type IssueProvider,
+  type IssueQueryOptions,
+  type PrComments,
+  type PullRequestHead,
+  type PullRequestQueryOptions,
+  type ReviewSuggestionInput,
+  type ReviewSuggestions,
 } from '../hostingProvider.js';
 import {
   parseGistId,
@@ -31,7 +32,14 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { ISSUE_TTL_MS, p, ProviderClient } from './client.js';
+import {
+  COMMIT_PULL_REQUESTS_TTL_MS,
+  ISSUE_TTL_MS,
+  isFullSha,
+  MAX_COMMIT_PULL_REQUESTS,
+  p,
+  ProviderClient,
+} from './client.js';
 import {
   assertKnownOptions,
   assertPlainHost,
@@ -349,6 +357,62 @@ export class GitHubProvider
     return this.mapPullRequest(node, data.viewer?.login ?? '');
   }
 
+  /**
+   * The pull requests containing `sha`, from REST GET
+   * /repos/{o}/{r}/commits/{sha}/pulls. The list carries no comment counts,
+   * so the first few are read in full (GET /pulls/{n}) for them. Both answers
+   * are cached per commit and pull request. A commit GitHub does not have
+   * (422: not pushed, or rewritten) has none.
+   */
+  async getPullRequestsForCommit(
+    auth: AuthContext,
+    repo: RepoDescriptor,
+    sha: string
+  ): Promise<PullRequest[]> {
+    if (!isFullSha(sha)) {
+      return [];
+    }
+    let pulls: Record<string, unknown>[] | undefined;
+    try {
+      pulls = await this.client.getJsonCached<Record<string, unknown>[]>(
+        auth,
+        p`/repos/${repo.owner}/${repo.name}/commits/${sha}/pulls?per_page=${MAX_COMMIT_PULL_REQUESTS}`,
+        COMMIT_PULL_REQUESTS_TTL_MS
+      );
+    } catch (error) {
+      if (error instanceof ProviderError && error.status === 422) {
+        return [];
+      }
+      throw error;
+    }
+    const listed = orderCommitPullRequests(
+      (Array.isArray(pulls) ? pulls : []).map((pull) => this.mapRestPullRequest(pull, repo))
+    ).slice(0, MAX_COMMIT_PULL_REQUESTS);
+    return Promise.all(
+      listed.map(async (pr) => {
+        let full: Record<string, unknown> | undefined;
+        try {
+          full = await this.client.getJsonCached<Record<string, unknown>>(
+            auth,
+            p`/repos/${repo.owner}/${repo.name}/pulls/${pr.number}`,
+            COMMIT_PULL_REQUESTS_TTL_MS
+          );
+        } catch (error) {
+          // The list already describes the pull request; only its counts are
+          // missing. A rejected token or an exhausted quota fails the lookup.
+          if (
+            !(error instanceof ProviderError) ||
+            error.status === 401 ||
+            error instanceof RateLimitError
+          ) {
+            throw error;
+          }
+        }
+        return full === undefined ? pr : this.mapRestPullRequest(full, repo);
+      })
+    );
+  }
+
   /** Open issues assigned to the authenticated user, across repositories. */
   async getMyIssues(auth: AuthContext, opts?: IssueQueryOptions): Promise<Issue[]> {
     // The endpoint pages at 100 and counts pull requests against the page.
@@ -624,8 +688,18 @@ export class GitHubProvider
         json.mergeable === true ? 'mergeable' : json.mergeable === false ? 'conflicts' : 'unknown',
       viewerRole: 'none',
       reviewRequestedFromViewer: false,
+      mergedAt: typeof json.merged_at === 'string' ? json.merged_at : undefined,
+      body: typeof json.body === 'string' ? json.body : undefined,
+      // Only the full record counts comments; list items leave them out.
+      reviewCommentCount: count(json.review_comments),
+      commentCount: count(json.comments),
     };
   }
+}
+
+/** A non-negative integer count from a payload, or undefined. */
+function count(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 /** Owner and name of the repository an /issues result belongs to. */
