@@ -291,6 +291,67 @@ export const CommitDetails = Type.Object(
   strict,
 );
 
+/** One statement of who wrote a commit, as the commit's own metadata or a
+ *  git-ai note makes it. Declared, never inferred from the code. */
+export const ProvenanceDeclaration = Type.Object(
+  {
+    source: Type.Union([Type.Literal('notes'), Type.Literal('trailer'), Type.Literal('identity')], {
+      description:
+        "Where it was read, in priority order: 'notes' a git-ai authorship log in refs/notes/ai, 'trailer' a message trailer (Co-authored-by, Assisted-by, Generated-by, an agent's session link), 'identity' an author or committer that is a known agent identity.",
+    }),
+    kind: Type.Union([Type.Literal('agent'), Type.Literal('human')], {
+      description: "'human' only for the known humans a git-ai note names.",
+    }),
+    name: Type.String({
+      description:
+        "The agent's display name ('Claude', 'GitHub Copilot', or the tool as the declaration names it), or the human's identity.",
+    }),
+    model: Type.Optional(Type.String({ description: 'The model, when the declaration names one.' })),
+    via: Type.String({
+      description:
+        "What carried it: the trailer key as written, 'author' or 'committer', or the notes ref.",
+    }),
+    value: Type.String({
+      description:
+        'The declaration as written: the trailer value, the "Name <email>" identity, or the session id the note names.',
+    }),
+    url: Type.Optional(
+      Type.String({
+        description:
+          'An http(s) link to the agent session. Clients render it as a link and never fetch it.',
+      }),
+    ),
+  },
+  strict,
+);
+
+/** What one commit declares about who wrote it. */
+export const CommitProvenance = Type.Object(
+  {
+    declared: Type.Union([Type.Literal('agent'), Type.Literal('human'), Type.Literal('unknown')], {
+      description:
+        "'agent' when any declaration names an AI agent, 'human' when the only declarations are known humans in a git-ai note, 'unknown' when the commit declares nothing.",
+    }),
+    declarations: Type.Array(ProvenanceDeclaration, {
+      description:
+        "Highest priority source first: the note's, then the trailers' in message order, then the author's and committer's. At most 16.",
+    }),
+    note: Type.Optional(
+      Type.Object(
+        {
+          read: Type.Boolean({
+            description:
+              'The note is a git-ai authorship log this engine reads (authorship/3.x). False for another schema version, a malformed or oversized note, or one whose content is missing; nothing is then taken from it.',
+          }),
+          schemaVersion: Type.Optional(Type.String()),
+        },
+        { ...strict, description: 'Present when refs/notes/ai attaches a note to the commit.' },
+      ),
+    ),
+  },
+  strict,
+);
+
 export const GraphRef = Type.Object(
   {
     name: Type.String(),

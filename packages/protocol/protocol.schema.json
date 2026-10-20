@@ -834,6 +834,270 @@
         }
       }
     },
+    "commit/provenance": {
+      "description": "What each commit declares about who wrote it: a git-ai authorship log in refs/notes/ai, its trailers (Co-authored-by, Assisted-by, Generated-by and the session links agents add) and an author or committer that is a known agent identity. Declared only: nothing is inferred from the code, and a commit that declares nothing is 'unknown'. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "shas"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "shas": {
+            "minItems": 1,
+            "maxItems": 1000,
+            "description": "Full commit shas, at most 1000.",
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commits"
+        ],
+        "properties": {
+          "commits": {
+            "description": "Keyed by sha. Shas that name no commit in the repository are left out.",
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "declared",
+                  "declarations"
+                ],
+                "properties": {
+                  "declared": {
+                    "description": "'agent' when any declaration names an AI agent, 'human' when the only declarations are known humans in a git-ai note, 'unknown' when the commit declares nothing.",
+                    "anyOf": [
+                      {
+                        "const": "agent",
+                        "type": "string"
+                      },
+                      {
+                        "const": "human",
+                        "type": "string"
+                      },
+                      {
+                        "const": "unknown",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "declarations": {
+                    "description": "Highest priority source first: the note's, then the trailers' in message order, then the author's and committer's. At most 16.",
+                    "type": "array",
+                    "items": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "source",
+                        "kind",
+                        "name",
+                        "via",
+                        "value"
+                      ],
+                      "properties": {
+                        "source": {
+                          "description": "Where it was read, in priority order: 'notes' a git-ai authorship log in refs/notes/ai, 'trailer' a message trailer (Co-authored-by, Assisted-by, Generated-by, an agent's session link), 'identity' an author or committer that is a known agent identity.",
+                          "anyOf": [
+                            {
+                              "const": "notes",
+                              "type": "string"
+                            },
+                            {
+                              "const": "trailer",
+                              "type": "string"
+                            },
+                            {
+                              "const": "identity",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "kind": {
+                          "description": "'human' only for the known humans a git-ai note names.",
+                          "anyOf": [
+                            {
+                              "const": "agent",
+                              "type": "string"
+                            },
+                            {
+                              "const": "human",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "description": "The agent's display name ('Claude', 'GitHub Copilot', or the tool as the declaration names it), or the human's identity.",
+                          "type": "string"
+                        },
+                        "model": {
+                          "description": "The model, when the declaration names one.",
+                          "type": "string"
+                        },
+                        "via": {
+                          "description": "What carried it: the trailer key as written, 'author' or 'committer', or the notes ref.",
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "The declaration as written: the trailer value, the \"Name <email>\" identity, or the session id the note names.",
+                          "type": "string"
+                        },
+                        "url": {
+                          "description": "An http(s) link to the agent session. Clients render it as a link and never fetch it.",
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "note": {
+                    "additionalProperties": false,
+                    "description": "Present when refs/notes/ai attaches a note to the commit.",
+                    "type": "object",
+                    "required": [
+                      "read"
+                    ],
+                    "properties": {
+                      "read": {
+                        "description": "The note is a git-ai authorship log this engine reads (authorship/3.x). False for another schema version, a malformed or oversized note, or one whose content is missing; nothing is then taken from it.",
+                        "type": "boolean"
+                      },
+                      "schemaVersion": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notes/read": {
+      "description": "The notes a notes ref attaches to commits, read with libgit2 (git_note_read) and cached per commit, so Restricted Mode and engines without the git CLI serve it too. A note longer than 131072 bytes, or one whose content is missing from a partial clone, is listed in `omitted` instead.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "shas"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "shas": {
+            "minItems": 1,
+            "maxItems": 64,
+            "description": "Full commit shas, at most 64.",
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          },
+          "ref": {
+            "minLength": 1,
+            "pattern": "^refs/notes/.+",
+            "description": "Notes ref to read, a full ref name. Omitted means refs/notes/ai.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ref",
+          "exists",
+          "notes",
+          "omitted"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "exists": {
+            "description": "The notes ref exists in the repository.",
+            "type": "boolean"
+          },
+          "notes": {
+            "description": "Note text keyed by sha; commits without a note are left out.",
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {
+                "type": "string"
+              }
+            }
+          },
+          "omitted": {
+            "description": "Commits whose note exists but is too long or could not be read.",
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "notes/addFetchRefspec": {
+      "description": "Adds `+<ref>:<ref>` to remote.<remote>.fetch (`git config --add`), so later fetches from the remote bring the notes along; git does not fetch notes by default. Changes nothing when one of the remote's fetch refspecs already maps the ref onto itself.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "remote"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote whose fetches should bring the notes.",
+            "type": "string"
+          },
+          "ref": {
+            "minLength": 1,
+            "pattern": "^refs/notes/.+",
+            "description": "Notes ref to read, a full ref name. Omitted means refs/notes/ai.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "added"
+        ],
+        "properties": {
+          "added": {
+            "description": "False when the remote already fetched the ref.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "history/file": {
       "description": "File history following renames, newest first.",
       "params": {
@@ -4481,6 +4745,8 @@
     "diff/refs",
     "diff/fileHunks",
     "remote/list",
-    "commit/details"
+    "commit/details",
+    "notes/read",
+    "commit/provenance"
   ]
 }

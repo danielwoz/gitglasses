@@ -23,6 +23,7 @@
 #include "services/mutate/rebase_methods.h"
 #include "services/mutate/ref_methods.h"
 #include "services/mutate/stash_worktree_methods.h"
+#include "services/notes/notes_methods.h"
 #include "services/patch/patch_methods.h"
 #include "services/refs/refs_methods.h"
 #include "services/repo_methods.h"
@@ -61,11 +62,12 @@ constexpr bool kThreadsCapability = true;
 // listed here. Notifications only feed these reads and stay registered.
 // Mirrors RESTRICTED_MODE_METHODS in packages/protocol; the protocol contract
 // test checks the two agree.
-constexpr std::array<std::string_view, 20> kRestrictedModeMethods = {
-    "initialize",  "shutdown",   "repo/discover",  "repo/close",     "repo/list",
-    "repo/state",  "blame/file", "log/commits",    "search/commits", "rev/fileAtRev",
-    "refs/list",   "stash/list", "status/summary", "graph/rows",     "graph/find",
-    "diff/commit", "diff/refs",  "diff/fileHunks", "remote/list",    "commit/details",
+constexpr std::array<std::string_view, 22> kRestrictedModeMethods = {
+    "initialize",  "shutdown",          "repo/discover",  "repo/close",     "repo/list",
+    "repo/state",  "blame/file",        "log/commits",    "search/commits", "rev/fileAtRev",
+    "refs/list",   "stash/list",        "status/summary", "graph/rows",     "graph/find",
+    "diff/commit", "diff/refs",         "diff/fileHunks", "remote/list",    "commit/details",
+    "notes/read",  "commit/provenance",
 };
 
 // Replaces the handler of every method Restricted Mode does not serve.
@@ -139,6 +141,7 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
   services::registerHistoryMethods(dispatcher, context);
   services::registerSearchMethods(dispatcher, context);
   services::registerCommitMethods(dispatcher, context);
+  services::registerNotesMethods(dispatcher, context);
   services::registerRefsMethods(dispatcher, context);
   services::registerGraphMethods(dispatcher, context);
   services::registerStatusMethods(dispatcher, context);

@@ -112,6 +112,13 @@ class PlantedRepo {
   std::filesystem::path markers_;
 };
 
+// The commit main points at, read from the ref file so no git runs.
+std::string headCommit(const std::filesystem::path& root) {
+  std::string sha = readFile(root / ".git" / "refs" / "heads" / "main");
+  while (!sha.empty() && (sha.back() == '\n' || sha.back() == '\r')) sha.pop_back();
+  return sha;
+}
+
 std::string discover(InteractiveSession& session, const std::filesystem::path& root) {
   Json discovered = session.request(req(2, "repo/discover", {{"path", root.string()}}));
   EXPECT_TRUE(discovered.contains("result")) << discovered.dump();
@@ -165,11 +172,14 @@ TEST(RestrictedMode, ReadsRunNothingTheRepositoryConfigures) {
           {{"repoId", repoId}, {"path", "a.txt"}, {"rev", "HEAD"}, {"streamId", "rev"}}));
   ASSERT_TRUE(atRev.contains("result")) << atRev.dump();
 
+  const std::string head = headCommit(planted.root());
   const std::vector<std::pair<std::string, Json>> reads = {
       {"status/summary", {{"repoId", repoId}}},
       {"diff/fileHunks", {{"repoId", repoId}, {"path", "a.txt"}, {"staged", false}}},
       {"diff/commit", {{"repoId", repoId}, {"sha", "HEAD"}}},
       {"commit/details", {{"repoId", repoId}, {"sha", "HEAD"}}},
+      {"commit/provenance", {{"repoId", repoId}, {"shas", {head}}}},
+      {"notes/read", {{"repoId", repoId}, {"shas", {head}}}},
       {"graph/rows", {{"repoId", repoId}, {"limit", 10}}},
       {"graph/find", {{"repoId", repoId}, {"query", "a"}}},
       {"log/commits", {{"repoId", repoId}, {"limit", 10}}},
@@ -215,6 +225,7 @@ TEST(RestrictedMode, RefusesWhatWouldRunGitOrChangeTheRepository) {
       {"history/line", {{"repoId", repoId}, {"path", "a.txt"}, {"startLine", 1}, {"endLine", 1}}},
       {"patch/create", {{"repoId", repoId}, {"source", {{"kind", "wip"}}}}},
       {"patch/apply", {{"repoId", repoId}, {"envelope", Json::object()}}},
+      {"notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "origin"}}},
   };
   std::int64_t id = 10;
   for (const auto& [method, params] : refused) {

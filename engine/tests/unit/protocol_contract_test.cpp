@@ -412,6 +412,21 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   checkedRequest(session, 23, "commit/details",
                  {{"repoId", repoId}, {"sha", log["commits"].back()["sha"]}});
 
+  const std::string newest = log["commits"][0]["sha"];
+  fixture.writeFile(
+      ".git/GG_CONTRACT_NOTE",
+      "src/main.txt\n  abcd1234abcd1234 1-2\n---\n"
+      "{\"schema_version\": \"authorship/3.0.0\", \"prompts\": {\"abcd1234abcd1234\": "
+      "{\"agent_id\": {\"tool\": \"claude\", \"id\": \"c1\", \"model\": \"m\"}, "
+      "\"messages_url\": \"https://example.invalid/c1\"}}}\n");
+  fixture.run("git notes --ref=ai add -F .git/GG_CONTRACT_NOTE " + newest);
+  Json provenance =
+      checkedRequest(session, 24, "commit/provenance", {{"repoId", repoId}, {"shas", {newest}}});
+  EXPECT_EQ(provenance["commits"][newest].value("declared", ""), "agent");
+  Json notes = checkedRequest(session, 24, "notes/read",
+                              {{"repoId", repoId}, {"shas", {newest}}, {"ref", "refs/notes/ai"}});
+  EXPECT_TRUE(notes.value("exists", false));
+
   checkedRequest(session, 24, "tag/create",
                  {{"repoId", repoId}, {"name", "v2.0"}, {"message", "annotated"}});
   checkedRequest(session, 25, "tag/delete", {{"repoId", repoId}, {"name", "v2.0"}});
@@ -567,6 +582,16 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
   reject("search/commits", {{"repoId", repoId}, {"streamId", ""}}, "empty streamId");
   reject("diff/commit", {{"repoId", repoId}, {"sha", ""}}, "empty sha");
   reject("commit/details", {{"repoId", repoId}, {"sha", ""}}, "empty commit/details sha");
+
+  // Provenance and notes take full commit shas, and notes refs only.
+  reject("commit/provenance", {{"repoId", repoId}, {"shas", Json::array()}}, "empty shas");
+  reject("commit/provenance", {{"repoId", repoId}, {"shas", {"HEAD"}}}, "revision for a sha");
+  reject("notes/read", {{"repoId", repoId}, {"shas", {"abc123"}}}, "abbreviated sha");
+  reject("notes/read",
+         {{"repoId", repoId}, {"shas", {std::string(40, 'a')}}, {"ref", "refs/heads/main"}},
+         "ref outside refs/notes");
+  reject("notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "--upload-pack=x"}},
+         "option-like remote");
 
   // Required members the engine will not guess.
   reject("stash/apply", {{"repoId", repoId}, {"index", 0}}, "missing pop");
