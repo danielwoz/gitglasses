@@ -19,16 +19,25 @@ class TempFile {
   static Result<TempFile> create(const std::string& contents, const std::string& prefix,
                                  const std::string& suffix = "");
 
-  TempFile(TempFile&& other) noexcept : path_(std::move(other.path_)) { other.path_.clear(); }
+  TempFile(TempFile&& other) noexcept
+      : file_(std::move(other.file_)), path_(std::move(other.path_)) {
+    other.file_.clear();
+    other.path_.clear();
+  }
   TempFile(const TempFile&) = delete;
   TempFile& operator=(const TempFile&) = delete;
   TempFile& operator=(TempFile&&) = delete;
   ~TempFile();
 
+  // UTF-8, like every other path the engine hands to git's argv.
   const std::string& path() const { return path_; }
 
  private:
   TempFile() = default;
+  // The native path is what the filesystem calls use: on Windows a narrow
+  // string would go through the ANSI code page and miss a %TEMP% with
+  // characters outside it.
+  std::filesystem::path file_;
   std::string path_;
 };
 

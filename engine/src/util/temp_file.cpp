@@ -27,8 +27,10 @@ std::filesystem::path randomTempPath(const std::string& prefix, const std::strin
 Result<TempFile> TempFile::create(const std::string& contents, const std::string& prefix,
                                   const std::string& suffix) {
   TempFile file;
-  file.path_ = randomTempPath(prefix, suffix).string();
-  std::ofstream out(file.path_, std::ios::binary | std::ios::trunc);
+  file.file_ = randomTempPath(prefix, suffix);
+  const std::u8string utf8 = file.file_.u8string();
+  file.path_.assign(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+  std::ofstream out(file.file_, std::ios::binary | std::ios::trunc);
   if (!out) return Error{ErrorCode::Internal, "failed to create temp file"};
   // These files hold the user's source and diffs in a world-readable shared
   // directory, so group/other access is dropped while the file is still empty.
@@ -36,14 +38,15 @@ Result<TempFile> TempFile::create(const std::string& contents, const std::string
   // already per-user.
   std::error_code permsEc;
   std::filesystem::permissions(
-      file.path_, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+      file.file_, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
       std::filesystem::perm_options::replace, permsEc);
   out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
   out.flush();
   if (!out) {
     out.close();
     std::error_code ec;
-    std::filesystem::remove(file.path_, ec);
+    std::filesystem::remove(file.file_, ec);
+    file.file_.clear();
     file.path_.clear();
     return Error{ErrorCode::Internal, "failed to write temp file"};
   }
@@ -51,9 +54,9 @@ Result<TempFile> TempFile::create(const std::string& contents, const std::string
 }
 
 TempFile::~TempFile() {
-  if (path_.empty()) return;
+  if (file_.empty()) return;
   std::error_code ec;
-  std::filesystem::remove(path_, ec);
+  std::filesystem::remove(file_, ec);
 }
 
 }  // namespace gg::util

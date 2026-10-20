@@ -7,9 +7,12 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "test_fixtures.h"
@@ -915,6 +918,86 @@ TEST(StatusService, StageFilesHandlesNonAsciiNames) {
   // Modified, not deleted: the path reached git as UTF-8.
   EXPECT_EQ(gitOut(fixture.root(), "-c core.quotePath=false diff --cached --name-status"),
             "M\t" + name + "\n");
+}
+
+// Points the process temp directory at `dir` for the scope: TMPDIR on POSIX,
+// TMP and TEMP on Windows, set through the wide API so a non-ASCII directory
+// survives.
+class ScopedTempDir {
+ public:
+  explicit ScopedTempDir(const std::filesystem::path& dir) {
+#ifdef _WIN32
+    for (const wchar_t* name : {L"TMP", L"TEMP"}) {
+      const wchar_t* old = _wgetenv(name);
+      saved_.emplace_back(name, old ? std::optional<std::wstring>(old) : std::nullopt);
+      _wputenv_s(name, dir.wstring().c_str());
+    }
+#else
+    const char* old = std::getenv("TMPDIR");
+    saved_ = old ? std::optional<std::string>(old) : std::nullopt;
+    ::setenv("TMPDIR", dir.c_str(), 1);
+#endif
+  }
+  ~ScopedTempDir() {
+#ifdef _WIN32
+    for (const auto& [name, value] : saved_) _wputenv_s(name.c_str(), value ? value->c_str() : L"");
+#else
+    if (saved_) {
+      ::setenv("TMPDIR", saved_->c_str(), 1);
+    } else {
+      ::unsetenv("TMPDIR");
+    }
+#endif
+  }
+  ScopedTempDir(const ScopedTempDir&) = delete;
+  ScopedTempDir& operator=(const ScopedTempDir&) = delete;
+
+ private:
+#ifdef _WIN32
+  std::vector<std::pair<std::wstring, std::optional<std::wstring>>> saved_;
+#else
+  std::optional<std::string> saved_;
+#endif
+};
+
+TEST(StatusService, StageHunksUnderNonAsciiTempDir) {
+  FixtureRepo fixture;
+  configureScrubFilter(fixture);
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.writeFile("app.env", "token=SECRET\nport=1\n");
+  fixture.writeFile("plain.txt", "a\nb\n");
+  fixture.run("git add .gitattributes app.env plain.txt");
+  commitTick(fixture, "seed", 1);
+  fixture.writeFile("app.env", "token=SECRET\nport=2\n");
+  fixture.writeFile("plain.txt", "a\nB\n");
+  const std::filesystem::path temp =
+      fixture.root() / ".git" / std::filesystem::path(u8"t\u00ebmp-\u6e29");
+  std::filesystem::create_directories(temp);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  {
+    // Both paths that hand git a patch file: staging a filtered file's hunk
+    // and unstaging any hunk.
+    ScopedTempDir scoped(temp);
+    Json hunks = fileHunks(session, 10, repoId, "app.env", false);
+    ASSERT_EQ(hunks["result"]["hunks"].size(), 1u) << hunks.dump();
+    Json stage = stageHunks(session, 11, repoId, "app.env", "stage",
+                            Json::array({rangeOf(hunks["result"]["hunks"][0])}));
+    ASSERT_TRUE(stage.contains("result")) << stage.dump();
+
+    Json plain = fileHunks(session, 12, repoId, "plain.txt", false);
+    ASSERT_EQ(plain["result"]["hunks"].size(), 1u) << plain.dump();
+    Json stagePlain = stageHunks(session, 13, repoId, "plain.txt", "stage",
+                                 Json::array({rangeOf(plain["result"]["hunks"][0])}));
+    ASSERT_TRUE(stagePlain.contains("result")) << stagePlain.dump();
+    Json staged = fileHunks(session, 14, repoId, "plain.txt", true);
+    ASSERT_EQ(staged["result"]["hunks"].size(), 1u) << staged.dump();
+    Json unstage = stageHunks(session, 15, repoId, "plain.txt", "unstage",
+                              Json::array({rangeOf(staged["result"]["hunks"][0])}));
+    ASSERT_TRUE(unstage.contains("result")) << unstage.dump();
+  }
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-only"), "app.env\n");
 }
 
 TEST(StatusService, StageFilesSplitsLongPathLists) {
