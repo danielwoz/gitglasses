@@ -13,7 +13,8 @@ namespace gg::watch {
 class RepoWatch;
 class InotifyHub;
 
-// Watches registered repositories' gitdirs and reports coalesced change
+// Watches registered repositories' gitdirs (and, for linked worktrees, the
+// refs in their common dir) and reports coalesced change
 // batches. Callbacks are invoked from a watcher thread, so they must be
 // thread-safe. Batches are debounced and classified into the repo/didChange
 // protocol categories ('HEAD', 'refs', 'index', 'stash', 'worktrees',
@@ -44,7 +45,16 @@ class WatchManager {
   WatchManager& operator=(const WatchManager&) = delete;
 
   // Starts watching the repo's gitdir. Idempotent for already-watched repos.
-  void watch(const std::string& repoId, const std::string& gitdir);
+  //
+  // A linked worktree's gitdir ($GIT_DIR/worktrees/<name>) holds only its
+  // own HEAD, index and sequencer state; branches, tags, remote-tracking refs
+  // and the stash live in the common dir it shares with the main checkout.
+  // When `commondir` names a different directory, its refs/ tree and
+  // packed-refs are watched too and reported as 'refs' and 'stash'. The
+  // common dir's HEAD, index and worktrees/ belong to the main checkout and
+  // are not reported for this repo.
+  void watch(const std::string& repoId, const std::string& gitdir,
+             const std::string& commondir = {});
 
   // Stops watching the repo and releases its watch descriptors or thread.
   // Idempotent for repos that are not watched.

@@ -20,8 +20,17 @@ void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
         auto info = context.registry.add(path);
         if (!info) throw rpc::HandlerError{{info.error()}};
         // Watch the gitdir so external ref/index changes push repo/didChange.
-        if (auto repo = context.registry.open(info.value().id)) {
-          context.watchManager.watch(info.value().id, repo.value().gitdir());
+        // A linked worktree keeps its branches, tags and stash in the common
+        // dir it shares with the main checkout, so that is watched as well.
+        // A client listing many repositories registers them with watch:false
+        // and starts the watch for the ones it uses; without a native watcher
+        // each watch is a polling thread.
+        if (params.value("watch", true)) {
+          if (auto repo = context.registry.open(info.value().id)) {
+            const char* commondir = git_repository_commondir(repo.value().raw());
+            context.watchManager.watch(info.value().id, repo.value().gitdir(),
+                                       commondir ? commondir : "");
+          }
         }
         return {{"repoId", info.value().id},
                 {"rootPath", info.value().rootPath},

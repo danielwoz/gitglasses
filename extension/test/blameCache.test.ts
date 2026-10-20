@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { BlameCommit, BlameHunk } from '@gitglasses/protocol';
-import type { EngineClient } from '@gitglasses/rpc';
+import { ErrorCodes, type BlameCommit, type BlameHunk } from '@gitglasses/protocol';
+import { EngineRestartedError, type EngineClient } from '@gitglasses/rpc';
 import { BlameModel, estimateBlameBytes } from '../src/model/blameModel';
 
 interface BlameResult {
@@ -194,5 +194,34 @@ describe('BlameModel superseded versions', () => {
       await model.getBlame(key('a.ts', version));
     }
     expect(model.stats().entries).toBe(1);
+  });
+});
+
+describe('BlameModel failure reporting', () => {
+  it('logs a failed request once per file and message', async () => {
+    const engine = fakeEngine((path) =>
+      path === 'gone.ts' ? new Error("no such path 'gone.ts' in HEAD") : makeResult(1),
+    );
+    const lines: string[] = [];
+    const model = new BlameModel(asEngine(engine), Infinity, Infinity, (line) => lines.push(line));
+
+    await expect(model.getBlame(onDisk('gone.ts'))).rejects.toThrow('no such path');
+    await expect(model.getBlame(onDisk('gone.ts'))).rejects.toThrow('no such path');
+    await model.getBlame(onDisk('fine.ts'));
+
+    expect(engine.requests).toHaveLength(3);
+    expect(lines).toEqual(["blame failed for gone.ts in r1: no such path 'gone.ts' in HEAD"]);
+  });
+
+  it('does not log cancellations or engine restarts', async () => {
+    const cancelled = Object.assign(new Error('cancelled'), { code: ErrorCodes.Cancelled });
+    const failures: Error[] = [cancelled, new EngineRestartedError()];
+    const engine = fakeEngine(() => failures.shift() ?? makeResult(1));
+    const lines: string[] = [];
+    const model = new BlameModel(asEngine(engine), Infinity, Infinity, (line) => lines.push(line));
+
+    await expect(model.getBlame(onDisk('a.ts'))).rejects.toThrow('cancelled');
+    await expect(model.getBlame(onDisk('a.ts'))).rejects.toThrow('restarted');
+    expect(lines).toEqual([]);
   });
 });

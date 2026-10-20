@@ -100,6 +100,10 @@
             "minLength": 1,
             "description": "Any path inside the repository.",
             "type": "string"
+          },
+          "watch": {
+            "description": "false registers the repository without watching it, for one a client only lists. A later repo/discover without it starts the watch; it never stops one already running. Default true.",
+            "type": "boolean"
           }
         }
       },

@@ -326,6 +326,16 @@ jobs:
       - name: E2E test
         run: pnpm --filter gitglasses run test:e2e
 
+      # VS Code's logs from the run: the GitGlasses output channel (engine
+      # stderr included) and the extension host log.
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-logs-${{ runner.os }}
+          path: extension/.vscode-test/logs
+          if-no-files-found: ignore
+
   extension-e2e:
     needs: engine-linux
     runs-on: ubuntu-22.04
@@ -354,6 +364,14 @@ jobs:
 
       - name: E2E test
         run: xvfb-run -a pnpm --filter gitglasses run test:e2e
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-logs-${{ runner.os }}
+          path: extension/.vscode-test/logs
+          if-no-files-found: ignore
 
   # The web extension (vscode.dev, github.dev) bundles the wasm engine; without
   # it the build skips dist/web entirely. Runs the smoke suite in headless

@@ -7,7 +7,7 @@
 import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
-import { BlameModel } from './model/blameModel';
+import { BlameModel, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES } from './model/blameModel';
 import { RepositoryService, repoName } from './model/repositoryService';
 import { ActiveRepoManager } from './model/activeRepo';
 import { RefsModel } from './model/refsModel';
@@ -124,6 +124,8 @@ export interface CoreDeps {
 export interface Core {
   readonly views: Readonly<Record<string, ViewBase>>;
   readonly blame: BlameModel;
+  /** The workspace's repositories and the one the views act on. */
+  readonly activeRepo: ActiveRepoManager;
   readonly lineBlame: LineBlameController;
   readonly fileAnnotations: FileAnnotationsController;
   readonly integrations: IntegrationService;
@@ -146,7 +148,7 @@ export interface Core {
 export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Core {
   const { engine, repos, docSync } = deps;
 
-  const blame = new BlameModel(engine);
+  const blame = new BlameModel(engine, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES, deps.log);
   const lineBlame = new LineBlameController(blame, repos);
   const fileAnnotations = new FileAnnotationsController(blame, repos, context.workspaceState);
   const codeLens = new BlameCodeLensProvider(blame, repos);
@@ -440,6 +442,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   return {
     views,
     blame,
+    activeRepo,
     lineBlame,
     fileAnnotations,
     integrations,

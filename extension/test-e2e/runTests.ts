@@ -1,6 +1,13 @@
-// End-to-end test entry point: downloads VS Code stable, builds a
+// End-to-end test entry point: downloads a pinned VS Code release, builds a
 // deterministic git fixture workspace, and launches the extension host with
 // the compiled mocha suite (dist-e2e/suite/index).
+//
+// Environment:
+//   GITGLASSES_E2E_ALIAS=0       open the fixture by its real path instead of
+//                                through a symlink (Linux and macOS)
+//   GITGLASSES_E2E_VSCODE=<ver>  run another VS Code: a release such as
+//                                1.90.0 (the engines.vscode floor), 'stable'
+//                                or 'insiders'
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -48,18 +55,26 @@ function emptyGitConfig(): string {
   return emptyConfigPath;
 }
 
+interface Author {
+  name: string;
+  email: string;
+}
+
+const MAIN_AUTHOR: Author = { name: FIXTURE.authorName, email: FIXTURE.authorEmail };
+const INNER_AUTHOR: Author = { name: FIXTURE.innerAuthorName, email: FIXTURE.innerAuthorEmail };
+
 // Runs git with a pinned identity, pinned timestamps, and user/system config
 // masked out, so every fixture repo is byte-for-byte reproducible.
-function git(cwd: string, ...args: string[]): void {
+function gitAs(author: Author, cwd: string, ...args: string[]): void {
   execFileSync('git', args, {
     cwd,
     stdio: 'pipe',
     env: {
       ...process.env,
-      GIT_AUTHOR_NAME: FIXTURE.authorName,
-      GIT_AUTHOR_EMAIL: FIXTURE.authorEmail,
-      GIT_COMMITTER_NAME: FIXTURE.authorName,
-      GIT_COMMITTER_EMAIL: FIXTURE.authorEmail,
+      GIT_AUTHOR_NAME: author.name,
+      GIT_AUTHOR_EMAIL: author.email,
+      GIT_COMMITTER_NAME: author.name,
+      GIT_COMMITTER_EMAIL: author.email,
       GIT_AUTHOR_DATE: '2024-01-02T03:04:05Z',
       GIT_COMMITTER_DATE: '2024-01-02T03:04:05Z',
       GIT_CONFIG_NOSYSTEM: '1',
@@ -69,24 +84,42 @@ function git(cwd: string, ...args: string[]): void {
   });
 }
 
+function git(cwd: string, ...args: string[]): void {
+  gitAs(MAIN_AUTHOR, cwd, ...args);
+}
+
 function write(root: string, relative: string, contents: string): void {
   fs.writeFileSync(path.join(root, relative), contents);
 }
 
-// Temp git repo with 3 commits, one rename, and one dirty file (see
-// fixture.ts for the exact shape the suite asserts against).
-function createFixtureWorkspace(enginePath: string): string {
+// Hermetic against the host's git config. Git for Windows ships system-level
+// core.autocrlf=true, which would rewrite the checked-out bytes and shift
+// every line the blame assertions depend on. The C++ fixture pins the same
+// settings for the same reason.
+function initRepo(author: Author, root: string): void {
+  gitAs(author, root, 'init');
+  gitAs(author, root, 'config', 'core.autocrlf', 'false');
+  gitAs(author, root, 'config', 'commit.gpgsign', 'false');
+  gitAs(author, root, 'config', 'user.name', author.name);
+  gitAs(author, root, 'config', 'user.email', author.email);
+}
+
+// A one-commit repository by the inner author holding `file`.
+function createInnerRepo(root: string, file: string, contents: string): void {
+  fs.mkdirSync(root, { recursive: true });
+  initRepo(INNER_AUTHOR, root);
+  write(root, file, contents);
+  gitAs(INNER_AUTHOR, root, 'add', file);
+  gitAs(INNER_AUTHOR, root, 'commit', '-m', `add ${file}`);
+}
+
+// Temp git repo with 4 commits, one rename, one dirty file, a submodule and a
+// nested clone (see fixture.ts for the exact shape the suite asserts
+// against). `scratch` receives the submodule's upstream.
+function createFixtureWorkspace(enginePath: string, scratch: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-'));
 
-  git(root, 'init');
-  // Hermetic against the host's git config. Git for Windows ships
-  // system-level core.autocrlf=true, which would rewrite the checked-out bytes
-  // and shift every line the blame assertions depend on. The C++ fixture pins
-  // the same settings for the same reason.
-  git(root, 'config', 'core.autocrlf', 'false');
-  git(root, 'config', 'commit.gpgsign', 'false');
-  git(root, 'config', 'user.name', FIXTURE.authorName);
-  git(root, 'config', 'user.email', FIXTURE.authorEmail);
+  initRepo(MAIN_AUTHOR, root);
   write(root, FIXTURE.blameFile, FIXTURE.blameFileInitialContents);
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileCommittedContents);
   write(root, FIXTURE.renameSource, FIXTURE.renameContents);
@@ -100,7 +133,28 @@ function createFixtureWorkspace(enginePath: string): string {
   git(root, 'mv', FIXTURE.renameSource, FIXTURE.renameTarget);
   git(root, 'commit', '-m', 'rename beta to gamma');
 
+  // A submodule: a file inside it belongs to the submodule's history, not the
+  // parent's. Local-path submodules need file transport allowed explicitly.
+  const upstream = path.join(scratch, 'submodule-upstream');
+  createInnerRepo(upstream, FIXTURE.submoduleFile, FIXTURE.submoduleContents);
+  git(
+    root,
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    upstream,
+    FIXTURE.submoduleDir,
+  );
+  git(root, 'commit', '-m', 'add submodule');
+
   git(root, 'remote', 'add', FIXTURE.remoteName, FIXTURE.remoteUrl);
+
+  // An unrelated clone inside the working tree, which the parent ignores.
+  createInnerRepo(path.join(root, FIXTURE.nestedDir), FIXTURE.nestedFile, FIXTURE.nestedContents);
+  fs.mkdirSync(path.join(root, '.git', 'info'), { recursive: true });
+  fs.appendFileSync(path.join(root, '.git', 'info', 'exclude'), `/${FIXTURE.nestedDir}/\n`);
 
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileWorkingContents);
 
@@ -111,7 +165,7 @@ function createFixtureWorkspace(enginePath: string): string {
     JSON.stringify(
       {
         'gitglasses.engine.path': enginePath,
-        'gitglasses.engine.logLevel': 'info',
+        'gitglasses.engine.logLevel': 'debug',
       },
       null,
       2,
@@ -211,13 +265,45 @@ function runUntrusted(vscodeExecutablePath: string, enginePath: string): void {
   }
 }
 
+// The path VS Code opens. On Linux and macOS it is a symlink to the fixture,
+// so the editor and the engine (which resolves symlinks) spell the repository
+// root differently. Windows CI gets the same mismatch from the 8.3 short name
+// in os.tmpdir() (C:\Users\RUNNER~1\...), so the fixture path is used as is.
+function workspaceSpelling(fixturePath: string, scratch: string): string {
+  if (process.platform === 'win32' || process.env.GITGLASSES_E2E_ALIAS === '0') {
+    return fixturePath;
+  }
+  const link = path.join(scratch, 'workspace');
+  fs.symlinkSync(fixturePath, link, 'dir');
+  return link;
+}
+
+/** The VS Code release the suite runs against unless GITGLASSES_E2E_VSCODE
+ *  names another, so a run is not at the mercy of whatever stable is that
+ *  day. Raise it deliberately. */
+const PINNED_VSCODE = '1.142.0';
+
+// VS Code's own logs, the GitGlasses output channel (engine stderr included)
+// among them; CI uploads this directory when the suite fails.
+const logsPath = path.join(extensionDevelopmentPath, '.vscode-test', 'logs');
+
 async function main(): Promise<void> {
   const enginePath = findEngineBinary();
   console.log(`[e2e] engine binary: ${enginePath}`);
-  const vscodeExecutablePath = await downloadAndUnzipVSCode('stable');
 
-  const workspacePath = createFixtureWorkspace(enginePath);
-  console.log(`[e2e] fixture workspace: ${workspacePath}`);
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-scratch-'));
+  const fixturePath = createFixtureWorkspace(enginePath, scratch);
+  const workspacePath = workspaceSpelling(fixturePath, scratch);
+  const resolved = fs.realpathSync.native(workspacePath);
+  const aliased = resolved !== workspacePath;
+  console.log(
+    `[e2e] fixture workspace: ${workspacePath}` + (aliased ? ` (resolves to ${resolved})` : ''),
+  );
+  fs.rmSync(logsPath, { recursive: true, force: true });
+  console.log(`[e2e] VS Code logs: ${logsPath}`);
+  const version = process.env.GITGLASSES_E2E_VSCODE || PINNED_VSCODE;
+  console.log(`[e2e] VS Code: ${version}`);
+  const vscodeExecutablePath = await downloadAndUnzipVSCode(version);
 
   try {
     await runTests({
@@ -226,10 +312,22 @@ async function main(): Promise<void> {
       extensionTestsPath: path.resolve(__dirname, 'suite', 'index'),
       // --disable-extensions turns off every installed extension while still
       // loading the development extension under test.
-      launchArgs: ['--disable-workspace-trust', '--disable-extensions', workspacePath],
+      launchArgs: [
+        '--disable-workspace-trust',
+        '--disable-extensions',
+        '--logsPath',
+        logsPath,
+        workspacePath,
+      ],
+      extensionTestsEnv: {
+        // Copies the GitGlasses log, engine stderr included, into this output.
+        GITGLASSES_LOG_TO_CONSOLE: '1',
+        GITGLASSES_E2E_ALIASED: aliased ? '1' : '0',
+      },
     });
   } finally {
-    fs.rmSync(workspacePath, { recursive: true, force: true });
+    fs.rmSync(scratch, { recursive: true, force: true });
+    fs.rmSync(fixturePath, { recursive: true, force: true });
   }
 
   runUntrusted(vscodeExecutablePath, enginePath);

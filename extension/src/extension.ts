@@ -19,6 +19,8 @@ import { HeadChangeTracker } from './engine/capabilityGate';
 import { DocumentSync } from './engine/documentSync';
 import { createTrustGrantHandler } from './engine/workspaceTrust';
 import { RepositoryService } from './model/repositoryService';
+import { identityAliasResolver } from './model/pathAliases';
+import { nodeFileIdentity } from './model/nodeFileIdentity';
 import { ViewNode, activeWorkspaceRepo, requireRepo } from './views/viewBase';
 import { buildRemoteUrl, type RemoteTarget } from './integrations/remoteUrls';
 import {
@@ -50,7 +52,13 @@ function resolveEngineBinary(context: vscode.ExtensionContext): string | undefin
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('GitGlasses');
   context.subscriptions.push(output);
-  const log = (line: string): void => output.appendLine(line);
+  // GITGLASSES_LOG_TO_CONSOLE=1 copies the channel, engine stderr included, to
+  // the extension host's console, which is all a headless test run shows.
+  const mirrorToConsole = process.env.GITGLASSES_LOG_TO_CONSOLE === '1';
+  const log = (line: string): void => {
+    output.appendLine(line);
+    if (mirrorToConsole) console.log(`[gitglasses] ${line}`);
+  };
 
   const enginePath = resolveEngineBinary(context);
   if (!enginePath) {
@@ -89,7 +97,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   context.subscriptions.push({ dispose: () => engine.dispose() });
 
-  const repos = new RepositoryService(engine);
+  // The engine reports repository roots with symlinks resolved and 8.3 short
+  // names expanded, while the editor keeps the spelling the workspace was
+  // opened with; file identity maps one onto the other.
+  const repos = new RepositoryService(engine, {
+    resolveAlias: identityAliasResolver(nodeFileIdentity),
+    log,
+  });
   const docSync = new DocumentSync(engine, repos);
   context.subscriptions.push(docSync);
 
@@ -374,6 +388,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
     }),
     ...registerPatchCommands(engine, repos, integrations),
+    // Internal: which repository a file resolves to and which repositories
+    // the views can act on, so a test or a bug report can tell a resolution
+    // failure apart from an engine failure.
+    vscode.commands.registerCommand('_gitglasses.locate', (target?: vscode.Uri | string) => {
+      const uri = typeof target === 'string' ? vscode.Uri.file(target) : target;
+      return uri ? repos.locateOrDiscover(uri) : undefined;
+    }),
+    vscode.commands.registerCommand('_gitglasses.repositories', () => core.activeRepo.all()),
   );
 
   try {

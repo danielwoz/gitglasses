@@ -61,7 +61,7 @@ function glimpsePrNode(bucket: string, pr: PullRequest): ViewNode {
 // editor, under a section that says what has to happen next.
 function conflictsSection(repo: ActiveRepo, conflicted: readonly string[]): ViewNode {
   const children = conflicted.map((file) => {
-    const uri = vscode.Uri.joinPath(vscode.Uri.file(repo.rootPath), file);
+    const uri = vscode.Uri.joinPath(vscode.Uri.file(repo.workspacePath ?? repo.rootPath), file);
     const item = new vscode.TreeItem(file, vscode.TreeItemCollapsibleState.None);
     item.resourceUri = uri;
     item.iconPath = new vscode.ThemeIcon('warning');
