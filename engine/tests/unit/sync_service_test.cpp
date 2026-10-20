@@ -1,11 +1,13 @@
-// What merge-like operations report when they stop: conflicts only when the
-// index has them, otherwise git's own reason, with the operation left in
-// progress named so it can be continued or aborted (mutate/sequencer).
+// Publishing a branch, pulling a branch that diverged, and what merge-like
+// operations report when they stop: conflicts only when the index has them,
+// otherwise git's own reason, with the operation left in progress named so
+// it can be continued or aborted (mutate/sequencer).
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "test_fixtures.h"
@@ -33,6 +35,10 @@ std::string rev(const std::filesystem::path& root, const std::string& spec) {
   return trimmed(gg::testing::gitCapture(root, "rev-parse --verify -q " + spec, /*quiet=*/true));
 }
 
+std::string config(const std::filesystem::path& root, const std::string& key) {
+  return trimmed(gg::testing::gitCapture(root, "config --local " + key, /*quiet=*/true));
+}
+
 void commitFile(FixtureRepo& fixture, const std::string& file, const std::string& contents,
                 const std::string& message) {
   fixture.writeFile(file, contents);
@@ -45,6 +51,211 @@ std::string discover(InteractiveSession& session, const std::filesystem::path& r
   const Json found = session.request(req(2, "repo/discover", {{"path", root.string()}}));
   return found["result"].value("repoId", "");
 }
+
+// A repository with a bare remote of each listed name, and a new branch
+// `topic` with one commit that no remote has.
+FixtureRepo& withRemotes(FixtureRepo& fixture, const std::vector<std::string>& names) {
+  for (const auto& name : names) {
+    fixture.run("git init -q --bare " + name + ".git");
+    fixture.run("git remote add " + name + " " + name + ".git");
+  }
+  fixture.run("git switch -q -c topic");
+  commitFile(fixture, "topic.txt", "topic\n", "topic work");
+  return fixture;
+}
+
+bool hasBranch(const std::filesystem::path& bare, const std::string& branch) {
+  return !rev(bare, "refs/heads/" + branch).empty();
+}
+
+// --- Publishing ------------------------------------------------------------------
+
+TEST(Publish, GoesToTheOnlyRemoteWhateverItIsCalled) {
+  FixtureRepo fixture;
+  withRemotes(fixture, {"upstream"});
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+
+  const Json push =
+      session.request(req(3, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}}));
+  ASSERT_TRUE(push.contains("result")) << push.dump();
+  EXPECT_EQ(push["result"]["remote"], "upstream");
+  EXPECT_TRUE(hasBranch(fixture.root() / "upstream.git", "topic"));
+  EXPECT_EQ(config(fixture.root(), "branch.topic.remote"), "upstream");
+}
+
+TEST(Publish, FollowsPushDefaultInAForkWorkflow) {
+  FixtureRepo fixture;
+  withRemotes(fixture, {"origin", "mine"});
+  fixture.run("git config remote.pushDefault mine");
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+
+  const Json push =
+      session.request(req(3, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}}));
+  ASSERT_TRUE(push.contains("result")) << push.dump();
+  EXPECT_EQ(push["result"]["remote"], "mine");
+  EXPECT_TRUE(hasBranch(fixture.root() / "mine.git", "topic"));
+  EXPECT_FALSE(hasBranch(fixture.root() / "origin.git", "topic"));
+}
+
+TEST(Publish, BranchPushRemoteWinsOverPushDefault) {
+  FixtureRepo fixture;
+  withRemotes(fixture, {"origin", "mine", "theirs"});
+  fixture.run("git config remote.pushDefault mine");
+  fixture.run("git config branch.topic.pushRemote theirs");
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+
+  const Json push =
+      session.request(req(3, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}}));
+  ASSERT_TRUE(push.contains("result")) << push.dump();
+  EXPECT_EQ(push["result"]["remote"], "theirs");
+  EXPECT_TRUE(hasBranch(fixture.root() / "theirs.git", "topic"));
+}
+
+// Several remotes and nothing configured: origin is not picked just for its
+// name; the caller is asked to choose, and can.
+TEST(Publish, SeveralRemotesWithoutADefaultAskForAChoice) {
+  FixtureRepo fixture;
+  withRemotes(fixture, {"origin", "mine"});
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+
+  const Json ambiguous =
+      session.request(req(3, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}}));
+  ASSERT_TRUE(ambiguous.contains("error")) << ambiguous.dump();
+  EXPECT_EQ(ambiguous["error"]["code"], static_cast<int>(ErrorCode::GitError));
+  EXPECT_EQ(ambiguous["error"]["data"]["kind"], "noRemote");
+  EXPECT_EQ(ambiguous["error"]["data"]["remotes"], Json::array({"mine", "origin"}));
+  EXPECT_FALSE(hasBranch(fixture.root() / "origin.git", "topic"));
+
+  const Json chosen = session.request(
+      req(4, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}, {"remote", "mine"}}));
+  ASSERT_TRUE(chosen.contains("result")) << chosen.dump();
+  EXPECT_TRUE(hasBranch(fixture.root() / "mine.git", "topic"));
+
+  const Json optionLike = session.request(
+      req(5, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}, {"remote", "--mirror"}}));
+  EXPECT_EQ(optionLike["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
+}
+
+TEST(Publish, NoRemoteAtAllSaysSo) {
+  FixtureRepo fixture;
+  withRemotes(fixture, {});
+  InteractiveSession session;
+  const std::string repoId = discover(session, fixture.root());
+  const Json push =
+      session.request(req(3, "mutate/push", {{"repoId", repoId}, {"setUpstream", true}}));
+  ASSERT_TRUE(push.contains("error")) << push.dump();
+  EXPECT_EQ(push["error"]["data"]["kind"], "noRemote");
+  EXPECT_EQ(push["error"]["data"]["remotes"], Json::array());
+}
+
+// --- Pulling a diverged branch -------------------------------------------------------
+
+// main has one commit the remote lacks and the remote one main lacks.
+struct DivergedClone {
+  FixtureRepo fixture;
+  std::filesystem::path other;
+
+  explicit DivergedClone(bool conflicting = false) {
+    commitFile(fixture, "shared.txt", "base\n", "base");
+    fixture.run("git clone --bare -q . origin.git");
+    fixture.run("git remote add origin origin.git");
+    fixture.run("git fetch -q origin");
+    fixture.run("git branch -q --set-upstream-to=origin/main");
+    fixture.run("git clone -q origin.git other");
+    other = fixture.root() / "other";
+    gg::testing::runGit(other, "git config user.name Other");
+    gg::testing::runGit(other, "git config user.email other@example.invalid");
+    std::ofstream(other / (conflicting ? "shared.txt" : "theirs.txt"), std::ios::binary)
+        << "theirs\n";
+    gg::testing::runGit(other, "git add -A");
+    gg::testing::runGit(other, "git commit -q -m theirs");
+    gg::testing::runGit(other, "git push -q origin main");
+    // Keeps the remote and its other clone out of the status the tests read.
+    std::ofstream(fixture.root() / ".git" / "info" / "exclude", std::ios::app)
+        << "other/\norigin.git/\n";
+    commitFile(fixture, conflicting ? "shared.txt" : "ours.txt", "ours\n", "ours");
+  }
+};
+
+TEST(PullStrategy, DivergedWithoutAConfiguredStrategyAsksForOne) {
+  DivergedClone repo;
+  InteractiveSession session;
+  const std::string repoId = discover(session, repo.fixture.root());
+  const Json pull = session.request(req(3, "mutate/pull", {{"repoId", repoId}}));
+  ASSERT_TRUE(pull.contains("error")) << pull.dump();
+  EXPECT_EQ(pull["error"]["data"]["kind"], "divergent") << pull.dump();
+}
+
+TEST(PullStrategy, MergeRebaseAndFastForwardOnly) {
+  {
+    DivergedClone repo;
+    InteractiveSession session;
+    const std::string repoId = discover(session, repo.fixture.root());
+    const Json merge = session.request(
+        req(3, "mutate/pull", {{"repoId", repoId}, {"strategy", "merge"}, {"autoStash", true}}));
+    ASSERT_TRUE(merge.contains("result")) << merge.dump();
+    EXPECT_FALSE(merge["result"]["conflicts"].get<bool>());
+    EXPECT_FALSE(rev(repo.fixture.root(), "HEAD^2").empty()) << "expected a merge commit";
+    EXPECT_EQ(config(repo.fixture.root(), "pull.rebase"), "") << "nothing remembered";
+  }
+  {
+    DivergedClone repo;
+    InteractiveSession session;
+    const std::string repoId = discover(session, repo.fixture.root());
+    const Json rebase =
+        session.request(req(3, "mutate/pull", {{"repoId", repoId}, {"strategy", "rebase"}}));
+    ASSERT_TRUE(rebase.contains("result")) << rebase.dump();
+    EXPECT_TRUE(rev(repo.fixture.root(), "HEAD^2").empty()) << "a rebase makes no merge commit";
+    EXPECT_EQ(rev(repo.fixture.root(), "HEAD~1"), rev(repo.fixture.root(), "origin/main"));
+  }
+  {
+    DivergedClone repo;
+    InteractiveSession session;
+    const std::string repoId = discover(session, repo.fixture.root());
+    const Json ffOnly =
+        session.request(req(3, "mutate/pull", {{"repoId", repoId}, {"strategy", "ff-only"}}));
+    ASSERT_TRUE(ffOnly.contains("error")) << ffOnly.dump();
+    EXPECT_EQ(ffOnly["error"]["data"]["kind"], "divergent") << ffOnly.dump();
+  }
+}
+
+TEST(PullStrategy, RememberedStrategyIsUsedByLaterPulls) {
+  DivergedClone repo;
+  repo.fixture.run("git config pull.ff only");
+  InteractiveSession session;
+  const std::string repoId = discover(session, repo.fixture.root());
+  const Json merge = session.request(
+      req(3, "mutate/pull", {{"repoId", repoId}, {"strategy", "merge"}, {"remember", true}}));
+  ASSERT_TRUE(merge.contains("result")) << merge.dump();
+  EXPECT_EQ(config(repo.fixture.root(), "pull.rebase"), "false");
+  EXPECT_EQ(config(repo.fixture.root(), "pull.ff"), "true");
+
+  const Json bad =
+      session.request(req(4, "mutate/pull", {{"repoId", repoId}, {"strategy", "octopus"}}));
+  EXPECT_EQ(bad["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
+  const Json orphanRemember =
+      session.request(req(5, "mutate/pull", {{"repoId", repoId}, {"remember", true}}));
+  EXPECT_EQ(orphanRemember["error"]["code"], static_cast<int>(ErrorCode::InvalidParams));
+}
+
+// A merge that conflicts reports conflicts, as merge does; git prints its
+// CONFLICT lines on stdout, so the old stderr-only error said nothing useful.
+TEST(PullStrategy, AConflictingPullReportsConflicts) {
+  DivergedClone repo(/*conflicting=*/true);
+  InteractiveSession session;
+  const std::string repoId = discover(session, repo.fixture.root());
+  const Json pull =
+      session.request(req(3, "mutate/pull", {{"repoId", repoId}, {"strategy", "merge"}}));
+  ASSERT_TRUE(pull.contains("result")) << pull.dump();
+  EXPECT_TRUE(pull["result"]["conflicts"].get<bool>());
+  EXPECT_TRUE(std::filesystem::exists(repo.fixture.root() / ".git" / "MERGE_HEAD"));
+}
+
+// --- Stops that are not conflicts ------------------------------------------------------
 
 // Two branches that merge cleanly, with signing switched on and a gpg that
 // always fails.

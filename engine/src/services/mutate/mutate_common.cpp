@@ -2,6 +2,7 @@
 
 #include <git2.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <utility>
@@ -13,6 +14,23 @@
 namespace gg::services::mutate_detail {
 
 namespace {
+
+// Value of a string config entry, with the level it was found at.
+struct ConfigValue {
+  std::string value;
+  int level = -1;
+};
+
+ConfigValue configEntry(git_config* config, const char* name) {
+  ConfigValue out;
+  git_config_entry* entry = nullptr;
+  if (git_config_get_entry(&entry, config, name) == 0 && entry) {
+    out.value = entry->value ? entry->value : "";
+    out.level = static_cast<int>(entry->level);
+    git_config_entry_free(entry);
+  }
+  return out;
+}
 
 // Collects a run's stdout lines and exit status into a GitOutput.
 Result<GitOutput> collectLines(const std::string& cwd, std::vector<std::string> args,
@@ -166,6 +184,24 @@ bool inConflictState(const core::Repo& repo) {
   const bool conflicts = git_index_has_conflicts(rawIndex) != 0;
   git_index_free(rawIndex);
   return conflicts;
+}
+
+std::string configString(const core::Repo& repo, const std::string& key) {
+  git_config* config = nullptr;
+  if (git_repository_config_snapshot(&config, repo.raw()) != 0) return {};
+  std::string value = configEntry(config, key.c_str()).value;
+  git_config_free(config);
+  return value;
+}
+
+std::vector<std::string> remoteNames(const core::Repo& repo) {
+  std::vector<std::string> names;
+  git_strarray list{};
+  if (git_remote_list(&list, repo.raw()) != 0) return names;
+  for (size_t i = 0; i < list.count; ++i) names.emplace_back(list.strings[i]);
+  git_strarray_dispose(&list);
+  std::sort(names.begin(), names.end());
+  return names;
 }
 
 core::Repo openRepo(ServiceContext& context, const rpc::Json& params) {

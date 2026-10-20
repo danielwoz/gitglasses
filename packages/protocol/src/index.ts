@@ -162,8 +162,8 @@ export interface Requests {
   'mutate/revert': { params: P<'mutate/revert'>; result: R<'mutate/revert'> };
   'mutate/reset': { params: P<'mutate/reset'>; result: Empty };
   'mutate/fetch': { params: P<'mutate/fetch'>; result: Empty };
-  'mutate/pull': { params: P<'mutate/pull'>; result: Empty };
-  'mutate/push': { params: P<'mutate/push'>; result: Empty };
+  'mutate/pull': { params: P<'mutate/pull'>; result: R<'mutate/pull'> };
+  'mutate/push': { params: P<'mutate/push'>; result: R<'mutate/push'> };
   'mutate/sequencer': { params: P<'mutate/sequencer'>; result: R<'mutate/sequencer'> };
   'stash/push': { params: P<'stash/push'>; result: Empty };
   'stash/apply': { params: P<'stash/apply'>; result: R<'stash/apply'> };

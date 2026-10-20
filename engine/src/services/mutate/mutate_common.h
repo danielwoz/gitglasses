@@ -95,6 +95,13 @@ SequencerState sequencerState(const core::Repo& repo);
 // entries in the index.
 bool inConflictState(const core::Repo& repo);
 
+// The repository's effective value for a config key (every config file git
+// reads, the most specific winning), or empty when unset.
+std::string configString(const core::Repo& repo, const std::string& key);
+
+// Names of the repository's configured remotes, sorted.
+std::vector<std::string> remoteNames(const core::Repo& repo);
+
 // Opens the repo for params["repoId"], throwing HandlerError on failure.
 core::Repo openRepo(ServiceContext& context, const rpc::Json& params);
 
