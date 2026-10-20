@@ -13,6 +13,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 const packageDir = path.join(root, 'mcp-server');
 const manifest = JSON.parse(readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
 const cli = path.join(packageDir, manifest.bin['gitglasses-mcp']);
+const repositoryReadme = readFileSync(path.join(packageDir, 'README.md'), 'utf8');
 
 describe('gitglasses-mcp package', () => {
   it('depends only on published packages at runtime', () => {
@@ -59,10 +60,12 @@ describe('gitglasses-mcp package', () => {
       }
     });
 
-    it('answers an MCP handshake with the package version and lists its tools', async () => {
+    it('answers an MCP handshake with the package version and documents every tool it lists', async () => {
       const { serverInfo, tools } = await smokeTestMcpServer(cli, { version: manifest.version });
       expect(serverInfo).toEqual({ name: 'gitglasses', version: manifest.version });
       expect(tools).toEqual(expect.arrayContaining(['git_blame', 'git_status', 'apply_patch']));
+      const documented = [...repositoryReadme.matchAll(/^\| `([a-z_]+)` \|/gm)].map((match) => match[1]);
+      expect(documented.sort()).toEqual([...tools].sort());
     });
   });
 });

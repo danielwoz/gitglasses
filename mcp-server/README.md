@@ -1,8 +1,9 @@
 # gitglasses-mcp
 
 MCP (Model Context Protocol) server exposing gitglasses repository insight as
-tools: blame, log search, file history, commit show, graph summary, status,
-patch envelopes, and a Launchpad-classified pull request list.
+tools: blame, log search, file history, commit show, diffs, refs, graph
+summary, status, patch envelopes, and a Launchpad-classified pull request
+list.
 
 The server speaks MCP over stdio and drives a `gitglasses-engine` process
 (spawned lazily on the first repository tool call).
@@ -15,6 +16,8 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | `git_log_search` | Search commits by text/author/sha, or list recent commits |
 | `git_file_history` | File history following renames |
 | `git_commit_show` | Commit metadata + changed files with +/- counts |
+| `git_diff` | Uncommitted changes as a unified diff, unstaged or staged, for the repository or one file |
+| `git_refs` | Branches, remote-tracking branches and tags with the sha each points at |
 | `git_graph_summary` | Lane-indented text rendering of the commit graph |
 | `git_status` | Branch, ahead/behind, staged/unstaged/untracked/conflicted |
 | `create_patch` | Patch envelope from `wip`, `stash:<n>` or `commit:<sha>` |
@@ -24,8 +27,9 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 Every tool but `apply_patch` is read-only, and each declares that through MCP
 tool annotations (`readOnlyHint`), so a client can gate or auto-approve on it.
 
-Tools that render a whole commit, status or patch take a `maxChars` argument
-and truncate with a footer naming the limit; `git_blame` takes `limit` hunks.
+Tools that render a whole commit, diff, status, ref list or patch take a
+`maxChars` argument and truncate with a footer naming the limit; `git_blame`
+takes `limit` hunks.
 
 ## Installation
 
@@ -112,7 +116,7 @@ repository contains it — not just the project under discussion. `repo/discover
 walks *upwards*, so a path inside a repository grants that repository.
 
 `apply_patch` writes: it applies a patch to the working tree of whatever
-repository `repoPath` names. The other eight tools only read.
+repository `repoPath` names. The other ten tools only read.
 
 `GITGLASSES_ALLOWED_ROOTS` is what bounds where either can happen. Set it to
 the directories this server may touch; paths outside are rejected before
