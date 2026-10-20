@@ -1,7 +1,7 @@
 // Versioned prompt templates for the AI features. Bump PROMPT_VERSION when a
 // template changes materially so output regressions are traceable.
 
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 const GROUNDING =
   'Use only the context provided in the message; never invent files, changes, or history. Be concise.';
@@ -35,14 +35,26 @@ export const NL_SEARCH_SYSTEM =
   '"renderer memory leak fixes" -> {"text": "memory leak"}. ' +
   `${GROUNDING}`;
 
-export function explainCommitPrompt(
-  meta: { sha: string; author: string; date: string; summary: string },
-  context: string,
-): string {
-  return (
-    `Commit ${meta.sha}\nAuthor: ${meta.author}\nDate: ${meta.date}\n` +
-    `Message: ${meta.summary}\n\nChanges:\n${context}`
-  );
+export interface ExplainCommitMeta {
+  sha: string;
+  author: string;
+  date: string;
+  subject: string;
+  /** The message after the subject; empty when there is none. */
+  body: string;
+  /** Refs pointing at the commit, e.g. "main, tag v1.2". */
+  refs?: string;
+  /** "+12 −3 in 2 files". */
+  stats?: string;
+}
+
+export function explainCommitPrompt(meta: ExplainCommitMeta, context: string): string {
+  const lines = [`Commit ${meta.sha}`, `Author: ${meta.author}`, `Date: ${meta.date}`];
+  if (meta.refs) lines.push(`Refs: ${meta.refs}`);
+  if (meta.stats) lines.push(`Changes: ${meta.stats}`);
+  lines.push('', 'Message:', meta.subject);
+  if (meta.body) lines.push('', meta.body);
+  return `${lines.join('\n')}\n\nDiff:\n${context}`;
 }
 
 export function explainWipPrompt(

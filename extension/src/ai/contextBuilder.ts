@@ -157,3 +157,75 @@ export function buildDiffContext(files: readonly DiffFile[], budgetTokens: numbe
     truncated,
   };
 }
+
+// --- Patch text → per-file sections ------------------------------------------
+
+/** Undoes git's C-style quoting of a path ("a/t\303\244st \"x\""). */
+export function unquoteGitPath(text: string): string {
+  if (!(text.startsWith('"') && text.endsWith('"') && text.length >= 2)) return text;
+  const bytes: number[] = [];
+  const inner = text.slice(1, -1);
+  const escapes: Record<string, number> = { n: 10, t: 9, r: 13, b: 8, f: 12, a: 7, v: 11 };
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== '\\' || i + 1 >= inner.length) {
+      bytes.push(...new TextEncoder().encode(ch));
+      continue;
+    }
+    const next = inner[++i];
+    if (/[0-7]/.test(next) && /^[0-7]{3}$/.test(inner.slice(i, i + 3))) {
+      bytes.push(parseInt(inner.slice(i, i + 3), 8));
+      i += 2;
+    } else if (escapes[next] !== undefined) {
+      bytes.push(escapes[next]);
+    } else {
+      bytes.push(...new TextEncoder().encode(next));
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+function stripSidePrefix(path: string, side: 'a/' | 'b/'): string {
+  return path.startsWith(side) ? path.slice(2) : path;
+}
+
+/** The file a `diff --git` section is about: its post-image path from the
+ *  `+++` line, the pre-image path for a deletion, or the header otherwise. */
+function sectionPath(lines: readonly string[]): string {
+  const plus = lines.find((line) => line.startsWith('+++ '));
+  const minus = lines.find((line) => line.startsWith('--- '));
+  const field = (line: string): string => unquoteGitPath(line.slice(4).replace(/\t.*$/, ''));
+  if (plus && field(plus) !== '/dev/null') return stripSidePrefix(field(plus), 'b/');
+  if (minus && field(minus) !== '/dev/null') return stripSidePrefix(field(minus), 'a/');
+  const rename = lines.find((line) => line.startsWith('rename to '));
+  if (rename) return unquoteGitPath(rename.slice('rename to '.length));
+  const header = lines[0].slice('diff --git '.length);
+  const quoted = /^"(?:[^"\\]|\\.)*" ("(?:[^"\\]|\\.)*")$/.exec(header);
+  if (quoted) return stripSidePrefix(unquoteGitPath(quoted[1]), 'b/');
+  // Unquoted "a/x b/x": both halves are the same length when unrenamed.
+  const half = (header.length - 1) / 2;
+  if (Number.isInteger(half) && header[half] === ' ') {
+    return stripSidePrefix(header.slice(half + 1), 'b/');
+  }
+  return header;
+}
+
+/** Splits `git diff` output into one DiffFile per file. */
+export function splitPatch(patch: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  let current: string[] | undefined;
+  const flush = (): void => {
+    if (!current) return;
+    files.push({ path: sectionPath(current), patch: current.join('\n').trimEnd() });
+  };
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      flush();
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  flush();
+  return files;
+}

@@ -6,6 +6,8 @@ import {
   estimateTokens,
   isGeneratedPath,
   rankFiles,
+  splitPatch,
+  unquoteGitPath,
 } from '../src/ai/contextBuilder';
 
 describe('categorizeFile', () => {
@@ -153,5 +155,66 @@ describe('buildDiffContext', () => {
     expect(context.includedPaths).toEqual([]);
     expect(context.text).toContain('(no changes)');
     expect(context.text).toContain('yarn.lock');
+  });
+});
+
+describe('splitPatch', () => {
+  const patch = [
+    'diff --git a/src/app.ts b/src/app.ts',
+    'index 1111111..2222222 100644',
+    '--- a/src/app.ts',
+    '+++ b/src/app.ts',
+    '@@ -1,2 +1,2 @@',
+    '-old',
+    '+new',
+    ' same',
+    'diff --git a/gone.txt b/gone.txt',
+    'deleted file mode 100644',
+    '--- a/gone.txt',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-bye',
+    'diff --git a/old name.md b/new name.md',
+    'similarity index 100%',
+    'rename from old name.md',
+    'rename to new name.md',
+    'diff --git "a/t\\303\\244st \\"q\\".txt" "b/t\\303\\244st \\"q\\".txt"',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ "b/t\\303\\244st \\"q\\".txt"',
+    '@@ -0,0 +1 @@',
+    '+hi',
+    'diff --git a/logo.png b/logo.png',
+    'Binary files a/logo.png and b/logo.png differ',
+    '',
+  ].join('\n');
+
+  it('splits git diff output into one section per file, named by its path', () => {
+    const files = splitPatch(patch);
+    expect(files.map((file) => file.path)).toEqual([
+      'src/app.ts',
+      'gone.txt',
+      'new name.md',
+      'täst "q".txt',
+      'logo.png',
+    ]);
+    expect(files[0].patch).toBe(
+      'diff --git a/src/app.ts b/src/app.ts\nindex 1111111..2222222 100644\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n same',
+    );
+    expect(files[4].patch).toContain('Binary files');
+  });
+
+  it('copes with prefix-less output and no files', () => {
+    expect(
+      splitPatch('diff --git x.txt x.txt\n--- x.txt\n+++ x.txt\n@@ -1 +1 @@\n-a\n+b\n')[0].path,
+    ).toBe('x.txt');
+    expect(splitPatch('')).toEqual([]);
+  });
+});
+
+describe('unquoteGitPath', () => {
+  it('decodes octal UTF-8 bytes and escapes, and leaves plain paths alone', () => {
+    expect(unquoteGitPath('"a/t\\303\\244st\\tx\\\\y"')).toBe('a/täst\tx\\y');
+    expect(unquoteGitPath('plain/path.ts')).toBe('plain/path.ts');
   });
 });

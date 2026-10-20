@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { CommitSummaryInfo, DiffHunk } from '@gitglasses/protocol';
+import { CommitDetails, CommitSummaryInfo, DiffHunk, ErrorCodes } from '@gitglasses/protocol';
 import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 import { requireRepo, ViewNode } from '../views/viewBase';
@@ -9,7 +9,8 @@ import { shortSha } from '@gitglasses/protocol/sha';
 import { AI_PROVIDER_LABELS, AiProvider, AiProviderId, CompletionRequest } from './aiProvider';
 import { registerAiAuthCommands } from './aiAuth';
 import { chooseProvider, ensureAiReady } from './aiSetup';
-import { buildDiffContext, DiffFile } from './contextBuilder';
+import { buildDiffContext, DiffFile, splitPatch } from './contextBuilder';
+import { unifiedDiff } from './lineDiff';
 import { parseNlSearchQuery } from './nlQuery';
 import {
   COMMIT_MESSAGE_SYSTEM,
@@ -24,8 +25,8 @@ import {
 
 const CONTEXT_BUDGET_TOKENS = 6000;
 const MAX_CONTEXT_FILES = 30;
-/** Cap per-file content pulled for commit explanation before budgeting. */
-const MAX_FILE_CONTENT_CHARS = 20_000;
+/** Largest file version read to diff a commit where git cannot. */
+const MAX_DIFF_SOURCE_BYTES = 256 * 1024;
 const NL_SEARCH_LIMIT = 100;
 
 type Log = (line: string) => void;
@@ -135,66 +136,94 @@ class AiService {
   }
 }
 
-// --- Features ---------------------------------------------------------------
+// --- Explain Commit ----------------------------------------------------------
 
-async function resolveCommit(
-  engine: EngineClient,
-  repoId: string,
-  node?: ViewNode,
-): Promise<CommitSummaryInfo | undefined> {
-  let ref = node?.sha;
-  if (!ref) {
-    ref = await vscode.window.showInputBox({
-      prompt: 'Commit to explain (sha, branch, tag, HEAD~n…)',
-      value: 'HEAD',
-    });
-  }
-  if (!ref) return undefined;
-  try {
-    const { commits } = await engine.request('log/commits', { repoId, ref, limit: 1 });
-    return commits[0];
-  } catch (error) {
-    void vscode.window.showWarningMessage(
-      `GitGlasses: cannot resolve "${ref}": ${errorMessage(error)}`,
-    );
-    return undefined;
-  }
+function changeLabel(status: string): string {
+  const labels: Record<string, string> = {
+    A: 'added',
+    D: 'deleted',
+    M: 'modified',
+    R: 'renamed',
+    C: 'copied',
+    T: 'type changed',
+    U: 'unmerged',
+  };
+  return labels[status] ?? status;
 }
 
-/** The engine has no per-commit patch-text method (diff/commit returns the
- *  file list only), so commit context = change stats plus the file contents at
- *  the commit; the context builder budgets/truncates the result. */
-async function collectCommitFiles(
+/** The commit's diff computed here from each file's two versions, for
+ *  engines that cannot run git (Restricted Mode, no git CLI, the web). */
+async function diffFromVersions(
   engine: EngineClient,
   repoId: string,
-  commit: CommitSummaryInfo,
+  details: CommitDetails,
 ): Promise<DiffFile[]> {
-  const { files } = await engine.request('diff/commit', { repoId, sha: commit.sha });
-  const collected: DiffFile[] = [];
-  for (const change of files.slice(0, MAX_CONTEXT_FILES)) {
-    let patch = `status: ${change.status}  +${change.additions} −${change.deletions}`;
-    if (change.origPath) patch += `  (from ${change.origPath})`;
-    if (change.status !== 'D') {
-      try {
-        const { contents } = await engine.request('rev/fileAtRev', {
-          repoId,
-          path: change.path,
-          rev: commit.sha,
-        });
-        patch += `\ncontents at ${shortSha(commit.sha)}:\n${contents.slice(0, MAX_FILE_CONTENT_CHARS)}`;
-      } catch {
-        // Binary or unreadable at this rev; the stats line still helps.
-      }
-    }
-    collected.push({ path: change.path, patch });
-  }
-  if (files.length > MAX_CONTEXT_FILES) {
-    collected.push({
-      path: '…',
-      patch: `(${files.length - MAX_CONTEXT_FILES} additional changed files not shown)`,
+  const parent = details.parents[0];
+  const read = async (rev: string | undefined, path: string): Promise<string | undefined> => {
+    if (rev === undefined) return '';
+    const file = await engine.request('rev/fileAtRev', {
+      repoId,
+      path,
+      rev,
+      maxBytes: MAX_DIFF_SOURCE_BYTES,
     });
+    return file.binary || file.truncated ? undefined : file.contents;
+  };
+  const files: DiffFile[] = [];
+  for (const change of details.files.slice(0, MAX_CONTEXT_FILES)) {
+    const from = change.origPath ? `${change.origPath} → ` : '';
+    const header = `${changeLabel(change.status)}: ${from}${change.path}  +${change.additions} −${change.deletions}`;
+    if (change.binary) {
+      files.push({ path: change.path, patch: `${header}\n(binary file)` });
+      continue;
+    }
+    try {
+      const before =
+        change.status === 'A' ? '' : await read(parent, change.origPath ?? change.path);
+      const after = change.status === 'D' ? '' : await read(details.sha, change.path);
+      const hunks =
+        before === undefined || after === undefined
+          ? '(too large to diff here)'
+          : unifiedDiff(before, after);
+      files.push({ path: change.path, patch: `${header}\n${hunks}` });
+    } catch (error) {
+      files.push({
+        path: change.path,
+        patch: `${header}\n(diff unavailable: ${errorMessage(error)})`,
+      });
+    }
   }
-  return collected;
+  return files;
+}
+
+/** The commit's real diff, split per file: git's own patch when the engine
+ *  can run git, otherwise computed from the file versions. */
+async function collectCommitDiff(
+  engine: EngineClient,
+  repoId: string,
+  details: CommitDetails,
+  log: Log,
+): Promise<DiffFile[]> {
+  try {
+    const { envelope } = await engine.request('patch/create', {
+      repoId,
+      source: { kind: 'commit', sha: details.sha },
+    });
+    const files = splitPatch(envelope.patch);
+    if (files.length > 0) return files;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code !== ErrorCodes.Restricted && code !== ErrorCodes.MethodNotSupported) {
+      log(
+        `AI: patch/create for ${details.sha} failed; diffing the file versions instead: ${errorMessage(error)}`,
+      );
+    }
+  }
+  return diffFromVersions(engine, repoId, details);
+}
+
+function refsLabel(details: CommitDetails): string {
+  return details.refs.map((ref) => (ref.kind === 'tag' ? `tag ${ref.name}` : ref.name)).join(', ');
 }
 
 async function explainCommit(
@@ -202,33 +231,48 @@ async function explainCommit(
   repos: RepositoryService,
   ai: AiService,
   panel: AiResultContentProvider,
+  log: Log,
   node?: ViewNode,
 ): Promise<void> {
   const repo = await requireRepo(repos);
   if (!repo) return;
   const ready = await ai.prepare();
   if (!ready) return;
-  const commit = await resolveCommit(engine, repo.repoId, node);
-  if (!commit) return;
+  const ref =
+    node?.sha ??
+    (await vscode.window.showInputBox({
+      prompt: 'Commit to explain (sha, branch, tag, HEAD~n…)',
+      value: 'HEAD',
+    }));
+  if (!ref) return;
 
+  let details: CommitDetails;
   let files: DiffFile[];
   try {
-    files = await collectCommitFiles(engine, repo.repoId, commit);
+    details = await engine.request('commit/details', { repoId: repo.repoId, sha: ref });
+    files = await collectCommitDiff(engine, repo.repoId, details, log);
   } catch (error) {
-    void vscode.window.showWarningMessage(`GitGlasses: commit diff failed: ${errorMessage(error)}`);
+    void vscode.window.showWarningMessage(
+      `GitGlasses: cannot read commit "${ref}": ${errorMessage(error)}`,
+    );
     return;
   }
+  const omitted = details.truncated || details.files.length > files.length;
   const context = buildDiffContext(files, CONTEXT_BUDGET_TOKENS);
+  const { stats } = details;
   const prompt = explainCommitPrompt(
     {
-      sha: commit.sha,
-      author: `${commit.author.name} <${commit.author.email}>`,
-      date: new Date(commit.author.time * 1000).toISOString(),
-      summary: commit.summary,
+      sha: details.sha,
+      author: `${details.author.name} <${details.author.email}>`,
+      date: new Date(details.author.time * 1000).toISOString(),
+      subject: details.subject,
+      body: details.body,
+      refs: refsLabel(details),
+      stats: `+${stats.additions} −${stats.deletions} in ${stats.files} file${stats.files === 1 ? '' : 's'}${omitted ? ' (not all shown)' : ''}`,
     },
     context.text,
   );
-  const sha7 = shortSha(commit.sha);
+  const sha7 = shortSha(details.sha);
   const result = await ai.complete(ready, `GitGlasses: explaining ${sha7}…`, {
     system: EXPLAIN_COMMIT_SYSTEM,
     prompt,
@@ -237,9 +281,11 @@ async function explainCommit(
   if (!result) return;
   await panel.show(
     `Explain: ${sha7}`,
-    `# ${commit.summary}\n\n\`${commit.sha}\` — ${commit.author.name}\n\n${result}\n`,
+    `# ${details.subject}\n\n\`${details.sha}\` — ${details.author.name}\n\n${result}\n`,
   );
 }
+
+// --- Explain Working Changes -------------------------------------------------
 
 async function collectWipFiles(
   engine: EngineClient,
@@ -506,7 +552,7 @@ export function registerAiFeatures(
   return [
     vscode.workspace.registerTextDocumentContentProvider(AI_SCHEME, panel),
     vscode.commands.registerCommand('gitglasses.ai.explainCommit', (node?: ViewNode) =>
-      explainCommit(engine, repos, ai, panel, node),
+      explainCommit(engine, repos, ai, panel, log, node),
     ),
     vscode.commands.registerCommand('gitglasses.ai.explainWip', () =>
       explainWip(engine, repos, ai, panel),

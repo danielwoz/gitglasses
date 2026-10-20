@@ -40,12 +40,24 @@ describe('prompt templates', () => {
 
   it('prompt builders embed the supplied context verbatim', () => {
     const prompt = explainCommitPrompt(
-      { sha: 'abc1234', author: 'a <a@b.c>', date: '2026-01-01', summary: 'fix crash' },
+      {
+        sha: 'abc1234',
+        author: 'a <a@b.c>',
+        date: '2026-01-01',
+        subject: 'fix crash',
+        body: 'The parser read past the end.\n\nFixes: #12',
+        refs: 'main, tag v1',
+        stats: '+3 −1 in 1 file',
+      },
       '=== a.ts ===\n+patch',
     );
     expect(prompt).toContain('abc1234');
     expect(prompt).toContain('fix crash');
-    expect(prompt).toContain('=== a.ts ===');
+    // The whole message travels, not just its subject.
+    expect(prompt).toContain('The parser read past the end.');
+    expect(prompt).toContain('Fixes: #12');
+    expect(prompt).toContain('Refs: main, tag v1');
+    expect(prompt).toContain('Diff:\n=== a.ts ===');
     expect(nlSearchPrompt('find alice commits')).toContain('find alice commits');
   });
 });
