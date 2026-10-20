@@ -108,6 +108,19 @@ export async function reportFailure(
   if (action) await runFailureAction(action, context.retry);
 }
 
+/**
+ * Reports an error that left a merge, rebase, cherry-pick or revert in
+ * progress (stopped by something other than conflicts, such as signing) with
+ * the steps that finish or abandon it, and returns true. Any other error is
+ * left to the caller.
+ */
+export function reportIfStopped(error: unknown): boolean {
+  const label = operationLabel(gitErrorData(error)?.operation);
+  if (!label) return false;
+  void reportFailure(label, error);
+  return true;
+}
+
 // The next steps run as commands on the active repository, which is the one
 // the failed action ran on.
 const FAILURE_COMMANDS: Partial<Record<FailureAction, string>> = {

@@ -16,7 +16,15 @@ import {
   gitMessage,
   operationActions,
 } from '../src/sync/syncLogic';
-import { configureSync, fetch, publish, pull, push, reportFailure } from '../src/sync/syncCommands';
+import {
+  configureSync,
+  fetch,
+  publish,
+  pull,
+  push,
+  reportFailure,
+  reportIfStopped,
+} from '../src/sync/syncCommands';
 import { showConflictGuidance } from '../src/commands/ui';
 
 const repo = { repoId: 'r1', rootPath: '/work/repo' };
@@ -331,6 +339,21 @@ describe('conflict guidance', () => {
     expect(ui.status).toHaveLength(0);
     expect(ui.messages[0].level).toBe('error');
     expect(ui.messages[0].buttons).toEqual(['Continue', 'Abort Merge', 'Show Log']);
+  });
+
+  it('reports an operation stopped half-way with the steps that finish it', async () => {
+    const stopped = gitError('git rebase failed (1): error: gpg failed to sign the data', {
+      kind: 'signing',
+      operation: 'rebase',
+    });
+    expect(reportIfStopped(stopped)).toBe(true);
+    await vi.waitFor(() => expect(ui.messages).toHaveLength(1));
+    expect(ui.messages[0].buttons).toEqual(['Continue', 'Skip Commit', 'Abort Rebase', 'Show Log']);
+    expect(reportIfStopped(gitError('git merge failed (1): not something we can merge'))).toBe(
+      false,
+    );
+    expect(reportIfStopped(new Error('plain'))).toBe(false);
+    expect(ui.messages).toHaveLength(1);
   });
 
   it('reports a failure without retry when the caller cannot retry', async () => {
