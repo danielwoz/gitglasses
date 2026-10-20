@@ -32,11 +32,13 @@ import {
   CompareEntry,
   compareEntries,
   confirmForcePush,
+  confirmPublishUnderOwnName,
   confirmRemoteRemove,
   confirmRemoteTagDelete,
   confirmTagDelete,
   isNotFullyMerged,
   isPushRejected,
+  isUpstreamNameMismatch,
   planPush,
   splitRemoteBranch,
   workingTreeCompareEntries,
@@ -403,7 +405,8 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
       if (!isRefNode(node) || node.ref.kind !== 'branch') return;
       const { name, upstream } = node.ref;
       const repoId = node.repo.repoId;
-      const plan = planPush(upstream, await remoteNames(node.repo));
+      const remotes = await remoteNames(node.repo);
+      const plan = planPush(upstream, remotes);
       let remote: string | undefined;
       if (plan.kind === 'noRemote') {
         const choice = await vscode.window.showInformationMessage(
@@ -419,15 +422,49 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
       } else if (plan.kind === 'publish') {
         remote = plan.remote;
       }
-      const setUpstream = plan.kind !== 'push';
+      let setUpstream = plan.kind !== 'push';
+      // The engine resolves where the push lands from git's config, so the
+      // progress, the force prompt and the status name the real branch.
+      const resolve = () =>
+        engine.request('branch/push', {
+          repoId,
+          name,
+          remote,
+          setUpstream: setUpstream || undefined,
+          dryRun: true,
+        });
+      let target;
+      try {
+        target = await resolve();
+      } catch (error) {
+        // A branch tracking a branch of another name is not pushed there
+        // (git's push.default=simple); publishing it under its own name is
+        // the way forward.
+        const tracked = upstream && splitRemoteBranch(upstream, remotes);
+        if (!tracked || !isUpstreamNameMismatch(String((error as Error)?.message ?? error))) {
+          throw error;
+        }
+        const prompt = confirmPublishUnderOwnName(name, upstream, tracked.remote);
+        const publish = `Publish to ${tracked.remote}/${name}`;
+        const choice = await vscode.window.showWarningMessage(
+          prompt.message,
+          { modal: true, detail: prompt.detail },
+          publish,
+        );
+        if (choice !== publish) return;
+        remote = tracked.remote;
+        setUpstream = true;
+        target = await resolve();
+      }
+      const where = `${target.remote}/${target.branch}`;
       const push = (force: boolean) =>
-        withProgress(`Pushing '${name}'…`, (token) =>
+        withProgress(`Pushing '${name}' to ${where}…`, (token) =>
           engine.request(
             'branch/push',
             {
               repoId,
               name,
-              remote,
+              remote: target.remote,
               setUpstream: setUpstream || undefined,
               force: force ? 'with-lease' : undefined,
             },
@@ -440,13 +477,13 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
       } catch (error) {
         const message = String((error as Error)?.message ?? error);
         if (!isPushRejected(message)) throw error;
-        log(`push of '${name}' rejected: ${message}`);
-        const target =
-          remote ?? (upstream && splitRemoteBranch(upstream, await remoteNames(node.repo))?.remote);
-        if (!(await confirmDestructive(confirmForcePush(name, target || 'the remote')))) return;
+        log(`push of '${name}' to ${where} rejected: ${message}`);
+        if (!(await confirmDestructive(confirmForcePush(name, target)))) return;
         result = await push(true);
       }
-      setStatus(`${setUpstream ? 'Published' : 'Pushed'} '${name}' to ${result.remote}`);
+      setStatus(
+        `${setUpstream ? 'Published' : 'Pushed'} '${name}' to ${result.remote}/${result.branch}`,
+      );
     });
 
   const setUpstream = (node?: unknown) =>

@@ -49,6 +49,33 @@ std::string pushRemoteFor(const core::Repo& repo, const std::string& branch,
                                       std::to_string(remotes.size()) + " remotes"}};
 }
 
+// The ref on `remote` that pushing `branch` updates. Publishing (setting the
+// upstream) and pushing to a remote the branch does not track use the
+// branch's own name, as `git push -u <remote> <branch>` does. Pushing a branch
+// to the remote it tracks follows push.default: upstream/tracking update the
+// tracked branch, current/matching/nothing use the branch's own name, and
+// simple (git's default) refuses when the tracked branch has another name,
+// so a branch started from origin/main never lands on origin/main unasked.
+std::string pushDestination(const core::Repo& repo, const std::string& branch,
+                            const std::string& remote, bool publishing, const CancelToken& token) {
+  const std::string own = "refs/heads/" + branch;
+  if (publishing || configValue(repo, "branch." + branch + ".remote", token) != remote) return own;
+  const std::string merge = configValue(repo, "branch." + branch + ".merge", token);
+  if (merge.empty() || merge == own) return own;
+  const std::string mode = configValue(repo, "push.default", token);
+  if (mode == "upstream" || mode == "tracking") return merge;
+  if (mode == "current" || mode == "matching" || mode == "nothing") return own;
+  const std::string tracked =
+      merge.starts_with("refs/heads/") ? merge.substr(std::string("refs/heads/").size()) : merge;
+  throw rpc::HandlerError{
+      {ErrorCode::GitError,
+       "'" + branch + "' tracks " + remote + "/" + tracked +
+           ", which has a different name; with push.default=simple git only pushes a branch "
+           "to one of the same name. Publish it as " +
+           remote + "/" + branch + ", or set push.default to upstream to push to " + remote + "/" +
+           tracked + "."}};
+}
+
 // Validates the optional 'force' param shared by the push methods.
 bool forceWithLease(const rpc::Json& params) {
   const std::string force = params.value("force", "");
@@ -107,21 +134,21 @@ void registerRefMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& conte
         const std::string name = requirePositional(requireString(params, "name"), "name");
         std::string remote = requirePositional(optionalString(params, "remote"), "remote");
         const bool force = forceWithLease(params);
+        const bool setUpstream = params.value("setUpstream", false);
         auto repo = openRepo(context, params);
         if (remote.empty()) remote = pushRemoteFor(repo, name, token);
-        // A branch tracking a differently named branch on this remote pushes
-        // to it; otherwise the remote branch takes the local name.
-        std::string destination = "refs/heads/" + name;
-        if (configValue(repo, "branch." + name + ".remote", token) == remote) {
-          const std::string merge = configValue(repo, "branch." + name + ".merge", token);
-          if (!merge.empty()) destination = merge;
-        }
+        const std::string destination = pushDestination(repo, name, remote, setUpstream, token);
+        const std::string remoteBranch = destination.starts_with("refs/heads/")
+                                             ? destination.substr(std::string("refs/heads/").size())
+                                             : destination;
+        rpc::Json result = {{"remote", remote}, {"branch", remoteBranch}};
+        if (params.value("dryRun", false)) return result;
         std::vector<std::string> args = {"push"};
-        if (params.value("setUpstream", false)) args.push_back("--set-upstream");
+        if (setUpstream) args.push_back("--set-upstream");
         if (force) args.push_back("--force-with-lease");
         args.insert(args.end(), {"--", remote, "refs/heads/" + name + ":" + destination});
         runGitOrThrow(repo, std::move(args), token, "git push", exec::kNetworkGitTimeout);
-        return {{"remote", remote}};
+        return result;
       },
       rpc::Mode::SerialNetwork);
 

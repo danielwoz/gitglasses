@@ -399,6 +399,11 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   checkedRequest(session, 26, "branch/rename",
                  {{"repoId", repoId}, {"name", "feature"}, {"newName", "feature-2"}});
   checkedRequest(session, 27, "branch/setUpstream", {{"repoId", repoId}, {"name", "feature-2"}});
+  // A dry run resolves the destination without contacting the remote.
+  fixture.run("git remote add origin https://example.invalid/contract.git");
+  Json pushTarget = checkedRequest(session, 28, "branch/push",
+                                   {{"repoId", repoId}, {"name", "feature-2"}, {"dryRun", true}});
+  EXPECT_EQ(pushTarget.value("branch", ""), "feature-2");
 }
 
 // The engine must refuse what the schema forbids. Every case here is params

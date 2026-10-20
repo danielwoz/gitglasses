@@ -846,7 +846,7 @@ export const RequestSchemas = {
   },
   'branch/push': {
     description:
-      'Pushes a local branch, checked out or not. A branch tracking a branch on the same remote updates it; otherwise the remote branch takes the local name.',
+      "Pushes a local branch, checked out or not, to the remote branch of the same name. Pushing to the remote the branch tracks follows push.default: with upstream (or tracking) it updates the tracked branch, and with simple (git's default) a tracked branch of another name refuses the push rather than updating it. Publishing (setUpstream) always uses the branch's own name.",
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -858,10 +858,22 @@ export const RequestSchemas = {
         setUpstream: Type.Optional(Type.Boolean()),
         /** Only the lease-checked force is offered; a bare --force is not. */
         force: Type.Optional(Type.Literal('with-lease')),
+        /** Resolves the remote and branch the push would update, refusing as
+         *  the push would, without contacting the remote or pushing. */
+        dryRun: Type.Optional(Type.Boolean()),
       },
       strict,
     ),
-    result: Type.Object({ remote: Type.String({ description: 'The remote pushed to.' }) }, strict),
+    result: Type.Object(
+      {
+        remote: Type.String({ description: 'The remote pushed to.' }),
+        branch: Type.String({
+          description:
+            'The branch on that remote the push updates (a full ref when it is not a branch).',
+        }),
+      },
+      strict,
+    ),
   },
   'tag/create': {
     description: 'Creates a tag: annotated when a message is given, lightweight otherwise.',

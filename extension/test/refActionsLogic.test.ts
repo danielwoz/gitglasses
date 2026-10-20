@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   compareEntries,
   confirmForcePush,
+  confirmPublishUnderOwnName,
   confirmRemoteRemove,
   confirmRemoteTagDelete,
   confirmTagDelete,
   hasMoreDetail,
   isNotFullyMerged,
   isPushRejected,
+  isUpstreamNameMismatch,
   planPush,
   rebaseTargets,
   refLabel,
@@ -101,6 +103,14 @@ describe('git failure classification', () => {
     ).toBe(true);
     expect(isPushRejected(' ! [rejected] main -> main (non-fast-forward)')).toBe(true);
     expect(isPushRejected('fatal: could not read Username')).toBe(false);
+  });
+  it("recognises the engine's refusal to push into a differently named upstream", () => {
+    expect(
+      isUpstreamNameMismatch(
+        "'feature' tracks origin/main, which has a different name; with push.default=simple git only pushes a branch to one of the same name. Publish it as origin/feature, or set push.default to upstream to push to origin/main.",
+      ),
+    ).toBe(true);
+    expect(isUpstreamNameMismatch(' ! [rejected] main -> main (fetch first)')).toBe(false);
   });
 });
 
@@ -218,8 +228,21 @@ describe('confirmations', () => {
       'git push --delete origin refs/tags/v1',
     );
     expect(confirmRemoteRemove('fork').detail).toContain('git remote remove fork');
-    const force = confirmForcePush('main', 'origin');
-    expect(force.message).toBe("Force push 'main' to origin?");
-    expect(force.detail).toContain('--force-with-lease');
+    const force = confirmForcePush('main', { remote: 'origin', branch: 'main' });
+    expect(force.message).toBe("Force push 'main' to origin/main?");
+    expect(force.detail).toContain('git push --force-with-lease origin main\n');
+  });
+
+  it('name the remote branch a push really updates', () => {
+    // push.default=upstream sends a branch to its differently named upstream.
+    const force = confirmForcePush('feature', { remote: 'origin', branch: 'main' });
+    expect(force.message).toBe("Force push 'feature' to origin/main?");
+    expect(force.detail).toContain('git push --force-with-lease origin feature:main\n');
+    expect(force.detail).toContain('origin/main has commits that are not in');
+
+    const publish = confirmPublishUnderOwnName('feature', 'origin/main', 'origin');
+    expect(publish.message).toBe("'feature' tracks origin/main, which has a different name.");
+    expect(publish.detail).toContain('git push -u origin feature\n');
+    expect(publish.detail).toContain('does not update origin/main');
   });
 });

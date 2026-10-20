@@ -121,21 +121,76 @@ TEST(RefMethods, BranchPushPicksTheRemoteGitWould) {
   EXPECT_EQ(rev(fork, "other"), rev(fixture.root(), "other"));
 }
 
-TEST(RefMethods, BranchPushUpdatesTheTrackedBranch) {
+// A branch started from origin/main tracks it. Under git's default
+// push.default=simple neither a push nor a forced push may land on
+// origin/main; publishing puts the branch under its own name.
+TEST(RefMethods, BranchPushLeavesADifferentlyNamedUpstreamAlone) {
+  FixtureRepo fixture;
+  const std::filesystem::path origin = addBareRemote(fixture, "origin");
+  fixture.run("git push -q origin main");
+  fixture.run("git fetch -q origin");
+  fixture.run("git checkout -q -b feature --track origin/main");
+  fixture.commit("WIP on feature");
+  const std::string remoteMain = rev(origin, "main");
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  for (const Json& params : {Json{{"repoId", repoId}, {"name", "feature"}},
+                             Json{{"repoId", repoId}, {"name", "feature"}, {"force", "with-lease"}},
+                             Json{{"repoId", repoId}, {"name", "feature"}, {"dryRun", true}}}) {
+    Json push = session.request(req(10, "branch/push", params));
+    ASSERT_TRUE(push.contains("error")) << push.dump();
+    EXPECT_NE(push["error"]["message"].get<std::string>().find("different name"), std::string::npos)
+        << push.dump();
+  }
+  EXPECT_EQ(rev(origin, "main"), remoteMain);
+  EXPECT_EQ(gitOut(origin, "branch --list feature"), "");
+
+  Json publish = session.request(
+      req(11, "branch/push", {{"repoId", repoId}, {"name", "feature"}, {"setUpstream", true}}));
+  ASSERT_TRUE(publish.contains("result")) << publish.dump();
+  EXPECT_EQ(publish["result"], (Json{{"remote", "origin"}, {"branch", "feature"}}));
+  EXPECT_EQ(rev(origin, "main"), remoteMain);
+  EXPECT_EQ(rev(origin, "feature"), rev(fixture.root(), "feature"));
+  EXPECT_EQ(upstreamOf(fixture.root(), "feature"), "origin/feature");
+}
+
+// push.default decides where a branch tracking another name goes: upstream
+// updates the tracked branch, current uses the branch's own name. dryRun
+// reports the destination without pushing.
+TEST(RefMethods, BranchPushFollowsPushDefault) {
   FixtureRepo fixture;
   const std::filesystem::path origin = addBareRemote(fixture, "origin");
   fixture.run("git push -q origin main:remote-name");
   fixture.run("git fetch -q origin");
-  fixture.run("git branch --track local-name origin/remote-name");
-  fixture.run("git checkout -q local-name");
+  fixture.run("git checkout -q -b local-name --track origin/remote-name");
   fixture.commit("local work");
+  const std::string before = rev(origin, "remote-name");
   InteractiveSession session;
   const std::string repoId = discoverRepo(session, fixture.root());
 
-  Json push = session.request(req(10, "branch/push", {{"repoId", repoId}, {"name", "local-name"}}));
-  ASSERT_TRUE(push.contains("result")) << push.dump();
+  fixture.run("git config push.default upstream");
+  Json dry = session.request(
+      req(10, "branch/push", {{"repoId", repoId}, {"name", "local-name"}, {"dryRun", true}}));
+  ASSERT_TRUE(dry.contains("result")) << dry.dump();
+  EXPECT_EQ(dry["result"], (Json{{"remote", "origin"}, {"branch", "remote-name"}}));
+  EXPECT_EQ(rev(origin, "remote-name"), before);
+
+  Json upstream =
+      session.request(req(11, "branch/push", {{"repoId", repoId}, {"name", "local-name"}}));
+  ASSERT_TRUE(upstream.contains("result")) << upstream.dump();
+  EXPECT_EQ(upstream["result"]["branch"], "remote-name");
   EXPECT_EQ(rev(origin, "remote-name"), rev(fixture.root(), "local-name"));
   EXPECT_EQ(gitOut(origin, "branch --list local-name"), "");
+
+  fixture.run("git config push.default current");
+  fixture.commit("more work");
+  Json current =
+      session.request(req(12, "branch/push", {{"repoId", repoId}, {"name", "local-name"}}));
+  ASSERT_TRUE(current.contains("result")) << current.dump();
+  EXPECT_EQ(current["result"]["branch"], "local-name");
+  EXPECT_EQ(rev(origin, "local-name"), rev(fixture.root(), "local-name"));
+  EXPECT_NE(rev(origin, "remote-name"), rev(fixture.root(), "local-name"));
 }
 
 TEST(RefMethods, TagCreatePushAndDelete) {

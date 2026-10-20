@@ -90,6 +90,23 @@ export function isPushRejected(message: string): boolean {
   return /\[rejected\]|non-fast-forward|fetch first|stale info/i.test(message);
 }
 
+/** The engine's refusal to push a branch into the differently named branch
+ *  it tracks (git's push.default=simple). */
+export function isUpstreamNameMismatch(message: string): boolean {
+  return /which has a different name/i.test(message);
+}
+
+/** The remote branch a push updates, as branch/push resolves it. */
+export interface PushTarget {
+  remote: string;
+  branch: string;
+}
+
+/** The `git push` arguments that push `branch` to `target`. */
+function pushArguments(branch: string, target: PushTarget): string {
+  return `${target.remote} ${target.branch === branch ? branch : `${branch}:${target.branch}`}`;
+}
+
 /** The line of a git failure worth a notification: the first `error:` or
  *  `fatal:` line without its prefix, else the first non-hint line, with the
  *  engine's "git … failed (n):" lead-in removed. A line that ends in a colon
@@ -209,10 +226,24 @@ export function confirmRemoteRemove(name: string): Confirmation {
   };
 }
 
-export function confirmForcePush(branch: string, remote: string): Confirmation {
+export function confirmForcePush(branch: string, target: PushTarget): Confirmation {
+  const where = `${target.remote}/${target.branch}`;
   return {
-    message: `Force push '${branch}' to ${remote}?`,
-    detail: `git push --force-with-lease ${remote} ${branch}\n\nThe remote has commits that are not in '${branch}'. Force pushing replaces them, unless someone pushed since you last fetched.`,
+    message: `Force push '${branch}' to ${where}?`,
+    detail: `git push --force-with-lease ${pushArguments(branch, target)}\n\n${where} has commits that are not in '${branch}'. Force pushing replaces them, unless someone pushed there since you last fetched.`,
+  };
+}
+
+/** Offered when `branch` tracks `upstream`, a branch of another name on
+ *  `remote`, which git will not push to by default. */
+export function confirmPublishUnderOwnName(
+  branch: string,
+  upstream: string,
+  remote: string,
+): Confirmation {
+  return {
+    message: `'${branch}' tracks ${upstream}, which has a different name.`,
+    detail: `git push -u ${remote} ${branch}\n\nPushing does not update ${upstream}. Publish '${branch}' as ${remote}/${branch} instead; it then tracks ${remote}/${branch}.`,
   };
 }
 
