@@ -4,7 +4,7 @@
 
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { hasChangelogEntry } from './vsix.mjs';
+import { hasChangelogEntry } from './changelog.mjs';
 
 const VERSIONED_MANIFESTS = ['package.json', 'mcp-server/package.json'];
 

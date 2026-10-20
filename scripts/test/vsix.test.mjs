@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasChangelogEntry, inspectVsix } from '../lib/vsix.mjs';
+import { inspectVsix } from '../lib/vsix.mjs';
 import { readZipEntries, readZipEntry } from '../lib/zip.mjs';
 import { elfHeader, importLibrary, makeZip, peHeader, pngHeader, vsixFiles, vsixManifest } from './fixtures.mjs';
 
@@ -104,15 +104,5 @@ describe('inspectVsix', () => {
       'package.json version is 0.1.2, expected 0.2.0',
       'CHANGELOG.md has no entry for 0.2.0',
     ]);
-  });
-});
-
-describe('hasChangelogEntry', () => {
-  it('finds release headings with or without brackets and dates', () => {
-    expect(hasChangelogEntry('## [0.2.0] - 2026-10-20\n', '0.2.0')).toBe(true);
-    expect(hasChangelogEntry('## 0.2.0\n', '0.2.0')).toBe(true);
-    expect(hasChangelogEntry('## [0.2.0]', '0.2.0')).toBe(true);
-    expect(hasChangelogEntry('## [0.2.01]\n', '0.2.0')).toBe(false);
-    expect(hasChangelogEntry('Mentions 0.2.0 in prose\n', '0.2.0')).toBe(false);
   });
 });

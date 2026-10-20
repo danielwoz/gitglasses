@@ -30,7 +30,7 @@ function tree({ version = '0.2.0', root: rootVersion = version, mcp = version, c
     cmake ??
       'file(READ "${CMAKE_CURRENT_SOURCE_DIR}/extension/package.json" M)\nproject(gitglasses VERSION ${GG_VERSION} LANGUAGES C CXX)\n',
   );
-  write('extension/CHANGELOG.md', changelog ?? `# Changelog\n\n## [${version}]\n`);
+  write('extension/CHANGELOG.md', changelog ?? `# Changelog\n\n## [${version}]\n\n- Fixes.\n`);
   return dir;
 }
 
@@ -61,6 +61,15 @@ describe('releaseVersionProblems', () => {
       'extension/CHANGELOG.md has no entry for 0.2.0',
       'tag v0.1.2 does not match extension/package.json version 0.2.0',
     ]);
+  });
+
+  it('requires a changelog section with release notes in it', () => {
+    expect(releaseVersionProblems(tree({ changelog: '# Changelog\n\n## [0.2.0]\n\n## [0.1.2]\n\n- Older.\n' })).problems).toEqual([
+      'extension/CHANGELOG.md has no entry for 0.2.0',
+    ]);
+    for (const heading of ['## 0.2.0', '## v0.2.0', '## [v0.2.0]', '## [0.2.0] - 2026-10-20']) {
+      expect(releaseVersionProblems(tree({ changelog: `${heading}\n\n- Fixes.\n` })).problems, heading).toEqual([]);
+    }
   });
 
   it('rejects versions the Marketplace cannot publish', () => {

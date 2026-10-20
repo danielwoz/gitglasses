@@ -2,6 +2,7 @@
 // the right target platform, exactly the right engine for it, the license,
 // third-party notices, a changelog entry for the version, and the icon.
 
+import { hasChangelogEntry } from './changelog.mjs';
 import { readZipEntries, readZipEntry } from './zip.mjs';
 import {
   ENGINE_HEADER_BYTES,
@@ -105,12 +106,6 @@ export function inspectVsix(archive, { target, version } = {}) {
   }
 
   return { problems, packageJson, engine, entries };
-}
-
-/** True when the changelog has a release heading for `version`. */
-export function hasChangelogEntry(changelog, version) {
-  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^##\\s+\\[?v?${escaped}\\]?(\\s|$)`, 'm').test(changelog);
 }
 
 function iconProblems(entries, read, icon) {

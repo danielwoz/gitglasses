@@ -218,7 +218,8 @@ Add two rulesets under **Settings > Rules > Rulesets**:
 1. On a branch, set the version in `extension/package.json`,
    `mcp-server/package.json` and the root `package.json` (the engine takes
    its version from the extension manifest), and give
-   `extension/CHANGELOG.md` a `## [x.y.z] - YYYY-MM-DD` section.
+   `extension/CHANGELOG.md` a `## [x.y.z] - YYYY-MM-DD` section. That
+   section becomes the GitHub release notes, so it must not be empty.
    `node scripts/check-versions.mjs` must pass.
 2. Merge to `main` and let CI pass.
 3. Tag the merge commit and push the tag:
@@ -247,6 +248,7 @@ wasm && cmake --build --preset wasm`) and `pnpm install && pnpm build` done:
 
 ```sh
 node scripts/check-versions.mjs --tag v0.2.0
+node scripts/release-notes.mjs 0.2.0
 
 node scripts/package-vsix.mjs --target linux-x64 --engine build/release/engine/gitglasses-engine
 node scripts/package-vsix.mjs --target web
