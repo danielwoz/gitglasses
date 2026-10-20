@@ -25,14 +25,17 @@ export function releaseVersionProblems(root, { tag } = {}) {
 
   for (const file of VERSIONED_MANIFESTS) {
     const other = JSON.parse(read(file)).version;
-    if (other !== version) problems.push(`${file} is ${other}, extension/package.json is ${version}`);
+    if (other !== version)
+      problems.push(`${file} is ${other}, extension/package.json is ${version}`);
   }
 
   const cmake = read('CMakeLists.txt');
   const project = /project\(\s*gitglasses\s+VERSION\s+([^\s)]+)/.exec(cmake)?.[1];
   const derived = project === '${GG_VERSION}' && cmake.includes('extension/package.json');
   if (!derived && project !== version) {
-    problems.push(`CMakeLists.txt project version is ${project}, extension/package.json is ${version}`);
+    problems.push(
+      `CMakeLists.txt project version is ${project}, extension/package.json is ${version}`,
+    );
   }
 
   if (!hasChangelogEntry(read('extension/CHANGELOG.md'), version)) {

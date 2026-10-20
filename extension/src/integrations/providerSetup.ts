@@ -133,7 +133,9 @@ export function buildHostingEntries(
 export function hostingForUrl(
   entries: ReadonlyMap<string, HostingEntry>,
   url: string,
-): { providerId: string; host: string; provider: HostingProvider; repo: RepoDescriptor } | undefined {
+):
+  | { providerId: string; host: string; provider: HostingProvider; repo: RepoDescriptor }
+  | undefined {
   const parsed = parseRemoteUrl(url);
   const entry = parsed && entries.get(parsed.host);
   if (!parsed || !entry) return undefined;

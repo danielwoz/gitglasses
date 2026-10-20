@@ -262,10 +262,10 @@ TEST(GitProcess, CommitTimeoutSaysGitMayHaveBeenWaitingForInput) {
   RunOpts opts;
   opts.timeout = std::chrono::milliseconds(300);
   CancelToken token;
-  auto status = runGit(fixture.root().string(),
-                       {"-c", "core.hooksPath=" + hooks.string(), "commit", "-q", "--allow-empty",
-                        "-m", "stalled"},
-                       opts, token, [](std::string) {});
+  auto status = runGit(
+      fixture.root().string(),
+      {"-c", "core.hooksPath=" + hooks.string(), "commit", "-q", "--allow-empty", "-m", "stalled"},
+      opts, token, [](std::string) {});
   ASSERT_FALSE(status.ok());
   EXPECT_EQ(status.error().code, ErrorCode::GitError);
   EXPECT_NE(status.error().message.find("timed out"), std::string::npos) << status.error().message;
@@ -278,8 +278,8 @@ TEST(GitProcess, LocalTimeoutCarriesNoInputHint) {
   RunOpts opts;
   opts.timeout = std::chrono::milliseconds(300);
   CancelToken token;
-  auto status = runGit(fixture.root().string(), {"-c", "alias.slow=!sleep 5", "slow"}, opts,
-                       token, [](std::string) {});
+  auto status = runGit(fixture.root().string(), {"-c", "alias.slow=!sleep 5", "slow"}, opts, token,
+                       [](std::string) {});
   ASSERT_FALSE(status.ok());
   EXPECT_NE(status.error().message.find("timed out"), std::string::npos) << status.error().message;
   EXPECT_EQ(status.error().message.find("waiting for input"), std::string::npos)

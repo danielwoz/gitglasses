@@ -191,7 +191,8 @@ async function readAtHead(
       path: relativePath,
       rev: pr.headSha,
     });
-    if (file.binary) return { problem: `${relativePath} is a binary file at the pull request head.` };
+    if (file.binary)
+      return { problem: `${relativePath} is a binary file at the pull request head.` };
     if (file.truncated) {
       return { problem: `${relativePath} is too large to check against the pull request head.` };
     }

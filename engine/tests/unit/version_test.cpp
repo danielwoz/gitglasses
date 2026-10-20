@@ -26,9 +26,7 @@ std::string extensionVersion() {
   return Json::parse(in).at("version").get<std::string>();
 }
 
-TEST(Version, MatchesTheExtensionManifest) {
-  EXPECT_EQ(std::string(kVersion), extensionVersion());
-}
+TEST(Version, MatchesTheExtensionManifest) { EXPECT_EQ(std::string(kVersion), extensionVersion()); }
 
 TEST(Version, InitializeReportsTheExtensionVersion) {
   auto messages = gg::testing::runSession({gg::testing::initRequest()});

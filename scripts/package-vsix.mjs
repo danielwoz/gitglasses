@@ -13,7 +13,17 @@
 // and the finished VSIX is inspected before the script reports success.
 
 import { execFileSync } from 'node:child_process';
-import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -119,7 +129,10 @@ const { version } = JSON.parse(readFileSync(path.join(extensionDir, 'package.jso
 mkdirSync(options.outDir, { recursive: true });
 const out = path.join(options.outDir, `gitglasses-${target}-${version}.vsix`);
 // vsce comes from this package's pinned devDependency, not from PATH.
-const vsce = path.join(path.dirname(createRequire(import.meta.url).resolve('@vscode/vsce/package.json')), 'vsce');
+const vsce = path.join(
+  path.dirname(createRequire(import.meta.url).resolve('@vscode/vsce/package.json')),
+  'vsce',
+);
 const vsceArgs = [vsce, 'package', '--no-dependencies', '--target', target, '--out', out];
 if (options.preRelease) vsceArgs.push('--pre-release');
 try {
@@ -134,4 +147,6 @@ if (problems.length > 0) {
   fail(`${path.basename(out)} failed inspection:\n  ${problems.join('\n  ')}`);
 }
 const engineNote = engine ? `, engine ${(engine.size / 1048576).toFixed(1)} MiB` : '';
-console.log(`packaged ${path.relative(root, out)} (${target}${options.preRelease ? ', pre-release' : ''}${engineNote})`);
+console.log(
+  `packaged ${path.relative(root, out)} (${target}${options.preRelease ? ', pre-release' : ''}${engineNote})`,
+);

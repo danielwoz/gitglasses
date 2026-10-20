@@ -93,7 +93,7 @@ export function createHostingProvider(config: HostingProviderConfig): HostingPro
     case 'github-enterprise':
       if (domain === 'github.com') {
         throw new IntegrationConfigError(
-          'github.com is GitHub, not GitHub Enterprise Server; use the "github" provider'
+          'github.com is GitHub, not GitHub Enterprise Server; use the "github" provider',
         );
       }
       return createGitHubEnterpriseProvider(domain, fetchFn);
@@ -102,26 +102,26 @@ export function createHostingProvider(config: HostingProviderConfig): HostingPro
     case 'bitbucket':
       if (domain !== 'bitbucket.org') {
         throw new IntegrationConfigError(
-          `Bitbucket Cloud only serves bitbucket.org; use Bitbucket Data Center ("bitbucketDC") for ${domain}`
+          `Bitbucket Cloud only serves bitbucket.org; use Bitbucket Data Center ("bitbucketDC") for ${domain}`,
         );
       }
       return new BitbucketProvider({ fetchFn });
     case 'bitbucketDC':
       if (domain === 'bitbucket.org') {
         throw new IntegrationConfigError(
-          'bitbucket.org is Bitbucket Cloud; use the "bitbucket" provider'
+          'bitbucket.org is Bitbucket Cloud; use the "bitbucket" provider',
         );
       }
       return new BitbucketDCProvider({ id: 'bitbucketDC', baseUrl: `https://${domain}`, fetchFn });
     case 'azuredevops': {
       if (domain !== AZURE_DEVOPS_HOST) {
         throw new IntegrationConfigError(
-          `Azure DevOps Server (${domain}) is not supported yet; only ${AZURE_DEVOPS_HOST} is`
+          `Azure DevOps Server (${domain}) is not supported yet; only ${AZURE_DEVOPS_HOST} is`,
         );
       }
       if (!config.organization) {
         throw new IntegrationConfigError(
-          'Azure DevOps needs the organization (the first path segment after dev.azure.com)'
+          'Azure DevOps needs the organization (the first path segment after dev.azure.com)',
         );
       }
       const organization = plainHost(config.organization, 'Azure DevOps organization');
@@ -129,7 +129,7 @@ export function createHostingProvider(config: HostingProviderConfig): HostingPro
     }
     default:
       throw new IntegrationConfigError(
-        `Unknown hosting provider "${config.providerId}" (expected one of ${HOSTING_PROVIDER_IDS.join(', ')})`
+        `Unknown hosting provider "${config.providerId}" (expected one of ${HOSTING_PROVIDER_IDS.join(', ')})`,
       );
   }
 }
@@ -148,7 +148,7 @@ export function createIssueProvider(config: IssueProviderConfig): IssueProvider 
       // speak an older API with different credentials.
       if (!site.endsWith('.atlassian.net')) {
         throw new IntegrationConfigError(
-          `Jira Server and Data Center (${site}) are not supported yet; use a *.atlassian.net site`
+          `Jira Server and Data Center (${site}) are not supported yet; use a *.atlassian.net site`,
         );
       }
       return new JiraProvider({ baseUrl: `https://${site}`, fetchFn });
@@ -168,14 +168,14 @@ export function createIssueProvider(config: IssueProviderConfig): IssueProvider 
       const domain = plainHost(host, 'GitHub Enterprise host');
       if (domain === 'github.com') {
         throw new IntegrationConfigError(
-          'github.com is GitHub, not GitHub Enterprise Server; use the "github" provider'
+          'github.com is GitHub, not GitHub Enterprise Server; use the "github" provider',
         );
       }
       return createGitHubEnterpriseProvider(domain, fetchFn);
     }
     default:
       throw new IntegrationConfigError(
-        `Unknown issue provider "${config.providerId}" (expected one of ${ISSUE_PROVIDER_IDS.join(', ')})`
+        `Unknown issue provider "${config.providerId}" (expected one of ${ISSUE_PROVIDER_IDS.join(', ')})`,
       );
   }
 }

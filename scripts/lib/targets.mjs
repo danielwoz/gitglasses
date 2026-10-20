@@ -68,7 +68,8 @@ function elfProblem(header, arch) {
   if (header[4] !== ELF_CLASS[arch]) return `ELF class ${header[4]} is wrong for ${arch}`;
   if (header[5] !== 1) return 'ELF file is not little-endian';
   const type = header.readUInt16LE(16);
-  if (type !== ELF_TYPE_EXEC && type !== ELF_TYPE_DYN) return `ELF type ${type} is not an executable`;
+  if (type !== ELF_TYPE_EXEC && type !== ELF_TYPE_DYN)
+    return `ELF type ${type} is not an executable`;
   const machine = header.readUInt16LE(18);
   if (machine !== ELF_MACHINE[arch]) return `ELF machine 0x${machine.toString(16)} is not ${arch}`;
   return undefined;
@@ -104,18 +105,24 @@ function peProblem(header, arch) {
   const optional = pe + 24;
   if (header.readUInt16LE(optional) !== PE32_PLUS) return 'PE image is not 64-bit (PE32+)';
   const subsystem = header.readUInt16LE(optional + 68);
-  if (subsystem !== PE_SUBSYSTEM_CONSOLE) return `PE subsystem ${subsystem} is not a console application`;
+  if (subsystem !== PE_SUBSYSTEM_CONSOLE)
+    return `PE subsystem ${subsystem} is not a console application`;
   return undefined;
 }
 
 // Names the file types most likely to be picked up by mistake from a build
 // directory, so the error says what was found instead.
 function describeUnknown(header, problem) {
-  if (header.toString('latin1', 0, 8) === '!<arch>\n') return `${problem} (found an ar archive or import library)`;
-  if (header.toString('latin1', 0, 19) === 'Microsoft C/C++ MSF') return `${problem} (found a PDB debug database)`;
-  if (header.length >= 4 && header.readUInt32BE(0) === 0x7f454c46) return `${problem} (found an ELF file)`;
-  if (header.length >= 2 && header.toString('latin1', 0, 2) === 'MZ') return `${problem} (found a PE file)`;
-  if (header.length >= 4 && header.readUInt32LE(0) === MACHO_MAGIC_64) return `${problem} (found a Mach-O file)`;
+  if (header.toString('latin1', 0, 8) === '!<arch>\n')
+    return `${problem} (found an ar archive or import library)`;
+  if (header.toString('latin1', 0, 19) === 'Microsoft C/C++ MSF')
+    return `${problem} (found a PDB debug database)`;
+  if (header.length >= 4 && header.readUInt32BE(0) === 0x7f454c46)
+    return `${problem} (found an ELF file)`;
+  if (header.length >= 2 && header.toString('latin1', 0, 2) === 'MZ')
+    return `${problem} (found a PE file)`;
+  if (header.length >= 4 && header.readUInt32LE(0) === MACHO_MAGIC_64)
+    return `${problem} (found a Mach-O file)`;
   return problem;
 }
 

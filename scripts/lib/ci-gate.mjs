@@ -18,9 +18,12 @@ export function ciVerdict(runs, sha) {
   const forCommit = runs.filter((run) => run.head_sha === sha);
   const qualifying = forCommit.filter((run) => EVENTS_TESTING_HEAD_SHA.has(run.event));
   const ignored = forCommit.filter((run) => !EVENTS_TESTING_HEAD_SHA.has(run.event));
-  const passed = qualifying.find((run) => run.status === 'completed' && run.conclusion === 'success');
+  const passed = qualifying.find(
+    (run) => run.status === 'completed' && run.conclusion === 'success',
+  );
   if (passed) return { state: 'passed', runs: [passed], ignored };
   if (qualifying.length === 0) return { state: 'missing', runs: [], ignored };
-  if (qualifying.every((run) => run.status === 'completed')) return { state: 'failed', runs: qualifying, ignored };
+  if (qualifying.every((run) => run.status === 'completed'))
+    return { state: 'failed', runs: qualifying, ignored };
   return { state: 'pending', runs: qualifying, ignored };
 }

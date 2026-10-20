@@ -13,7 +13,10 @@ describe('server version', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'test', version: '0.0.0' });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-    expect(client.getServerVersion()).toMatchObject({ name: 'gitglasses', version: manifest.version });
+    expect(client.getServerVersion()).toMatchObject({
+      name: 'gitglasses',
+      version: manifest.version,
+    });
     await client.close();
   });
 });

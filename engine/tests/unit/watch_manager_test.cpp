@@ -140,8 +140,7 @@ TEST_P(WatchManagerTest, ReportsWorktreeChanges) {
 class LinkedWorktree {
  public:
   LinkedWorktree(gg::testing::FixtureRepo& fixture, const std::string& branch)
-      : path_(fixture.root().parent_path() /
-              (fixture.root().filename().string() + "-" + branch)),
+      : path_(fixture.root().parent_path() / (fixture.root().filename().string() + "-" + branch)),
         commondir_((fixture.root() / ".git").string()) {
     fixture.run("git worktree add -q -b " + branch + " \"" + path_.string() + "\"");
     gitdir_ = gg::testing::gitCapture(path_, "rev-parse --absolute-git-dir");

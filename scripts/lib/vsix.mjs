@@ -47,8 +47,10 @@ export function inspectVsix(archive, { target, version } = {}) {
   } else {
     const manifest = read(MANIFEST).toString('utf8');
     const platform = /<Identity\b[^>]*\bTargetPlatform="([^"]*)"/.exec(manifest)?.[1];
-    if (platform !== target) problems.push(`target platform is ${platform ?? 'unset'}, expected ${target}`);
-    if (!/<License>[^<]+<\/License>/.test(manifest)) problems.push('manifest declares no license file');
+    if (platform !== target)
+      problems.push(`target platform is ${platform ?? 'unset'}, expected ${target}`);
+    if (!/<License>[^<]+<\/License>/.test(manifest))
+      problems.push('manifest declares no license file');
   }
 
   let packageJson;
@@ -75,10 +77,13 @@ export function inspectVsix(archive, { target, version } = {}) {
     problems.push(`CHANGELOG.md has no entry for ${expectedVersion}`);
   }
 
-  const binEntries = [...entries.keys()].filter((name) => name.startsWith(BIN_PREFIX) && !name.endsWith('/'));
+  const binEntries = [...entries.keys()].filter(
+    (name) => name.startsWith(BIN_PREFIX) && !name.endsWith('/'),
+  );
   let engine;
   if (target === WEB_TARGET) {
-    if (binEntries.length > 0) problems.push(`web package carries native files: ${binEntries.join(', ')}`);
+    if (binEntries.length > 0)
+      problems.push(`web package carries native files: ${binEntries.join(', ')}`);
     if (!entries.has(WEB_BUNDLE)) problems.push(`${WEB_BUNDLE} is missing`);
     if (!entries.has(WEB_WASM)) {
       problems.push(`${WEB_WASM} is missing`);
@@ -86,7 +91,8 @@ export function inspectVsix(archive, { target, version } = {}) {
       const problem = wasmProblem(read(WEB_WASM));
       if (problem) problems.push(`wasm engine: ${problem}`);
     }
-    if (packageJson && !packageJson.browser) problems.push('package.json has no browser entry point');
+    if (packageJson && !packageJson.browser)
+      problems.push('package.json has no browser entry point');
   } else if (isNativeTarget(target)) {
     const expected = BIN_PREFIX + engineBinaryName(target);
     const extra = binEntries.filter((name) => name !== expected);
@@ -98,7 +104,8 @@ export function inspectVsix(archive, { target, version } = {}) {
       const data = read(expected);
       const problem = engineFormatProblem(data.subarray(0, ENGINE_HEADER_BYTES), target);
       if (problem) problems.push(`engine is not a ${target} executable: ${problem}`);
-      if (!target.startsWith('win32-') && (entry.mode & 0o111) === 0) problems.push('engine is not marked executable');
+      if (!target.startsWith('win32-') && (entry.mode & 0o111) === 0)
+        problems.push('engine is not marked executable');
       engine = { name: expected, size: entry.size, compressedSize: entry.compressedSize, data };
     }
   } else {
@@ -113,13 +120,19 @@ function iconProblems(entries, read, icon) {
   const name = `extension/${icon.replace(/^\.\//, '')}`;
   if (!entries.has(name)) return [`icon ${icon} is missing`];
   const png = read(name);
-  if (png.length < 24 || png.toString('latin1', 1, 4) !== 'PNG' || png.toString('latin1', 12, 16) !== 'IHDR') {
+  if (
+    png.length < 24 ||
+    png.toString('latin1', 1, 4) !== 'PNG' ||
+    png.toString('latin1', 12, 16) !== 'IHDR'
+  ) {
     return [`icon ${icon} is not a PNG`];
   }
   const width = png.readUInt32BE(16);
   const height = png.readUInt32BE(20);
   if (width !== height || width < MIN_ICON_SIZE) {
-    return [`icon ${icon} is ${width}x${height}; it must be square and at least ${MIN_ICON_SIZE}px`];
+    return [
+      `icon ${icon} is ${width}x${height}; it must be square and at least ${MIN_ICON_SIZE}px`,
+    ];
   }
   return [];
 }

@@ -15,7 +15,9 @@ const args = process.argv.slice(2);
 const changelogIndex = args.indexOf('--changelog');
 const changelogFile =
   changelogIndex >= 0 ? args[changelogIndex + 1] : path.join(root, 'extension', 'CHANGELOG.md');
-const version = args.find((arg, index) => !arg.startsWith('--') && (changelogIndex < 0 || index !== changelogIndex + 1));
+const version = args.find(
+  (arg, index) => !arg.startsWith('--') && (changelogIndex < 0 || index !== changelogIndex + 1),
+);
 if (!version || !changelogFile || args.length !== (changelogIndex >= 0 ? 3 : 1)) {
   console.error('usage: release-notes.mjs <version> [--changelog <file>]');
   process.exit(2);
@@ -23,7 +25,9 @@ if (!version || !changelogFile || args.length !== (changelogIndex >= 0 ? 3 : 1))
 
 const notes = changelogSection(readFileSync(changelogFile, 'utf8'), version);
 if (!notes) {
-  console.error(`release-notes: ${changelogFile} has no ${notes === undefined ? '' : 'non-empty '}section for ${version}`);
+  console.error(
+    `release-notes: ${changelogFile} has no ${notes === undefined ? '' : 'non-empty '}section for ${version}`,
+  );
   process.exit(1);
 }
 console.log(notes);

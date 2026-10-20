@@ -40,7 +40,10 @@ export function fakeEngine(
         .filter((repo) => target === fold(repo.match) || target.startsWith(`${fold(repo.match)}/`))
         .sort((a, b) => b.match.length - a.match.length)[0];
       if (!hit) {
-        throw new EngineError(ErrorCodes.RepoNotFound, `could not find repository at '${requested}'`);
+        throw new EngineError(
+          ErrorCodes.RepoNotFound,
+          `could not find repository at '${requested}'`,
+        );
       }
       return { repoId: hit.id, rootPath: `${hit.root}/`, bare: false };
     },

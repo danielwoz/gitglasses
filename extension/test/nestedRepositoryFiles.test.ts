@@ -48,11 +48,15 @@ describe('files in a repository nested in a known one', () => {
     vi.useFakeTimers();
     const { repos, notifications } = await knownParent();
     const sync = new DocumentSync(
-      { notify: (method: string, params: unknown) => notifications.push({ method, params }) } as never,
+      {
+        notify: (method: string, params: unknown) => notifications.push({ method, params }),
+      } as never,
       repos,
     );
     try {
-      controls.documentChanged.fire({ document: textDocument('/w/parent/sub/lib.txt', 'edited\n', 7) });
+      controls.documentChanged.fire({
+        document: textDocument('/w/parent/sub/lib.txt', 'edited\n', 7),
+      });
       await vi.advanceTimersByTimeAsync(200);
 
       expect(notifications).toEqual([
@@ -78,7 +82,9 @@ describe('files in a repository nested in a known one', () => {
       return request(...args);
     }) as typeof engine.request;
     const sync = new DocumentSync(
-      { notify: (method: string, params: unknown) => notifications.push({ method, params }) } as never,
+      {
+        notify: (method: string, params: unknown) => notifications.push({ method, params }),
+      } as never,
       repos,
     );
     try {

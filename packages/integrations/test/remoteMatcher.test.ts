@@ -94,10 +94,10 @@ describe('parseRemoteUrl', () => {
   it('maps an organization.visualstudio.com remote onto dev.azure.com', () => {
     const expected = { host: 'dev.azure.com', owner: 'contoso/webapp', name: 'frontend' };
     expect(parseRemoteUrl('https://contoso.visualstudio.com/webapp/_git/frontend')).toEqual(
-      expected
+      expected,
     );
     expect(
-      parseRemoteUrl('https://contoso.visualstudio.com/DefaultCollection/webapp/_git/frontend')
+      parseRemoteUrl('https://contoso.visualstudio.com/DefaultCollection/webapp/_git/frontend'),
     ).toEqual(expected);
   });
 

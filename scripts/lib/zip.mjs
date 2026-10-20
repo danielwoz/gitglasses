@@ -16,7 +16,8 @@ export function readZipEntries(archive) {
   const end = findEndOfCentralDirectory(archive);
   const count = archive.readUInt16LE(end + 10);
   let offset = archive.readUInt32LE(end + 16);
-  if (count === 0xffff || offset === 0xffffffff) throw new Error('zip64 archives are not supported');
+  if (count === 0xffff || offset === 0xffffffff)
+    throw new Error('zip64 archives are not supported');
 
   const entries = new Map();
   for (let i = 0; i < count; i++) {
@@ -52,7 +53,8 @@ export function readZipEntry(archive, entry) {
   if (entry.method === 0) contents = Buffer.from(data);
   else if (entry.method === 8) contents = inflateRawSync(data);
   else throw new Error(`unsupported compression method ${entry.method} for ${entry.name}`);
-  if (contents.length !== entry.size) throw new Error(`corrupt zip: size mismatch for ${entry.name}`);
+  if (contents.length !== entry.size)
+    throw new Error(`corrupt zip: size mismatch for ${entry.name}`);
   return contents;
 }
 

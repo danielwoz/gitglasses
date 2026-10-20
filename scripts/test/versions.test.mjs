@@ -11,12 +11,22 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function tree({ version = '0.2.0', root: rootVersion = version, mcp = version, cmake, changelog, types = '~1.90.0' } = {}) {
+function tree({
+  version = '0.2.0',
+  root: rootVersion = version,
+  mcp = version,
+  cmake,
+  changelog,
+  types = '~1.90.0',
+} = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'gitglasses-versions-'));
   dirs.push(dir);
   const write = (file, contents) => {
     mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-    writeFileSync(path.join(dir, file), typeof contents === 'string' ? contents : JSON.stringify(contents));
+    writeFileSync(
+      path.join(dir, file),
+      typeof contents === 'string' ? contents : JSON.stringify(contents),
+    );
   };
   write('extension/package.json', {
     version,
@@ -44,7 +54,10 @@ describe('releaseVersionProblems', () => {
   });
 
   it('puts odd minor versions on the pre-release channel', () => {
-    expect(releaseVersionProblems(tree({ version: '0.3.1' }))).toMatchObject({ prerelease: true, problems: [] });
+    expect(releaseVersionProblems(tree({ version: '0.3.1' }))).toMatchObject({
+      prerelease: true,
+      problems: [],
+    });
   });
 
   it('reports every manifest, the CMake version, the changelog and the tag that disagree', () => {
@@ -64,16 +77,23 @@ describe('releaseVersionProblems', () => {
   });
 
   it('requires a changelog section with release notes in it', () => {
-    expect(releaseVersionProblems(tree({ changelog: '# Changelog\n\n## [0.2.0]\n\n## [0.1.2]\n\n- Older.\n' })).problems).toEqual([
-      'extension/CHANGELOG.md has no entry for 0.2.0',
-    ]);
+    expect(
+      releaseVersionProblems(
+        tree({ changelog: '# Changelog\n\n## [0.2.0]\n\n## [0.1.2]\n\n- Older.\n' }),
+      ).problems,
+    ).toEqual(['extension/CHANGELOG.md has no entry for 0.2.0']);
     for (const heading of ['## 0.2.0', '## v0.2.0', '## [v0.2.0]', '## [0.2.0] - 2026-10-20']) {
-      expect(releaseVersionProblems(tree({ changelog: `${heading}\n\n- Fixes.\n` })).problems, heading).toEqual([]);
+      expect(
+        releaseVersionProblems(tree({ changelog: `${heading}\n\n- Fixes.\n` })).problems,
+        heading,
+      ).toEqual([]);
     }
   });
 
   it('rejects versions the Marketplace cannot publish', () => {
-    expect(releaseVersionProblems(tree({ version: '0.2.0-beta.1' })).problems[0]).toMatch(/not MAJOR.MINOR.PATCH/);
+    expect(releaseVersionProblems(tree({ version: '0.2.0-beta.1' })).problems[0]).toMatch(
+      /not MAJOR.MINOR.PATCH/,
+    );
   });
 
   it('holds for this repository', () => {
@@ -82,7 +102,10 @@ describe('releaseVersionProblems', () => {
 });
 
 describe('vscodeTypesProblem', () => {
-  const manifest = (types) => ({ engines: { vscode: '^1.90.0' }, devDependencies: { '@types/vscode': types } });
+  const manifest = (types) => ({
+    engines: { vscode: '^1.90.0' },
+    devDependencies: { '@types/vscode': types },
+  });
 
   it('accepts typings pinned to the engines.vscode floor', () => {
     for (const types of ['~1.90.0', '1.90.0', '1.90.x', '~1.90.3']) {

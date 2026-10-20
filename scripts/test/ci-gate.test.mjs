@@ -26,7 +26,12 @@ describe('ciVerdict', () => {
   it('passes on a successful push or manual run of the commit', () => {
     expect(ciVerdict([run('push', 'completed', 'success')], SHA).state).toBe('passed');
     expect(ciVerdict([run('workflow_dispatch', 'completed', 'success')], SHA).state).toBe('passed');
-    expect(ciVerdict([run('push', 'completed', 'failure', 1), run('push', 'completed', 'success', 2)], SHA)).toMatchObject({
+    expect(
+      ciVerdict(
+        [run('push', 'completed', 'failure', 1), run('push', 'completed', 'success', 2)],
+        SHA,
+      ),
+    ).toMatchObject({
       state: 'passed',
       runs: [{ html_url: 'https://github.com/o/r/actions/runs/2' }],
     });
@@ -34,22 +39,37 @@ describe('ciVerdict', () => {
 
   it('does not count a pull request run, even a successful one', () => {
     const prOnly = ciVerdict([run('pull_request', 'completed', 'success')], SHA);
-    expect(prOnly).toMatchObject({ state: 'missing', runs: [], ignored: [{ event: 'pull_request' }] });
-    expect(ciVerdict([run('pull_request', 'completed', 'success'), run('push', 'in_progress')], SHA).state).toBe('pending');
-    expect(ciVerdict([run('pull_request', 'completed', 'success'), run('push', 'completed', 'failure')], SHA).state).toBe(
-      'failed',
-    );
+    expect(prOnly).toMatchObject({
+      state: 'missing',
+      runs: [],
+      ignored: [{ event: 'pull_request' }],
+    });
+    expect(
+      ciVerdict([run('pull_request', 'completed', 'success'), run('push', 'in_progress')], SHA)
+        .state,
+    ).toBe('pending');
+    expect(
+      ciVerdict(
+        [run('pull_request', 'completed', 'success'), run('push', 'completed', 'failure')],
+        SHA,
+      ).state,
+    ).toBe('failed');
   });
 
   it('ignores runs of other commits', () => {
-    expect(ciVerdict([{ ...run('push', 'completed', 'success'), head_sha: 'f'.repeat(40) }], SHA).state).toBe('missing');
+    expect(
+      ciVerdict([{ ...run('push', 'completed', 'success'), head_sha: 'f'.repeat(40) }], SHA).state,
+    ).toBe('missing');
   });
 
   it('waits while a run is queued or running', () => {
     expect(ciVerdict([run('push', 'queued')], SHA).state).toBe('pending');
-    expect(ciVerdict([run('push', 'completed', 'cancelled', 1), run('push', 'in_progress', null, 2)], SHA).state).toBe(
-      'pending',
-    );
+    expect(
+      ciVerdict(
+        [run('push', 'completed', 'cancelled', 1), run('push', 'in_progress', null, 2)],
+        SHA,
+      ).state,
+    ).toBe('pending');
   });
 });
 
@@ -70,7 +90,13 @@ describe('wait-for-ci', () => {
     const child = spawn(
       process.execPath,
       [script, '--repo', 'o/r', '--sha', SHA, '--interval', '0', '--grace', '0', ...args],
-      { env: { ...process.env, GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`, GH_TOKEN: '' } },
+      {
+        env: {
+          ...process.env,
+          GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,
+          GH_TOKEN: '',
+        },
+      },
     );
     let stdout = '';
     child.stdout.on('data', (chunk) => (stdout += chunk));
@@ -85,15 +111,21 @@ describe('wait-for-ci', () => {
     const { status, stdout } = await waitForCi([[run('pull_request', 'completed', 'success', 7)]]);
     expect(status).toBe(1);
     expect(stdout).toContain(`::error::No CI run has tested ${SHA} itself`);
-    expect(stdout).toContain('pull request runs https://github.com/o/r/actions/runs/7 tested it merged into their base branch');
+    expect(stdout).toContain(
+      'pull request runs https://github.com/o/r/actions/runs/7 tested it merged into their base branch',
+    );
   });
 
   it('waits for the push run and passes when it succeeds', async () => {
-    const { status, stdout, served } = await waitForCi([
-      [run('pull_request', 'completed', 'success')],
-      [run('pull_request', 'completed', 'success'), run('push', 'queued', null, 8)],
-      [run('pull_request', 'completed', 'success'), run('push', 'completed', 'success', 8)],
-    ], '--grace', '5');
+    const { status, stdout, served } = await waitForCi(
+      [
+        [run('pull_request', 'completed', 'success')],
+        [run('pull_request', 'completed', 'success'), run('push', 'queued', null, 8)],
+        [run('pull_request', 'completed', 'success'), run('push', 'completed', 'success', 8)],
+      ],
+      '--grace',
+      '5',
+    );
     expect(status, stdout).toBe(0);
     expect(served).toBe(3);
     expect(stdout).toContain(`CI passed on ${SHA}: https://github.com/o/r/actions/runs/8`);
@@ -102,7 +134,9 @@ describe('wait-for-ci', () => {
   it('fails when the push run failed', async () => {
     const { status, stdout } = await waitForCi([[run('push', 'completed', 'failure', 9)]]);
     expect(status).toBe(1);
-    expect(stdout).toContain(`::error::CI did not pass on ${SHA}: https://github.com/o/r/actions/runs/9`);
+    expect(stdout).toContain(
+      `::error::CI did not pass on ${SHA}: https://github.com/o/r/actions/runs/9`,
+    );
   });
 
   it('gives up at the timeout', async () => {

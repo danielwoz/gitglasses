@@ -89,7 +89,10 @@ describe('RepositoryService aliased roots (windows)', () => {
 describe('RepositoryService aliased roots (posix)', () => {
   const tree: IdentifyPath = (fsPath) => {
     const resolved = fsPath.replace(/^\/home\/u\/link(?=\/|$)/, '/home/u/real');
-    return { dev: 1n, ino: BigInt(resolved.length) + (resolved === '/home/u/real/repo' ? 1000n : 0n) };
+    return {
+      dev: 1n,
+      ino: BigInt(resolved.length) + (resolved === '/home/u/real/repo' ? 1000n : 0n),
+    };
   };
 
   it('learns the symlinked spelling once and keeps joined paths in it', async () => {
@@ -407,10 +410,11 @@ describe('RepositoryService watching', () => {
     await repos.locateOrDiscover(fileUri('/w/listed/.gitglasses'), { watch: false });
 
     await repos.rediscoverAll();
-    expect(discoveries().slice(2).map((request) => request.params)).toEqual([
-      { path: '/w/used' },
-      { path: '/w/listed', watch: false },
-    ]);
+    expect(
+      discoveries()
+        .slice(2)
+        .map((request) => request.params),
+    ).toEqual([{ path: '/w/used' }, { path: '/w/listed', watch: false }]);
     expect(repos.isWatched('r1')).toBe(true);
     expect(repos.isWatched('r2')).toBe(false);
   });

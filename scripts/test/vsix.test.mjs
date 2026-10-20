@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { inspectVsix } from '../lib/vsix.mjs';
 import { readZipEntries, readZipEntry } from '../lib/zip.mjs';
-import { elfHeader, importLibrary, makeZip, peHeader, pngHeader, vsixFiles, vsixManifest } from './fixtures.mjs';
+import {
+  elfHeader,
+  importLibrary,
+  makeZip,
+  peHeader,
+  pngHeader,
+  vsixFiles,
+  vsixManifest,
+} from './fixtures.mjs';
 
 const linuxEngine = { name: 'extension/bin/gitglasses-engine', data: elfHeader(), mode: 0o755 };
 const windowsEngine = { name: 'extension/bin/gitglasses-engine.exe', data: peHeader() };
 
 function replace(files, name, change) {
-  return files.map((file) => (file.name === name ? { ...file, ...change } : file)).filter((file) => file.data !== null);
+  return files
+    .map((file) => (file.name === name ? { ...file, ...change } : file))
+    .filter((file) => file.data !== null);
 }
 
 describe('zip reader', () => {
@@ -24,7 +34,9 @@ describe('zip reader', () => {
   });
 
   it('rejects something that is not a zip', () => {
-    expect(() => readZipEntries(Buffer.from('not a zip at all, just text'))).toThrow(/not a zip archive/);
+    expect(() => readZipEntries(Buffer.from('not a zip at all, just text'))).toThrow(
+      /not a zip archive/,
+    );
   });
 });
 
@@ -39,7 +51,9 @@ describe('inspectVsix', () => {
   });
 
   it('passes a complete web package', () => {
-    expect(inspectVsix(makeZip(vsixFiles('web')), { target: 'web', version: '0.2.0' }).problems).toEqual([]);
+    expect(
+      inspectVsix(makeZip(vsixFiles('web')), { target: 'web', version: '0.2.0' }).problems,
+    ).toEqual([]);
   });
 
   it('fails a Windows package whose engine is the import library', () => {
@@ -50,9 +64,13 @@ describe('inspectVsix', () => {
   });
 
   it('fails a package for the wrong target platform', () => {
-    const files = replace(vsixFiles('win32-x64', { engine: windowsEngine }), 'extension.vsixmanifest', {
-      data: vsixManifest('win32-arm64'),
-    });
+    const files = replace(
+      vsixFiles('win32-x64', { engine: windowsEngine }),
+      'extension.vsixmanifest',
+      {
+        data: vsixManifest('win32-arm64'),
+      },
+    );
     expect(inspectVsix(makeZip(files), { target: 'win32-x64' }).problems).toEqual([
       'target platform is win32-arm64, expected win32-x64',
     ]);
@@ -70,7 +88,9 @@ describe('inspectVsix', () => {
     ]);
 
     const noExec = vsixFiles('linux-x64', { engine: { ...linuxEngine, mode: 0o644 } });
-    expect(inspectVsix(makeZip(noExec), { target: 'linux-x64' }).problems).toEqual(['engine is not marked executable']);
+    expect(inspectVsix(makeZip(noExec), { target: 'linux-x64' }).problems).toEqual([
+      'engine is not marked executable',
+    ]);
   });
 
   it('fails a web package that carries a native engine or lacks the wasm engine', () => {
@@ -78,7 +98,9 @@ describe('inspectVsix', () => {
     expect(inspectVsix(makeZip(withBin), { target: 'web' }).problems).toEqual([
       'web package carries native files: extension/bin/gitglasses-engine',
     ]);
-    const noWasm = replace(vsixFiles('web'), 'extension/dist/web/gitglasses-engine-wasm.wasm', { data: null });
+    const noWasm = replace(vsixFiles('web'), 'extension/dist/web/gitglasses-engine-wasm.wasm', {
+      data: null,
+    });
     expect(inspectVsix(makeZip(noWasm), { target: 'web' }).problems).toEqual([
       'extension/dist/web/gitglasses-engine-wasm.wasm is missing',
     ]);
@@ -90,19 +112,20 @@ describe('inspectVsix', () => {
     files = replace(files, 'extension/NOTICE', { data: null });
     files = replace(files, 'extension/changelog.md', { data: '# Changelog\n\n## [0.1.2]\n' });
     files = replace(files, 'extension/media/icon.png', { data: pngHeader(64, 64) });
-    expect(inspectVsix(makeZip(files), { target: 'linux-x64', version: '0.2.0' }).problems).toEqual([
-      'icon media/icon.png is 64x64; it must be square and at least 128px',
-      'LICENSE is missing',
-      'NOTICE is missing',
-      'CHANGELOG.md has no entry for 0.2.0',
-    ]);
+    expect(inspectVsix(makeZip(files), { target: 'linux-x64', version: '0.2.0' }).problems).toEqual(
+      [
+        'icon media/icon.png is 64x64; it must be square and at least 128px',
+        'LICENSE is missing',
+        'NOTICE is missing',
+        'CHANGELOG.md has no entry for 0.2.0',
+      ],
+    );
   });
 
   it('fails a package whose version is not the release version', () => {
     const files = vsixFiles('linux-x64', { engine: linuxEngine, version: '0.1.2' });
-    expect(inspectVsix(makeZip(files), { target: 'linux-x64', version: '0.2.0' }).problems).toEqual([
-      'package.json version is 0.1.2, expected 0.2.0',
-      'CHANGELOG.md has no entry for 0.2.0',
-    ]);
+    expect(inspectVsix(makeZip(files), { target: 'linux-x64', version: '0.2.0' }).problems).toEqual(
+      ['package.json version is 0.1.2, expected 0.2.0', 'CHANGELOG.md has no entry for 0.2.0'],
+    );
   });
 });

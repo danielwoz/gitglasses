@@ -45,7 +45,7 @@ function anyProviderFetch() {
 function credentialedHosts(requests: Array<{ url: string; init?: HttpRequestInit }>): string[] {
   return [
     ...new Set(
-      requests.filter((r) => r.init?.headers?.authorization).map((r) => new URL(r.url).host)
+      requests.filter((r) => r.init?.headers?.authorization).map((r) => new URL(r.url).host),
     ),
   ];
 }

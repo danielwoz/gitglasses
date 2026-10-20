@@ -11,7 +11,14 @@ import { changelogSection, hasChangelogEntry } from '../lib/changelog.mjs';
 import { releaseVersionProblems } from '../lib/versions.mjs';
 
 const script = fileURLToPath(new URL('../release-notes.mjs', import.meta.url));
-const HEADINGS = ['## [0.3.0] - 2026-11-01', '## [0.3.0]', '## 0.3.0', '## v0.3.0', '## [v0.3.0]', '## 0.3.0 - 2026-11-01'];
+const HEADINGS = [
+  '## [0.3.0] - 2026-11-01',
+  '## [0.3.0]',
+  '## 0.3.0',
+  '## v0.3.0',
+  '## [v0.3.0]',
+  '## 0.3.0 - 2026-11-01',
+];
 const changelog = (heading, body = '### Fixed\n\n- A fix.\n') =>
   `# Changelog\n\nIntroduction.\n\n${heading}\n\n${body}\n## [0.2.0] - 2026-10-20\n\n- Older.\n`;
 
@@ -54,7 +61,6 @@ describe('hasChangelogEntry', () => {
     expect(hasChangelogEntry(changelog('## [0.3.0]', ''), '0.3.0')).toBe(false);
     expect(hasChangelogEntry('# Changelog\n\n## [0.3.0]\n', '0.3.0')).toBe(false);
   });
-
 });
 
 describe('release-notes', () => {
@@ -70,7 +76,9 @@ describe('release-notes', () => {
     expect(notes(changelog('## [0.2.9]'))).toMatchObject({ status: 1 });
     expect(notes(changelog('## [0.2.9]')).stderr).toContain('has no section for 0.3.0');
     expect(notes(changelog('## [0.3.0]', ''))).toMatchObject({ status: 1 });
-    expect(notes(changelog('## [0.3.0]', '')).stderr).toContain('has no non-empty section for 0.3.0');
+    expect(notes(changelog('## [0.3.0]', '')).stderr).toContain(
+      'has no non-empty section for 0.3.0',
+    );
   });
 
   it("prints this repository's section for its own version", () => {

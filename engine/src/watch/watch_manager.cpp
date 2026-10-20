@@ -187,7 +187,7 @@ class InotifyHub {
  private:
   struct WatchDir {
     std::string repoId;
-    std::string rel;  // directory path relative to the gitdir or common dir
+    std::string rel;      // directory path relative to the gitdir or common dir
     bool shared = false;  // under the linked worktree's common dir
 
     bool operator==(const WatchDir&) const = default;
@@ -283,10 +283,8 @@ class InotifyHub {
           const auto repoIt = repos_.find(watcher.repoId);
           if (repoIt == repos_.end()) continue;
           const std::string rel = joinRel(watcher.rel, name);
-          const bool recursive =
-              watcher.shared ? isSharedRecursiveRoot(rel) : isRecursiveRoot(rel);
-          if ((event->mask & IN_ISDIR) && (event->mask & (IN_CREATE | IN_MOVED_TO)) &&
-              recursive) {
+          const bool recursive = watcher.shared ? isSharedRecursiveRoot(rel) : isRecursiveRoot(rel);
+          if ((event->mask & IN_ISDIR) && (event->mask & (IN_CREATE | IN_MOVED_TO)) && recursive) {
             addDirTreeLocked(watcher.repoId, repoIt->second, rel, watcher.shared);
           }
           const std::string category = watcher.shared ? classifyShared(rel) : classify(rel);
@@ -443,8 +441,7 @@ class RepoWatch {
 
   // Adds the category of every path that appeared, changed or vanished.
   static void diff(const Stamps& previous, const Stamps& current,
-                   std::string (*categorize)(const std::string&),
-                   std::set<std::string>& pending) {
+                   std::string (*categorize)(const std::string&), std::set<std::string>& pending) {
     for (const auto& [rel, stamp] : current) {
       const auto it = previous.find(rel);
       if (it == previous.end() || it->second != stamp) {

@@ -14,7 +14,9 @@ import { PACKAGE_FILES, npmReadmeProblems } from './lib/mcp-package.mjs';
 import { smokeTestMcpServer } from './lib/mcp-smoke.mjs';
 
 const args = process.argv.slice(2);
-const tarball = args.find((arg) => !arg.startsWith('--') && args[args.indexOf(arg) - 1] !== '--version');
+const tarball = args.find(
+  (arg) => !arg.startsWith('--') && args[args.indexOf(arg) - 1] !== '--version',
+);
 const versionIndex = args.indexOf('--version');
 const version = versionIndex >= 0 ? args[versionIndex + 1] : undefined;
 if (!tarball || !existsSync(tarball)) {
@@ -25,31 +27,49 @@ if (!tarball || !existsSync(tarball)) {
 function listFiles(dir, prefix = '') {
   return readdirSync(dir).flatMap((name) => {
     const full = path.join(dir, name);
-    return statSync(full).isDirectory() ? listFiles(full, `${prefix}${name}/`) : [`${prefix}${name}`];
+    return statSync(full).isDirectory()
+      ? listFiles(full, `${prefix}${name}/`)
+      : [`${prefix}${name}`];
   });
 }
 
 const dir = mkdtempSync(path.join(tmpdir(), 'gitglasses-mcp-package-'));
 try {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  execFileSync(npm, ['install', '--prefix', dir, '--no-audit', '--no-fund', '--omit=dev', path.resolve(tarball)], {
-    stdio: ['ignore', 'ignore', 'inherit'],
-    shell: process.platform === 'win32',
-  });
+  execFileSync(
+    npm,
+    ['install', '--prefix', dir, '--no-audit', '--no-fund', '--omit=dev', path.resolve(tarball)],
+    {
+      stdio: ['ignore', 'ignore', 'inherit'],
+      shell: process.platform === 'win32',
+    },
+  );
   const installed = path.join(dir, 'node_modules', 'gitglasses-mcp');
-  const files = listFiles(installed).filter((file) => !file.startsWith('node_modules/')).sort();
+  const files = listFiles(installed)
+    .filter((file) => !file.startsWith('node_modules/'))
+    .sort();
   if (JSON.stringify(files) !== JSON.stringify(PACKAGE_FILES)) {
-    throw new Error(`package contents are ${files.join(', ')}; expected ${PACKAGE_FILES.join(', ')}`);
+    throw new Error(
+      `package contents are ${files.join(', ')}; expected ${PACKAGE_FILES.join(', ')}`,
+    );
   }
-  const { version: packed } = JSON.parse(readFileSync(path.join(installed, 'package.json'), 'utf8'));
-  const readmeProblems = npmReadmeProblems(readFileSync(path.join(installed, 'README.md'), 'utf8'), version ?? packed);
-  if (readmeProblems.length > 0) throw new Error(`${readmeProblems.join('; ')} (pack it with scripts/pack-mcp.mjs)`);
+  const { version: packed } = JSON.parse(
+    readFileSync(path.join(installed, 'package.json'), 'utf8'),
+  );
+  const readmeProblems = npmReadmeProblems(
+    readFileSync(path.join(installed, 'README.md'), 'utf8'),
+    version ?? packed,
+  );
+  if (readmeProblems.length > 0)
+    throw new Error(`${readmeProblems.join('; ')} (pack it with scripts/pack-mcp.mjs)`);
   // No engine is configured, so the server must start without one.
   const { serverInfo, tools } = await smokeTestMcpServer(path.join(installed, 'dist', 'cli.js'), {
     version,
     env: { GITGLASSES_ENGINE: '' },
   });
-  console.log(`${path.basename(tarball)}: ok, ${serverInfo.name} ${serverInfo.version} with ${tools.length} tools`);
+  console.log(
+    `${path.basename(tarball)}: ok, ${serverInfo.name} ${serverInfo.version} with ${tools.length} tools`,
+  );
 } catch (error) {
   console.error(`verify-mcp-package: ${path.basename(tarball)}: ${error.message}`);
   process.exitCode = 1;

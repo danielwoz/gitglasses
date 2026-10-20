@@ -16,13 +16,24 @@ const options = { ...DEFAULTS };
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i += 2) {
   const name = args[i].replace(/^--/, '');
-  if (!args[i].startsWith('--') || !['repo', 'sha', ...Object.keys(DEFAULTS)].includes(name) || args[i + 1] === undefined) {
+  if (
+    !args[i].startsWith('--') ||
+    !['repo', 'sha', ...Object.keys(DEFAULTS)].includes(name) ||
+    args[i + 1] === undefined
+  ) {
     usage();
   }
   options[name] = args[i + 1];
 }
-const [timeout, grace, interval] = ['timeout', 'grace', 'interval'].map((name) => Number(options[name]));
-if (!options.repo || !options.sha || ![timeout, grace, interval].every((n) => Number.isFinite(n) && n >= 0)) usage();
+const [timeout, grace, interval] = ['timeout', 'grace', 'interval'].map((name) =>
+  Number(options[name]),
+);
+if (
+  !options.repo ||
+  !options.sha ||
+  ![timeout, grace, interval].every((n) => Number.isFinite(n) && n >= 0)
+)
+  usage();
 
 function usage() {
   console.error(
@@ -71,7 +82,9 @@ for (;;) {
       );
     }
     console.log(
-      verdict.state === 'pending' ? `Waiting for ${urls(verdict.runs)}` : `Waiting for a CI run on ${options.sha}`,
+      verdict.state === 'pending'
+        ? `Waiting for ${urls(verdict.runs)}`
+        : `Waiting for a CI run on ${options.sha}`,
     );
   }
 

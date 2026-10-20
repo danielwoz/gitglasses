@@ -42,8 +42,7 @@ const BRANCH_SECTION = /^\s*\[branch\s+"((?:[^"\\]|\\.)*)"\]\s*$/;
 const PLAIN_REMOTE_SECTION = /^\s*\[remote\]\s*$/i;
 const OTHER_SECTION = /^\s*\[/;
 const KEY_VALUE = /^\s*(url|pushurl)\s*=\s*(.*?)\s*$/i;
-const BRANCH_KEY_VALUE =
-  /^\s*(remote|pushremote|merge|github-pr-owner-number)\s*=\s*(.*?)\s*$/i;
+const BRANCH_KEY_VALUE = /^\s*(remote|pushremote|merge|github-pr-owner-number)\s*=\s*(.*?)\s*$/i;
 const PUSH_DEFAULT = /^\s*pushdefault\s*=\s*(.*?)\s*$/i;
 const PR_METADATA = /^(.+)#([^#]+)#(\d+)$/;
 

@@ -152,7 +152,7 @@ export async function collectWorkspaceRepos(
   // Looks up candidate directories, never more at once than there is room
   // left: each lookup can register a repository the engine then holds.
   const discoverWithin = async (candidates: { dir: string; folder: string }[]): Promise<void> => {
-    for (let next = 0; next < candidates.length && found.length < limit; ) {
+    for (let next = 0; next < candidates.length && found.length < limit;) {
       const batch = candidates.slice(next, next + limit - found.length);
       next += batch.length;
       const repos = await Promise.all(batch.map((candidate) => discover(candidate.dir, false)));

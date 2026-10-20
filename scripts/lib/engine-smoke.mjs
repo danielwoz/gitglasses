@@ -8,12 +8,18 @@ const HANDSHAKE_TIMEOUT_MS = 20000;
 
 /** Throws with a description of the first check the engine fails. */
 export async function smokeTestEngine(enginePath, { version, protocolVersion }) {
-  const printed = execFileSync(enginePath, ['--version'], { encoding: 'utf8', timeout: HANDSHAKE_TIMEOUT_MS }).trim();
-  if (printed !== version) throw new Error(`--version printed ${JSON.stringify(printed)}, expected ${version}`);
+  const printed = execFileSync(enginePath, ['--version'], {
+    encoding: 'utf8',
+    timeout: HANDSHAKE_TIMEOUT_MS,
+  }).trim();
+  if (printed !== version)
+    throw new Error(`--version printed ${JSON.stringify(printed)}, expected ${version}`);
 
   const result = await handshake(enginePath, protocolVersion);
   if (result.engineVersion !== version) {
-    throw new Error(`initialize reported engineVersion ${result.engineVersion}, expected ${version}`);
+    throw new Error(
+      `initialize reported engineVersion ${result.engineVersion}, expected ${version}`,
+    );
   }
   return result;
 }
@@ -42,12 +48,17 @@ function handshake(enginePath, protocolVersion) {
       }
     };
     const timer = setTimeout(
-      () => finish(new Error(`no initialize response within ${HANDSHAKE_TIMEOUT_MS} ms; stderr: ${stderr}`)),
+      () =>
+        finish(
+          new Error(`no initialize response within ${HANDSHAKE_TIMEOUT_MS} ms; stderr: ${stderr}`),
+        ),
       HANDSHAKE_TIMEOUT_MS,
     );
 
     child.on('error', (error) => finish(error));
-    child.on('close', (code) => finish(new Error(`engine exited with ${code} before answering; stderr: ${stderr}`)));
+    child.on('close', (code) =>
+      finish(new Error(`engine exited with ${code} before answering; stderr: ${stderr}`)),
+    );
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString('utf8');
     });
@@ -55,7 +66,9 @@ function handshake(enginePath, protocolVersion) {
       buffered = Buffer.concat([buffered, chunk]);
       const headerEnd = buffered.indexOf('\r\n\r\n');
       if (headerEnd < 0) return;
-      const length = Number(/Content-Length: *(\d+)/i.exec(buffered.toString('ascii', 0, headerEnd))?.[1]);
+      const length = Number(
+        /Content-Length: *(\d+)/i.exec(buffered.toString('ascii', 0, headerEnd))?.[1],
+      );
       if (!Number.isFinite(length) || buffered.length < headerEnd + 4 + length) return;
       const message = JSON.parse(buffered.toString('utf8', headerEnd + 4, headerEnd + 4 + length));
       if (message.error) finish(new Error(`initialize failed: ${JSON.stringify(message.error)}`));

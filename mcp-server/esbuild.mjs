@@ -6,7 +6,9 @@
 import esbuild from 'esbuild';
 import { readFileSync } from 'node:fs';
 
-const { dependencies } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const { dependencies } = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+);
 const external = Object.keys(dependencies).flatMap((name) => [name, `${name}/*`]);
 
 const result = await esbuild.build({
@@ -26,6 +28,8 @@ const inlined = Object.keys(result.metafile.inputs).filter(
   (input) => input.includes('node_modules') && !input.includes('/@gitglasses/'),
 );
 if (inlined.length > 0) {
-  console.error(`esbuild: third-party code would be inlined into dist/cli.js:\n  ${inlined.join('\n  ')}`);
+  console.error(
+    `esbuild: third-party code would be inlined into dist/cli.js:\n  ${inlined.join('\n  ')}`,
+  );
   process.exit(1);
 }

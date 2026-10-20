@@ -39,12 +39,18 @@ for (let i = 0; i < args.length; i++) {
   else fail(`unknown argument ${arg}`, 2);
 }
 if (!options.vsix || !options.target) {
-  fail('usage: verify-vsix.mjs <file.vsix> --target <target> [--version <v>] [--run] [--extract-engine <path>]', 2);
+  fail(
+    'usage: verify-vsix.mjs <file.vsix> --target <target> [--version <v>] [--run] [--extract-engine <path>]',
+    2,
+  );
 }
 
 const readJson = (file) => JSON.parse(readFileSync(path.join(root, file), 'utf8'));
 const version = options.version ?? readJson('extension/package.json').version;
-const { problems, engine } = inspectVsix(readFileSync(options.vsix), { target: options.target, version });
+const { problems, engine } = inspectVsix(readFileSync(options.vsix), {
+  target: options.target,
+  version,
+});
 if (problems.length > 0) fail(`${path.basename(options.vsix)}:\n  ${problems.join('\n  ')}`);
 
 const writeEngine = (file) => {
@@ -59,7 +65,9 @@ if (engine && options.run) {
     writeEngine(file);
     const { protocolVersion } = readJson('packages/protocol/protocol.schema.json');
     const result = await smokeTestEngine(file, { version, protocolVersion });
-    console.log(`engine ran: ${version}, protocol ${result.protocolVersion}, git CLI ${result.capabilities?.gitCli ? 'found' : 'not found'}`);
+    console.log(
+      `engine ran: ${version}, protocol ${result.protocolVersion}, git CLI ${result.capabilities?.gitCli ? 'found' : 'not found'}`,
+    );
   } catch (error) {
     fail(`${path.basename(options.vsix)}: the packaged engine failed to run: ${error.message}`);
   } finally {
@@ -68,5 +76,7 @@ if (engine && options.run) {
 }
 
 const size = (bytes) => `${(bytes / 1048576).toFixed(1)} MiB`;
-const engineNote = engine ? `; engine ${size(engine.size)} (${size(engine.compressedSize)} compressed)` : '';
+const engineNote = engine
+  ? `; engine ${size(engine.size)} (${size(engine.compressedSize)} compressed)`
+  : '';
 console.log(`${path.basename(options.vsix)}: ok for ${options.target} ${version}${engineNote}`);

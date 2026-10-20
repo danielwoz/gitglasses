@@ -46,7 +46,7 @@ export function sameDirectoryAncestor(
 ): string | undefined {
   const target = identify(root);
   if (!target) return undefined;
-  for (let current = dir; ; ) {
+  for (let current = dir; ;) {
     const identity = identify(current);
     if (identity && identity.dev === target.dev && identity.ino === target.ino) return current;
     const parent = flavor.dirname(current);

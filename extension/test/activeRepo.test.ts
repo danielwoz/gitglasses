@@ -103,14 +103,21 @@ describe('ActiveRepoManager list', () => {
       '.gitmodules',
       '[submodule "core"]\n\tpath = libs/core\n',
     ]);
-    const engine = fakeEngine([repo('r1', ''), repo('r2', 'api'), repo('r3', 'libs/core'), repo('r4', 'node_modules/dep')]);
+    const engine = fakeEngine([
+      repo('r1', ''),
+      repo('r2', 'api'),
+      repo('r3', 'libs/core'),
+      repo('r4', 'node_modules/dep'),
+    ]);
     const { active } = manager(engine);
 
     const list = await active.all();
     expect(list.map((entry) => entry.repoId)).toEqual(['r1', 'r2', 'r3']);
     expect(names(list)).toEqual([path.basename(root), 'api', 'core']);
     // Only the folder's own repository is watched while merely listed.
-    expect(engine.discoveries().filter((request) => request.params.watch !== false)).toHaveLength(1);
+    expect(engine.discoveries().filter((request) => request.params.watch !== false)).toHaveLength(
+      1,
+    );
   });
 
   it('adds a repository reached by opening a file in it', async () => {
@@ -203,7 +210,10 @@ describe('ActiveRepoManager settings', () => {
    *  scan follows the directory listing's order. */
   const ids = (list: readonly { repoId: string }[]): string[] => [
     list[0]?.repoId,
-    ...list.slice(1).map((entry) => entry.repoId).sort(),
+    ...list
+      .slice(1)
+      .map((entry) => entry.repoId)
+      .sort(),
   ];
 
   it('searches as deep as git.repositoryScanMaxDepth, skipping ignored folders', async () => {
@@ -267,7 +277,10 @@ describe('ActiveRepoManager selection', () => {
   it('acts on the stored choice and watches it', async () => {
     layout('.git', 'api/.git');
     const engine = fakeEngine([repo('r1', ''), repo('r2', 'api')]);
-    const { repos, active } = manager(engine, memento({ [ACTIVE_REPO_KEY]: path.join(root, 'api') }));
+    const { repos, active } = manager(
+      engine,
+      memento({ [ACTIVE_REPO_KEY]: path.join(root, 'api') }),
+    );
 
     expect((await active.resolve())?.repoId).toBe('r2');
     expect(repos.isWatched('r2')).toBe(true);
@@ -278,7 +291,11 @@ describe('ActiveRepoManager selection', () => {
     // The workspace folder is a symlink; the engine reports the real path.
     layout('real/.git', 'real/nested/.git');
     const link = path.join(root, 'link');
-    fs.symlinkSync(path.join(root, 'real'), link, process.platform === 'win32' ? 'junction' : 'dir');
+    fs.symlinkSync(
+      path.join(root, 'real'),
+      link,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
     controls.folders = [link];
     const fake = fakeEngine([
       { id: 'r1', root: path.join(root, 'real'), match: path.join(root, 'real') },

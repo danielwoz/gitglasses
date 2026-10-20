@@ -48,30 +48,40 @@ describe('NOTICE', () => {
     const workspace = Object.keys(readJson('extension/package.json').dependencies ?? {});
     expect(workspace.length).toBeGreaterThan(0);
     for (const name of workspace) {
-      const manifest = readJson(path.join('packages', name.replace('@gitglasses/', ''), 'package.json'));
+      const manifest = readJson(
+        path.join('packages', name.replace('@gitglasses/', ''), 'package.json'),
+      );
       for (const dependency of Object.keys(manifest.dependencies ?? {})) {
         if (dependency.startsWith('@gitglasses/')) continue;
-        expect(SECTIONS[dependency], `${dependency} (via ${name}) needs a NOTICE section`).toBeDefined();
+        expect(
+          SECTIONS[dependency],
+          `${dependency} (via ${name}) needs a NOTICE section`,
+        ).toBeDefined();
       }
     }
   });
 
   // Every port vcpkg installed (transitive ones included) must be covered,
   // and its copyright text must appear in full. Needs a local vcpkg install.
-  const installed = process.env.GG_VCPKG_INSTALLED ?? path.join(homedir(), '.cache', 'gitglasses', 'vcpkg_installed');
+  const installed =
+    process.env.GG_VCPKG_INSTALLED ??
+    path.join(homedir(), '.cache', 'gitglasses', 'vcpkg_installed');
   const share = path.join(installed, 'x64-linux', 'share');
   const info = path.join(installed, 'vcpkg', 'info');
-  it.skipIf(!existsSync(share) || !existsSync(info))('reproduces each installed port\'s copyright text', () => {
-    const ports = readdirSync(info)
-      .map((file) => /^(.+?)_[^_]+_x64-linux\.list$/.exec(file)?.[1])
-      .filter((port) => port && !NOT_SHIPPED.has(port));
-    expect(ports.length).toBeGreaterThan(0);
-    for (const port of ports) {
-      expect(SECTIONS[port], `${port} needs a NOTICE section`).toBeDefined();
-      const copyright = readFileSync(path.join(share, port, 'copyright'), 'utf8');
-      // vcpkg's pcre2 copyright only points at the LICENCE file NOTICE quotes.
-      if (port === 'pcre2') continue;
-      expect(squash(notice).includes(squash(copyright)), `${port} copyright text`).toBe(true);
-    }
-  });
+  it.skipIf(!existsSync(share) || !existsSync(info))(
+    "reproduces each installed port's copyright text",
+    () => {
+      const ports = readdirSync(info)
+        .map((file) => /^(.+?)_[^_]+_x64-linux\.list$/.exec(file)?.[1])
+        .filter((port) => port && !NOT_SHIPPED.has(port));
+      expect(ports.length).toBeGreaterThan(0);
+      for (const port of ports) {
+        expect(SECTIONS[port], `${port} needs a NOTICE section`).toBeDefined();
+        const copyright = readFileSync(path.join(share, port, 'copyright'), 'utf8');
+        // vcpkg's pcre2 copyright only points at the LICENCE file NOTICE quotes.
+        if (port === 'pcre2') continue;
+        expect(squash(notice).includes(squash(copyright)), `${port} copyright text`).toBe(true);
+      }
+    },
+  );
 });

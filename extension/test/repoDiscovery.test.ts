@@ -114,7 +114,9 @@ describe('findRepositoryFolders', () => {
 
   it('searches nothing at depth 0', async () => {
     const fake = host(srcTree, []);
-    expect(await findRepositoryFolders('/home/u/src', fake, { maxDepth: 0, ignoredFolders: [] })).toEqual([]);
+    expect(
+      await findRepositoryFolders('/home/u/src', fake, { maxDepth: 0, ignoredFolders: [] }),
+    ).toEqual([]);
     expect(fake.listed).toEqual([]);
   });
 
@@ -148,7 +150,8 @@ describe('parseGitmodulePaths', () => {
   });
 
   it('drops paths that leave the repository', () => {
-    const text = '\tpath = ../outside\n\tpath = /etc\n\tpath = C:/x\n\tpath = a/../../b\n\tpath = ok/';
+    const text =
+      '\tpath = ../outside\n\tpath = /etc\n\tpath = C:/x\n\tpath = a/../../b\n\tpath = ok/';
     expect(parseGitmodulePaths(text)).toEqual(['ok']);
   });
 });
@@ -176,7 +179,10 @@ describe('collectWorkspaceRepos', () => {
       { id: 'r2', root: '/w/main/nested' },
       { id: 'r3', root: '/w/other' },
     ];
-    const found = await collectWorkspaceRepos(['/w/main', '/w/other', '/w/main'], host(tree, repos));
+    const found = await collectWorkspaceRepos(
+      ['/w/main', '/w/other', '/w/main'],
+      host(tree, repos),
+    );
     expect(found.map((repo: FoundRepository) => repo.repoId)).toEqual(['r1', 'r3', 'r2']);
   });
 
@@ -188,7 +194,8 @@ describe('collectWorkspaceRepos', () => {
       { id: 'r3', root: '/w/app/libs/core/third/zlib' },
     ];
     const files = {
-      '/w/app/.gitmodules': '[submodule "core"]\n\tpath = libs/core\n[submodule "docs"]\n\tpath = docs\n',
+      '/w/app/.gitmodules':
+        '[submodule "core"]\n\tpath = libs/core\n[submodule "docs"]\n\tpath = docs\n',
       '/w/app/libs/core/.gitmodules': '[submodule "zlib"]\n\tpath = third/zlib\n',
     };
     const fake = host(tree, repos, files);

@@ -26,7 +26,7 @@ describe('credentialAllowsUrl', () => {
 
   it('refuses every other host', () => {
     expect(credentialAllowsUrl('https://gitlab.com/api/v4/user', 'gitlab.corp.example')).toBe(
-      false
+      false,
     );
     expect(credentialAllowsUrl('https://api.github.com/graphql', 'ghe.corp.example')).toBe(false);
     expect(credentialAllowsUrl('https://evil.example/?github.com', 'github.com')).toBe(false);
@@ -89,7 +89,7 @@ describe('ProviderClient credential guard', () => {
           credentialHost: 'gitlab.corp.example',
           authorize: (auth) => auth.token,
           fetchFn: stubFetch(() => jsonResponse({})).fetchFn,
-        })
+        }),
     ).toThrow(/not on gitlab\.corp\.example/);
   });
 });
@@ -109,14 +109,14 @@ describe('providers never send a credential off its host', () => {
     const { fetchFn, requests } = stubFetch((url) =>
       url.endsWith('/graphql')
         ? jsonResponse({ data: { viewer: { login: 'a' }, search: { nodes: [] } } })
-        : jsonResponse([])
+        : jsonResponse([]),
     );
     const provider = new GitHubProvider({ host: 'ghe.corp.example', fetchFn });
     await provider.getMyPullRequests({ token: 't', host: 'ghe.corp.example' });
     await provider.getIssueOrPr(
       { token: 't', host: 'ghe.corp.example' },
       { provider: 'github', host: 'ghe.corp.example', owner: 'acme', name: 'widgets' },
-      '#7'
+      '#7',
     );
     await provider.getMyIssues({ token: 't', host: 'ghe.corp.example' });
     expect(requests.map((r) => r.url)).toEqual([
@@ -128,7 +128,7 @@ describe('providers never send a credential off its host', () => {
 
   it('GitHub refuses an enterprise host paired with the public API', () => {
     expect(
-      () => new GitHubProvider({ host: 'ghe.corp.example', apiBaseUrl: 'https://api.github.com' })
+      () => new GitHubProvider({ host: 'ghe.corp.example', apiBaseUrl: 'https://api.github.com' }),
     ).toThrow(/not on ghe\.corp\.example/);
   });
 
@@ -139,13 +139,13 @@ describe('providers never send a credential off its host', () => {
     expect(() => new LinearProvider(host)).toThrow(/does not take a "host" option/);
     expect(() => new JiraProvider(host)).toThrow(/does not take a "host" option/);
     expect(
-      () => new BitbucketDCProvider({ baseUrl: 'https://git.corp.example', host: 'x' } as never)
+      () => new BitbucketDCProvider({ baseUrl: 'https://git.corp.example', host: 'x' } as never),
     ).toThrow(/does not take a "host" option/);
-    expect(
-      () => new AzureDevOpsProvider({ organization: 'contoso', host: 'x' } as never)
-    ).toThrow(/does not take a "host" option/);
+    expect(() => new AzureDevOpsProvider({ organization: 'contoso', host: 'x' } as never)).toThrow(
+      /does not take a "host" option/,
+    );
     expect(() => new GitHubProvider({ baseUrl: 'https://x' } as never)).toThrow(
-      /does not take a "baseUrl" option/
+      /does not take a "baseUrl" option/,
     );
   });
 

@@ -10,11 +10,25 @@
 // --out (default dist-npm/) and its path is printed.
 
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NPM_README_TEMPLATE, npmReadmeProblems, publishedManifest, renderNpmReadme } from './lib/mcp-package.mjs';
+import {
+  NPM_README_TEMPLATE,
+  npmReadmeProblems,
+  publishedManifest,
+  renderNpmReadme,
+} from './lib/mcp-package.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packageDir = path.join(root, 'mcp-server');
@@ -37,13 +51,19 @@ for (const file of manifest.files) {
     fail(`mcp-server/${file} is missing; build it first: pnpm --filter "gitglasses-mcp..." build`);
   }
 }
-const readme = renderNpmReadme(readFileSync(path.join(root, NPM_README_TEMPLATE), 'utf8'), manifest.version);
+const readme = renderNpmReadme(
+  readFileSync(path.join(root, NPM_README_TEMPLATE), 'utf8'),
+  manifest.version,
+);
 const problems = npmReadmeProblems(readme, manifest.version);
 if (problems.length > 0) fail(`${NPM_README_TEMPLATE}: ${problems.join('; ')}`);
 
 const stage = mkdtempSync(path.join(tmpdir(), 'gitglasses-mcp-stage-'));
 try {
-  writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(publishedManifest(manifest), null, 2)}\n`);
+  writeFileSync(
+    path.join(stage, 'package.json'),
+    `${JSON.stringify(publishedManifest(manifest), null, 2)}\n`,
+  );
   writeFileSync(path.join(stage, 'README.md'), readme);
   for (const file of ['LICENSE', ...manifest.files]) {
     mkdirSync(path.dirname(path.join(stage, file)), { recursive: true });
@@ -53,12 +73,16 @@ try {
   for (const bin of Object.values(manifest.bin)) chmodSync(path.join(stage, bin), 0o755);
   mkdirSync(out, { recursive: true });
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const packed = execFileSync(npm, ['pack', '--json', '--ignore-scripts', '--pack-destination', out], {
-    cwd: stage,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'inherit'],
-    shell: process.platform === 'win32',
-  });
+  const packed = execFileSync(
+    npm,
+    ['pack', '--json', '--ignore-scripts', '--pack-destination', out],
+    {
+      cwd: stage,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit'],
+      shell: process.platform === 'win32',
+    },
+  );
   console.log(path.join(out, JSON.parse(packed)[0].filename));
 } finally {
   rmSync(stage, { recursive: true, force: true });

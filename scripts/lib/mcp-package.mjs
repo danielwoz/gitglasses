@@ -26,10 +26,13 @@ export function renderNpmReadme(template, version) {
 /** What would make `readme` wrong on the npm page of gitglasses-mcp `version`. */
 export function npmReadmeProblems(readme, version) {
   const problems = [];
-  if (readme.includes('{{') || readme.startsWith('<!--')) problems.push('README still has template markup');
-  if (!readme.includes(`gitglasses-mcp@${version}`)) problems.push(`README does not show how to run gitglasses-mcp@${version}`);
+  if (readme.includes('{{') || readme.startsWith('<!--'))
+    problems.push('README still has template markup');
+  if (!readme.includes(`gitglasses-mcp@${version}`))
+    problems.push(`README does not show how to run gitglasses-mcp@${version}`);
   if (/not on npm yet/i.test(readme)) problems.push('README says the package is not on npm');
-  if (/git clone|pnpm (install|--filter)/.test(readme)) problems.push('README tells readers to build from a clone');
+  if (/git clone|pnpm (install|--filter)/.test(readme))
+    problems.push('README tells readers to build from a clone');
   if (/\/path\/to\/gitglasses\/|mcp-server\/dist|build\/release/.test(readme)) {
     problems.push('README gives paths inside a clone');
   }

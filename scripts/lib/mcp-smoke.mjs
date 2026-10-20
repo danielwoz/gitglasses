@@ -25,7 +25,10 @@ export function smokeTestMcpServer(cliPath, { version, env = {} } = {}) {
       if (error) reject(error);
       else resolve(value);
     };
-    const timer = setTimeout(() => finish(new Error(`no answer within ${TIMEOUT_MS} ms; stderr: ${stderr}`)), TIMEOUT_MS);
+    const timer = setTimeout(
+      () => finish(new Error(`no answer within ${TIMEOUT_MS} ms; stderr: ${stderr}`)),
+      TIMEOUT_MS,
+    );
     const request = (id, method, params) =>
       new Promise((answer) => {
         pending.set(id, answer);
@@ -61,7 +64,9 @@ export function smokeTestMcpServer(cliPath, { version, env = {} } = {}) {
       if (version !== undefined && serverInfo.version !== version) {
         throw new Error(`server reports version ${serverInfo.version}, expected ${version}`);
       }
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
+      );
       const listed = await request(2, 'tools/list', {});
       if (listed.error) throw new Error(`tools/list failed: ${JSON.stringify(listed.error)}`);
       const tools = listed.result.tools.map((tool) => tool.name);

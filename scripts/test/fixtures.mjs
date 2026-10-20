@@ -22,7 +22,12 @@ export function machOHeader({ cpu = 0x0100000c, fileType = 2 } = {}) {
   return header;
 }
 
-export function peHeader({ machine = 0x8664, characteristics = 0x0022, magic = 0x20b, subsystem = 3 } = {}) {
+export function peHeader({
+  machine = 0x8664,
+  characteristics = 0x0022,
+  magic = 0x20b,
+  subsystem = 3,
+} = {}) {
   const pe = 0x80;
   const header = Buffer.alloc(0x200);
   header.write('MZ', 0, 'latin1');
@@ -115,7 +120,12 @@ export function vsixFiles(target, { engine, version = '0.2.0' } = {}) {
     { name: 'extension.vsixmanifest', data: vsixManifest(target) },
     {
       name: 'extension/package.json',
-      data: JSON.stringify({ name: 'gitglasses', version, icon: 'media/icon.png', browser: './dist/web/extension.js' }),
+      data: JSON.stringify({
+        name: 'gitglasses',
+        version,
+        icon: 'media/icon.png',
+        browser: './dist/web/extension.js',
+      }),
     },
     { name: 'extension/media/icon.png', data: pngHeader(256, 256) },
     { name: 'extension/LICENSE.txt', data: 'MIT License' },

@@ -39,7 +39,9 @@ function posixTree(dirs: string[], link: string, target: string): IdentifyPath {
   const ids = new Map(dirs.map((dir, index) => [dir, BigInt(index + 1)]));
   return (fsPath) => {
     const resolved =
-      fsPath === link || fsPath.startsWith(`${link}/`) ? target + fsPath.slice(link.length) : fsPath;
+      fsPath === link || fsPath.startsWith(`${link}/`)
+        ? target + fsPath.slice(link.length)
+        : fsPath;
     const ino = ids.get(resolved);
     return ino === undefined ? undefined : { dev: 1n, ino };
   };

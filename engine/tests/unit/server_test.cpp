@@ -235,10 +235,11 @@ TEST(Server, DiscoverWithoutWatchDefersTheWatch) {
 
   InteractiveSession session;
   session.request(initRequest(1));
-  Json listed = session.request({{"jsonrpc", "2.0"},
-                                 {"id", 2},
-                                 {"method", "repo/discover"},
-                                 {"params", {{"path", fixture.root().string()}, {"watch", false}}}});
+  Json listed =
+      session.request({{"jsonrpc", "2.0"},
+                       {"id", 2},
+                       {"method", "repo/discover"},
+                       {"params", {{"path", fixture.root().string()}, {"watch", false}}}});
   ASSERT_TRUE(listed.contains("result")) << listed.dump();
   const std::string repoId = listed["result"]["repoId"];
 
