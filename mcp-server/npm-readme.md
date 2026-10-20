@@ -110,16 +110,18 @@ an absolute `repoPath`.
 the client's MCP roots, the workspace folders the client shares with it. A
 client that offers no roots gets the server's working directory instead,
 unless that is the filesystem root, your home directory or a directory that
-holds it. `--allow <dir>` (repeatable) or `GITGLASSES_ALLOWED_ROOTS` replaces
-those defaults with the directories you name. A path outside them is rejected
+holds it. `--read <dir>` (repeatable) adds directories to read the same way,
+for clients that share no roots. `--allow <dir>` (repeatable) or
+`GITGLASSES_ALLOWED_ROOTS` replaces the client's roots and the working
+directory with the directories you name, where git may run. A path outside them is rejected
 before it reaches the engine, including via `..` traversal and via a symlink
 that leaves a root, and so is a path whose repository extends outside them.
 
 **Whether git runs.** git runs programs that a repository's own configuration,
 attributes and hooks name (`core.fsmonitor`, filters, textconv drivers, hooks,
 `core.sshCommand`), and a prompt-injected agent can name any path. So
-repositories served from the client's roots are read by an engine that runs
-no git at all: blame, log, search, status, diffs, refs, branch comparisons
+repositories served from the client's roots or a `--read` directory are read
+by an engine that runs no git at all: blame, log, search, status, diffs, refs, branch comparisons
 and the commit graph come straight from the repository. File history,
 patches, code search and the diffs of `git_commit_show` and `git_compare`
 need git and work only in the directories you allow; allow only directories

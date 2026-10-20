@@ -196,7 +196,8 @@ requests. Every tool except `apply_patch` is marked read-only.
 The Home view's **MCP Server** section shows where the server is registered
 and offers the same commands. Each command asks whether the agent may run git
 in this workspace; by default it may not, and the agent's own project is read
-without git.
+without git. The copied configuration also names this workspace's folders,
+since many desktop apps share none with their servers.
 
 *Limits:* registration in the editor needs VS Code 1.101 or newer, or Cursor;
 older releases and other editors use the commands. The configuration the

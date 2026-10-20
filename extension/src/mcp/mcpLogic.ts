@@ -33,9 +33,15 @@ export interface LaunchOptions {
    * the server then reads only its client's own roots, without running git.
    */
   allowedRoots: readonly string[];
+  /**
+   * Directories the server reads without running git (--read), besides its
+   * client's own roots: for clients that share no folders with it.
+   */
+  readRoots?: readonly string[];
 }
 
 const ALLOW_OPTION = '--allow=';
+const READ_OPTION = '--read=';
 
 /**
  * How to start the server. Each directory is its own argument, so no folder
@@ -50,16 +56,27 @@ export function buildLaunch(options: LaunchOptions): McpLaunch {
   if (options.runtime.electron) env.ELECTRON_RUN_AS_NODE = '1';
   return {
     command: options.runtime.command,
-    args: [options.cliPath, ...options.allowedRoots.map((root) => `${ALLOW_OPTION}${root}`)],
+    args: [
+      options.cliPath,
+      ...options.allowedRoots.map((root) => `${ALLOW_OPTION}${root}`),
+      ...(options.readRoots ?? []).map((root) => `${READ_OPTION}${root}`),
+    ],
     env,
   };
 }
 
+function optionValues(launch: McpLaunch, option: string): string[] {
+  return launch.args.filter((arg) => arg.startsWith(option)).map((arg) => arg.slice(option.length));
+}
+
 /** The directories a launch lets git run in (its --allow arguments). */
 export function launchGitRoots(launch: McpLaunch): string[] {
-  return launch.args
-    .filter((arg) => arg.startsWith(ALLOW_OPTION))
-    .map((arg) => arg.slice(ALLOW_OPTION.length));
+  return optionValues(launch, ALLOW_OPTION);
+}
+
+/** The directories a launch reads without git (its --read arguments). */
+export function launchReadRoots(launch: McpLaunch): string[] {
+  return optionValues(launch, READ_OPTION);
 }
 
 /** True when `child` is `parent` or lies inside it. */

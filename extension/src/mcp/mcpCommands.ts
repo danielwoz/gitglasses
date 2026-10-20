@@ -20,6 +20,7 @@ import {
   codexServerToml,
   findOnPath,
   launchGitRoots,
+  launchReadRoots,
   mcpServersJson,
   serverEntry,
   type McpLaunch,
@@ -73,6 +74,7 @@ function displayPath(file: string): string {
 /** What the agent will run, for a confirmation dialog. */
 function describeLaunch(launch: McpLaunch): string {
   const roots = launchGitRoots(launch);
+  const read = launchReadRoots(launch);
   return [
     `Runs: ${launch.command}${launch.env.ELECTRON_RUN_AS_NODE ? ' (as Node)' : ''}`,
     `Script: ${launch.args[0]}`,
@@ -80,6 +82,7 @@ function describeLaunch(launch: McpLaunch): string {
     roots.length > 0
       ? `Git runs in: ${roots.join(', ')}`
       : "Git runs nowhere: the agent's own project is read without running git.",
+    ...(read.length > 0 ? [`Also read without git: ${read.join(', ')}`] : []),
   ].join('\n');
 }
 
@@ -110,24 +113,33 @@ export function registerMcpCommands(options: McpCommandOptions): vscode.Disposab
   /**
    * Where the agent may run git: nowhere unless the user picks this
    * workspace's folders, which is offered only in a trusted workspace.
-   * Undefined when the user cancels.
+   * Without git, Claude Code and Codex read the project they work in, which
+   * the server learns from them; `readFolders` also names this workspace's
+   * folders for agents that share no folders with the server (desktop apps
+   * start it from / or the home directory). Undefined when the user cancels.
    */
-  const chooseGitRoots = async (): Promise<string[] | undefined> => {
+  const chooseRoots = async (
+    readFolders: boolean,
+  ): Promise<{ allow: string[]; read: string[] } | undefined> => {
     const roots = registration.gitRoots();
-    if (roots.length === 0) return [];
+    const read = readFolders ? registration.folderRoots() : [];
+    if (roots.length === 0) return { allow: [], read };
     const picked = await vscode.window.showQuickPick(
       [
         {
           label: '$(lock) Read only, without running git',
           description: 'recommended',
-          detail: "Blame, history, status, diffs and branch comparisons of the agent's project",
-          roots: [] as string[],
+          detail: readFolders
+            ? "Blame, history, status, diffs and branch comparisons of this workspace's folders " +
+              'and of any folders the agent shares'
+            : "Blame, history, status, diffs and branch comparisons of the agent's project",
+          roots: { allow: [], read },
         },
         {
           label: '$(unlock) Also run git in this workspace',
           description: roots.map((root) => path.basename(root)).join(', '),
           detail: 'Adds file history, patches and code search; serves only these folders',
-          roots,
+          roots: { allow: roots, read: [] },
         },
       ],
       {
@@ -139,10 +151,10 @@ export function registerMcpCommands(options: McpCommandOptions): vscode.Disposab
     return picked?.roots;
   };
 
-  const chooseLaunch = async (): Promise<McpLaunch | undefined> => {
-    const roots = await chooseGitRoots();
+  const chooseLaunch = async (readFolders = false): Promise<McpLaunch | undefined> => {
+    const roots = await chooseRoots(readFolders);
     if (roots === undefined) return undefined;
-    const launch = await registration.launch(roots);
+    const launch = await registration.launch(roots.allow, roots.read);
     if (!launch) {
       void vscode.window.showErrorMessage(
         'GitGlasses: the MCP server cannot be started here; see the GitGlasses output for why.',
@@ -284,7 +296,7 @@ export function registerMcpCommands(options: McpCommandOptions): vscode.Disposab
   };
 
   const copyConfig = async (): Promise<void> => {
-    const launch = await chooseLaunch();
+    const launch = await chooseLaunch(true);
     if (!launch) return;
     const json = mcpServersJson(launch);
     await vscode.env.clipboard.writeText(json);

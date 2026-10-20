@@ -95,10 +95,14 @@ export interface McpRegistration extends Disposable {
   status(): McpStatus;
   readonly onDidChangeStatus: Event<McpStatus>;
   /**
-   * How to start the server with git allowed in `allowedRoots`, or undefined
-   * (with the reason logged) when no runtime or bundled script exists.
+   * How to start the server with git allowed in `allowedRoots` and
+   * `readRoots` read without git, or undefined (with the reason logged) when
+   * no runtime or bundled script exists.
    */
-  launch(allowedRoots: readonly string[]): Promise<McpLaunch | undefined>;
+  launch(
+    allowedRoots: readonly string[],
+    readRoots?: readonly string[],
+  ): Promise<McpLaunch | undefined>;
   /**
    * Looks for the runtime ahead of an agent's first request, so the Home
    * view can say early when there is none. Only while the editor's
@@ -107,6 +111,12 @@ export interface McpRegistration extends Disposable {
   checkRuntime(): Promise<void>;
   /** Where the editor's server runs git right now. */
   gitRoots(): string[];
+  /**
+   * The workspace folders as the server compares them, widened to their
+   * repositories, whether or not the workspace is trusted: where a server
+   * may read without git.
+   */
+  folderRoots(): string[];
 }
 
 function emitter<T>(): { event: Event<T>; fire(value: T): void } {
@@ -131,15 +141,20 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
   let registrationFailed = false;
   let cursorRegistered = false;
 
-  const gitRoots = (): string[] =>
+  const rootsFor = (trusted: boolean): string[] =>
     allowedRootsFor({
-      trusted: host.trusted(),
+      trusted,
       folders: host.folders(),
       home: host.home,
       hasGit: (dir) => host.hasGit(dir),
     });
+  const gitRoots = (): string[] => rootsFor(host.trusted());
+  const folderRoots = (): string[] => rootsFor(true);
 
-  const launch = async (allowedRoots: readonly string[]): Promise<McpLaunch | undefined> => {
+  const launch = async (
+    allowedRoots: readonly string[],
+    readRoots: readonly string[] = [],
+  ): Promise<McpLaunch | undefined> => {
     if (host.cliPath === undefined) {
       host.log('MCP server: this build has no dist/mcp/cli.js; run the extension build');
       return undefined;
@@ -157,6 +172,7 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
       cliPath: host.cliPath,
       enginePath: host.enginePath,
       allowedRoots,
+      readRoots,
     });
   };
 
@@ -282,6 +298,7 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
     launch,
     checkRuntime,
     gitRoots,
+    folderRoots,
     dispose: () => {
       for (const disposable of disposables) disposable.dispose();
       if (cursorRegistered) host.api.cursor?.mcp?.unregisterServer?.(MCP_SERVER_NAME);

@@ -57,8 +57,10 @@ and its engine, so most people need no installation at all:
 
 Each command asks whether the agent may run git in the workspace's folders;
 by default it may not, and the server reads the project the agent works in
-without git. The paths point into the installed extension, so run the
-command again after GitGlasses updates. The Home view's **MCP Server**
+without git. Many desktop apps share no folders with their servers, so the
+configuration **Copy MCP Server Config** produces also names the workspace's
+folders, to read without git (`--read`). The paths point into the installed
+extension, so run the command again after GitGlasses updates. The Home view's **MCP Server**
 section shows the registration and offers the same commands.
 
 ## Installation
@@ -158,9 +160,13 @@ re-read whenever the client reports a change. A client that offers no roots
 gets the server's working directory instead, unless that is the filesystem
 root, your home directory or a directory that holds it (such as `/home`),
 which would cover every repository you have.
-Starting the server with `--allow <dir>` (repeatable) or setting
-`GITGLASSES_ALLOWED_ROOTS` replaces those defaults with the directories you
-name; `--allow '*'` admits every path. A path outside them is rejected before
+Starting the server with `--read <dir>` (repeatable) adds directories to read
+the same way, without git, for clients that share no roots: desktop apps
+often start their servers from `/` or your home directory. Starting it with
+`--allow <dir>` (repeatable) or setting `GITGLASSES_ALLOWED_ROOTS` replaces
+the client's roots and the working directory with the directories you name,
+where git may run; `--allow '*'` admits every path. Each `--allow` and
+`--read` value is one directory, taken as written. A path outside them is rejected before
 it reaches the engine, including via `..` traversal and via a symlink that
 leaves a root, since both sides of the comparison are canonicalised. A path
 whose repository extends outside them, such as a subfolder of a larger
@@ -170,8 +176,9 @@ repository, is rejected too, because `repo/discover` walks *upwards*.
 attributes and hooks name: `core.fsmonitor`, clean and smudge filters,
 textconv drivers, hooks, `core.sshCommand`. A repository that arrived as an
 archive or a shared folder can carry any of them, and a prompt-injected agent
-can name its path. So repositories served from the client's roots are read by
-an engine started with `--restricted`, which runs no git at all: blame, log,
+can name its path. So repositories served from the client's roots or a
+`--read` directory are read by an engine started with `--restricted`, which
+runs no git at all: blame, log,
 search, status, diffs, refs and the commit graph come straight from the
 repository through libgit2, and so does `git_compare`'s merge base, commits
 and file list. `git_file_history`, `create_patch`, `apply_patch` and

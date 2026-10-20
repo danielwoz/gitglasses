@@ -385,6 +385,22 @@ describe('editors without an MCP registration API', () => {
     expect(launch?.env.GITGLASSES_ALLOWED_ROOTS).toBe('');
     expect(launch?.args).toEqual(['/ext/dist/mcp/cli.js']);
   });
+
+  // Copy MCP Server Config offers the folders to read without git, which is
+  // safe whether or not the workspace is trusted.
+  it('offers the workspace folders to read without git, trusted or not', async () => {
+    const { host, state } = setup({});
+    state.trusted = false;
+    const registration = registerMcpServer(host);
+    expect(registration.gitRoots()).toEqual([]);
+    expect(registration.folderRoots()).toEqual([folderA, folderB]);
+    const launch = await registration.launch([], registration.folderRoots());
+    expect(launch?.args).toEqual([
+      '/ext/dist/mcp/cli.js',
+      `--read=${folderA}`,
+      `--read=${folderB}`,
+    ]);
+  });
 });
 
 describe('Home view status', () => {

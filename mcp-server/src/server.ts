@@ -216,6 +216,11 @@ export interface ToolContext {
   /** Directories passed with --allow; merged with GITGLASSES_ALLOWED_ROOTS. */
   allow?: readonly string[];
   /**
+   * Directories passed with --read: served like the client's roots, by the
+   * engine that runs no git, for clients that share no folders.
+   */
+  read?: readonly string[];
+  /**
    * The client's MCP roots as local directories, or undefined when the client
    * offers none. createServer supplies this from the MCP session.
    */
@@ -253,15 +258,21 @@ export function createToolHandlers(context: ToolContext) {
   const MAX_REPO_IDS = 64;
 
   const allowedRoots = parseAllowedRoots(env.GITGLASSES_ALLOWED_ROOTS, context.allow);
+  // Like --allow values, each --read value is one directory, taken whole.
+  const readRoots = (context.read ?? [])
+    .filter((entry) => entry !== '')
+    .map((entry) => canonicalPath(entry));
 
   /**
-   * The directories served without the operator naming them: the client's
-   * MCP roots, or this process's working directory when the client offers
-   * none (see workingDirectoryRoot). An allow list replaces them entirely.
+   * The directories served without git: those passed with --read, and the
+   * client's MCP roots, or this process's working directory when the client
+   * offers none (see workingDirectoryRoot). An allow list replaces the
+   * client's roots and the working directory, not --read.
    */
   async function workspaceRoots(): Promise<readonly string[]> {
-    if (allowedRoots.length > 0 || !context.restrictedClient) return [];
-    return (await context.clientRoots?.()) ?? workingDirectoryRoot();
+    if (!context.restrictedClient) return [];
+    if (allowedRoots.length > 0) return readRoots;
+    return [...readRoots, ...((await context.clientRoots?.()) ?? workingDirectoryRoot())];
   }
 
   /**
@@ -276,17 +287,20 @@ export function createToolHandlers(context: ToolContext) {
   }
 
   async function outsideRootsError(target: string, repoRoot?: string): Promise<ToolError> {
+    const readable = await workspaceRoots();
     const where =
       allowedRoots.length > 0 || !context.restrictedClient
-        ? `the directories this server was started with (${allowedRoots.join(', ') || 'none'})`
-        : `the client's workspace roots (${(await workspaceRoots()).join(', ') || 'none'})`;
+        ? `the directories this server was started with (${[...allowedRoots, ...readable].join(', ') || 'none'})`
+        : readRoots.length > 0
+          ? `the directories this server was started with and the client's workspace roots (${readable.join(', ')})`
+          : `the client's workspace roots (${readable.join(', ') || 'none'})`;
     const subject =
       repoRoot === undefined
         ? `${target} is outside ${where}`
         : `${target} belongs to the repository at ${repoRoot}, which extends outside ${where}`;
     return new ToolError(
-      `${subject}. Start the server with --allow <dir> or set GITGLASSES_ALLOWED_ROOTS ` +
-        'to read repositories elsewhere.',
+      `${subject}. Start the server with --read <dir> to read repositories elsewhere ` +
+        'without git, or with --allow <dir> or GITGLASSES_ALLOWED_ROOTS to let git run there too.',
     );
   }
 
@@ -361,8 +375,9 @@ export function createToolHandlers(context: ToolContext) {
     return (
       `${tool} needs git for ${purpose}, and this server runs git only in repositories ` +
       'inside the directories it was started with (--allow or GITGLASSES_ALLOWED_ROOTS). ' +
-      `${repoPath} is served from the client's workspace roots without running git, because ` +
-      "git would run programs that the repository's own configuration names."
+      `${repoPath} is read without running git (it is in the client's workspace roots or a ` +
+      "--read directory), because git would run programs that the repository's own " +
+      'configuration names.'
     );
   }
 

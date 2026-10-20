@@ -12,6 +12,7 @@ import {
   isNodeVersionOutput,
   isSupportedNodeVersion,
   launchGitRoots,
+  launchReadRoots,
   mcpServersJson,
   mergeCodexConfig,
   unifiedDiff,
@@ -65,6 +66,27 @@ describe('buildLaunch', () => {
       GITGLASSES_ENGINE: '/ext/bin/gitglasses-engine',
       GITGLASSES_ALLOWED_ROOTS: '',
     });
+  });
+});
+
+describe('read roots', () => {
+  it('names directories read without git after those where git runs', () => {
+    const built = buildLaunch({
+      runtime: { command: '/usr/bin/node', electron: false },
+      cliPath: '/ext/dist/mcp/cli.js',
+      enginePath: '/ext/bin/gitglasses-engine',
+      allowedRoots: ['/work/app'],
+      readRoots: ['/work/docs:old', '/work/site'],
+    });
+    expect(built.args).toEqual([
+      '/ext/dist/mcp/cli.js',
+      '--allow=/work/app',
+      '--read=/work/docs:old',
+      '--read=/work/site',
+    ]);
+    expect(launchGitRoots(built)).toEqual(['/work/app']);
+    expect(launchReadRoots(built)).toEqual(['/work/docs:old', '/work/site']);
+    expect(launchReadRoots(launch)).toEqual([]);
   });
 });
 
