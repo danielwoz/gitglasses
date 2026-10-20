@@ -1,14 +1,97 @@
 name: Release
 
+# A v* tag on a commit of main builds every engine, packages and runs one
+# VSIX per target, waits for CI to have passed on the same commit, and then
+# publishes to the Visual Studio Marketplace, Open VSX and npm from jobs
+# that each need approval in the `release` environment. The GitHub release
+# is created last, once both extension registries have every package.
+#
+# Running the workflow by hand (Actions > Release > Run workflow) is a dry
+# run on the chosen branch: it builds, packages and smoke-tests everything,
+# packs the npm package, and publishes nothing. See docs/releasing.md.
+
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
 
 env:
   VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+  # Multi-arch index digest of alpine:3.22, for the Alpine engines and their
+  # smoke tests.
+  ALPINE_IMAGE: alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 
 jobs:
+  version:
+    name: Version and branch checks
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # The tag, the extension, MCP server and root manifests, the engine's
+      # CMake version and the changelog must all name the same version. Odd
+      # minor versions ship on the pre-release channel.
+      - id: check
+        name: Versions agree
+        run: |
+          args=()
+          if [ "$GITHUB_EVENT_NAME" = push ]; then args=(--tag "$GITHUB_REF_NAME"); fi
+          node scripts/check-versions.mjs "${args[@]}" | tee -a "$GITHUB_OUTPUT"
+      - name: Tagged commit is on main
+        if: github.event_name == 'push'
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main. Release from main, and never move a published tag: bump the version instead."
+            exit 1
+          fi
+
+  # Publishing waits for CI to pass on the tagged commit itself: its run from
+  # the push to main (or a manual run of it). A pull request run does not
+  # count, because it tested the pull request merged into its base branch.
+  # The builds below run meanwhile.
+  ci:
+    name: CI passed on the tagged commit
+    if: github.event_name == 'push'
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Wait for CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-ci.mjs --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --timeout 230 --grace 30
+
   engine:
+    name: engine (${{ matrix.target }})
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +134,8 @@ jobs:
             msvc_arch: arm64
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || null }}
+    env:
+      ENGINE: build/release/engine/gitglasses-engine${{ startsWith(matrix.target, 'win32-') && '.exe' || '' }}
     steps:
       - name: Container build tools (manylinux)
         if: ${{ matrix.container != '' && matrix.container != null }}
@@ -60,18 +145,18 @@ jobs:
           ln -sf /opt/python/cp312-cp312/bin/cmake /usr/local/bin/cmake
           ln -sf /opt/python/cp312-cp312/bin/ninja /usr/local/bin/ninja
           git config --global --add safe.directory '*'
-      - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         if: ${{ matrix.msvc_arch != '' && matrix.msvc_arch != null }}
         with:
           arch: ${{ matrix.msvc_arch }}
       # VsDevCmd exports its own VCPKG_ROOT (VS-bundled vcpkg); re-point ours.
       - name: Restore VCPKG_ROOT
         if: ${{ matrix.msvc_arch != '' && matrix.msvc_arch != null }}
-        shell: bash
         run: echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
       - name: Bootstrap vcpkg
-        shell: bash
         run: |
           BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
           git init -q "$VCPKG_ROOT"
@@ -80,14 +165,13 @@ jobs:
           git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics || "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
       - name: Cache vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/gitglasses/vcpkg_installed
             ~/.cache/vcpkg/archives
           key: vcpkg-release-${{ matrix.target }}-${{ hashFiles('vcpkg.json') }}
       - name: Install deps + build
-        shell: bash
         run: |
           "$VCPKG_ROOT/vcpkg" install --triplet ${{ matrix.triplet }} \
             --overlay-triplets=ci/triplets \
@@ -102,39 +186,53 @@ jobs:
           cmake --build --preset release
       - name: Verify macOS floor
         if: ${{ matrix.osx_target != '' && matrix.osx_target != null }}
-        shell: bash
         run: |
           # The binary's minimum OS must equal the intended floor, not
           # whatever the runner's SDK defaulted to.
-          minos=$(otool -l build/release/engine/gitglasses-engine \
+          minos=$(otool -l "$ENGINE" \
             | grep -A3 'LC_BUILD_VERSION\|LC_VERSION_MIN_MACOSX' \
             | grep -oE '(minos|version) [0-9.]+' | awk '{print $2}' | head -1)
           echo "minos: $minos (want ${{ matrix.osx_target }})"
           [ "$minos" = "${{ matrix.osx_target }}" ]
       - name: Verify glibc floor (linux)
         if: ${{ matrix.static_runtime == 'ON' }}
-        shell: bash
         run: |
           # The binary must not need glibc newer than 2.28 (VS Code's floor)
           # and must not depend on libstdc++/libgcc at all.
-          max=$(objdump -T build/release/engine/gitglasses-engine \
-            | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1)
+          max=$(objdump -T "$ENGINE" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1)
           echo "max glibc symbol: $max"
           [ "$(printf '%s\n2.28\n' "${max#GLIBC_}" | sort -V | tail -1)" = "2.28" ]
-          ! objdump -p build/release/engine/gitglasses-engine \
-            | grep -E 'NEEDED.*(libstdc\+\+|libgcc)'
+          ! objdump -p "$ENGINE" | grep -E 'NEEDED.*(libstdc\+\+|libgcc)'
       - name: Test
-        shell: bash
         run: |
           git config --global user.name CI
           git config --global user.email ci@example.invalid
           ctest --preset release
+      # RelWithDebInfo carries full debug information (about 90% of the Linux
+      # binary). The shipped engine goes without it; the symbols are kept as
+      # an artifact and attached to the GitHub release for crash reports.
+      # MSVC already writes them to a separate .pdb.
+      - name: Split debug info (Linux)
+        if: ${{ startsWith(matrix.target, 'linux-') }}
+        working-directory: build/release/engine
+        run: |
+          objcopy --only-keep-debug gitglasses-engine gitglasses-engine.debug
+          strip --strip-unneeded gitglasses-engine
+          objcopy --add-gnu-debuglink=gitglasses-engine.debug gitglasses-engine
+      - name: Split debug info (macOS)
+        if: ${{ startsWith(matrix.target, 'darwin-') }}
+        working-directory: build/release/engine
+        run: |
+          dsymutil gitglasses-engine -o gitglasses-engine.dSYM
+          strip -S -x gitglasses-engine
+          # Stripping invalidates the linker's ad-hoc signature, and Apple
+          # silicon refuses to run an unsigned binary; sign it again.
+          codesign --force --sign - gitglasses-engine
       # Signs + notarizes automatically once Apple credentials exist as
       # secrets; skips with a notice otherwise (unsigned binaries still work —
       # VSIX contents are not subject to Gatekeeper's quarantine flow).
       - name: Codesign + notarize (macOS)
         if: ${{ matrix.osx_target != '' && matrix.osx_target != null }}
-        shell: bash
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -153,24 +251,107 @@ jobs:
           security import cert.p12 -k ci.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k ci ci.keychain
           codesign --force --options runtime --timestamp \
-            --sign "Developer ID Application" build/release/engine/gitglasses-engine
-          ditto -c -k build/release/engine/gitglasses-engine engine.zip
+            --sign "Developer ID Application" "$ENGINE"
+          ditto -c -k "$ENGINE" engine.zip
           xcrun notarytool submit engine.zip --wait \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
-      - uses: actions/upload-artifact@v4
+      # The exact binary that ships, after stripping and signing.
+      - name: Run the engine
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          printed=$("$ENGINE" --version | tr -d '\r')
+          echo "gitglasses-engine --version: $printed"
+          if [ "$printed" != "$VERSION" ]; then
+            echo "::error::the ${{ matrix.target }} engine reports $printed, expected $VERSION"
+            exit 1
+          fi
+      # Exactly one file: an MSVC build directory also holds the import
+      # library (gitglasses-engine.lib), .exp and .pdb next to the .exe.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: engine-${{ matrix.target }}
-          path: build/release/engine/gitglasses-engine*
+          path: ${{ env.ENGINE }}
           if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: symbols-${{ matrix.target }}
+          path: |
+            build/release/engine/gitglasses-engine.debug
+            build/release/engine/gitglasses-engine.pdb
+            build/release/engine/gitglasses-engine.dSYM
+          if-no-files-found: error
+          retention-days: 90
+
+  # Fully static musl engines, built in an Alpine container on a host of the
+  # target architecture (JavaScript actions cannot run inside Alpine job
+  # containers on arm64, so the container is driven with docker directly).
+  engine-alpine:
+    name: engine (${{ matrix.target }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: alpine-x64
+            os: ubuntu-24.04
+          - target: alpine-arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      ENGINE_DIR: build/${{ matrix.target }}/engine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cache vcpkg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/${{ matrix.target }}
+          key: vcpkg-release-${{ matrix.target }}-${{ hashFiles('vcpkg.json') }}
+      - name: Build and test in Alpine
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/src" "$ALPINE_IMAGE" sh /src/scripts/build-alpine-engine.sh
+      - name: Split debug info
+        working-directory: ${{ env.ENGINE_DIR }}
+        run: |
+          objcopy --only-keep-debug gitglasses-engine gitglasses-engine.debug
+          strip --strip-unneeded gitglasses-engine
+          objcopy --add-gnu-debuglink=gitglasses-engine.debug gitglasses-engine
+      # Static, so it runs both on Alpine and on the glibc host.
+      - name: Run the engine
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          on_host=$("$ENGINE_DIR/gitglasses-engine" --version)
+          on_alpine=$(docker run --rm -v "$GITHUB_WORKSPACE/$ENGINE_DIR:/e:ro" "$ALPINE_IMAGE" /e/gitglasses-engine --version)
+          echo "host: $on_host, alpine: $on_alpine"
+          if [ "$on_host" != "$VERSION" ] || [ "$on_alpine" != "$VERSION" ]; then
+            echo "::error::the ${{ matrix.target }} engine reports $on_host / $on_alpine, expected $VERSION"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engine-${{ matrix.target }}
+          path: ${{ env.ENGINE_DIR }}/gitglasses-engine
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: symbols-${{ matrix.target }}
+          path: ${{ env.ENGINE_DIR }}/gitglasses-engine.debug
+          if-no-files-found: error
+          retention-days: 90
 
   engine-wasm:
+    needs: version
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           version: 6.0.3
       - name: Bootstrap vcpkg
@@ -182,7 +363,7 @@ jobs:
           git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - name: Cache vcpkg wasm packages
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/gitglasses/vcpkg_wasm
@@ -201,82 +382,380 @@ jobs:
           cmake --build --preset wasm
       - name: Harness
         run: node engine/wasm-test/run.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: engine-wasm-artifacts
           path: build/wasm/engine/gitglasses-engine-wasm.*
           if-no-files-found: error
 
+  # One VSIX per target. package-vsix.mjs refuses an engine whose format or
+  # CPU does not match the target and inspects the finished package.
   package:
-    needs: [engine, engine-wasm]
-    runs-on: ubuntu-22.04
+    name: package (${{ matrix.target }})
+    needs: [version, engine, engine-alpine, engine-wasm]
+    runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
-        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64, win32-arm64]
+        target:
+          - linux-x64
+          - linux-arm64
+          - alpine-x64
+          - alpine-arm64
+          - darwin-x64
+          - darwin-arm64
+          - win32-x64
+          - win32-arm64
+          - web
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ matrix.target != 'web' }}
         with:
           name: engine-${{ matrix.target }}
           path: engine-bin/
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: engine-wasm-artifacts
           path: build/wasm/engine/
-      - name: Package VSIX
+      - name: Install and build
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-          mkdir -p dist
-          node scripts/package-vsix.mjs \
-            --engine "$(find engine-bin -name 'gitglasses-engine*' -type f | head -1)" \
-            --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@v4
+      - name: Package VSIX
+        env:
+          TARGET: ${{ matrix.target }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          args=(--target "$TARGET")
+          case "$TARGET" in
+            web) ;;
+            win32-*) args+=(--engine engine-bin/gitglasses-engine.exe) ;;
+            *) args+=(--engine engine-bin/gitglasses-engine) ;;
+          esac
+          if [ "$PRERELEASE" = true ]; then args+=(--pre-release); fi
+          node scripts/package-vsix.mjs "${args[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vsix-${{ matrix.target }}
           path: dist/*.vsix
+          if-no-files-found: error
 
-  publish:
-    needs: package
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+  # Runs the engine from inside each packaged VSIX on its own platform:
+  # --version and an initialize handshake must report the release version.
+  smoke:
+    name: run packaged engine (${{ matrix.target }})
+    needs: [version, package]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-24.04
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+          - target: alpine-x64
+            os: ubuntu-24.04
+          - target: alpine-arm64
+            os: ubuntu-24.04-arm
+          # Under Rosetta 2 on the Apple silicon runner.
+          - target: darwin-x64
+            os: macos-14
+          - target: darwin-arm64
+            os: macos-14
+          - target: win32-x64
+            os: windows-2022
+          - target: win32-arm64
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vsix-${{ matrix.target }}
+          path: dist/
+      - name: Inspect and run
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/verify-vsix.mjs dist/*.vsix --target "$TARGET" --version "$VERSION" --run
+      - name: Run inside Alpine
+        if: ${{ startsWith(matrix.target, 'alpine-') }}
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mkdir -p alpine-engine
+          node scripts/verify-vsix.mjs dist/*.vsix --target "$TARGET" --version "$VERSION" \
+            --extract-engine alpine-engine/gitglasses-engine
+          printed=$(docker run --rm -v "$PWD/alpine-engine:/e:ro" "$ALPINE_IMAGE" /e/gitglasses-engine --version)
+          if [ "$printed" != "$VERSION" ]; then
+            echo "::error::the packaged $TARGET engine reports $printed inside Alpine, expected $VERSION"
+            exit 1
+          fi
+
+  package-mcp:
+    name: package (gitglasses-mcp)
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # The tarball carries the npm README (mcp-server/npm-readme.md) in place
+      # of the repository README, which describes running from a clone.
+      - name: Build and pack
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter "gitglasses-mcp..." build
+          node scripts/pack-mcp.mjs --out dist-npm
+      # Installs the tarball into an empty directory as npx would, checks its
+      # files and README, and runs it.
+      - name: Verify the package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/verify-mcp-package.mjs "dist-npm/gitglasses-mcp-$VERSION.tgz" --version "$VERSION"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-package
+          path: dist-npm/*.tgz
+          if-no-files-found: error
+
+  # Everything the GitHub release carries. Every publish job waits for it, so
+  # a release that cannot be fully described never reaches a registry.
+  release-assets:
+    needs: [version, smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+          path: release/
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: symbols-*
+          path: symbols/
+      - name: Symbols, checksums and notes
+        run: |
+          for dir in symbols/symbols-*; do
+            target=${dir#symbols/symbols-}
+            tar -C "$dir" -czf "release/gitglasses-engine-symbols-$target-$VERSION.tar.gz" .
+          done
+          (cd release && sha256sum -- * > SHA256SUMS)
+          cat release/SHA256SUMS
+          # The release notes are this version's changelog section, read by
+          # the same parser the version job checked it with.
+          node scripts/release-notes.mjs "$VERSION" > release-notes.md
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: github.event_name == 'push'
+        with:
+          subject-path: release/*.vsix
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: |
+            release/
+            release-notes.md
+          if-no-files-found: error
+
+  # Each registry publishes in its own job, so one failing never blocks the
+  # other, and --skip-duplicate lets a re-run finish a partial publish. A
+  # missing credential fails the job; it never skips. The tools are the
+  # exact versions pinned by the release-scripts package.
+  publish-marketplace:
+    name: publish (Visual Studio Marketplace)
+    if: github.event_name == 'push'
+    needs: [version, ci, smoke, release-assets]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile --filter @gitglasses/release-scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: vsix-*
           merge-multiple: true
           path: dist/
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      # Microsoft Entra ID workload identity federation: the managed identity
+      # behind AZURE_CLIENT_ID is a member of the gitglasses publisher, and no
+      # secret is stored. VSCE_PAT is used only until those variables exist;
+      # global Azure DevOps PATs stop working on 2026-12-01.
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        if: ${{ vars.AZURE_CLIENT_ID != '' }}
         with:
-          files: dist/*.vsix
-          generate_release_notes: true
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Publish
+        working-directory: scripts
+        env:
+          USE_ENTRA: ${{ vars.AZURE_CLIENT_ID != '' }}
+          VSCE_PAT: ${{ vars.AZURE_CLIENT_ID == '' && secrets.VSCE_PAT || '' }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          if [ "$USE_ENTRA" = true ]; then
+            auth=(--azure-credential)
+          elif [ -n "$VSCE_PAT" ]; then
+            auth=() # vsce reads VSCE_PAT from the environment
+          else
+            echo "::error::No Marketplace credential in the release environment. Set the AZURE_CLIENT_ID and AZURE_TENANT_ID variables (docs/releasing.md), or the VSCE_PAT secret until then."
+            exit 1
+          fi
+          flags=(--skip-duplicate)
+          if [ "$PRERELEASE" = true ]; then flags+=(--pre-release); fi
+          pnpm exec vsce publish "${auth[@]}" "${flags[@]}" --packagePath ../dist/*.vsix
 
-      # Marketplace publishes run automatically once the tokens are configured
-      # as repository secrets; without them the steps no-op with a notice.
-      - name: Publish to VS Code Marketplace
+  publish-openvsx:
+    name: publish (Open VSX)
+    if: github.event_name == 'push'
+    needs: [version, ci, smoke, release-assets]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile --filter @gitglasses/release-scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+          path: dist/
+      # Open VSX trusted publishing (OIDC) once it is registered for this
+      # workflow and OVSX_TRUSTED_PUBLISHING is true; until then the OVSX_PAT
+      # secret, which the first publish always needs.
+      - name: Publish
+        working-directory: scripts
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          TRUSTED: ${{ vars.OVSX_TRUSTED_PUBLISHING == 'true' }}
+          OVSX_PAT: ${{ vars.OVSX_TRUSTED_PUBLISHING != 'true' && secrets.OVSX_PAT || '' }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          if [ -z "$VSCE_PAT" ]; then
-            echo "::notice::VSCE_PAT not configured — skipping Marketplace publish"
+          if [ "$TRUSTED" = true ]; then
+            auth=(--trusted-publishing)
+          elif [ -n "$OVSX_PAT" ]; then
+            auth=() # ovsx reads OVSX_PAT from the environment
+          else
+            echo "::error::No Open VSX credential in the release environment. Set the OVSX_PAT secret, or the OVSX_TRUSTED_PUBLISHING variable once trusted publishing is registered (docs/releasing.md)."
+            exit 1
+          fi
+          flags=(--skip-duplicate)
+          if [ "$PRERELEASE" = true ]; then flags+=(--pre-release); fi
+          pnpm exec ovsx publish "${auth[@]}" "${flags[@]}" --packagePath ../dist/*.vsix
+
+  publish-npm:
+    name: publish (npm gitglasses-mcp)
+    if: github.event_name == 'push'
+    needs: [version, ci, package-mcp, release-assets]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
+      - run: npm install -g npm@11.20.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-package
+          path: dist-npm/
+      # npm trusted publishing (OIDC) once configured for this workflow on
+      # npmjs.com and NPM_TRUSTED_PUBLISHING is true; until then NPM_TOKEN.
+      # Either way the package carries a provenance attestation.
+      - name: Publish
+        env:
+          TRUSTED: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
+          NODE_AUTH_TOKEN: ${{ vars.NPM_TRUSTED_PUBLISHING != 'true' && secrets.NPM_TOKEN || '' }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          if [ "$TRUSTED" != true ] && [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::No npm credential in the release environment. Set the NPM_TOKEN secret for the first publish, then configure trusted publishing and the NPM_TRUSTED_PUBLISHING variable (docs/releasing.md)."
+            exit 1
+          fi
+          if [ "$(npm view "gitglasses-mcp@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "gitglasses-mcp@$VERSION is already on npm"
             exit 0
           fi
-          for vsix in dist/*.vsix; do
-            npx --yes @vscode/vsce publish --packagePath "$vsix"
-          done
-      - name: Publish to Open VSX
+          tag=latest
+          if [ "$PRERELEASE" = true ]; then tag=next; fi
+          npm publish "dist-npm/gitglasses-mcp-$VERSION.tgz" --provenance --access public --tag "$tag"
+
+  # Created only after both extension registries have every package. A
+  # re-run uploads any missing assets to the existing release.
+  github-release:
+    name: GitHub release
+    if: github.event_name == 'push'
+    needs: [version, release-assets, publish-marketplace, publish-openvsx]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: assets/
+      - name: Create the release
         env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          if [ -z "$OVSX_PAT" ]; then
-            echo "::notice::OVSX_PAT not configured — skipping Open VSX publish"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" assets/release/* --clobber
             exit 0
           fi
-          for vsix in dist/*.vsix; do
-            npx --yes ovsx publish "$vsix" -p "$OVSX_PAT"
-          done
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" assets/release/* --verify-tag \
+            --title "GitGlasses $VERSION" --notes-file assets/release-notes.md "${flags[@]}"

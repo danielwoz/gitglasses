@@ -1,3 +1,8 @@
+# version.h carries the project version into main.cpp and server.cpp.
+configure_file(src/version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.h" @ONLY)
+add_library(gg_version INTERFACE)
+target_include_directories(gg_version INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 if(EMSCRIPTEN)
   # Wasm build: one module target from the service/cache/core/rpc sources.
   # Excluded relative to native: exec/git_process.cpp + exec/cli_detect's
@@ -55,6 +60,7 @@ if(EMSCRIPTEN)
     $<$<BOOL:${GG_WARNINGS_AS_ERRORS}>:-Werror>
     -Wno-missing-designated-field-initializers)
   target_link_libraries(gitglasses-engine-wasm PRIVATE
+    gg_version
     nlohmann_json::nlohmann_json
     libgit2::libgit2package)
   target_link_options(gitglasses-engine-wasm PRIVATE
@@ -181,10 +187,13 @@ add_executable(gitglasses-engine
   src/main.cpp
   src/server.cpp
 )
-target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_warnings)
+target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_version gg_warnings)
 
 if(GG_STATIC_RUNTIME AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(gitglasses-engine PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+if(GG_FULLY_STATIC AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(gitglasses-engine PRIVATE -static)
 endif()
 
 if(GG_BUILD_TESTS)

@@ -2,6 +2,7 @@ build/
 out/
 node_modules/
 dist/
+dist-npm/
 dist-e2e/
 .vscode-test/
 *.vsix
@@ -17,3 +18,7 @@ extension/.vscode-test-web/
 
 # Personal CMake preset overrides.
 CMakeUserPresets.json
+
+# Staged into the extension only while package-vsix.mjs runs.
+extension/LICENSE
+extension/NOTICE

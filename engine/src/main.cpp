@@ -10,10 +10,9 @@
 #include "exec/sequence_editor.h"
 #include "server.h"
 #include "util/log.h"
+#include "version.h"
 
 namespace {
-
-constexpr const char* kVersion = "0.1.2";
 
 int printUsage() {
   std::cerr << "usage: gitglasses-engine --stdio [--log-level <level>]\n"
@@ -46,7 +45,7 @@ int main(int argc, char** argv) {
     if (arg == "--stdio") {
       stdio = true;
     } else if (arg == "--version") {
-      std::cout << kVersion << "\n";
+      std::cout << gg::kVersion << "\n";
       return 0;
     } else if (arg == "--log-level" && i + 1 < argc) {
       logLevel = argv[++i];

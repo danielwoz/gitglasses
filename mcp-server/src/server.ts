@@ -41,6 +41,7 @@ import {
   truncateText,
   type DiffFileEntry,
 } from './format.js';
+import { SERVER_VERSION } from './version.js';
 
 /**
  * A bare hostname, optionally with a port: letters, digits, hyphens and dots.
@@ -760,7 +761,7 @@ const readOnly = { readOnlyHint: true } as const;
 
 export function createServer(context: ToolContext): McpServer {
   const handlers = createToolHandlers(context);
-  const server = new McpServer({ name: 'gitglasses', version: '0.1.0' });
+  const server = new McpServer({ name: 'gitglasses', version: SERVER_VERSION });
 
   server.registerTool(
     'git_blame',

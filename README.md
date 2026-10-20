@@ -18,6 +18,43 @@ analysis engine.
 - **Offline-capable AI.** AI features are bring-your-own-key (Anthropic,
   OpenAI, Gemini, VS Code language models) or fully offline via Ollama.
 
+## Install
+
+From 0.2.0, every release is published to the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gitglasses.gitglasses)
+for VS Code, and to [Open VSX](https://open-vsx.org/extension/gitglasses/gitglasses)
+for VSCodium, Cursor, Windsurf, Theia, code-server, Gitpod and other Open VSX
+hosts. Search for GitGlasses in the Extensions view, or:
+
+```sh
+code --install-extension gitglasses.gitglasses
+```
+
+The editor picks the package for its platform: Windows (x64, arm64), macOS
+(Intel, Apple silicon), Linux (x64, arm64; glibc 2.28 or newer) and Alpine
+Linux (x64, arm64) packages carry the native engine, and the `web` package
+runs a read-only WebAssembly engine on vscode.dev and github.dev. `git` 2.34
+or newer on `PATH` is needed outside the browser.
+
+Each [GitHub release](https://github.com/danielwoz/gitglasses/releases) also
+carries every `.vsix` with a `SHA256SUMS` file and build provenance
+attestations, for offline installs:
+
+```sh
+gh attestation verify gitglasses-linux-x64-0.2.0.vsix --repo danielwoz/gitglasses
+code --install-extension gitglasses-linux-x64-0.2.0.vsix
+```
+
+What changed in each release is in [the changelog](extension/CHANGELOG.md).
+
+## MCP server
+
+`gitglasses-mcp` (in `mcp-server/`) is a stdio MCP server that gives AI agents
+blame, history, the commit graph, status, diffs, patches and pull requests
+through the same engine. It is not on npm yet: build it from a clone and
+register `node mcp-server/dist/cli.js` with your client, as
+[its README](mcp-server/README.md) describes.
+
 ## Layout
 
 | Path | What |

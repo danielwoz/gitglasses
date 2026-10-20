@@ -1,6 +1,5 @@
 {
   "name": "gitglasses",
-  "version-string": "0.1.0",
   "builtin-baseline": "9ff1bd435a9e0591a223033766f6de6260c080ad",
   "dependencies": [
     {

@@ -2,9 +2,18 @@
   "name": "gitglasses",
   "displayName": "GitGlasses",
   "description": "Open-source git supercharger: inline blame, history, and more — powered by a native engine",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publisher": "gitglasses",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1b1f2a",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/danielwoz/gitglasses#readme",
+  "bugs": {
+    "url": "https://github.com/danielwoz/gitglasses/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/danielwoz/gitglasses.git"
@@ -15,16 +24,14 @@
   "categories": [
     "SCM Providers",
     "Visualization",
-    "Education",
-    "Other"
+    "Education"
   ],
   "keywords": [
     "git",
     "blame",
     "commit graph",
     "history",
-    "worktrees",
-    "gitlens"
+    "worktrees"
   ],
   "extensionKind": [
     "workspace"
@@ -1028,7 +1035,7 @@
     "test": "vitest run",
     "test:e2e": "node esbuild.mjs && tsc -p test-e2e/tsconfig.json && node test-e2e/headless.cjs",
     "test:web": "node esbuild.mjs && node test-web/runTests.mjs",
-    "package": "vsce package --no-dependencies"
+    "package": "node ../scripts/package-vsix.mjs"
   },
   "dependencies": {
     "@gitglasses/integrations": "workspace:*",
@@ -1038,7 +1045,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.90.0",
+    "@types/vscode": "~1.90.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/test-web": "^0.0.81",
     "@vscode/vsce": "^3.0.0",

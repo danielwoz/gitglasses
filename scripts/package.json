@@ -1,0 +1,15 @@
+{
+  "name": "@gitglasses/release-scripts",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Packaging, verification and publishing tools for GitGlasses releases",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "3.9.2",
+    "ovsx": "1.2.0",
+    "vitest": "^2.1.0"
+  }
+}
