@@ -227,11 +227,14 @@ export class GraphWebviewHost implements vscode.Disposable {
   }
 
   private async startRepo(repo: ActiveRepo): Promise<void> {
-    const switched = this.repo?.rootPath !== repo.rootPath;
+    // After an engine restart the same repository comes back under a new id
+    // and keeps its branch filter; another repository starts unfiltered.
+    const same =
+      this.repo !== undefined && this.deps.repos.isRootOf(repo.repoId, this.repo.rootPath);
     this.repo = repo;
     this.generations.clear();
     this.kinds.clear();
-    if (switched) this.filter = undefined;
+    if (!same) this.filter = undefined;
     if (this.panel) this.panel.title = this.title();
     await this.reset();
   }
@@ -311,8 +314,9 @@ export class GraphWebviewHost implements vscode.Disposable {
           await this.reset();
           break;
         case 'openFile':
-          if (repo)
+          if (repo) {
             await openFileDiff(repo.repoId, repo.workspacePath ?? repo.rootPath, message.target);
+          }
           break;
         case 'openChanges':
           if (repo) await openAllChanges(this.deps.engine, repo.repoId, message.target);
