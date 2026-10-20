@@ -4,6 +4,7 @@ import {
   actionForKey,
   autosquash,
   hasAutosquashCandidates,
+  isStalePlanRefusal,
   mergePlan,
   move,
   planFromPreview,
@@ -259,5 +260,24 @@ describe('autosquash', () => {
     ]);
     expect(hasAutosquashCandidates(p)).toBe(false);
     expect(autosquash(p)).toEqual(p);
+  });
+});
+
+describe('isStalePlanRefusal', () => {
+  it("recognises each of the engine's out-of-date plan refusals", () => {
+    for (const message of [
+      'the branch moved since the rebase plan was made (HEAD was 1111111, is now 2222222); reload the plan',
+      "'origin/main' moved since the rebase plan was made (it was 1111111, is now 2222222); reload the plan",
+      "rebase not started: the branch has 3333333 'late work', which the plan does not list; it was probably committed after the plan was made. Reload the plan so it is not lost.",
+      "rebase not started: the plan lists 4444444 'merge', which git will not replay: it is a merge commit or its change is already upstream. Reload the plan.",
+    ]) {
+      expect(isStalePlanRefusal(message)).toBe(true);
+    }
+  });
+
+  it('leaves other failures alone', () => {
+    expect(
+      isStalePlanRefusal('git rebase failed (1): error: cannot rebase: You have unstaged changes.'),
+    ).toBe(false);
   });
 });

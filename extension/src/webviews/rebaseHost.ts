@@ -45,6 +45,10 @@ export class RebaseWebviewHost implements vscode.Disposable {
   private overlay: HostToWebviewMessage | undefined;
   private ready = false;
   private running = false;
+  /** Start was pressed and the host is checking or confirming it. */
+  private starting = false;
+  /** The repository changed while a rebase was being started or run. */
+  private recheckPending = false;
   private recheckTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly emitter = new vscode.EventEmitter<void>();
   /** Fires when a rebase this host drove starts, stops or ends. */
@@ -86,7 +90,7 @@ export class RebaseWebviewHost implements vscode.Disposable {
    *  already under way opens in its paused state instead. */
   async open(upstream?: string): Promise<void> {
     if (!this.available()) return;
-    if (this.running) {
+    if (this.busy()) {
       this.panel?.reveal();
       return;
     }
@@ -305,8 +309,13 @@ export class RebaseWebviewHost implements vscode.Disposable {
   }
 
   private scheduleRecheck(): void {
-    // The host's own rebase moves HEAD on every step.
-    if (this.running) return;
+    // The host's own rebase moves HEAD on every step, and a change seen
+    // while a start is being confirmed is judged against what the start
+    // did: both are checked once the start or step settles.
+    if (this.busy()) {
+      this.recheckPending = true;
+      return;
+    }
     if (this.recheckTimer !== undefined) clearTimeout(this.recheckTimer);
     this.recheckTimer = setTimeout(() => {
       this.recheckTimer = undefined;
@@ -316,12 +325,26 @@ export class RebaseWebviewHost implements vscode.Disposable {
     }, RECHECK_DELAY_MS);
   }
 
+  private busy(): boolean {
+    return this.running || this.starting;
+  }
+
+  private flushRecheck(): void {
+    if (!this.recheckPending || this.busy()) return;
+    this.recheckPending = false;
+    this.scheduleRecheck();
+  }
+
   // Keeps the panel honest about the repository: a paused rebase follows the
   // conflicts as they are resolved (or the rebase finishing elsewhere), and a
   // plan being edited is flagged once the branch or upstream moves.
   private async recheck(): Promise<void> {
     const repo = this.repo;
-    if (!repo || !this.panel || this.running) return;
+    if (this.busy()) {
+      this.recheckPending = true;
+      return;
+    }
+    if (!repo || !this.panel) return;
     const inProgress = await this.rebaseInProgress(repo);
     if (this.overlay?.type === 'paused') {
       if (inProgress) {
@@ -380,34 +403,40 @@ export class RebaseWebviewHost implements vscode.Disposable {
   private async startRebase(plan: RebaseEntry[]): Promise<void> {
     const repo = this.repo;
     const session = this.session;
-    if (this.running || !repo || !session) return;
+    if (this.busy() || !repo || !session) return;
+    this.starting = true;
     try {
-      const status = await this.engine.request('status/summary', { repoId: repo.repoId });
-      if (isDirty(status) && !session.autoStash) {
-        if (!(await this.askAutoStash(status))) return;
-        session.autoStash = true;
+      try {
+        const status = await this.engine.request('status/summary', { repoId: repo.repoId });
+        if (isDirty(status) && !session.autoStash) {
+          if (!(await this.askAutoStash(status))) return;
+          session.autoStash = true;
+        }
+      } catch (error) {
+        this.log(`status before rebase failed: ${errorMessage(error)}`);
       }
-    } catch (error) {
-      this.log(`status before rebase failed: ${errorMessage(error)}`);
-    }
-    if (!(await confirmDestructive(confirmRebase(session.branch, session.upstream)))) return;
+      if (!(await confirmDestructive(confirmRebase(session.branch, session.upstream)))) return;
 
-    await this.run(() =>
-      this.engine.request('rebase/start', {
-        repoId: repo.repoId,
-        upstream: session.upstream,
-        plan,
-        expectedHead: session.headSha,
-        expectedUpstream: session.upstreamSha,
-        autoStash: session.autoStash || undefined,
-      }),
-    );
+      await this.run(() =>
+        this.engine.request('rebase/start', {
+          repoId: repo.repoId,
+          upstream: session.upstream,
+          plan,
+          expectedHead: session.headSha,
+          expectedUpstream: session.upstreamSha,
+          autoStash: session.autoStash || undefined,
+        }),
+      );
+    } finally {
+      this.starting = false;
+      this.flushRecheck();
+    }
   }
 
   /** Continues, skips or aborts the rebase in progress in the active (or
    *  shown) repository. */
   async resume(action: ResumeAction): Promise<void> {
-    if (!this.available() || this.running) return;
+    if (!this.available() || this.busy()) return;
     const repo = this.repo ?? (await this.activeRepo());
     if (!repo) return;
     try {
@@ -443,6 +472,7 @@ export class RebaseWebviewHost implements vscode.Disposable {
         this.running = false;
         await this.post({ type: 'busy', busy: false });
         this.emitter.fire();
+        this.flushRecheck();
       }
       return;
     }
@@ -476,6 +506,7 @@ export class RebaseWebviewHost implements vscode.Disposable {
       this.running = false;
       await this.post({ type: 'busy', busy: false });
       this.emitter.fire();
+      this.flushRecheck();
     }
   }
 

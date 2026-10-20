@@ -15,6 +15,7 @@ import {
   actionForKey,
   autosquash,
   hasAutosquashCandidates,
+  isStalePlanRefusal,
   mergePlan,
   move,
   planFromPreview,
@@ -459,12 +460,19 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       renderValidation();
       break;
     case 'error':
+      // An out-of-date plan cannot start, so while it is (or the engine says
+      // it is) the banner keeps the way to reload it rather than a Dismiss
+      // that would leave Start disabled with nothing to press.
+      if (mode === 'plan' && isStalePlanRefusal(message.message)) stale = true;
       showBanner(
         'error',
         'The rebase did not run.',
         message.message,
-        button('Dismiss', clearBanner),
+        stale
+          ? button('Reload Plan', () => post({ type: 'reload' }))
+          : button('Dismiss', clearBanner),
       );
+      renderValidation();
       break;
     case 'paused': {
       const { type: _type, ...state } = message;

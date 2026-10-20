@@ -129,6 +129,12 @@ export function validate(
   return errors;
 }
 
+/** The engine refused the plan because the branch, the upstream or the
+ *  commits to replay changed since it was made; reloading it is the fix. */
+export function isStalePlanRefusal(message: string): boolean {
+  return /reload the plan/i.test(message);
+}
+
 /** Wire-format plan; messages attach only where the action consumes them. */
 export function toRebaseEntries(plan: readonly PlanEntry[]): RebaseEntry[] {
   return plan.map((entry) => {
