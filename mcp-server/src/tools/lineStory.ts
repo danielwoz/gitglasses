@@ -3,8 +3,9 @@
 // that merged it, the issues they name and the line's earlier versions with
 // their diffs, assembled by buildLineStory (the extension's Line Story panel
 // tells the same story) and rendered as bounded markdown. Text that comes
-// from the repository or the forge is quoted as data: titles as JSON strings,
-// messages, descriptions and diffs in fences no line inside can close.
+// from the repository or the forge is quoted as data: names, paths, branch
+// names and titles as JSON strings, messages, descriptions and diffs in
+// fences no line inside can close.
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -112,7 +113,19 @@ function quoted(text: string): string {
 }
 
 function signature(person: { name: string; email: string; time: number }): string {
-  return `${person.name} <${person.email}> ${isoDate(person.time)}`;
+  return `${quoted(`${person.name} <${person.email}>`)} ${isoDate(person.time)}`;
+}
+
+/** A web link from the forge or the autolinks as is, or quoted when it is
+ *  not a plain http(s) URL. */
+function link(url: string): string {
+  return /^https?:\/\/[^\s"'<>`\\]+$/.test(url) ? url : quoted(url);
+}
+
+/** The day of an ISO timestamp from the forge, or undefined. */
+function isoDay(iso: string | undefined): string | undefined {
+  const ms = iso === undefined ? NaN : Date.parse(iso);
+  return Number.isNaN(ms) ? undefined : new Date(ms).toISOString().slice(0, 10);
 }
 
 function bound(text: string, max: number): string {
@@ -292,7 +305,7 @@ function blameSection(story: LineStory<CommitDetails>, options: LineStoryFormatO
   lines.push(
     `- last changed in ${shortSha(blame.sha)} (${blame.sha}) by ${signature(blame.author)}`,
     `- lines ${blame.hunkStart}-${last} of the file last changed together in that commit`,
-    `- in that commit the line was ${blame.path}:${blame.originalLine}`,
+    `- in that commit it was line ${blame.originalLine} of ${quoted(blame.path)}`,
     options.ignoreRevs === false
       ? "- blame here runs without git, so the repository's ignore-revs file is not applied"
       : "- blame looks through the commits the repository's ignore-revs file lists, if it has one",
@@ -325,14 +338,14 @@ function commitSection(story: LineStory<CommitDetails>): string[] {
 }
 
 function pullRequestLines(pr: StoryPullRequest): string[] {
-  const when = pr.mergedAt
-    ? `merged ${pr.mergedAt.slice(0, 10)}`
-    : `opened ${pr.createdAt.slice(0, 10)}`;
+  const merged = isoDay(pr.mergedAt);
+  const opened = isoDay(pr.createdAt);
+  const when = merged ? `; merged ${merged}` : opened ? `; opened ${opened}` : '';
   const lines = [
     `### #${pr.number} (${pr.state}${pr.draft ? ', draft' : ''})`,
     `- title: ${quoted(pr.title)}`,
-    `- url: ${pr.url}`,
-    `- author: ${pr.author}; ${when}; into ${pr.baseRef} from ${pr.headRef}`,
+    `- url: ${link(pr.url)}`,
+    `- author: ${quoted(pr.author)}${when}; into ${quoted(pr.baseRef)} from ${quoted(pr.headRef)}`,
   ];
   const counts: string[] = [];
   if (pr.reviewCommentCount !== undefined) counts.push(`${pr.reviewCommentCount} review comments`);
@@ -399,7 +412,9 @@ function pullRequestSection(
       break;
   }
   const named = 'named' in prs ? prs.named : undefined;
-  if (named) lines.push(`The commit message names pull request #${named.number}: ${named.url}`);
+  if (named) {
+    lines.push(`The commit message names pull request #${named.number}: ${link(named.url)}`);
+  }
   return lines;
 }
 
@@ -408,7 +423,8 @@ function issueSection(story: LineStory<CommitDetails>): string[] {
   if (issues.state !== 'ready' || issues.value.length === 0) return [];
   const lines = ['## Linked issues'];
   for (const issue of issues.value) {
-    let line = `- ${issue.ref} ${issue.url}`;
+    const ref = /^#\d+$/.test(issue.ref) ? issue.ref : quoted(issue.ref);
+    let line = `- ${ref} ${link(issue.url)}`;
     if (issue.title !== undefined) line += ` title: ${quoted(issue.title)}`;
     if (issue.state) line += ` (${issue.pullRequest ? 'pull request, ' : ''}${issue.state})`;
     if (issue.source === 'pullRequest') line += ' [named in the pull request]';
@@ -418,10 +434,10 @@ function issueSection(story: LineStory<CommitDetails>): string[] {
 }
 
 function versionText(version: StoryVersion, currentPath: string): string {
-  const where = version.path !== currentPath ? ` in ${version.path}` : '';
+  const where = version.path !== currentPath ? ` in ${quoted(version.path)}` : '';
   const head =
-    `### ${shortSha(version.sha)} ${isoDate(version.author.time)} ${version.author.name}${where}: ` +
-    quoted(version.summary);
+    `### ${shortSha(version.sha)} ${isoDate(version.author.time)} by ` +
+    `${quoted(version.author.name)}${where}: ${quoted(version.summary)}`;
   if (!version.patch) return head;
   const rows = version.patch
     .replace(/\n$/, '')
@@ -442,7 +458,7 @@ export function formatLineStory(
   story: LineStory<CommitDetails>,
   options: LineStoryFormatOptions,
 ): string {
-  const head: string[] = [`# Line story: ${story.file}:${story.line}`];
+  const head: string[] = [`# Line story: line ${story.line} of ${quoted(story.file)}`];
   if (story.lineText !== undefined) head.push(fence(story.lineText));
   const sections: string[][] =
     story.blame.sha === UNCOMMITTED
