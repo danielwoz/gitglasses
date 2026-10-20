@@ -5,6 +5,15 @@
   "version": "0.2.0",
   "publisher": "gitglasses",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1b1f2a",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/danielwoz/gitglasses#readme",
+  "bugs": {
+    "url": "https://github.com/danielwoz/gitglasses/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/danielwoz/gitglasses.git"
@@ -15,16 +24,14 @@
   "categories": [
     "SCM Providers",
     "Visualization",
-    "Education",
-    "Other"
+    "Education"
   ],
   "keywords": [
     "git",
     "blame",
     "commit graph",
     "history",
-    "worktrees",
-    "gitlens"
+    "worktrees"
   ],
   "extensionKind": [
     "workspace"
