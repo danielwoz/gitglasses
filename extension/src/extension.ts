@@ -33,6 +33,7 @@ import {
   toHunkRange,
 } from './scm/hunkStaging';
 import { registerPatchCommands } from './patches/patchCommands';
+import { createEngineHealth } from './engine/engineHealth';
 
 function resolveEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -77,6 +78,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const showMethodNotSupported = createMethodNotSupportedNotifier();
   const showRestricted = createRestrictedNotifier();
+  const showLog = (): void => output.show(true);
+  const health = createEngineHealth({ showLog, refreshViews: () => core.refreshViews() });
 
   // In an untrusted workspace (Restricted Mode) the engine runs no git
   // process: git would run whatever the repository's config, attributes and
@@ -91,7 +94,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     {
       onLog: log,
-      onCrash: (error) => log(`engine crashed: ${error.message}`),
+      onCrash: (error) => {
+        log(`engine crashed: ${error.message}`);
+        health.onCrash(error);
+      },
+      onGiveUp: (error) => {
+        log(`engine stopped after repeated crashes: ${error.message}`);
+        health.onGiveUp(error);
+      },
       onMethodNotSupported: (_method, message) => showMethodNotSupported(message),
       onRestricted: () => showRestricted(),
       onRestarted: () => core.handleEngineRestarted(),

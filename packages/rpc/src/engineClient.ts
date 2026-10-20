@@ -8,7 +8,7 @@ import {
   RequestMethod,
   RequestParams,
   RequestResult,
-  RpcResponse,
+  RpcError,
 } from '@gitglasses/protocol';
 import { EngineTransport } from './transport.js';
 
@@ -16,6 +16,8 @@ export class EngineError extends Error {
   constructor(
     public readonly code: number,
     message: string,
+    /** The error's `data` member; for GitError, a GitErrorData. */
+    public readonly data?: unknown,
   ) {
     super(message);
   }
@@ -38,7 +40,9 @@ interface Pending {
   generation: number;
   method: string;
   /** Deadline for this request; cleared wherever it settles. */
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  /** When the deadline passes (Date.now() time). */
+  deadline: number;
   /** Cancellation listener for this request; disposed wherever it settles. */
   cancelSub?: { dispose(): void };
 }
@@ -46,6 +50,9 @@ interface Pending {
 export interface EngineClientOptions {
   onLog?: (line: string) => void;
   onCrash?: (error: Error) => void;
+  /** Called when the engine crashed too often in too short a time and is
+   *  not respawned any more; restart() starts it again. */
+  onGiveUp?: (error: Error) => void;
   /** Called after a respawned engine finished its initialize handshake. */
   onRestarted?: () => void;
   /** Called when the engine answers a request with MethodNotSupported
@@ -65,7 +72,13 @@ export interface EngineClientOptions {
 
 const BACKOFF_START_MS = 250;
 const BACKOFF_MAX_MS = 8000;
-const MAX_RESPAWNS = 5;
+
+/** Crashes tolerated within CRASH_WINDOW_MS; one more and the engine is not
+ *  respawned until restart(). Counted whether or not the crashed engine had
+ *  finished its handshake, so an engine that dies on some request right after
+ *  starting is caught as well as one that cannot start. */
+export const MAX_CRASHES_IN_WINDOW = 3;
+export const CRASH_WINDOW_MS = 60_000;
 
 /** Default ceiling on a single engine request. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -92,14 +105,24 @@ export const LONG_REQUEST_TIMEOUT_MS: Partial<Record<RequestMethod, number>> = {
   'mutate/merge': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'mutate/cherryPick': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'mutate/revert': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
+  'mutate/sequencer': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'rebase/start': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
   'rebase/continue': ENGINE_GIT_TIMEOUT_MS + ENGINE_TIMEOUT_MARGIN_MS,
 };
 
+interface InboundMessage {
+  id?: number | null;
+  method?: string;
+  params?: unknown;
+  result?: unknown;
+  error?: RpcError;
+}
+
 // Typed JSON-RPC client over a pluggable engine transport. Crash-safe:
 // pending requests reject with EngineRestartedError on respawn (a generation
 // counter guarantees no stale result ever resolves), and callers re-query.
-// Each respawn gets a fresh transport from the injected factory. Every request
+// Each respawn gets a fresh transport from the injected factory; an engine
+// that keeps crashing is given up on (onGiveUp) until restart(). Every request
 // carries a deadline so a wedged engine cannot hold a caller forever.
 export class EngineClient {
   private transport: EngineTransport | undefined;
@@ -107,8 +130,10 @@ export class EngineClient {
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private generation = 0;
-  private respawns = 0;
   private backoffMs = BACKOFF_START_MS;
+  private crashTimes: number[] = [];
+  private respawnTimer: ReturnType<typeof setTimeout> | undefined;
+  private gaveUp = false;
   private disposed = false;
   private notificationHandlers = new Map<string, Set<(params: unknown) => void>>();
   private capabilityHandlers = new Set<() => void>();
@@ -123,8 +148,15 @@ export class EngineClient {
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
-  /** Bring the engine up and complete the initialize handshake. Idempotent. */
+  /** Bring the engine up and complete the initialize handshake. Idempotent.
+   *  After the client gave up on a crashing engine, a start() once the
+   *  crashes have aged out of the window tries again. */
   start(): Promise<void> {
+    if (this.gaveUp && !this.recentCrashes()) {
+      this.gaveUp = false;
+      this.backoffMs = BACKOFF_START_MS;
+      this.ready = this.spawnEngine();
+    }
     this.ready ??= this.spawnEngine();
     return this.ready;
   }
@@ -143,12 +175,21 @@ export class EngineClient {
     return { dispose: () => this.capabilityHandlers.delete(handler) };
   }
 
+  private recentCrashes(): number {
+    const now = Date.now();
+    this.crashTimes = this.crashTimes.filter((time) => now - time < CRASH_WINDOW_MS);
+    return this.crashTimes.length;
+  }
+
   private async spawnEngine(): Promise<void> {
     if (this.disposed) throw new Error('engine client disposed');
     this.generation += 1;
     const generation = this.generation;
+    // Whatever transport a previous generation left behind is done for.
+    const previous = this.transport;
     const transport = this.createTransport();
     this.transport = transport;
+    if (previous && previous !== transport) previous.kill();
 
     transport.onMessage((payload) => {
       if (this.disposed || generation !== this.generation) return;
@@ -158,12 +199,13 @@ export class EngineClient {
       if (this.disposed || generation !== this.generation) return;
       this.transportAlive = false;
       this.failAllPending(new EngineRestartedError());
-      this.options.onCrash?.(new Error(`engine exited with code ${code}`));
-      this.scheduleRespawn();
+      const error = new Error(`engine exited with code ${code}`);
+      this.options.onCrash?.(error);
+      this.scheduleRespawn(error);
     });
 
     await transport.start();
-    this.transportAlive = true;
+    if (generation === this.generation) this.transportAlive = true;
 
     let init: Awaited<ReturnType<typeof this.send<'initialize'>>>;
     try {
@@ -177,41 +219,55 @@ export class EngineClient {
         );
       }
     } catch (error) {
-      // A failed handshake tears the process down and clears the cached
-      // promise, so a later start() spawns a fresh engine and tries again.
-      this.transportAlive = false;
+      // A failed handshake tears this process down. When this generation is
+      // still the current one the cached promise is cleared too, so a later
+      // start() spawns a fresh engine; a newer generation keeps its own.
+      if (generation === this.generation) {
+        this.transportAlive = false;
+        this.ready = undefined;
+      }
       try {
-        this.transport?.kill();
+        transport.kill();
       } catch {
         // Teardown failures must not mask the handshake error.
       }
-      this.ready = undefined;
       throw error;
     }
+    if (generation !== this.generation) throw new EngineRestartedError();
     this.caps = init.capabilities;
-    this.respawns = 0;
     this.backoffMs = BACKOFF_START_MS;
     for (const handler of [...this.capabilityHandlers]) handler();
   }
 
-  private scheduleRespawn(): void {
-    if (this.respawns >= MAX_RESPAWNS) {
-      this.options.onLog?.('engine crashed too many times; giving up');
+  private scheduleRespawn(error: Error): void {
+    this.crashTimes.push(Date.now());
+    const crashes = this.recentCrashes();
+    if (crashes > MAX_CRASHES_IN_WINDOW) {
+      this.gaveUp = true;
+      this.options.onLog?.(
+        `engine crashed ${crashes} times within ${CRASH_WINDOW_MS / 1000}s; not restarting it`,
+      );
+      this.options.onGiveUp?.(error);
       return;
     }
-    this.respawns += 1;
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, BACKOFF_MAX_MS);
-    setTimeout(() => {
+    this.respawnTimer = setTimeout(() => {
+      this.respawnTimer = undefined;
       if (this.disposed) return;
       this.ready = this.spawnEngine();
       void this.ready.then(() => this.options.onRestarted?.()).catch(() => undefined);
     }, delay);
   }
 
+  private clearRespawn(): void {
+    if (this.respawnTimer !== undefined) clearTimeout(this.respawnTimer);
+    this.respawnTimer = undefined;
+  }
+
   private failAllPending(error: Error): void {
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
+      if (pending.timer !== undefined) clearTimeout(pending.timer);
       pending.cancelSub?.dispose();
       pending.reject(error);
     }
@@ -219,7 +275,7 @@ export class EngineClient {
   }
 
   private handleMessage(payload: string): void {
-    let message: RpcResponse & { method?: string; params?: unknown };
+    let message: InboundMessage;
     try {
       message = JSON.parse(payload);
     } catch {
@@ -235,7 +291,7 @@ export class EngineClient {
     const pending = this.pending.get(message.id);
     if (!pending) return; // cancelled, timed out, or from a previous generation
     this.pending.delete(message.id);
-    clearTimeout(pending.timer);
+    if (pending.timer !== undefined) clearTimeout(pending.timer);
     // The token outlives the request (an editor's token can back many calls),
     // so its listener is disposed with the request it belonged to.
     pending.cancelSub?.dispose();
@@ -245,10 +301,33 @@ export class EngineClient {
       } else if (message.error.code === ErrorCodes.Restricted) {
         this.options.onRestricted?.(pending.method, message.error.message);
       }
-      pending.reject(new EngineError(message.error.code, message.error.message));
+      pending.reject(
+        new EngineError(message.error.code, message.error.message, message.error.data),
+      );
     } else {
       pending.resolve(message.result);
     }
+  }
+
+  /** Starts (or restarts) request `id`'s deadline, `ms` from now. */
+  private armDeadline(id: number, pending: Pending, ms: number): void {
+    pending.deadline = Date.now() + ms;
+    const timeoutMs =
+      LONG_REQUEST_TIMEOUT_MS[pending.method as RequestMethod] ?? this.requestTimeoutMs;
+    const total = Math.max(this.requestTimeoutMs, timeoutMs);
+    // The rejection path for an engine that wedges without ever exiting;
+    // the others are transport exit, cancellation and dispose().
+    pending.timer = setTimeout(() => {
+      if (this.pending.get(id) !== pending) return;
+      this.pending.delete(id);
+      pending.cancelSub?.dispose();
+      // The engine may still be working on it; nobody wants the answer now.
+      this.notify('$/cancelRequest', { id });
+      pending.reject(new Error(`engine request '${pending.method}' timed out after ${total}ms`));
+    }, ms);
+    // Unref'd so a pending deadline never holds the host process alive; the
+    // optional call covers runtimes whose setTimeout returns a plain number.
+    (pending.timer as { unref?: () => void }).unref?.();
   }
 
   async request<M extends RequestMethod>(
@@ -275,40 +354,30 @@ export class EngineClient {
     const timeoutMs = Math.max(this.requestTimeoutMs, LONG_REQUEST_TIMEOUT_MS[method] ?? 0);
 
     return new Promise<RequestResult<M>>((resolve, reject) => {
-      // The rejection path for an engine that wedges without ever exiting;
-      // the others are transport exit, cancellation and dispose().
-      const timer = setTimeout(() => {
-        const entry = this.pending.get(id);
-        if (!entry) return;
-        this.pending.delete(id);
-        entry.cancelSub?.dispose();
-        reject(new Error(`engine request '${method}' timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      // Unref'd so a pending deadline never holds the host process alive; the
-      // optional call covers runtimes whose setTimeout returns a plain number.
-      (timer as { unref?: () => void }).unref?.();
-
-      this.pending.set(id, {
+      const pending: Pending = {
         resolve: resolve as (value: unknown) => void,
         reject,
         generation,
         method,
-        timer,
-      });
+        timer: undefined,
+        deadline: 0,
+      };
+      this.pending.set(id, pending);
+      this.armDeadline(id, pending, timeoutMs);
       const sub = token?.onCancellationRequested(() => {
         // Reject locally right away; tell the engine so it stops working.
-        if (this.pending.delete(id)) {
-          clearTimeout(timer);
+        if (this.pending.get(id) === pending) {
+          this.pending.delete(id);
+          if (pending.timer !== undefined) clearTimeout(pending.timer);
           sub?.dispose();
           this.notify('$/cancelRequest', { id });
           reject(new EngineError(ErrorCodes.Cancelled, 'cancelled'));
         }
       });
-      const entry = this.pending.get(id);
-      if (entry) entry.cancelSub = sub;
+      pending.cancelSub = sub;
       if (token?.isCancellationRequested) {
         this.pending.delete(id);
-        clearTimeout(timer);
+        if (pending.timer !== undefined) clearTimeout(pending.timer);
         sub?.dispose();
         reject(new EngineError(ErrorCodes.Cancelled, 'cancelled'));
         return;
@@ -339,20 +408,42 @@ export class EngineClient {
     return { dispose: () => this.notificationHandlers.get(method)?.delete(untyped) };
   }
 
+  /** True after the engine crashed too often and respawning stopped. */
+  hasGivenUp(): boolean {
+    return this.gaveUp;
+  }
+
+  /** Kills the engine and starts a fresh one; requests in flight reject
+   *  with EngineRestartedError. Also starts an engine the client gave up on.
+   *  Resolves once an engine is up, even when another restart overtook this
+   *  one. */
   async restart(): Promise<void> {
+    this.clearRespawn();
     const transport = this.transport;
     this.generation += 1; // orphan the old transport's exit handler
     this.transportAlive = false;
     this.failAllPending(new EngineRestartedError());
     transport?.kill();
-    this.respawns = 0;
+    this.crashTimes = [];
+    this.gaveUp = false;
+    this.backoffMs = BACKOFF_START_MS;
     this.ready = this.spawnEngine();
-    await this.ready;
+    for (;;) {
+      const ready: Promise<void> | undefined = this.ready;
+      try {
+        await ready;
+        return;
+      } catch (error) {
+        // A later restart replaced this spawn: wait for that one instead.
+        if (this.ready === ready || this.ready === undefined || this.disposed) throw error;
+      }
+    }
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.clearRespawn();
     this.failAllPending(new EngineRestartedError());
     this.transport?.kill();
   }
