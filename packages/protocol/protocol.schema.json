@@ -740,13 +740,18 @@
                 "binary": {
                   "description": "Either side is binary; additions and deletions are then 0.",
                   "type": "boolean"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
           },
           "stats": {
             "additionalProperties": false,
-            "description": "`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set.",
+            "description": "`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set or a file has `statsUnavailable`.",
             "type": "object",
             "required": [
               "files",
@@ -1362,6 +1367,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -1423,6 +1433,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -1766,6 +1781,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -1861,6 +1881,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }

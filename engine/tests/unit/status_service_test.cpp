@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -330,6 +331,343 @@ TEST(StatusService, DiffHandlesBinaryFiles) {
   Json hunks = session.request(
       req(11, "diff/fileHunks", {{"repoId", repoId}, {"path", "blob.bin"}, {"staged", false}}));
   EXPECT_TRUE(hunks["result"]["hunks"].empty());
+}
+
+// One file of git's own `--name-status -z` and `--numstat -z` output.
+struct GitChange {
+  std::string status;  // first letter only
+  std::string path;
+  std::string origPath;
+  std::string additions;  // "-" for binary files
+  std::string deletions;
+
+  bool operator==(const GitChange&) const = default;
+};
+
+std::vector<std::string> splitNul(const std::string& text) {
+  std::vector<std::string> fields;
+  size_t pos = 0;
+  while (pos < text.size()) {
+    size_t end = text.find('\0', pos);
+    if (end == std::string::npos) end = text.size();
+    fields.push_back(text.substr(pos, end - pos));
+    pos = end + 1;
+  }
+  return fields;
+}
+
+// git's answer for `args` (a `show <sha>` or `diff <base> <head>` command
+// without output options): status, paths and line counts of every file.
+std::vector<GitChange> gitChanges(const std::filesystem::path& root, const std::string& args) {
+  std::vector<GitChange> changes;
+  const auto statuses = splitNul(gitOut(root, args + " --format= --name-status -z"));
+  for (size_t i = 0; i < statuses.size();) {
+    GitChange change;
+    change.status = statuses[i].substr(0, 1);
+    if (change.status == "R" || change.status == "C") {
+      change.origPath = statuses[i + 1];
+      change.path = statuses[i + 2];
+      i += 3;
+    } else {
+      change.path = statuses[i + 1];
+      i += 2;
+    }
+    changes.push_back(std::move(change));
+  }
+  // --numstat -z: "<add>\t<del>\t<path>\0", or for a rename
+  // "<add>\t<del>\t\0<old>\0<new>\0".
+  const auto stats = splitNul(gitOut(root, args + " --format= --numstat -z"));
+  for (size_t i = 0; i < stats.size();) {
+    const std::string& head = stats[i];
+    const size_t tab1 = head.find('\t');
+    const size_t tab2 = head.find('\t', tab1 + 1);
+    const std::string added = head.substr(0, tab1);
+    const std::string deleted = head.substr(tab1 + 1, tab2 - tab1 - 1);
+    std::string path = head.substr(tab2 + 1);
+    i += 1;
+    if (path.empty()) {
+      path = stats[i + 1];
+      i += 2;
+    }
+    for (auto& change : changes) {
+      if (change.path == path && change.additions.empty()) {
+        change.additions = added;
+        change.deletions = deleted;
+        break;
+      }
+    }
+  }
+  std::sort(changes.begin(), changes.end(),
+            [](const GitChange& a, const GitChange& b) { return a.path < b.path; });
+  return changes;
+}
+
+// The engine's FileChange list in the same shape.
+std::vector<GitChange> engineChanges(const Json& files) {
+  std::vector<GitChange> changes;
+  for (const auto& file : files) {
+    GitChange change;
+    change.status = file["status"];
+    change.path = file["path"];
+    change.origPath = file.value("origPath", "");
+    change.additions = std::to_string(file["additions"].get<int>());
+    change.deletions = std::to_string(file["deletions"].get<int>());
+    changes.push_back(std::move(change));
+  }
+  std::sort(changes.begin(), changes.end(),
+            [](const GitChange& a, const GitChange& b) { return a.path < b.path; });
+  return changes;
+}
+
+std::string numberedLines(const std::string& prefix, int count) {
+  std::string text;
+  for (int i = 0; i < count; ++i) text += prefix + " line " + std::to_string(i) + "\n";
+  return text;
+}
+
+TEST(StatusService, DiffCommitPairsEveryRenameOfAMassMove) {
+  FixtureRepo fixture;
+  // More files than the default rename limit (1000), all moved at once, one
+  // of them also edited.
+  constexpr int kFiles = 1100;
+  for (int i = 0; i < kFiles; ++i) {
+    fixture.writeFile("src/f" + std::to_string(i) + ".txt",
+                      numberedLines("file " + std::to_string(i), 10));
+  }
+  fixture.run("git add src");
+  commitTick(fixture, "add many files", 1);
+  fixture.run("git mv src lib");
+  std::string edited = numberedLines("file 0", 10);
+  edited.replace(edited.find("file 0 line 4"), 13, "file 0 line four");
+  fixture.writeFile("lib/f0.txt", edited);
+  fixture.run("git add lib/f0.txt");
+  commitTick(fixture, "move everything", 2);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json moved =
+      session.request(req(10, "diff/commit", {{"repoId", repoId}, {"sha", rev(fixture, "HEAD")}}));
+  ASSERT_TRUE(moved.contains("result")) << moved.dump().substr(0, 500);
+  const auto engine = engineChanges(moved["result"]["files"]);
+  ASSERT_EQ(engine.size(), static_cast<size_t>(kFiles));
+  for (const auto& change : engine) EXPECT_EQ(change.status, "R") << change.path;
+  EXPECT_EQ(engine, gitChanges(fixture.root(), "show " + rev(fixture, "HEAD")));
+  const Json f0 = changeFor(moved["result"]["files"], "lib/f0.txt");
+  EXPECT_EQ(f0["origPath"], "src/f0.txt");
+  EXPECT_EQ(f0["additions"], 1);
+  EXPECT_EQ(f0["deletions"], 1);
+}
+
+TEST(StatusService, DiffRenameDetectionFollowsTheRepositoryConfig) {
+  FixtureRepo fixture;
+  fixture.writeFile("a.txt", numberedLines("alpha", 10));
+  fixture.writeFile("b.txt", numberedLines("beta", 10));
+  fixture.writeFile("c.txt", numberedLines("gamma", 10));
+  fixture.run("git add a.txt b.txt c.txt");
+  commitTick(fixture, "three files", 1);
+  fixture.run("git mv a.txt a2.txt");
+  fixture.run("git mv b.txt b2.txt");
+  std::string edited = numberedLines("beta", 10);
+  edited += "beta appended\n";
+  fixture.writeFile("b2.txt", edited);
+  fixture.run("git rm -q c.txt");
+  fixture.run("git add b2.txt");
+  commitTick(fixture, "rename and edit", 2);
+  const std::string sha = rev(fixture, "HEAD");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  std::int64_t id = 10;
+  const auto diffCommit = [&] {
+    Json response = session.request(req(++id, "diff/commit", {{"repoId", repoId}, {"sha", sha}}));
+    EXPECT_TRUE(response.contains("result")) << response.dump();
+    return engineChanges(response["result"]["files"]);
+  };
+
+  // Default: the exact and the edited rename are both found.
+  auto changes = diffCommit();
+  EXPECT_EQ(changes, gitChanges(fixture.root(), "show " + sha));
+  ASSERT_EQ(changes.size(), 3u);
+  EXPECT_EQ(changes[0].status, "R");  // a2.txt
+  EXPECT_EQ(changes[1].status, "R");  // b2.txt
+  EXPECT_EQ(changes[1].origPath, "b.txt");
+  EXPECT_EQ(changes[1].additions, "1");
+
+  // Two sources for one destination exceed a limit of 1: only the exact
+  // rename survives, as in git.
+  fixture.run("git config diff.renameLimit 1");
+  changes = diffCommit();
+  EXPECT_EQ(changes, gitChanges(fixture.root(), "show " + sha));
+  ASSERT_EQ(changes.size(), 4u);
+  EXPECT_EQ(changes[0].status, "R");
+  EXPECT_EQ(changes[1].status, "D");  // b.txt
+  EXPECT_EQ(changes[2].status, "A");  // b2.txt
+
+  fixture.run("git config diff.renames false");
+  changes = diffCommit();
+  EXPECT_EQ(changes, gitChanges(fixture.root(), "show " + sha));
+  for (const auto& change : changes) EXPECT_NE(change.status, "R") << change.path;
+}
+
+TEST(StatusService, DiffRefsMatchesGitAcrossRenamesAndEdits) {
+  FixtureRepo fixture;
+  for (int i = 0; i < 6; ++i) {
+    fixture.writeFile("dir/file" + std::to_string(i) + ".txt",
+                      numberedLines("content " + std::to_string(i), 12));
+  }
+  fixture.run("git add dir");
+  commitTick(fixture, "base", 1);
+  fixture.run("git branch base");
+  std::filesystem::create_directories(fixture.root() / "moved");
+  fixture.run("git mv dir/file0.txt moved/file0.txt");
+  fixture.run("git mv dir/file1.txt moved/renamed1.txt");
+  std::string edited = numberedLines("content 2", 12);
+  edited.replace(edited.find("content 2 line 3"), 16, "changed line");
+  fixture.writeFile("dir/file2.txt", edited);
+  fixture.run("git add dir/file2.txt");
+  commitTick(fixture, "first", 2);
+  fixture.run("git mv dir/file3.txt elsewhere.txt");
+  fixture.writeFile("elsewhere.txt", numberedLines("content 3", 12) + "tail\n");
+  fixture.run("git rm -q dir/file4.txt");
+  fixture.writeFile("new.txt", "brand new\n");
+  fixture.run("git add elsewhere.txt new.txt");
+  commitTick(fixture, "second", 3);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json diff = session.request(
+      req(10, "diff/refs", {{"repoId", repoId}, {"base", "base"}, {"head", "main"}}));
+  ASSERT_TRUE(diff.contains("result")) << diff.dump();
+  const auto engine = engineChanges(diff["result"]["files"]);
+  EXPECT_EQ(engine, gitChanges(fixture.root(), "diff base main"));
+  EXPECT_EQ(engine.size(), 6u);
+}
+
+TEST(StatusService, CommitDetailsCallsAnExactlyRenamedBinaryFileBinary) {
+  FixtureRepo fixture;
+  fixture.writeFile("image.bin", std::string("\x89PNG\x00\x01\x02\x03 data", 13));
+  fixture.writeFile("notes.txt", "one\ntwo\n");
+  fixture.run("git add image.bin notes.txt");
+  commitTick(fixture, "add", 1);
+  std::filesystem::create_directories(fixture.root() / "assets");
+  std::filesystem::create_directories(fixture.root() / "docs");
+  fixture.run("git mv image.bin assets/image.bin");
+  fixture.run("git mv notes.txt docs/notes.txt");
+  commitTick(fixture, "move", 2);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json details = session.request(req(10, "commit/details", {{"repoId", repoId}, {"sha", "HEAD"}}));
+  ASSERT_TRUE(details.contains("result")) << details.dump();
+  const Json& files = details["result"]["files"];
+  ASSERT_EQ(files.size(), 2u) << details.dump();
+  const Json image = changeFor(files, "assets/image.bin");
+  EXPECT_EQ(image["status"], "R");
+  EXPECT_EQ(image["origPath"], "image.bin");
+  EXPECT_TRUE(image["binary"].get<bool>());
+  EXPECT_EQ(image["additions"], 0);
+  const Json notes = changeFor(files, "docs/notes.txt");
+  EXPECT_EQ(notes["status"], "R");
+  EXPECT_FALSE(notes["binary"].get<bool>());
+  EXPECT_FALSE(notes.contains("statsUnavailable"));
+}
+
+// A `file://` URL for a local repository, as `git clone` takes it.
+std::string fileUrl(const std::filesystem::path& path) {
+  std::string generic = path.generic_string();
+  if (generic.empty() || generic.front() != '/') generic.insert(0, "/");
+  return "file://" + generic;
+}
+
+// A blobless partial clone of a three-commit repository: trees and commits
+// are local, file contents only where something fetched them.
+class PartialCloneFixture {
+ public:
+  PartialCloneFixture() {
+    source_.writeFile("a.txt", "1\n2\n");
+    source_.run("git add a.txt");
+    commitTick(source_, "first", 1);
+    source_.writeFile("a.txt", "1\n2\n3\n");
+    source_.writeFile("b.txt", "bee\n");
+    source_.run("git add a.txt b.txt");
+    commitTick(source_, "second", 2);
+    source_.writeFile("a.txt", "1\n2\n3\n4\n");
+    source_.run("git add a.txt");
+    commitTick(source_, "third", 3);
+    source_.run("git config uploadpack.allowFilter true");
+    parent_ = gg::testing::makeTempDir("gg-partial-");
+    gg::testing::runGit(parent_, "git clone -q --filter=blob:none --no-checkout \"" +
+                                     fileUrl(source_.root()) + "\" clone");
+  }
+  ~PartialCloneFixture() {
+    std::error_code ec;
+    std::filesystem::remove_all(parent_, ec);
+  }
+
+  const FixtureRepo& source() const { return source_; }
+  std::filesystem::path root() const { return parent_ / "clone"; }
+  // Objects the clone lacks.
+  size_t missing() const {
+    size_t count = 0;
+    for (const auto& line :
+         gg::testing::gitLines(root(), "rev-list --objects --missing=print --all")) {
+      if (!line.empty() && line[0] == '?') ++count;
+    }
+    return count;
+  }
+
+ private:
+  FixtureRepo source_;
+  std::filesystem::path parent_;
+};
+
+TEST(StatusService, DiffInAPartialCloneFetchesTheBlobsItNeeds) {
+  PartialCloneFixture partial;
+  ASSERT_GT(partial.missing(), 0u);
+  const std::string sha = rev(partial.source(), "HEAD~1");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, partial.root());
+  Json diff = session.request(req(10, "diff/commit", {{"repoId", repoId}, {"sha", sha}}));
+  ASSERT_TRUE(diff.contains("result")) << diff.dump();
+  EXPECT_EQ(engineChanges(diff["result"]["files"]),
+            gitChanges(partial.source().root(), "show " + sha));
+  for (const auto& file : diff["result"]["files"]) EXPECT_FALSE(file.contains("statsUnavailable"));
+
+  Json range = session.request(
+      req(11, "diff/refs", {{"repoId", repoId}, {"base", "HEAD~2"}, {"head", "HEAD"}}));
+  ASSERT_TRUE(range.contains("result")) << range.dump();
+  EXPECT_EQ(engineChanges(range["result"]["files"]),
+            gitChanges(partial.source().root(), "diff HEAD~2 HEAD"));
+}
+
+TEST(StatusService, DiffInAPartialCloneWithoutGitSaysStatsAreUnavailable) {
+  PartialCloneFixture partial;
+  const size_t missingBefore = partial.missing();
+  ASSERT_GT(missingBefore, 0u);
+
+  gg::testing::ScopedRestrictedMode restricted;
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, partial.root());
+  Json diff = session.request(req(10, "diff/commit", {{"repoId", repoId}, {"sha", "HEAD~1"}}));
+  ASSERT_TRUE(diff.contains("result")) << diff.dump();
+  const Json& files = diff["result"]["files"];
+  ASSERT_EQ(files.size(), 2u) << diff.dump();
+  for (const auto& file : files) {
+    EXPECT_EQ(file["statsUnavailable"], true) << file.dump();
+    EXPECT_EQ(file["additions"], 0);
+    EXPECT_EQ(file["deletions"], 0);
+  }
+
+  Json details =
+      session.request(req(11, "commit/details", {{"repoId", repoId}, {"sha", "HEAD~1"}}));
+  ASSERT_TRUE(details.contains("result")) << details.dump();
+  for (const auto& file : details["result"]["files"]) {
+    EXPECT_EQ(file["statsUnavailable"], true) << file.dump();
+  }
+
+  // Nothing was downloaded.
+  EXPECT_EQ(partial.missing(), missingBefore);
 }
 
 TEST(StatusService, StageFilesStageAndUnstage) {

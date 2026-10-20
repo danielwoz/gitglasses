@@ -22,10 +22,6 @@ Result<core::CommitPtr> resolveCommit(const core::Repo& repo, const std::string&
 // The tree a commit records.
 Result<core::TreePtr> commitTree(git_commit* commit);
 
-// The change a commit introduces: its tree against its first parent's tree,
-// or against the empty tree for a root commit.
-Result<core::DiffPtr> commitDiff(const core::Repo& repo, git_commit* commit);
-
 // One file of a tree-to-tree diff.
 struct TreeFileChange {
   std::string path;
@@ -34,13 +30,45 @@ struct TreeFileChange {
   std::size_t additions = 0;
   std::size_t deletions = 0;
   bool binary = false;  // binary files carry no line counts
+  // The content is not in the local object database (a partial clone that
+  // has not downloaded it) and could not be fetched, so neither the line
+  // counts nor `binary` are known; they stay 0 and false.
+  bool statsUnavailable = false;
 };
 
-// Runs rename detection on `diff` (libgit2's default find options), then
-// lists its first `limit` files with per-file line stats. `total` receives
-// the number of files in the diff once renames are paired.
-Result<std::vector<TreeFileChange>> treeFileChanges(git_diff* diff, const CancelToken& token,
-                                                    std::size_t limit, std::size_t& total);
+// The files changed between two trees (`oldTree` null means the empty tree),
+// with rename detection as git porcelain does it: `diff.renames` (off, on,
+// or copies) and `diff.renameLimit` (default 1000) from the repository's
+// config. Exact renames (identical content) are paired first however many
+// files moved; similarity is then measured among the files left over,
+// unless their sources times destinations exceed the limit squared, in
+// which case they stay added and deleted, as git leaves them.
+//
+// Per-file line stats are computed for the first `limit` files; `total`
+// receives the number of files. In a partial clone, blobs the stats need
+// that the object database lacks are downloaded in one batch through the git
+// CLI when `mayFetch` (the way `git show --stat` downloads them); otherwise,
+// or when that fails, the affected files report statsUnavailable.
+Result<std::vector<TreeFileChange>> treeFileChanges(const core::Repo& repo, git_tree* oldTree,
+                                                    git_tree* newTree, const CancelToken& token,
+                                                    std::size_t limit, std::size_t& total,
+                                                    bool mayFetch);
+
+// The same for the change a commit introduces: its tree against its first
+// parent's tree, or against the empty tree for a root commit.
+Result<std::vector<TreeFileChange>> commitFileChanges(const core::Repo& repo, git_commit* commit,
+                                                      const CancelToken& token, std::size_t limit,
+                                                      std::size_t& total, bool mayFetch);
+
+// Whether objects missing from the repository's database may be supplied by
+// a promisor remote: a partial clone (`git clone --filter=...`).
+bool isPartialClone(git_repository* repo);
+
+// Downloads objects a partial clone lacks by running `git <args>`, a command
+// that reads them (git fetches what one command needs in a single batch).
+// Fails with git's stderr when git cannot (offline, no credentials).
+Result<void> fetchThroughGit(const core::Repo& repo, std::vector<std::string> args,
+                             const CancelToken& token);
 
 // Diff limited to one path: index -> workdir (staged == false, untracked
 // content included) or HEAD tree -> index (staged == true; empty tree when

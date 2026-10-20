@@ -149,6 +149,16 @@ export const FileChangeStatus = Type.Union([
   Type.Literal('U'),
 ]);
 
+/** Present (true) when a file's content is missing from a partial clone and
+ *  could not be downloaded (no git CLI, Restricted Mode, offline): its line
+ *  counts are unknown, not zero. */
+const StatsUnavailable = Type.Optional(
+  Type.Literal(true, {
+    description:
+      'The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.',
+  }),
+);
+
 export const FileChange = Type.Object(
   {
     path: Type.String(),
@@ -157,6 +167,7 @@ export const FileChange = Type.Object(
     /** 0 for binary files, whose lines are not counted. */
     additions: Count,
     deletions: Count,
+    statsUnavailable: StatsUnavailable,
   },
   strict,
 );
@@ -176,6 +187,7 @@ export const CommitFileChange = Type.Object(
     binary: Type.Boolean({
       description: 'Either side is binary; additions and deletions are then 0.',
     }),
+    statsUnavailable: StatsUnavailable,
   },
   strict,
 );
@@ -243,7 +255,7 @@ export const CommitDetails = Type.Object(
       {
         ...strict,
         description:
-          '`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set.',
+          '`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set or a file has `statsUnavailable`.',
       },
     ),
     truncated: Type.Boolean({

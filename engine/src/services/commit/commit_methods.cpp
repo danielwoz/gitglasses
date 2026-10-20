@@ -128,11 +128,9 @@ void registerCommitMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         auto refs = refsJson(repo.value(), sha);
         if (!refs) throw rpc::HandlerError{{refs.error()}};
 
-        auto diff = status_detail::commitDiff(repo.value(), raw);
-        if (!diff) throw rpc::HandlerError{{diff.error()}};
         std::size_t total = 0;
-        auto changes =
-            status_detail::treeFileChanges(diff.value().get(), token, kMaxCommitDetailFiles, total);
+        auto changes = status_detail::commitFileChanges(
+            repo.value(), raw, token, kMaxCommitDetailFiles, total, context.cliAvailable);
         if (!changes) throw rpc::HandlerError{{changes.error()}};
 
         rpc::Json files = rpc::Json::array();
@@ -145,6 +143,7 @@ void registerCommitMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
                             {"deletions", change.deletions},
                             {"binary", change.binary}};
           if (!change.origPath.empty()) file["origPath"] = change.origPath;
+          if (change.statsUnavailable) file["statsUnavailable"] = true;
           files.push_back(std::move(file));
           additions += change.additions;
           deletions += change.deletions;
