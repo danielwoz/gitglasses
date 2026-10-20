@@ -15,6 +15,11 @@ export interface GetAuthOptions {
   interactive?: boolean;
   /** Also collect a username alongside the token (e.g. Jira's account email). */
   needsUsername?: boolean;
+  /**
+   * GitHub.com scopes needed beyond "repo", e.g. "gist" to share a patch.
+   * The session is then one granted for all of them.
+   */
+  extraScopes?: readonly string[];
 }
 
 const SECRET_PREFIX = 'gitglasses:auth:';
@@ -57,7 +62,7 @@ export class AuthManager implements vscode.Disposable {
       try {
         const session = await vscode.authentication.getSession(
           'github',
-          ['repo'],
+          ['repo', ...(options.extraScopes ?? [])],
           options.interactive ? { createIfNone: true } : { silent: true },
         );
         return session
