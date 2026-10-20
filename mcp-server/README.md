@@ -13,6 +13,7 @@ The server speaks MCP over stdio and drives a `gitglasses-engine` process
 | Tool | Description |
 | --- | --- |
 | `git_blame` | Per-hunk author/date/sha/summary for a file or single line |
+| `git_provenance` | Per-hunk declared AI provenance of a line range: git-ai notes, trailers, agent identities |
 | `git_log_search` | Search commits by text/author/sha, or list recent commits |
 | `git_file_history` | File history following renames |
 | `git_commit_show` | Commit metadata + changed files with +/- counts |

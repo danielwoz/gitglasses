@@ -190,9 +190,10 @@ read. AI output is shown without loading any images or HTML it contains.
 
 ### Agents over MCP
 
-`gitglasses-mcp` is an MCP server that gives agents eleven tools over the same
+`gitglasses-mcp` is an MCP server that gives agents twelve tools over the same
 engine: blame, commit search, file history, commit details, diffs, refs, a
-text rendering of the graph, status, patches and your pull requests. Every
+text rendering of the graph, status, patches, your pull requests and the
+declared AI provenance of a file's lines. Every
 tool except `apply_patch` is marked read-only, and by default the server
 reads only the folders your client shares with it, without running git.
 
