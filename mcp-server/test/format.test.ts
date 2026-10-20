@@ -129,7 +129,12 @@ describe('formatDiff', () => {
   // A footer is the first thing a character limit drops, so the count of files
   // left out has to survive on the first line.
   it('reports files left out on the header line', () => {
-    const text = formatDiff('unstaged', [{ path: 'a.txt', status: 'M', hunks: [hunk] }], undefined, 66);
+    const text = formatDiff(
+      'unstaged',
+      [{ path: 'a.txt', status: 'M', hunks: [hunk] }],
+      undefined,
+      66,
+    );
     expect(text.split('\n')[0]).toBe(
       'diff unstaged (showing 1 of 66 changed files; pass "file" to diff one of them):',
     );
@@ -224,10 +229,7 @@ describe('formatGraph', () => {
       row({ sha: '5'.repeat(40), kind: 'stash', summary: 'WIP on main' }),
       row({ sha: '6'.repeat(40), kind: 'wip', lane: 1, summary: 'uncommitted changes' }),
     ]);
-    expect(text.split('\n')).toEqual([
-      's 5555555 WIP on main',
-      '  w 6666666 uncommitted changes',
-    ]);
+    expect(text.split('\n')).toEqual(['s 5555555 WIP on main', '  w 6666666 uncommitted changes']);
   });
 });
 
@@ -346,9 +348,12 @@ describe('explainEngineError', () => {
 
   it('leaves an unrecognised message intact apart from the plumbing prefix', () => {
     expect(
-      explainEngineError('git merge-base failed (1): fatal: refusing to merge unrelated histories', {
-        repoPath: '/w/repo',
-      }),
+      explainEngineError(
+        'git merge-base failed (1): fatal: refusing to merge unrelated histories',
+        {
+          repoPath: '/w/repo',
+        },
+      ),
     ).toBe('refusing to merge unrelated histories');
   });
 });

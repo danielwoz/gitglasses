@@ -57,7 +57,9 @@ function changeLine(change: FileChange, options: ChangeLineOptions = {}): string
 /** Paths a unified diff reports as binary rather than as text hunks. */
 export function binaryPathsInPatch(patch: string): Set<string> {
   const paths = new Set<string>();
-  for (const match of patch.matchAll(/^Binary files (?:a\/(.+?)|\/dev\/null) and (?:b\/(.+?)|\/dev\/null) differ$/gm)) {
+  for (const match of patch.matchAll(
+    /^Binary files (?:a\/(.+?)|\/dev\/null) and (?:b\/(.+?)|\/dev\/null) differ$/gm,
+  )) {
     const path = match[2] ?? match[1];
     if (path) paths.add(path);
   }
@@ -89,8 +91,7 @@ export function formatBlame(
   }
   const lines = selected.map((hunk) => {
     const last = hunk.resultLine + hunk.lineCount - 1;
-    const range =
-      hunk.lineCount === 1 ? `L${hunk.resultLine}` : `L${hunk.resultLine}-${last}`;
+    const range = hunk.lineCount === 1 ? `L${hunk.resultLine}` : `L${hunk.resultLine}-${last}`;
     if (hunk.sha === UNCOMMITTED_SHA) {
       return `${range} uncommitted`;
     }
@@ -194,9 +195,7 @@ export function formatDiff(
   totalChanged = entries.length,
 ): string {
   if (entries.length === 0) {
-    return file === undefined
-      ? `No ${scope} changes`
-      : `No ${scope} changes in ${file}`;
+    return file === undefined ? `No ${scope} changes` : `No ${scope} changes in ${file}`;
   }
   // The count of files left out belongs on the first line: a footer is the
   // first thing a character limit drops.
@@ -293,10 +292,7 @@ export function formatBranchLine(
   return `branch: ${status.branch || head?.branch || '(unknown)'}${tracking}`;
 }
 
-export function formatStatus(
-  status: RequestResult<'status/summary'>,
-  head?: HeadState,
-): string {
+export function formatStatus(status: RequestResult<'status/summary'>, head?: HeadState): string {
   const lines: string[] = [];
   lines.push(formatBranchLine(status, head));
   if (
@@ -360,7 +356,10 @@ function cleanEngineMessage(message: string, context: EngineErrorContext): strin
 }
 
 /** Message patterns an agent can act on, and the action each one implies. */
-const ENGINE_ERROR_CASES: { match: RegExp; explain: (m: RegExpExecArray, repoPath: string) => string }[] = [
+const ENGINE_ERROR_CASES: {
+  match: RegExp;
+  explain: (m: RegExpExecArray, repoPath: string) => string;
+}[] = [
   {
     match: /could not find repository at|failed to resolve path/,
     explain: (_m, repoPath) =>
@@ -373,7 +372,8 @@ const ENGINE_ERROR_CASES: { match: RegExp; explain: (m: RegExpExecArray, repoPat
   },
   {
     match: /the path '(.+?)' does not exist in the given tree/,
-    explain: (m) => `${m[1]} does not exist at that revision; call git_commit_show to list its files`,
+    explain: (m) =>
+      `${m[1]} does not exist at that revision; call git_commit_show to list its files`,
   },
   {
     match: /no such ref: HEAD|ambiguous argument 'HEAD'|revspec 'HEAD' not found|unborn/,
@@ -425,7 +425,9 @@ export function parsePatchSource(source: string): PatchSourceParam {
   if (commit) {
     return { kind: 'commit', sha: commit[1] };
   }
-  throw new Error(`Invalid patch source "${source}"; expected 'wip', 'stash:<n>' or 'commit:<sha>'`);
+  throw new Error(
+    `Invalid patch source "${source}"; expected 'wip', 'stash:<n>' or 'commit:<sha>'`,
+  );
 }
 
 /** Line separating envelope metadata from the raw patch text. */
@@ -447,9 +449,9 @@ const ENVELOPE_METADATA_FIELDS = [
  * JSON so each occupies exactly one line; the patch keeps its real newlines.
  */
 export function formatPatchEnvelope(envelope: PatchEnvelope): string {
-  const lines = ENVELOPE_METADATA_FIELDS.filter(
-    (field) => envelope[field] !== undefined,
-  ).map((field) => `${field}: ${JSON.stringify(envelope[field])}`);
+  const lines = ENVELOPE_METADATA_FIELDS.filter((field) => envelope[field] !== undefined).map(
+    (field) => `${field}: ${JSON.stringify(envelope[field])}`,
+  );
   return [...lines, PATCH_BODY_DELIMITER, envelope.patch].join('\n');
 }
 

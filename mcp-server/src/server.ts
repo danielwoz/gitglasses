@@ -64,15 +64,11 @@ export function isPlainHostname(value: string): boolean {
  * The host pairs with the token, so both come from the environment and
  * neither is something a caller can name.
  */
-export function configuredGitHubHost(
-  env: Record<string, string | undefined>,
-): string | undefined {
+export function configuredGitHubHost(env: Record<string, string | undefined>): string | undefined {
   const host = env.GITGLASSES_GITHUB_HOST?.trim();
   if (!host || host === 'github.com') return undefined;
   if (!isPlainHostname(host)) {
-    throw new Error(
-      `GITGLASSES_GITHUB_HOST is not a plain hostname: ${JSON.stringify(host)}`,
-    );
+    throw new Error(`GITGLASSES_GITHUB_HOST is not a plain hostname: ${JSON.stringify(host)}`);
   }
   return host;
 }
@@ -711,8 +707,7 @@ export function createToolHandlers(context: ToolContext) {
             return {
               ...file,
               hunks,
-              binary:
-                hunks.length === 0 && (await isBinaryInWorkingTree(repo.rootPath, file.path)),
+              binary: hunks.length === 0 && (await isBinaryInWorkingTree(repo.rootPath, file.path)),
             };
           }),
         );
@@ -968,10 +963,7 @@ export function createServer(context: ToolContext): McpServer {
         'Filters are combined with AND.',
       inputSchema: {
         repoPath,
-        text: z
-          .string()
-          .optional()
-          .describe('Case-insensitive substring of the commit message'),
+        text: z.string().optional().describe('Case-insensitive substring of the commit message'),
         author: z
           .string()
           .optional()

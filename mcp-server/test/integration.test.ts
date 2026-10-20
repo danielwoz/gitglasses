@@ -105,9 +105,9 @@ describe.skipIf(!enginePath)('engine integration', () => {
       maxChars: 200,
     });
     expect(patch).toMatch(/\(truncated to 200 characters;/);
-    await expect(
-      handlers.apply_patch({ repoPath: repoDir, envelopeJson: patch }),
-    ).rejects.toThrow(/truncated/);
+    await expect(handlers.apply_patch({ repoPath: repoDir, envelopeJson: patch })).rejects.toThrow(
+      /truncated/,
+    );
     git(repoDir, 'checkout', '--', 'hello.txt');
   });
 
@@ -291,10 +291,19 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
   });
 
   for (const [name, call] of [
-    ['git_log_search', (h: ToolHandlers, p: string) => h.git_log_search({ repoPath: p, limit: 20 })],
-    ['git_graph_summary', (h: ToolHandlers, p: string) => h.git_graph_summary({ repoPath: p, limit: 30 })],
+    [
+      'git_log_search',
+      (h: ToolHandlers, p: string) => h.git_log_search({ repoPath: p, limit: 20 }),
+    ],
+    [
+      'git_graph_summary',
+      (h: ToolHandlers, p: string) => h.git_graph_summary({ repoPath: p, limit: 30 }),
+    ],
     ['git_refs', (h: ToolHandlers, p: string) => h.git_refs({ repoPath: p })],
-    ['git_file_history', (h: ToolHandlers, p: string) => h.git_file_history({ repoPath: p, file: 'x', limit: 20 })],
+    [
+      'git_file_history',
+      (h: ToolHandlers, p: string) => h.git_file_history({ repoPath: p, file: 'x', limit: 20 }),
+    ],
     ['git_blame', (h: ToolHandlers, p: string) => h.git_blame({ repoPath: p, file: 'x' })],
   ] as const) {
     it(`${name} reports the empty repository rather than "nothing found"`, async () => {
@@ -303,8 +312,14 @@ describe.skipIf(!enginePath)('repository with no commits', () => {
   }
 
   for (const [name, call] of [
-    ['create_patch', (h: ToolHandlers, p: string) => h.create_patch({ repoPath: p, source: 'wip' })],
-    ['git_commit_show', (h: ToolHandlers, p: string) => h.git_commit_show({ repoPath: p, sha: 'HEAD' })],
+    [
+      'create_patch',
+      (h: ToolHandlers, p: string) => h.create_patch({ repoPath: p, source: 'wip' }),
+    ],
+    [
+      'git_commit_show',
+      (h: ToolHandlers, p: string) => h.git_commit_show({ repoPath: p, sha: 'HEAD' }),
+    ],
   ] as const) {
     it(`${name} fails with the empty repository, not raw git output`, async () => {
       const error = await call(handlers, repoDir).then(
