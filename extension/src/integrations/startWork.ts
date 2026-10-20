@@ -3,7 +3,8 @@ import { AuthError, type Issue, type IssueProvider } from '@gitglasses/integrati
 import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
 import { activeWorkspaceRepo } from '../views/viewBase';
-import type { IntegrationService, IssueProviderEntry } from './integrationService';
+import type { IntegrationService } from './integrationService';
+import { toAuthContext, type IssueProviderEntry } from './providerSetup';
 import { fallbackBranchName, sanitizeBranchName } from './startWorkLogic';
 
 function suggestName(provider: IssueProvider, issue: Issue): string {
@@ -19,16 +20,9 @@ function suggestName(provider: IssueProvider, issue: Issue): string {
 async function pickIssueProvider(
   entries: IssueProviderEntry[],
 ): Promise<IssueProviderEntry | undefined> {
-  const usable = entries.filter((entry) => entry.provider !== undefined);
-  if (usable.length === 0) {
-    void vscode.window.showWarningMessage(
-      'GitGlasses: the configured issue providers are not available in this build.',
-    );
-    return undefined;
-  }
-  if (usable.length === 1) return usable[0];
+  if (entries.length === 1) return entries[0];
   const picked = await vscode.window.showQuickPick(
-    usable.map((entry) => ({
+    entries.map((entry) => ({
       label: entry.providerId,
       description: entry.host ?? '',
       entry,
@@ -61,7 +55,7 @@ export function registerStartWork(
     }
 
     const entry = await pickIssueProvider(entries);
-    if (!entry?.provider) return;
+    if (!entry) return;
     const provider = entry.provider;
 
     const auth = await integrations.auth.getAuth(entry.providerId, entry.host ?? '', {
@@ -72,7 +66,7 @@ export function registerStartWork(
 
     let issues: Issue[];
     try {
-      issues = await provider.getMyIssues({ token: auth.token }, { limit: 50 });
+      issues = await provider.getMyIssues(toAuthContext(auth, entry.host), { limit: 50 });
     } catch (error) {
       if (error instanceof AuthError) {
         const reconnect = await vscode.window.showErrorMessage(

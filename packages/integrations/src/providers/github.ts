@@ -29,16 +29,22 @@ import type {
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
 import { ISSUE_TTL_MS, p, ProviderClient } from './client.js';
-import { assertPlainHost, isGistRawOrigin, isSameOriginAs } from './shared.js';
+import { assertKnownOptions, assertPlainHost, isGistRawOrigin, isSameOriginAs } from './shared.js';
 
 export interface GitHubProviderOptions {
   /** Provider id used in RepoDescriptors. Default "github". */
   id?: string;
   /** Host this provider serves. Default "github.com". */
   host?: string;
-  /** REST API base URL. Default "https://api.github.com". */
+  /**
+   * REST API base URL. Default "https://api.github.com" for github.com and
+   * "https://<host>/api/v3" for any other host.
+   */
   apiBaseUrl?: string;
-  /** GraphQL endpoint URL. Default "https://api.github.com/graphql". */
+  /**
+   * GraphQL endpoint URL. Default "<apiBaseUrl>/graphql" for github.com and
+   * "https://<host>/api/graphql" for any other host.
+   */
   graphqlUrl?: string;
   /** HTTP transport; defaults to the global fetch. Tests inject a stub here. */
   fetchFn?: FetchLike;
@@ -100,6 +106,8 @@ const PR_FRAGMENT = `
   reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
   assignees(first: 10) { nodes { login } }
 `;
+
+const OPTION_KEYS = ['id', 'host', 'apiBaseUrl', 'graphqlUrl', 'fetchFn'] as const;
 
 const SEARCH_QUERY = `
 query ($searchQuery: String!, $first: Int!) {
@@ -178,8 +186,8 @@ function mapAccount(account: GraphQlAccount | null): Account {
 
 /**
  * GitHub hosting provider backed by the real api.github.com GraphQL/REST APIs.
- * Also serves GitHub Enterprise via createGitHubEnterpriseProvider, which
- * points the same class at an enterprise host's API endpoints.
+ * Any host other than github.com is treated as GitHub Enterprise Server and
+ * served from that host's own API endpoints.
  */
 export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSuggestions, PrComments {
   readonly id: string;
@@ -197,18 +205,29 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
   private readonly client: ProviderClient;
 
   constructor(options: GitHubProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'GitHubProvider');
     this.id = options.id ?? 'github';
     // The host reaches a base URL that carries the token, so it must be a bare
     // hostname. It is lowercased to match the hosts parseRemoteUrl returns.
     this.host = (
       options.host === undefined ? 'github.com' : assertPlainHost(options.host, 'GitHub host')
     ).toLowerCase();
-    const apiBaseUrl = options.apiBaseUrl ?? 'https://api.github.com';
+    // An enterprise host serves its own API; defaulting it to api.github.com
+    // would send that instance's token to github.com.
+    const enterprise = this.host !== 'github.com';
+    const apiBaseUrl =
+      options.apiBaseUrl ?? (enterprise ? `https://${this.host}/api/v3` : 'https://api.github.com');
+    const graphqlUrl =
+      options.graphqlUrl ??
+      (enterprise && options.apiBaseUrl === undefined
+        ? `https://${this.host}/api/graphql`
+        : `${apiBaseUrl}/graphql`);
     this.client = new ProviderClient({
       name: 'GitHub',
       baseUrl: apiBaseUrl,
       baseUrlLabel: 'GitHub apiBaseUrl',
-      graphqlUrl: options.graphqlUrl ?? `${apiBaseUrl}/graphql`,
+      credentialHost: this.host,
+      graphqlUrl,
       headers: { accept: 'application/vnd.github+json', 'content-type': 'application/json' },
       authorize: (auth) => `Bearer ${auth.token}`,
       fetchFn: options.fetchFn ?? governedFetch,

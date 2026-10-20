@@ -2,7 +2,7 @@
 // quick-pick flows build gitglasses.integrations.hosts and .issues entries
 // through these, which keeps validation and de-duplication testable.
 
-import type { HostSetting, IssueSetting } from './integrationService';
+import type { HostSetting, IssueSetting } from './providerSetup';
 
 export interface ProviderChoice {
   id: string;

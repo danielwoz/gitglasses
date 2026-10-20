@@ -141,6 +141,7 @@ describe('response cache', () => {
       name: 'Test',
       baseUrl: 'https://api.example.com',
       baseUrlLabel: 'Test baseUrl',
+      credentialHost: 'example.com',
       authorize: (a) => `Bearer ${a.token}`,
       fetchFn,
       clock,

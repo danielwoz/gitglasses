@@ -20,6 +20,12 @@ export interface AuthContext {
    * e.g. the Jira account email or the Bitbucket username for basic auth.
    */
   username?: string;
+  /**
+   * Host the credential was issued for, e.g. "github.com" or
+   * "gitlab.corp.example". When set, a provider serving any other host
+   * refuses to send it (CredentialScopeError) instead of making the request.
+   */
+  host?: string;
 }
 
 export interface PullRequestQueryOptions {

@@ -1,10 +1,17 @@
 /** Shared HTTP transport and small companions used by every provider. */
 
 import { TtlCache, type Clock } from '../cache.js';
-import { ProviderError } from '../errors.js';
+import { CredentialScopeError, ProviderError } from '../errors.js';
 import type { AuthContext } from '../hostingProvider.js';
 import type { FetchLike, HttpResponseLike } from '../http.js';
-import { assertSecureBaseUrl, hostOfUrl, throwForStatus, tokenFingerprint } from './shared.js';
+import {
+  assertSecureBaseUrl,
+  credentialAllowsUrl,
+  hostOfUrl,
+  normalizeCredentialHost,
+  throwForStatus,
+  tokenFingerprint,
+} from './shared.js';
 
 const USER_AGENT = 'gitglasses';
 
@@ -106,6 +113,12 @@ export interface ProviderClientOptions {
   name: string;
   /** Base URL every path hangs off. Trailing slashes are stripped. */
   baseUrl: string;
+  /**
+   * Host the provider's credentials are issued for, e.g. "github.com" for an
+   * API at api.github.com. Every authenticated request must go to this host
+   * or its `api.` subdomain.
+   */
+  credentialHost: string;
   /** Label naming the offending option in a base-URL validation error. */
   baseUrlLabel: string;
   /** Segment inserted between the base URL and each path, e.g. "/api/v4". */
@@ -135,6 +148,8 @@ export class ProviderClient {
   readonly baseUrl: string;
   /** Hostname of the base URL. */
   readonly host: string;
+  /** Normalised host the credentials this client sends belong to. */
+  readonly credentialHost: string;
 
   private readonly name: string;
   private readonly prefix: string;
@@ -154,6 +169,16 @@ export class ProviderClient {
     this.graphqlUrl = options.graphqlUrl
       ? assertSecureBaseUrl(options.graphqlUrl, `${options.name} GraphQL URL`)
       : `${this.baseUrl}${this.prefix}`;
+    this.credentialHost = normalizeCredentialHost(options.credentialHost);
+    // A misconfigured endpoint fails here, before a token is ever attached.
+    for (const endpoint of [this.baseUrl, this.graphqlUrl]) {
+      if (!credentialAllowsUrl(endpoint, this.credentialHost)) {
+        throw new Error(
+          `${options.name} endpoint ${JSON.stringify(endpoint)} is not on ${this.credentialHost}, ` +
+            'the host its credentials are issued for'
+        );
+      }
+    }
     this.authorize = options.authorize;
     this.headers = options.headers ?? {};
     this.fetchFn = options.fetchFn;
@@ -249,6 +274,33 @@ export class ProviderClient {
     return `${this.baseUrl}${this.prefix}${path.value}`;
   }
 
+  /**
+   * Fails closed unless the credential belongs to this client's host and
+   * `url` is on that host. `auth.host`, when the caller says where the
+   * credential came from, has to name the same host.
+   */
+  private assertCredentialScope(auth: AuthContext, url: string): void {
+    if (auth.host !== undefined && auth.host !== '') {
+      let owner: string | undefined;
+      try {
+        owner = normalizeCredentialHost(auth.host);
+      } catch {
+        owner = undefined;
+      }
+      if (owner !== this.credentialHost) {
+        throw new CredentialScopeError(
+          `${this.name}: refusing to send the credential for ${JSON.stringify(auth.host)} ` +
+            `to ${this.credentialHost}`
+        );
+      }
+    }
+    if (!credentialAllowsUrl(url, this.credentialHost)) {
+      throw new CredentialScopeError(
+        `${this.name}: refusing to send the credential for ${this.credentialHost} to ${hostOfUrl(url)}`
+      );
+    }
+  }
+
   private async send(
     auth: AuthContext,
     method: string,
@@ -260,6 +312,7 @@ export class ProviderClient {
       headers['content-type'] = 'application/json';
     }
     headers['user-agent'] = USER_AGENT;
+    this.assertCredentialScope(auth, url);
     headers.authorization = this.authorize(auth);
     try {
       return await this.fetchFn(url, {

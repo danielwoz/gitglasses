@@ -17,6 +17,7 @@ import type {
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
 import { ISSUE_TTL_MS, mergeByRole, p, ProviderClient } from './client.js';
+import { assertKnownOptions, credentialHostOfUrl } from './shared.js';
 
 export interface BitbucketDCProviderOptions {
   /** Instance base URL, e.g. "https://git.corp.example". Required. */
@@ -60,6 +61,8 @@ interface DCPullRequest {
   updatedDate?: number;
   links?: { self?: Array<{ href?: string }> };
 }
+
+const OPTION_KEYS = ['baseUrl', 'id', 'fetchFn'] as const;
 
 function mapState(state: DCPullRequest['state']): PullRequestState {
   switch (state) {
@@ -112,11 +115,16 @@ export class BitbucketDCProvider implements HostingProvider {
   private readonly client: ProviderClient;
 
   constructor(options: BitbucketDCProviderOptions) {
+    assertKnownOptions(options, OPTION_KEYS, 'BitbucketDCProvider');
+    if (typeof options.baseUrl !== 'string') {
+      throw new Error('BitbucketDCProvider requires a baseUrl');
+    }
     this.id = options.id ?? 'bitbucket-dc';
     this.client = new ProviderClient({
       name: 'Bitbucket Data Center',
       baseUrl: options.baseUrl,
       baseUrlLabel: 'Bitbucket Data Center baseUrl',
+      credentialHost: credentialHostOfUrl(options.baseUrl),
       prefix: '/rest/api/1.0',
       headers: { accept: 'application/json' },
       authorize: (auth) => `Bearer ${auth.token}`,

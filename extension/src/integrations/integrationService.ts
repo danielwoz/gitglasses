@@ -1,16 +1,13 @@
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import * as integrationsPackage from '@gitglasses/integrations';
 import {
   AuthError,
-  GitHubProvider,
-  ProviderRegistry,
-  createGitHubEnterpriseProvider,
+  CredentialScopeError,
+  parseRemoteUrl,
   type AuthContext,
   type AutolinkPattern,
   type HostingProvider,
-  type IssueProvider,
   type RepoDescriptor,
 } from '@gitglasses/integrations';
 import { AuthManager, type AuthInfo } from './auth';
@@ -27,16 +24,17 @@ import {
   removeHostSetting,
   removeIssueSetting,
 } from './integrationSettings';
+import {
+  buildHostingEntries,
+  buildIssueEntries,
+  toAuthContext,
+  type HostingEntry,
+  type HostSetting,
+  type IssueProviderEntry,
+  type IssueSetting,
+} from './providerSetup';
 
-export interface HostSetting {
-  domain: string;
-  provider: string;
-}
-
-export interface IssueSetting {
-  provider: string;
-  host?: string;
-}
+export type { HostingEntry, HostSetting, IssueProviderEntry, IssueSetting } from './providerSetup';
 
 export interface HostingInfo {
   providerId: string;
@@ -48,19 +46,6 @@ export interface HostingInfo {
 export interface ConnectedHosting extends HostingInfo {
   auth: AuthContext;
   username?: string;
-}
-
-export interface HostingEntry {
-  providerId: string;
-  host: string;
-  provider: HostingProvider;
-}
-
-export interface IssueProviderEntry {
-  providerId: string;
-  host?: string;
-  /** Undefined when the configured provider is not shipped in this build yet. */
-  provider?: IssueProvider;
 }
 
 /**
@@ -92,20 +77,15 @@ async function findGitConfigPath(repoRoot: string): Promise<string | undefined> 
   }
 }
 
-/**
- * Feature-detect a provider class exported by @gitglasses/integrations by id
- * (e.g. "gitlab" -> GitLabProvider), so the extension works with whatever
- * providers the installed package version ships.
- */
-function findExportedProviderClass(providerId: string): (new (options: { host?: string }) => object) | undefined {
-  const wanted = `${providerId.replace(/[^a-z0-9]/gi, '').toLowerCase()}provider`;
-  const mod = integrationsPackage as unknown as Record<string, unknown>;
-  for (const [key, value] of Object.entries(mod)) {
-    if (key.toLowerCase() === wanted && typeof value === 'function') {
-      return value as new (options: { host?: string }) => object;
-    }
+/** The text of a repository's git config file, or undefined when unreadable. */
+async function readGitConfig(repoRoot: string): Promise<string | undefined> {
+  const configPath = await findGitConfigPath(repoRoot);
+  if (!configPath) return undefined;
+  try {
+    return await fs.readFile(configPath, 'utf8');
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
 /**
@@ -137,12 +117,17 @@ function settingScope<T>(
   };
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class IntegrationService implements vscode.Disposable {
-  private registry = new ProviderRegistry();
-  private readonly providersByHost = new Map<string, HostingProvider>();
+  private hostingEntries = new Map<string, HostingEntry>();
   private issueEntries: IssueProviderEntry[] = [];
   private autolinkSettings: AutolinkPattern[] = [];
   private hostingCache = new Map<string, Promise<HostingInfo | undefined>>();
+  /** Problems last reported for the settings, so a reload does not repeat them. */
+  private reportedProblems = '';
   private readonly emitter = new vscode.EventEmitter<void>();
   /** Fires when connections or integration configuration change. */
   readonly onDidChange = this.emitter.event;
@@ -165,72 +150,43 @@ export class IntegrationService implements vscode.Disposable {
 
   reloadConfiguration(): void {
     const config = vscode.workspace.getConfiguration('gitglasses');
-    const hosts = (config.get<HostSetting[]>('integrations.hosts') ?? []).filter(
-      (entry) => typeof entry?.domain === 'string' && typeof entry?.provider === 'string',
-    );
     this.autolinkSettings = userPatterns(config.get('autolinks'));
 
     // Rebuild from scratch so hosts removed from settings actually disappear.
-    this.registry = new ProviderRegistry();
-    this.providersByHost.clear();
-    this.providersByHost.set('github.com', new GitHubProvider());
-    this.registry.register(new GitHubProvider());
-    this.registry.configureHosts(
-      hosts.map((entry) => ({ domain: entry.domain, providerId: entry.provider })),
-    );
-    for (const entry of hosts) {
-      const provider = this.createHostingProvider(entry.provider, entry.domain);
-      if (provider) this.providersByHost.set(entry.domain.toLowerCase(), provider);
-    }
-
-    const issues = (config.get<IssueSetting[]>('integrations.issues') ?? []).filter(
-      (entry) => typeof entry?.provider === 'string',
-    );
-    this.issueEntries = issues.map((entry) => ({
-      providerId: entry.provider,
-      host: entry.host,
-      provider: this.createIssueProvider(entry.provider, entry.host),
-    }));
+    const hosting = buildHostingEntries(asArray(config.get('integrations.hosts')));
+    const issues = buildIssueEntries(asArray(config.get('integrations.issues')));
+    this.hostingEntries = hosting.entries;
+    this.issueEntries = issues.entries;
+    this.reportProblems([...hosting.problems, ...issues.problems]);
 
     this.hostingCache.clear();
     this.emitter.fire();
   }
 
-  private createHostingProvider(providerId: string, domain: string): HostingProvider | undefined {
-    // A provider constructor rejects a domain it cannot safely put in a base
-    // URL; one bad settings entry drops that entry, not the whole reload.
-    try {
-      if (providerId === 'github') {
-        return new GitHubProvider(domain === 'github.com' ? {} : { host: domain });
-      }
-      if (providerId === 'github-enterprise') {
-        return createGitHubEnterpriseProvider(domain);
-      }
-      const ctor = findExportedProviderClass(providerId);
-      if (!ctor) return undefined;
-      return new ctor({ host: domain }) as HostingProvider;
-    } catch {
-      return undefined;
-    }
+  /** Tells the user once about settings entries that were left out. */
+  private reportProblems(problems: string[]): void {
+    const key = problems.join('\n');
+    if (key === this.reportedProblems) return;
+    this.reportedProblems = key;
+    if (problems.length === 0) return;
+    void vscode.window
+      .showWarningMessage(
+        `GitGlasses: ignoring integration settings — ${problems.join('; ')}`,
+        'Open Settings',
+      )
+      .then((choice) => {
+        if (choice === 'Open Settings') {
+          void vscode.commands.executeCommand(
+            'workbench.action.openSettings',
+            'gitglasses.integrations',
+          );
+        }
+      });
   }
 
-  private createIssueProvider(providerId: string, host?: string): IssueProvider | undefined {
-    const ctor = findExportedProviderClass(providerId);
-    if (!ctor) return undefined;
-    try {
-      return new ctor(host ? { host } : {}) as unknown as IssueProvider;
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** All hosting endpoints (github.com + configured hosts) with a provider. */
+  /** All hosting endpoints with a provider: github.com plus configured hosts. */
   getHostingEntries(): HostingEntry[] {
-    return [...this.providersByHost.entries()].map(([host, provider]) => ({
-      host,
-      providerId: provider.id,
-      provider,
-    }));
+    return [...this.hostingEntries.values()];
   }
 
   /** Configured issue-tracker integrations from settings. */
@@ -256,27 +212,26 @@ export class IntegrationService implements vscode.Disposable {
   }
 
   private async resolveHosting(repoRoot: string): Promise<HostingInfo | undefined> {
-    const configPath = await findGitConfigPath(repoRoot);
-    if (!configPath) return undefined;
-    let text: string;
-    try {
-      text = await fs.readFile(configPath, 'utf8');
-    } catch {
-      return undefined;
-    }
+    const text = await readGitConfig(repoRoot);
+    if (text === undefined) return undefined;
     for (const url of orderedRemoteUrls(parseGitConfigRemotes(text))) {
-      const resolved = this.registry.resolveRemote(url);
-      if (!resolved) continue;
-      const provider = this.providersByHost.get(resolved.repo.host) ?? resolved.provider;
-      if (!provider) continue;
-      return {
-        providerId: resolved.providerId,
-        host: resolved.repo.host,
-        provider,
-        repo: resolved.repo,
-      };
+      const hosting = this.hostingForUrl(url);
+      if (hosting) return hosting;
     }
     return undefined;
+  }
+
+  /** The provider serving a remote URL's host, with the repository it names. */
+  private hostingForUrl(url: string): HostingInfo | undefined {
+    const parsed = parseRemoteUrl(url);
+    const entry = parsed && this.hostingEntries.get(parsed.host);
+    if (!parsed || !entry) return undefined;
+    return {
+      providerId: entry.providerId,
+      host: entry.host,
+      provider: entry.provider,
+      repo: entry.provider.matchesRemote(url) ?? { provider: entry.providerId, ...parsed },
+    };
   }
 
   /** Like getHostingFor, but only when credentials are available. */
@@ -288,7 +243,7 @@ export class IntegrationService implements vscode.Disposable {
     if (!hosting) return undefined;
     const auth = await this.auth.getAuth(hosting.providerId, hosting.host, { interactive });
     if (!auth) return undefined;
-    return { ...hosting, auth: { token: auth.token }, username: auth.username };
+    return { ...hosting, auth: toAuthContext(auth, hosting.host), username: auth.username };
   }
 
   /** All hosting endpoints that currently have stored credentials. */
@@ -488,29 +443,29 @@ export class IntegrationService implements vscode.Disposable {
     });
     if (!picked) return;
 
-    const auth = await this.auth.getAuth(picked.providerId, picked.host, {
+    const credential = await this.auth.getAuth(picked.providerId, picked.host, {
       interactive: true,
       needsUsername: picked.providerId === 'jira',
     });
-    if (!auth) return;
+    if (!credential) return;
+    const auth = toAuthContext(credential, picked.host);
 
     try {
       if (picked.itemKind === 'hosting') {
-        const provider = this.providersByHost.get(picked.host);
-        await provider?.getMyPullRequests({ token: auth.token }, { limit: 1 });
+        const provider = this.hostingEntries.get(picked.host)?.provider;
+        await provider?.getMyPullRequests(auth, { limit: 1 });
       } else {
         const provider = this.issueEntries.find(
-          (entry) => entry.providerId === picked.providerId,
+          (entry) =>
+            entry.providerId === picked.providerId && (entry.host ?? '') === picked.host,
         )?.provider;
-        if (!provider) {
-          void vscode.window.showWarningMessage(
-            `GitGlasses: the "${picked.providerId}" provider is not available in this build.`,
-          );
-          return;
-        }
-        await provider.getMyIssues({ token: auth.token }, { limit: 1 });
+        await provider?.getMyIssues(auth, { limit: 1 });
       }
     } catch (error) {
+      if (error instanceof CredentialScopeError) {
+        void vscode.window.showErrorMessage(`GitGlasses: ${errorText(error)}`);
+        return;
+      }
       if (error instanceof AuthError) {
         await this.auth.signOut(picked.providerId, picked.host);
         const retry = await vscode.window.showErrorMessage(
@@ -521,9 +476,7 @@ export class IntegrationService implements vscode.Disposable {
         return;
       }
       void vscode.window.showWarningMessage(
-        `GitGlasses: connected, but validation failed: ${String(
-          error instanceof Error ? error.message : error,
-        )}`,
+        `GitGlasses: connected, but validation failed: ${errorText(error)}`,
       );
     }
     this.emitter.fire();
@@ -568,4 +521,9 @@ export class IntegrationService implements vscode.Disposable {
     for (const disposable of this.disposables.splice(0)) disposable.dispose();
     this.emitter.dispose();
   }
+}
+
+/** A setting value as an array, whatever a hand-edited settings file holds. */
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }

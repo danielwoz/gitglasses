@@ -25,7 +25,7 @@ import {
   p,
   ProviderClient,
 } from './client.js';
-import { base64Encode, escapeBbqlString } from './shared.js';
+import { assertKnownOptions, base64Encode, escapeBbqlString } from './shared.js';
 
 export interface BitbucketProviderOptions {
   /** Provider id used in RepoDescriptors. Default "bitbucket". */
@@ -60,6 +60,8 @@ interface BitbucketPullRequest {
   created_on: string;
   updated_on: string;
 }
+
+const OPTION_KEYS = ['id', 'apiBaseUrl', 'fetchFn'] as const;
 
 function mapState(state: BitbucketPullRequest['state']): PullRequestState {
   switch (state) {
@@ -138,11 +140,13 @@ export class BitbucketProvider implements HostingProvider {
   private readonly identity = new CachedIdentity<BitbucketAccount>();
 
   constructor(options: BitbucketProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'BitbucketProvider');
     this.id = options.id ?? 'bitbucket';
     this.client = new ProviderClient({
       name: 'Bitbucket',
       baseUrl: options.apiBaseUrl ?? 'https://api.bitbucket.org/2.0',
       baseUrlLabel: 'Bitbucket apiBaseUrl',
+      credentialHost: this.host,
       headers: { accept: 'application/json' },
       // An app password authenticates as a named account; OAuth tokens do not.
       authorize: (auth) =>

@@ -38,6 +38,7 @@ import {
   p,
   ProviderClient,
 } from './client.js';
+import { assertKnownOptions, credentialHostOfUrl } from './shared.js';
 
 export interface GitLabProviderOptions {
   /** Provider id used in RepoDescriptors. Default "gitlab". */
@@ -77,6 +78,8 @@ interface GitLabMergeRequest {
   head_pipeline?: { status?: string } | null;
   references?: { full?: string };
 }
+
+const OPTION_KEYS = ['id', 'baseUrl', 'fetchFn'] as const;
 
 interface GitLabApprovals {
   approved?: boolean;
@@ -173,11 +176,14 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
   private readonly identity = new CachedIdentity<string>();
 
   constructor(options: GitLabProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'GitLabProvider');
     this.id = options.id ?? 'gitlab';
+    const baseUrl = options.baseUrl ?? 'https://gitlab.com';
     this.client = new ProviderClient({
       name: 'GitLab',
-      baseUrl: options.baseUrl ?? 'https://gitlab.com',
+      baseUrl,
       baseUrlLabel: 'GitLab baseUrl',
+      credentialHost: credentialHostOfUrl(baseUrl),
       prefix: '/api/v4',
       headers: { accept: 'application/json' },
       authorize: (auth) => `Bearer ${auth.token}`,

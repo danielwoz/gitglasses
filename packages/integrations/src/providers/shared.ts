@@ -104,6 +104,19 @@ export function hostOfUrl(baseUrl: string): string {
   return (match?.[1] ?? baseUrl).toLowerCase();
 }
 
+/**
+ * Host and port of a base URL, as URL.host reports them: the host that
+ * credentials sent to the URL belong to. Falls back to hostOfUrl for a value
+ * that does not parse, leaving the base-URL validation to reject it.
+ */
+export function credentialHostOfUrl(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return hostOfUrl(baseUrl);
+  }
+}
+
 /** True when both URLs share scheme, host and port. */
 export function isSameOriginAs(candidate: string, reference: string): boolean {
   try {
@@ -141,10 +154,62 @@ export function escapeBbqlString(value: string): string {
  * resolves elsewhere.
  */
 export function assertPlainHost(value: string, what: string): string {
-  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(value)) {
+  // RegExp.test stringifies its argument, so without the type check an
+  // undefined value would be tested as the plain hostname "undefined".
+  if (
+    typeof value !== 'string' ||
+    !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(value)
+  ) {
     throw new Error(`${what} must be a plain hostname, got ${JSON.stringify(value)}`);
   }
   return value;
+}
+
+/**
+ * A credential's host in the form URL.host reports it: lowercased, with an
+ * explicit default https port dropped. Throws for anything but a plain host.
+ */
+export function normalizeCredentialHost(value: string): string {
+  return new URL(`https://${assertPlainHost(value, 'Credential host')}`).host;
+}
+
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * True when a credential issued for `credentialHost` may be sent to `url`:
+ * the URL is https (http only on loopback), carries no userinfo, and its host
+ * is the credential's host or that host's `api.` subdomain, which is where
+ * github.com, bitbucket.org and linear.app serve their APIs.
+ */
+export function credentialAllowsUrl(url: string, credentialHost: string): boolean {
+  let parsed: URL;
+  let host: string;
+  try {
+    parsed = new URL(url);
+    host = normalizeCredentialHost(credentialHost);
+  } catch {
+    return false;
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    return false;
+  }
+  const secure =
+    parsed.protocol === 'https:' ||
+    (parsed.protocol === 'http:' && LOOPBACK_HOSTNAMES.has(parsed.hostname));
+  return secure && (parsed.host === host || parsed.host === `api.${host}`);
+}
+
+/**
+ * Rejects option keys a provider does not read. A host or base URL passed
+ * under a name the provider ignores would otherwise fall back to the public
+ * default and send the credential there.
+ */
+export function assertKnownOptions(options: object, known: readonly string[], what: string): void {
+  for (const key of Object.keys(options)) {
+    if (!known.includes(key)) {
+      throw new Error(`${what} does not take a "${key}" option (it takes ${known.join(', ')})`);
+    }
+  }
 }
 
 /**

@@ -26,9 +26,16 @@ import {
   ProviderClient,
   segments,
 } from './client.js';
-import { assertPlainHost, base64Encode } from './shared.js';
+import {
+  assertKnownOptions,
+  assertPlainHost,
+  base64Encode,
+  credentialHostOfUrl,
+} from './shared.js';
 
 const API_VERSION = '7.1';
+
+const OPTION_KEYS = ['organization', 'project', 'baseUrl', 'id', 'fetchFn'] as const;
 
 export interface AzureDevOpsProviderOptions {
   /** Organization name (the first path segment on dev.azure.com). Required. */
@@ -159,15 +166,18 @@ export class AzureDevOpsProvider implements HostingProvider {
   private readonly profile = new CachedIdentity<string>();
 
   constructor(options: AzureDevOpsProviderOptions) {
+    assertKnownOptions(options, OPTION_KEYS, 'AzureDevOpsProvider');
     this.id = options.id ?? 'azuredevops';
     // The organization is the first path segment of every credentialed
     // request, so it is restricted to the same bare-label form a hostname has.
     this.organization = assertPlainHost(options.organization, 'Azure DevOps organization');
     this.project = options.project;
+    const baseUrl = options.baseUrl ?? 'https://dev.azure.com';
     this.client = new ProviderClient({
       name: 'Azure DevOps',
-      baseUrl: options.baseUrl ?? 'https://dev.azure.com',
+      baseUrl,
       baseUrlLabel: 'Azure DevOps baseUrl',
+      credentialHost: credentialHostOfUrl(baseUrl),
       headers: { accept: 'application/json' },
       // The PAT goes in as basic auth with an empty username.
       authorize: (auth) => `Basic ${base64Encode(`:${auth.token}`)}`,

@@ -4,7 +4,12 @@ import type { FetchLike } from '../http.js';
 import type { AuthContext, IssueProvider, IssueQueryOptions } from '../hostingProvider.js';
 import type { Issue } from '../models.js';
 import { ProviderClient } from './client.js';
-import { slugify } from './shared.js';
+import { assertKnownOptions, credentialHostOfUrl, slugify } from './shared.js';
+
+const OPTION_KEYS = ['apiUrl', 'id', 'fetchFn'] as const;
+
+/** Host Linear API keys are issued for; the API itself is on api.linear.app. */
+const LINEAR_HOST = 'linear.app';
 
 export interface LinearProviderOptions {
   /** GraphQL endpoint. Default "https://api.linear.app/graphql". */
@@ -93,11 +98,15 @@ export class LinearProvider implements IssueProvider {
   private readonly client: ProviderClient;
 
   constructor(options: LinearProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'LinearProvider');
     this.id = options.id ?? 'linear';
+    const apiUrl = options.apiUrl ?? 'https://api.linear.app/graphql';
     this.client = new ProviderClient({
       name: 'Linear',
-      baseUrl: options.apiUrl ?? 'https://api.linear.app/graphql',
+      baseUrl: apiUrl,
       baseUrlLabel: 'Linear apiUrl',
+      // A custom endpoint (a local mock) owns its own credentials.
+      credentialHost: options.apiUrl === undefined ? LINEAR_HOST : credentialHostOfUrl(apiUrl),
       authorize: (auth) => auth.token,
       fetchFn: options.fetchFn ?? governedFetch,
     });
