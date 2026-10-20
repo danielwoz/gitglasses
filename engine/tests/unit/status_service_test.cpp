@@ -970,6 +970,16 @@ TEST(StatusService, SparseCheckoutLeavesOutOfConeFilesAlone) {
   ASSERT_TRUE(sparse.contains("error")) << sparse.dump();
   EXPECT_NE(sparse["error"]["message"].get<std::string>().find("sparse"), std::string::npos);
   EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-status"), "M\tkeep/k.txt\n");
+
+  // Nor does it have hunks: like `git diff`, the absent file is no deletion.
+  Json hunks = fileHunks(session, 13, repoId, "other/f1.txt", false);
+  ASSERT_TRUE(hunks.contains("result")) << hunks.dump();
+  EXPECT_TRUE(hunks["result"]["hunks"].empty()) << hunks.dump();
+  Json hunkStage = stageHunks(
+      session, 14, repoId, "other/f1.txt", "stage",
+      Json::array({{{"oldStart", 1}, {"oldLines", 1}, {"newStart", 0}, {"newLines", 0}}}));
+  EXPECT_TRUE(hunkStage.contains("error")) << hunkStage.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "diff --cached --name-status"), "M\tkeep/k.txt\n");
 }
 
 TEST(StatusService, DirtySubmoduleIsNotStageable) {

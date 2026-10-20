@@ -291,6 +291,13 @@ void splitPatch(const std::string& text, std::string& header, std::vector<HunkBl
 FilePatch filePatch(const core::Repo& repo, const std::string& path, bool staged, bool cliAvailable,
                     const CancelToken& token) {
   FilePatch patch;
+  if (!staged) {
+    // Git treats a skip-worktree entry as unchanged whatever the working
+    // tree holds, so the absent file of an out-of-cone entry is no deletion.
+    auto index = readIndex(repo.raw());
+    if (!index) throw rpc::HandlerError{{index.error()}};
+    if (skipWorktree(index.value().get(), path.c_str())) return patch;
+  }
   auto diff = singleFileDiff(repo, path, staged);
   if (!diff) throw rpc::HandlerError{{diff.error()}};
   size_t index = 0;

@@ -128,7 +128,8 @@ struct FilePatch {
 // Builds the FilePatch for `path`. Unstaged changes of a path with a filter
 // driver or working-tree-encoding are diffed by git itself, which cleans the
 // working-tree side first; without the git CLI that is impossible, and the
-// request fails with FilterNeedsGitCli rather than exposing raw bytes.
+// request fails with FilterNeedsGitCli rather than exposing raw bytes. A
+// skip-worktree path has no unstaged change, as in `git diff`.
 FilePatch filePatch(const core::Repo& repo, const std::string& path, bool staged, bool cliAvailable,
                     const CancelToken& token);
 
