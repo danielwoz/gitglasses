@@ -7,6 +7,7 @@
 #include <io.h>
 #endif
 
+#include "exec/cli_detect.h"
 #include "exec/sequence_editor.h"
 #include "server.h"
 #include "util/log.h"
@@ -16,7 +17,7 @@ namespace {
 constexpr const char* kVersion = "0.1.2";
 
 int printUsage() {
-  std::cerr << "usage: gitglasses-engine --stdio [--log-level <level>]\n"
+  std::cerr << "usage: gitglasses-engine --stdio [--restricted] [--log-level <level>]\n"
                "       gitglasses-engine --version\n"
                "       gitglasses-engine --edit-sequence <control-file> <todo-file>\n"
                "       gitglasses-engine --edit-message <control-file> <msg-file>\n";
@@ -48,6 +49,10 @@ int main(int argc, char** argv) {
     } else if (arg == "--version") {
       std::cout << kVersion << "\n";
       return 0;
+    } else if (arg == "--restricted") {
+      // Restricted Mode, for an untrusted workspace: no git process runs and
+      // nothing in the repository changes (see exec::setRestrictedMode).
+      gg::exec::setRestrictedMode(true);
     } else if (arg == "--log-level" && i + 1 < argc) {
       logLevel = argv[++i];
     } else {

@@ -14,6 +14,7 @@
 #include <unistd.h>
 #endif
 
+#include "exec/cli_detect.h"
 #include "test_fixtures.h"
 
 namespace gg::exec {
@@ -144,6 +145,20 @@ TEST(GitProcess, SpawnFailsInMissingDirectory) {
     }
     EXPECT_NE(process.value().wait(token), 0);
   }
+}
+
+TEST(GitProcess, RestrictedModeRefusesEverySpawn) {
+  gg::testing::FixtureRepo fixture;
+  gg::testing::ScopedRestrictedMode restricted;
+  auto process = GitProcess::spawn(fixture.root().string(), {"--version"});
+  CancelToken token;
+  auto run = runGit(fixture.root().string(), {"status"}, {}, token, [](std::string) {});
+
+  ASSERT_FALSE(process.ok());
+  EXPECT_EQ(process.error().code, ErrorCode::Restricted);
+  ASSERT_FALSE(run.ok());
+  EXPECT_EQ(run.error().code, ErrorCode::Restricted);
+  EXPECT_FALSE(gitCliAvailable());
 }
 
 #ifndef _WIN32

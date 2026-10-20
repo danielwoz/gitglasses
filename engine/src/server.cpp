@@ -2,7 +2,10 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <string_view>
 
 #include "core/git2.h"
 #include "rpc/dispatcher.h"
@@ -39,6 +42,35 @@ constexpr bool kWatchCapability = true;
 constexpr bool kThreadsCapability = true;
 #endif
 
+// The methods a Restricted Mode engine serves: reads that go through libgit2
+// alone (blame/file switches to its libgit2 backend), so no program the
+// repository configures can run, and none of which changes the repository.
+// Every other request method is refused with ErrorCode::Restricted before its
+// handler runs, including methods added later, until they are vetted and
+// listed here. Notifications only feed these reads and stay registered.
+// Mirrors RESTRICTED_MODE_METHODS in packages/protocol; the protocol contract
+// test checks the two agree.
+constexpr std::array<std::string_view, 18> kRestrictedModeMethods = {
+    "initialize", "shutdown",       "repo/discover",  "repo/close",     "repo/list",
+    "repo/state", "blame/file",     "log/commits",    "search/commits", "rev/fileAtRev",
+    "refs/list",  "stash/list",     "status/summary", "graph/rows",     "diff/commit",
+    "diff/refs",  "diff/fileHunks", "remote/list",
+};
+
+// Replaces the handler of every method Restricted Mode does not serve.
+void refuseOutsideRestrictedMode(rpc::Dispatcher& dispatcher) {
+  for (const std::string& name : dispatcher.methodNames()) {
+    if (std::find(kRestrictedModeMethods.begin(), kRestrictedModeMethods.end(), name) !=
+        kRestrictedModeMethods.end()) {
+      continue;
+    }
+    dispatcher.method(
+        name, [](const rpc::Json&, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
+          throw rpc::HandlerError{{ErrorCode::Restricted, exec::kRestrictedModeMessage}};
+        });
+  }
+}
+
 // Which mechanism actually backs repo/didChange: "none" when the build has no
 // watcher, "inotify" for the kernel watcher, "polling" for the degraded
 // periodic stat sweep. Notifications are delivered either way; polling costs
@@ -71,6 +103,7 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
                 {"protocolVersion", kProtocolVersion},
                 {"capabilities",
                  {{"gitCli", context.cliAvailable},
+                  {"restricted", context.restricted},
                   {"watch", kWatchCapability},
                   {"watchBackend", watchBackendName(context)},
                   {"threads", kThreadsCapability}}}};
@@ -99,6 +132,8 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
   services::registerStashWorktreeMethods(dispatcher, context);
   services::registerRebaseMethods(dispatcher, context);
   services::registerPatchMethods(dispatcher, context);
+
+  if (context.restricted) refuseOutsideRestrictedMode(dispatcher);
 }
 
 int runServer(std::istream& in, std::ostream& out) {

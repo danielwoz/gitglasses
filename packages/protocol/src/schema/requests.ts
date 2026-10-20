@@ -80,8 +80,16 @@ export const EngineCapabilities = Type.Object(
     /** git CLI available: blame --incremental, --follow/-L history, all
      * mutations, rebase, network ops, patch create/apply. When false the
      * engine serves libgit2-backed fallbacks for reads and rejects
-     * CLI-dependent methods with MethodNotSupported. */
+     * CLI-dependent methods with MethodNotSupported. Always false when
+     * `restricted` is true. */
     gitCli: Type.Boolean(),
+    /** Restricted Mode, for a repository that is not trusted (the engine was
+     * started with --restricted): no git process runs, so nothing the
+     * repository's config, attributes or hooks name can run, and nothing in
+     * the repository changes. Only RESTRICTED_MODE_METHODS are served; every
+     * other method fails with Restricted (-32004). Absent from engines that
+     * predate the mode. */
+    restricted: Type.Optional(Type.Boolean()),
     /** Filesystem watching (repo/didChange pushes). */
     watch: Type.Boolean(),
     /** Concurrent request execution (false in single-threaded wasm builds). */
@@ -820,3 +828,29 @@ export const RequestSchemas = {
     ),
   },
 };
+
+/** The methods an engine in Restricted Mode serves. Each reads through libgit2
+ *  alone (blame/file switches to its libgit2 backend), so no program the
+ *  repository configures can run, and none changes the repository. Every
+ *  other method fails with Restricted (-32004). The engine keeps its own copy
+ *  of this list, and the protocol contract test checks the two agree. */
+export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] = [
+  'initialize',
+  'shutdown',
+  'repo/discover',
+  'repo/close',
+  'repo/list',
+  'repo/state',
+  'blame/file',
+  'log/commits',
+  'search/commits',
+  'rev/fileAtRev',
+  'refs/list',
+  'stash/list',
+  'status/summary',
+  'graph/rows',
+  'diff/commit',
+  'diff/refs',
+  'diff/fileHunks',
+  'remote/list',
+];

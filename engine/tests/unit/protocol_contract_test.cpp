@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <regex>
 #include <string>
@@ -508,6 +509,46 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
           {"rev", "HEAD"},
           {"maxBytes", 64 * 1024 * 1024}},
          "maxBytes above the ceiling");
+}
+
+// The artifact's restrictedModeMethods is what clients gate on; a restricted
+// engine must serve exactly those methods and refuse every other one with
+// Restricted before looking at its params.
+TEST(ProtocolContract, RestrictedEngineServesExactlyTheListedMethods) {
+  const Json& doc = schemaDoc();
+  ASSERT_TRUE(doc.contains("restrictedModeMethods"));
+  std::vector<std::string> served;
+  for (const auto& method : doc["restrictedModeMethods"]) {
+    served.push_back(method.get<std::string>());
+    EXPECT_TRUE(doc["methods"].contains(served.back()))
+        << "restrictedModeMethods names an unknown method: " << served.back();
+  }
+
+  FixtureRepo fixture;
+  gg::testing::ScopedRestrictedMode restricted;
+  {
+    InteractiveSession session;
+    checkedRequest(session, 1, "initialize",
+                   {{"protocolVersion", doc.value("protocolVersion", "")}});
+    Json discovered =
+        checkedRequest(session, 2, "repo/discover", {{"path", fixture.root().string()}});
+    const std::string repoId = discovered.value("repoId", "");
+
+    std::int64_t id = 100;
+    for (const auto& [method, schemas] : doc["methods"].items()) {
+      if (method == "initialize" || method == "shutdown") continue;
+      const Json response = session.request(req(++id, method, {{"repoId", repoId}}));
+      const int code = response.contains("error") ? response["error"].value("code", 0) : 0;
+      const bool listed = std::find(served.begin(), served.end(), method) != served.end();
+      if (listed) {
+        EXPECT_NE(code, static_cast<int>(ErrorCode::Restricted))
+            << method << " is listed as served but was refused";
+      } else {
+        EXPECT_EQ(code, static_cast<int>(ErrorCode::Restricted))
+            << method << " is not listed as served but was not refused: " << response.dump();
+      }
+    }
+  }
 }
 
 }  // namespace

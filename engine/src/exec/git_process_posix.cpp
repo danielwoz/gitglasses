@@ -10,6 +10,8 @@
 #include <cerrno>
 #include <cstring>
 
+#include "exec/cli_detect.h"
+
 extern char** environ;
 
 namespace gg::exec {
@@ -53,6 +55,8 @@ struct SpawnAttr {
 
 Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args,
                                      const SpawnOpts& opts) {
+  if (restrictedMode()) return Error{ErrorCode::Restricted, kRestrictedModeMessage};
+
   int outPipe[2], errPipe[2];
   if (!makePipe(outPipe)) return Error{ErrorCode::Internal, "pipe() failed"};
   if (!makePipe(errPipe)) {

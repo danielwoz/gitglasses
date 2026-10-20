@@ -71,7 +71,8 @@ class GitProcess {
   // Spawns `git <args...>` with `cwd` as working directory and the
   // environment childEnvOverrides() describes. The child reads stdin from the
   // null device, inherits no descriptor beyond its three standard ones, and on
-  // POSIX runs in a session of its own with no controlling terminal.
+  // POSIX runs in a session of its own with no controlling terminal. Fails
+  // with ErrorCode::Restricted, spawning nothing, in Restricted Mode.
   static Result<GitProcess> spawn(const std::string& cwd, std::vector<std::string> args,
                                   const SpawnOpts& opts = {});
 

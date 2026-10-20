@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "exec/cli_detect.h"
+
 namespace gg::testing {
 
 // Sets or clears a process environment variable; children spawned via
@@ -53,6 +55,17 @@ class ScopedEnv {
  private:
   std::string name_;
   std::optional<std::string> previous_;
+};
+
+// Turns the engine's Restricted Mode on for the current scope. Declared before
+// a session, so the session's context is built in the mode and the mode is
+// cleared only after the session has shut down.
+class ScopedRestrictedMode {
+ public:
+  ScopedRestrictedMode() { exec::setRestrictedMode(true); }
+  ~ScopedRestrictedMode() { exec::setRestrictedMode(false); }
+  ScopedRestrictedMode(const ScopedRestrictedMode&) = delete;
+  ScopedRestrictedMode& operator=(const ScopedRestrictedMode&) = delete;
 };
 
 // Platform null device for discarding command output.

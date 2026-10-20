@@ -5,6 +5,7 @@
 
 #include "exec/git_process.h"
 
+#include "exec/cli_detect.h"
 #include "exec/win_unicode.h"
 
 #include <algorithm>
@@ -156,6 +157,8 @@ class InheritedHandleList {
 
 Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args,
                                      const SpawnOpts& opts) {
+  if (restrictedMode()) return Error{ErrorCode::Restricted, kRestrictedModeMessage};
+
   std::vector<std::string> fullArgs;
   fullArgs.reserve(args.size() + 3);
   fullArgs.push_back("git");

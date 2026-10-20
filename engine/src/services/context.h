@@ -28,9 +28,12 @@ struct ServiceContext {
   cache::BlameCache blameCache;
   cache::GraphCache graphCache;
   cache::DocOverlay docOverlay;
-  // Whether this process has a usable git CLI, read once at construction so
-  // capability reporting, method guards and the blame backend choice always
-  // agree for the life of the context.
+  // Restricted Mode (exec::restrictedMode()): no git process runs and nothing
+  // in the repository changes. Read once at construction, like cliAvailable.
+  bool restricted = exec::restrictedMode();
+  // Whether this process has a usable git CLI it may run (never in Restricted
+  // Mode), read once at construction so capability reporting, method guards
+  // and the blame backend choice always agree for the life of the context.
   bool cliAvailable = exec::gitCliAvailable();
   BlameService blameService{blameCache, cliAvailable};
 
@@ -63,8 +66,12 @@ struct ServiceContext {
 };
 
 // Rejects a method that shells out to the git CLI when this build/environment
-// has none, as a typed error the client can branch on.
+// has none, or when Restricted Mode forbids running it, as a typed error the
+// client can branch on.
 inline void requireGitCli(const ServiceContext& context) {
+  if (context.restricted) {
+    throw rpc::HandlerError{{ErrorCode::Restricted, exec::kRestrictedModeMessage}};
+  }
   if (context.cliAvailable) return;
   throw rpc::HandlerError{{ErrorCode::MethodNotSupported,
                            "requires the git CLI (not available in this engine build)"}};
