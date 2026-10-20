@@ -1,7 +1,7 @@
 {
   "name": "gitglasses-monorepo",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "packageManager": "pnpm@11.15.1",
   "scripts": {
