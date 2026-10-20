@@ -131,7 +131,10 @@ describe('buildSuggestionPatch', () => {
   });
 
   it('quotes a path git would quote, and still applies', () => {
-    const file = 'dir with space/naïve "x".txt';
+    // Windows file names cannot hold a double quote; the non-ASCII letter
+    // alone still makes git quote the path.
+    const file =
+      process.platform === 'win32' ? 'dir with space/naïve x.txt' : 'dir with space/naïve "x".txt';
     const result = buildSuggestionPatch({
       path: file,
       headText: 'a\nb\n',
@@ -139,7 +142,11 @@ describe('buildSuggestionPatch', () => {
       endLine: 1,
       replacement: 'A',
     });
-    expect(result?.patch.split('\n')[1]).toBe('--- "a/dir with space/na\\303\\257ve \\"x\\".txt"');
+    expect(result?.patch.split('\n')[1]).toBe(
+      process.platform === 'win32'
+        ? '--- "a/dir with space/na\\303\\257ve x.txt"'
+        : '--- "a/dir with space/na\\303\\257ve \\"x\\".txt"',
+    );
     expect(applyToCommitted(file, 'a\nb\n', result!.patch)).toBe('A\nb\n');
   });
 
