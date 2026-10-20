@@ -139,18 +139,36 @@ describe('nodeFileIdentity', () => {
     expect(nodeFileIdentity(path.join(os.tmpdir(), 'gitglasses-no-such-dir', 'x'))).toBeUndefined();
   });
 
-  it.skipIf(process.platform === 'win32')(
-    'finds the symlinked spelling of a real directory',
-    () => {
-      const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-alias-'));
-      created.push(base);
-      fs.mkdirSync(path.join(base, 'real', 'repo', 'src'), { recursive: true });
-      fs.symlinkSync(path.join(base, 'real'), path.join(base, 'link'));
-      const root = fs.realpathSync.native(path.join(base, 'real', 'repo'));
+  // A junction on Windows, which needs no privilege to create; a symbolic
+  // link elsewhere.
+  it('finds the linked spelling of a real directory', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-alias-'));
+    created.push(base);
+    fs.mkdirSync(path.join(base, 'real', 'repo', 'src'), { recursive: true });
+    fs.symlinkSync(
+      path.join(base, 'real'),
+      path.join(base, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const root = fs.realpathSync.native(path.join(base, 'real', 'repo'));
 
-      expect(
-        sameDirectoryAncestor(path.join(base, 'link', 'repo', 'src'), root, nodeFileIdentity),
-      ).toBe(path.join(base, 'link', 'repo'));
+    expect(
+      sameDirectoryAncestor(path.join(base, 'link', 'repo', 'src'), root, nodeFileIdentity),
+    ).toBe(path.join(base, 'link', 'repo'));
+  });
+
+  // On CI runners os.tmpdir() is the 8.3 short form (C:\Users\RUNNER~1\...),
+  // and the engine reports the long form libgit2 expands it to.
+  it.runIf(process.platform === 'win32')(
+    'gives the temp dir one identity under its short and long names',
+    () => {
+      const spelled = os.tmpdir();
+      const long = fs.realpathSync.native(spelled);
+      expect(nodeFileIdentity(spelled)).toBeDefined();
+      expect(nodeFileIdentity(spelled)).toEqual(nodeFileIdentity(long));
+      expect(sameDirectoryAncestor(path.join(spelled, 'x', 'y'), long, nodeFileIdentity)).toBe(
+        spelled,
+      );
     },
   );
 });
