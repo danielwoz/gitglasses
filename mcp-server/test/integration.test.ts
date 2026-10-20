@@ -15,8 +15,12 @@ const packageRoot = path.resolve(import.meta.dirname, '..');
 const enginePath = resolveEnginePath({ packageRoot });
 const cliPath = path.join(packageRoot, 'dist', 'cli.js');
 
+// Skipped locally without an engine; in CI a missing engine means the build
+// broke, so the suite fails instead of passing with nothing run.
 if (!enginePath) {
-  console.log('gitglasses-engine binary not found; skipping engine integration tests');
+  const message = 'gitglasses-engine binary not found';
+  if (process.env.CI) throw new Error(`${message}; CI must provide build/release/engine`);
+  console.log(`${message}; skipping engine integration tests`);
 }
 if (!existsSync(cliPath)) {
   console.log('dist/cli.js not built; skipping MCP stdio smoke test (run build first)');
