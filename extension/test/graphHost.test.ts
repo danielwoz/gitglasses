@@ -1,7 +1,8 @@
 // The commit graph host's guards: commit actions never run on the
 // uncommitted-changes row or a stash, actions from a snapshot of another
-// repository are dropped, and branch and tag actions the engine cannot serve
-// are refused before anything reaches it.
+// repository are dropped, and branch and tag actions an engine that cannot
+// run git (Restricted Mode, no git CLI) cannot serve are refused before
+// anything reaches it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
@@ -18,7 +19,8 @@ import {
   controls,
   recorded,
 } from './support/fakeWebviewVscode';
-import { REF_MANAGEMENT, runRefAction, runRowAction } from '../src/webviews/graphActions';
+import { runRefAction, runRowAction } from '../src/webviews/graphActions';
+import { CLI_UNAVAILABLE_MESSAGE, RESTRICTED_MESSAGE } from '../src/engine/capabilityGate';
 import { GraphWebviewHost } from '../src/webviews/graphHost';
 import { setActiveRepoResolver, type ActiveRepo } from '../src/views/viewBase';
 import type { RepositoryService } from '../src/model/repositoryService';
@@ -33,7 +35,7 @@ interface Request {
 
 /** An engine that answers the reads the graph host makes and records every
  *  request. Mutations succeed without doing anything. */
-function graphEngine() {
+function graphEngine(caps: Record<string, unknown> = { gitCli: true, watch: true, threads: true }) {
   const requests: Request[] = [];
   const row = (sha: string, kind: GraphRow['kind']): GraphRow => ({
     sha,
@@ -69,7 +71,7 @@ function graphEngine() {
           return {};
       }
     },
-    capabilities: () => ({ gitCli: true, watch: true, threads: true }),
+    capabilities: () => caps,
     onNotification: () => ({ dispose: () => undefined }),
     onDidChangeCapabilities: () => ({ dispose: () => undefined }),
   };
@@ -77,6 +79,14 @@ function graphEngine() {
     requests.filter((request) => /^(mutate|tag|branch|stash|rebase)\//.test(request.method));
   return { engine: engine as unknown as EngineClient, requests, mutations };
 }
+
+/** The action context the graph host passes, for repository r1. */
+function contextFor(engine: EngineClient) {
+  return { engine, repoId: 'r1', log: () => undefined, openRebase: vi.fn() };
+}
+
+const RESTRICTED = { gitCli: false, restricted: true, watch: true, threads: true };
+const NO_GIT_CLI = { gitCli: false, restricted: false, watch: true, threads: true };
 
 const KINDS = new Map<string, GraphRow['kind']>([
   [UNCOMMITTED_SHA, 'wip'],
@@ -90,7 +100,7 @@ afterEach(() => setActiveRepoResolver(undefined));
 describe('runRowAction', () => {
   it('refuses commit actions on the uncommitted-changes row and on stashes', async () => {
     const { engine, requests } = graphEngine();
-    const ctx = { engine, repoId: 'r1', openRebase: vi.fn() };
+    const ctx = contextFor(engine);
     await runRowAction(ctx, 'reset', [STASH], KINDS);
     await runRowAction(ctx, 'merge', [STASH], KINDS);
     await runRowAction(ctx, 'cherryPick', [UNCOMMITTED_SHA], KINDS);
@@ -104,7 +114,7 @@ describe('runRowAction', () => {
 
   it('refuses commits the graph never showed, and stash actions on commits', async () => {
     const { engine, requests } = graphEngine();
-    const ctx = { engine, repoId: 'r1', openRebase: vi.fn() };
+    const ctx = contextFor(engine);
     await runRowAction(ctx, 'switchDetached', ['d'.repeat(40)], KINDS);
     await runRowAction(ctx, 'stashDrop', [COMMIT], KINDS);
     expect(requests).toEqual([]);
@@ -112,23 +122,23 @@ describe('runRowAction', () => {
 
   it('runs a commit action on a commit row', async () => {
     const { engine, mutations } = graphEngine();
-    await runRowAction(
-      { engine, repoId: 'r1', openRebase: vi.fn() },
-      'switchDetached',
-      [COMMIT],
-      KINDS,
-    );
+    await runRowAction(contextFor(engine), 'switchDetached', [COMMIT], KINDS);
     expect(mutations()).toEqual([
       { method: 'mutate/switch', params: { repoId: 'r1', ref: COMMIT } },
     ]);
   });
 
-  it('refuses to create a tag while the engine has no tag methods', async () => {
-    expect(REF_MANAGEMENT).toBe(false);
-    const { engine, requests } = graphEngine();
-    await runRowAction({ engine, repoId: 'r1', openRebase: vi.fn() }, 'createTag', [COMMIT], KINDS);
-    expect(requests).toEqual([]);
-    expect(controls.messages[0]).toMatch(/does not support it yet/);
+  it('refuses to create a tag where the engine cannot run git', async () => {
+    for (const [caps, explanation] of [
+      [RESTRICTED, RESTRICTED_MESSAGE],
+      [NO_GIT_CLI, CLI_UNAVAILABLE_MESSAGE],
+    ] as const) {
+      recorded.reset();
+      const { engine, requests } = graphEngine(caps);
+      await runRowAction(contextFor(engine), 'createTag', [COMMIT], KINDS);
+      expect(requests).toEqual([]);
+      expect(controls.messages).toEqual([`GitGlasses: cannot create tag. ${explanation}.`]);
+    }
   });
 });
 
@@ -136,30 +146,26 @@ describe('runRefAction', () => {
   const tag: GraphRef = { name: 'v1.0', kind: 'tag' };
   const branch: GraphRef = { name: 'feature', kind: 'branch' };
 
-  it('refuses branch and tag management the engine cannot serve', async () => {
-    const { engine, mutations } = graphEngine();
-    const ctx = { engine, repoId: 'r1', openRebase: vi.fn() };
-    await runRefAction(ctx, 'pushTag', tag, COMMIT);
-    await runRefAction(ctx, 'deleteTag', tag, COMMIT);
-    await runRefAction(ctx, 'rename', branch, COMMIT);
-    // Pushing a branch that is not checked out needs branch/push.
-    await runRefAction(ctx, 'push', branch, COMMIT);
-    expect(mutations()).toEqual([]);
-    expect(controls.messages).toHaveLength(4);
-    for (const message of controls.messages) expect(message).toMatch(/does not support it yet/);
-  });
-
-  it('still pushes the checked-out branch', async () => {
-    const { engine, mutations } = graphEngine();
-    await runRefAction(
-      { engine, repoId: 'r1', openRebase: vi.fn() },
-      'push',
-      { name: 'main', kind: 'branch', upstream: { name: 'origin/main', ahead: 1, behind: 0 } },
-      COMMIT,
-    );
-    expect(mutations()).toEqual([
-      { method: 'mutate/push', params: { repoId: 'r1', setUpstream: false } },
-    ]);
+  it('refuses branch and tag management where the engine cannot run git', async () => {
+    const main: GraphRef = { name: 'main', kind: 'branch' };
+    for (const [caps, explanation] of [
+      [RESTRICTED, RESTRICTED_MESSAGE],
+      [NO_GIT_CLI, CLI_UNAVAILABLE_MESSAGE],
+    ] as const) {
+      recorded.reset();
+      const { engine, requests } = graphEngine(caps);
+      const ctx = contextFor(engine);
+      await runRefAction(ctx, 'pushTag', tag, COMMIT);
+      await runRefAction(ctx, 'deleteTag', tag, COMMIT);
+      await runRefAction(ctx, 'rename', branch, COMMIT);
+      await runRefAction(ctx, 'delete', branch, COMMIT);
+      await runRefAction(ctx, 'push', branch, COMMIT);
+      // The checked-out branch is refused alike.
+      await runRefAction(ctx, 'push', main, COMMIT);
+      expect(requests).toEqual([]);
+      expect(controls.messages).toHaveLength(6);
+      for (const message of controls.messages) expect(message).toContain(explanation);
+    }
   });
 });
 

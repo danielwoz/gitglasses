@@ -30,7 +30,7 @@ import type {
   WebviewToHostMessage,
 } from '../../webviews-src/graph/ipc';
 import { renderWebviewHtml } from './webviewHtml';
-import { REF_MANAGEMENT, runRefAction, runRowAction } from './graphActions';
+import { runRefAction, runRowAction } from './graphActions';
 import {
   RefreshKind,
   branchOptions,
@@ -259,7 +259,6 @@ export class GraphWebviewHost implements vscode.Disposable {
       repoName: repoName(repo.workspacePath ?? repo.rootPath),
       repoRoot: repo.workspacePath ?? repo.rootPath,
       canMutate: this.canMutate(),
-      refManagement: REF_MANAGEMENT,
       maxLanes: this.maxLanes(),
       filter: this.filter,
       restore: this.restorable,
@@ -298,7 +297,6 @@ export class GraphWebviewHost implements vscode.Disposable {
       type: 'settings',
       maxLanes: this.maxLanes(),
       canMutate: this.canMutate(),
-      refManagement: REF_MANAGEMENT,
     });
   }
 
@@ -360,7 +358,12 @@ export class GraphWebviewHost implements vscode.Disposable {
   }
 
   private actionContext(repo: ActiveRepo) {
-    return { engine: this.deps.engine, repoId: repo.repoId, openRebase: this.deps.openRebase };
+    return {
+      engine: this.deps.engine,
+      repoId: repo.repoId,
+      log: this.deps.log,
+      openRebase: this.deps.openRebase,
+    };
   }
 
   private async onReady(state: GraphViewState | undefined): Promise<void> {

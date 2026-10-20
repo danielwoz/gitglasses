@@ -136,7 +136,6 @@ const view = {
   repoRoot: '',
   repoName: '',
   canMutate: false,
-  refManagement: false,
   maxLanes: 24,
   filter: undefined as string[] | undefined,
   /** The host confirmed the saved state belongs to the shown repository. */
@@ -1193,7 +1192,6 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       view.repoRoot = message.repoRoot;
       view.repoName = message.repoName;
       view.canMutate = message.canMutate;
-      view.refManagement = message.refManagement;
       view.maxLanes = message.maxLanes;
       view.filter = message.filter;
       view.restoring = message.restore === true && pendingRestore !== undefined;
@@ -1248,7 +1246,6 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
     case 'settings':
       view.maxLanes = message.maxLanes;
       view.canMutate = message.canMutate;
-      view.refManagement = message.refManagement;
       render();
       break;
     case 'error':

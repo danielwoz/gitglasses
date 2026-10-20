@@ -13,12 +13,7 @@ import { hostingForUrl, type HostingEntry } from '../integrations/providerSetup'
 import { buildRemoteUrl, type RemoteTarget } from '../integrations/remoteUrls';
 import { encodeRevisionUri } from '../scm/revisionContentProvider';
 import { allowedDespiteConflicts } from '../commands/conflictGuard';
-import {
-  confirmBranchDelete,
-  confirmBranchForceDelete,
-  confirmMerge,
-  confirmStashDrop,
-} from '../commands/confirmations';
+import { confirmMerge, confirmStashDrop } from '../commands/confirmations';
 import {
   confirmDestructive,
   setStatus,
@@ -32,19 +27,12 @@ import {
   CompareEntry,
   canOfferPublish,
   compareEntries,
-  confirmForcePush,
-  confirmPublishUnderOwnName,
   confirmRemoteRemove,
-  confirmRemoteTagDelete,
-  confirmTagDelete,
-  isNotFullyMerged,
-  isPushRejected,
-  isUpstreamNameMismatch,
-  planPush,
   splitRemoteBranch,
   workingTreeCompareEntries,
 } from './refActionsLogic';
 import { LogFn, reportGitError } from './errorReport';
+import * as refs from './refOperations';
 
 export interface RefCommandDeps {
   engine: EngineClient;
@@ -83,37 +71,12 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
     deps.refresh();
   };
 
-  const withProgress = <T>(
-    title: string,
-    task: (token: vscode.CancellationToken) => Promise<T>,
-  ): Thenable<T> =>
-    vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title, cancellable: true },
-      (_progress, token) => task(token),
-    );
-
-  const remoteNames = async (repo: ActiveRepo): Promise<string[]> =>
-    (await engine.request('refs/list', { repoId: repo.repoId })).remotes.map((r) => r.name);
+  const remoteNames = (repo: ActiveRepo): Promise<string[]> =>
+    refs.remoteNames(engine, repo.repoId);
 
   const currentBranchName = async (repo: ActiveRepo): Promise<string> => {
     const { head } = await engine.request('repo/state', { repoId: repo.repoId });
     return head.detached || !head.branch ? 'HEAD' : head.branch;
-  };
-
-  const pickRemote = async (
-    remotes: readonly string[],
-    title: string,
-    preferred?: string,
-  ): Promise<string | undefined> => {
-    if (remotes.length === 1) return remotes[0];
-    const ordered = preferred
-      ? [preferred, ...remotes.filter((remote) => remote !== preferred)]
-      : [...remotes];
-    const picked = await showPick(
-      ordered.map((remote) => ({ label: remote })),
-      { title, placeholder: 'Remote' },
-    );
-    return picked === 'back' || !picked ? undefined : picked.label;
   };
 
   // --- Comparisons -----------------------------------------------------------
@@ -347,38 +310,13 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
   const renameBranch = (node?: unknown) =>
     mutate('Rename branch', async () => {
       if (!isRefNode(node) || node.ref.kind !== 'branch') return;
-      const oldName = node.ref.name;
-      const name = await showInput({
-        title: `Rename Branch '${oldName}'`,
-        prompt: 'New name',
-        value: oldName,
-        validate: (value) => (value.trim() ? undefined : 'Branch name is required'),
-      });
-      if (name === 'back' || name === undefined || name.trim() === oldName) return;
-      await engine.request('branch/rename', {
-        repoId: node.repo.repoId,
-        name: oldName,
-        newName: name.trim(),
-      });
-      setStatus(`Renamed '${oldName}' to '${name.trim()}'`);
+      await refs.renameBranch(deps, node.repo.repoId, node.ref.name);
     });
 
   const deleteBranch = (node?: unknown) =>
     mutate('Delete branch', async () => {
       if (!isRefNode(node) || node.ref.kind !== 'branch') return;
-      const { name } = node.ref;
-      const repoId = node.repo.repoId;
-      if (!(await confirmDestructive(confirmBranchDelete(name)))) return;
-      try {
-        await engine.request('mutate/branchDelete', { repoId, name, force: false });
-      } catch (error) {
-        // Only an unmerged branch warrants the forced delete; any other
-        // refusal is reported as it is.
-        if (!isNotFullyMerged(String((error as Error)?.message ?? error))) throw error;
-        if (!(await confirmDestructive(confirmBranchForceDelete(name)))) return;
-        await engine.request('mutate/branchDelete', { repoId, name, force: true });
-      }
-      setStatus(`Deleted branch '${name}'`);
+      await refs.deleteBranch(deps, node.repo.repoId, node.ref.name);
     });
 
   const mergeIntoCurrent = (node?: unknown) =>
@@ -406,87 +344,7 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
   const pushBranch = (node?: unknown) =>
     mutate('Push', async () => {
       if (!isRefNode(node) || node.ref.kind !== 'branch') return;
-      const { name, upstream } = node.ref;
-      const repoId = node.repo.repoId;
-      const remotes = await remoteNames(node.repo);
-      const plan = planPush(upstream, remotes);
-      let remote: string | undefined;
-      if (plan.kind === 'noRemote') {
-        const choice = await vscode.window.showInformationMessage(
-          `GitGlasses: this repository has no remote to publish '${name}' to.`,
-          'Add Remote…',
-        );
-        if (choice) await vscode.commands.executeCommand('gitglasses.remote.add');
-        return;
-      }
-      if (plan.kind === 'pickRemote') {
-        remote = await pickRemote(plan.remotes, `Publish '${name}' to`, plan.preferred);
-        if (!remote) return;
-      } else if (plan.kind === 'publish') {
-        remote = plan.remote;
-      }
-      let setUpstream = plan.kind !== 'push';
-      // The engine resolves where the push lands from git's config, so the
-      // progress, the force prompt and the status name the real branch.
-      const resolve = () =>
-        engine.request('branch/push', {
-          repoId,
-          name,
-          remote,
-          setUpstream: setUpstream || undefined,
-          dryRun: true,
-        });
-      let target;
-      try {
-        target = await resolve();
-      } catch (error) {
-        // A branch tracking a branch of another name is not pushed there
-        // (git's push.default=simple); publishing it under its own name is
-        // the way forward.
-        const tracked = upstream && splitRemoteBranch(upstream, remotes);
-        if (!tracked || !isUpstreamNameMismatch(String((error as Error)?.message ?? error))) {
-          throw error;
-        }
-        const prompt = confirmPublishUnderOwnName(name, upstream, tracked.remote);
-        const publish = `Publish to ${tracked.remote}/${name}`;
-        const choice = await vscode.window.showWarningMessage(
-          prompt.message,
-          { modal: true, detail: prompt.detail },
-          publish,
-        );
-        if (choice !== publish) return;
-        remote = tracked.remote;
-        setUpstream = true;
-        target = await resolve();
-      }
-      const where = `${target.remote}/${target.branch}`;
-      const push = (force: boolean) =>
-        withProgress(`Pushing '${name}' to ${where}…`, (token) =>
-          engine.request(
-            'branch/push',
-            {
-              repoId,
-              name,
-              remote: target.remote,
-              setUpstream: setUpstream || undefined,
-              force: force ? 'with-lease' : undefined,
-            },
-            token,
-          ),
-        );
-      let result;
-      try {
-        result = await push(false);
-      } catch (error) {
-        const message = String((error as Error)?.message ?? error);
-        if (!isPushRejected(message)) throw error;
-        log(`push of '${name}' to ${where} rejected: ${message}`);
-        if (!(await confirmDestructive(confirmForcePush(name, target)))) return;
-        result = await push(true);
-      }
-      setStatus(
-        `${setUpstream ? 'Published' : 'Pushed'} '${name}' to ${result.remote}/${result.branch}`,
-      );
+      await refs.pushBranch(deps, node.repo.repoId, node.ref);
     });
 
   const setUpstream = (node?: unknown) =>
@@ -531,78 +389,24 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
     mutate('Create tag', async () => {
       const repo = await repoOf(node);
       if (!repo) return;
-      const at = isRefNode(node) ? refRevision(node.ref) : undefined;
-      const name = await showInput({
-        title: `Create Tag${isRefNode(node) ? ` at ${refLabel(node.ref)}` : ''}`,
-        prompt: 'Tag name',
-        validate: (value) =>
-          !value.trim()
-            ? 'Tag name is required'
-            : /\s/.test(value.trim())
-              ? 'Tag names cannot contain spaces'
-              : undefined,
-      });
-      if (name === 'back' || name === undefined) return;
-      let ref = at;
-      if (!ref) {
-        const entered = await showInput({
-          title: `Create Tag '${name.trim()}'`,
-          prompt: 'Commit to tag (sha, branch, HEAD~n…)',
-          value: 'HEAD',
-          validate: (value) => (value.trim() ? undefined : 'A revision is required'),
-        });
-        if (entered === 'back' || entered === undefined) return;
-        ref = entered.trim();
-      }
-      const message = await showInput({
-        title: `Create Tag '${name.trim()}'`,
-        prompt: 'Message for an annotated tag; leave empty for a lightweight tag',
-      });
-      if (message === 'back' || message === undefined) return;
-      await engine.request('tag/create', {
-        repoId: repo.repoId,
-        name: name.trim(),
-        ref,
-        message: message.trim() || undefined,
-      });
-      setStatus(`Created tag '${name.trim()}'`);
+      const revision = isRefNode(node) ? refRevision(node.ref) : undefined;
+      await refs.createTag(
+        deps,
+        repo.repoId,
+        isRefNode(node) && revision ? { revision, label: refLabel(node.ref) } : undefined,
+      );
     });
 
   const deleteTag = (node?: unknown) =>
     mutate('Delete tag', async () => {
       if (!isRefNode(node) || node.ref.kind !== 'tag') return;
-      const { name } = node.ref;
-      if (!(await confirmDestructive(confirmTagDelete(name)))) return;
-      await engine.request('tag/delete', { repoId: node.repo.repoId, name });
-      setStatus(`Deleted tag '${name}'`);
+      await refs.deleteTag(deps, node.repo.repoId, node.ref.name);
     });
 
   const pushTag = (node?: unknown, remove = false) =>
     mutate(remove ? 'Delete remote tag' : 'Push tag', async () => {
       if (!isRefNode(node) || node.ref.kind !== 'tag') return;
-      const { name } = node.ref;
-      const remotes = await remoteNames(node.repo);
-      if (remotes.length === 0) {
-        void vscode.window.showInformationMessage('GitGlasses: this repository has no remotes.');
-        return;
-      }
-      const remote = await pickRemote(
-        remotes,
-        remove ? `Delete '${name}' from` : `Push '${name}' to`,
-        remotes.includes('origin') ? 'origin' : undefined,
-      );
-      if (!remote) return;
-      if (remove && !(await confirmDestructive(confirmRemoteTagDelete(name, remote)))) return;
-      await withProgress(
-        remove ? `Deleting '${name}' from ${remote}…` : `Pushing '${name}' to ${remote}…`,
-        (token) =>
-          engine.request(
-            'tag/push',
-            { repoId: node.repo.repoId, name, remote, delete: remove || undefined },
-            token,
-          ),
-      );
-      setStatus(remove ? `Deleted '${name}' from ${remote}` : `Pushed '${name}' to ${remote}`);
+      await refs.pushTag(deps, node.repo.repoId, node.ref.name, remove);
     });
 
   const checkoutTag = (node?: unknown) =>
@@ -737,7 +541,7 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
         void vscode.window.showInformationMessage('GitGlasses: this repository has no remotes.');
         return;
       }
-      await withProgress(`Fetching ${remotes.join(', ')}…`, async (token) => {
+      await refs.withProgress(`Fetching ${remotes.join(', ')}…`, async (token) => {
         for (const remote of remotes) {
           if (token.isCancellationRequested) return;
           await engine.request('mutate/fetch', { repoId: repo.repoId, remote, prune }, token);
@@ -777,7 +581,7 @@ export function registerRefCommands(deps: RefCommandDeps): vscode.Disposable[] {
       setStatus(`Added remote '${name.trim()}'`);
       deps.refresh();
       // A new remote shows nothing until it is fetched.
-      await withProgress(`Fetching ${name.trim()}…`, (token) =>
+      await refs.withProgress(`Fetching ${name.trim()}…`, (token) =>
         engine.request('mutate/fetch', { repoId: repo.repoId, remote: name.trim() }, token),
       );
     });

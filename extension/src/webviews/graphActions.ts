@@ -2,22 +2,16 @@
 // and tag actions on ref chips, and stash and working-tree actions on the
 // synthetic rows. Every mutation is checked against the engine's capabilities
 // (Restricted Mode, engines without the git CLI) and against unresolved
-// conflicts before it runs, and asks before anything destructive.
+// conflicts before it runs, and asks before anything destructive. Renaming,
+// deleting and pushing a branch and creating, pushing and deleting a tag run
+// the same flows as the Branches and Tags views.
 
 import * as vscode from 'vscode';
-import type {
-  GraphRef,
-  GraphRow,
-  RequestMethod,
-  RequestParams,
-  RequestResult,
-} from '@gitglasses/protocol';
+import type { GraphRef, GraphRow } from '@gitglasses/protocol';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { EngineClient } from '@gitglasses/rpc';
 import { isMethodAvailable, unavailableMessage } from '../engine/capabilityGate';
 import {
-  confirmBranchDelete,
-  confirmBranchForceDelete,
   confirmCherryPick,
   confirmMerge,
   confirmResetHard,
@@ -29,12 +23,22 @@ import { allowedDespiteConflicts } from '../commands/conflictGuard';
 import type { GraphActionId, WebviewToHostMessage } from '../../webviews-src/graph/ipc';
 import { localNameFor } from './graphHostLogic';
 import { reportIfStopped } from '../sync/syncCommands';
+import type { LogFn } from '../views/errorReport';
+import {
+  createTag,
+  deleteBranch,
+  deleteTag,
+  pushBranch,
+  pushTag,
+  renameBranch,
+} from '../views/refOperations';
 
 export type RefActionId = Extract<WebviewToHostMessage, { type: 'refAction' }>['action'];
 
 export interface GraphActionContext {
   engine: EngineClient;
   repoId: string;
+  log: LogFn;
   openRebase(upstream: string): void | Promise<void>;
 }
 
@@ -66,9 +70,7 @@ const REF_LABELS: Record<RefActionId, string> = {
   deleteTag: 'delete tag',
 };
 
-// Engine method each action leads with, for capability gating. Branch
-// renames, pushes of branches that are not checked out, and tag operations
-// need the branch and tag management methods (REF_MANAGEMENT).
+// Engine method each action leads with, for capability gating.
 const ROW_METHODS: Record<GraphActionId, string | undefined> = {
   createBranch: 'mutate/branchCreate',
   createTag: 'tag/create',
@@ -92,7 +94,7 @@ const REF_METHODS: Record<RefActionId, string> = {
   createBranch: 'mutate/branchCreate',
   rename: 'branch/rename',
   delete: 'mutate/branchDelete',
-  push: 'mutate/push',
+  push: 'branch/push',
   pushTag: 'tag/push',
   deleteTag: 'tag/delete',
 };
@@ -125,72 +127,6 @@ function rowKindFor(action: GraphActionId): GraphRow['kind'] | undefined {
     default:
       return 'commit';
   }
-}
-
-/** The branch and tag management methods (branch renames, pushes of a branch
- *  that is not checked out, tag creation, pushes and deletion), with the
- *  params and results the sidebar's branch and tag views define for them. */
-interface RefManagementMethods {
-  'branch/rename': {
-    params: { repoId: string; name: string; newName: string };
-    result: Record<string, never>;
-  };
-  'branch/push': {
-    params: { repoId: string; name: string; setUpstream?: boolean };
-    result: { remote: string; branch: string };
-  };
-  'tag/create': {
-    params: { repoId: string; name: string; ref?: string; message?: string };
-    result: Record<string, never>;
-  };
-  'tag/delete': { params: { repoId: string; name: string }; result: Record<string, never> };
-  'tag/push': {
-    params: { repoId: string; name: string; remote: string };
-    result: Record<string, never>;
-  };
-}
-type RefManagementMethod = keyof RefManagementMethods;
-
-/** True when the protocol defines every method of `M`. */
-type ProtocolDefines<M extends string> = [M] extends [RequestMethod] ? true : false;
-
-/** Whether this build's engine serves the branch and tag management methods.
- *  Its type is true exactly when the protocol defines all of them, so the
- *  compiler requires it to be switched on as soon as they exist. Until then
- *  the menus leave out the actions that need them. */
-export const REF_MANAGEMENT: ProtocolDefines<RefManagementMethod> = true;
-
-/** The protocol's params and result for a method it defines; the shapes
- *  above while it does not. */
-type RefManagementParams<M extends RefManagementMethod> = M extends RequestMethod
-  ? RequestParams<M>
-  : RefManagementMethods[M]['params'];
-type RefManagementResult<M extends RefManagementMethod> = M extends RequestMethod
-  ? RequestResult<M>
-  : RefManagementMethods[M]['result'];
-
-/** Calls a branch or tag management method. Callers' params are checked
- *  against the protocol's definition once it has one. */
-async function requestRefManagement<M extends RefManagementMethod>(
-  engine: EngineClient,
-  method: M,
-  params: RefManagementParams<M>,
-): Promise<RefManagementResult<M>> {
-  const request = engine.request as unknown as (
-    name: string,
-    body: unknown,
-  ) => Promise<RefManagementResult<M>>;
-  return request.call(engine, method, params);
-}
-
-/** Refuses an action that needs the branch and tag management methods when
- *  the engine lacks them. */
-function refManagementAvailable(label: string): boolean {
-  if (REF_MANAGEMENT) return true;
-  void vscode.window.showWarningMessage(
-    `GitGlasses: cannot ${label}: this version of GitGlasses does not support it yet.`,
-  );
-  return false;
 }
 
 function gate(engine: EngineClient, method: string | undefined, label: string): boolean {
@@ -244,7 +180,7 @@ export async function runRowAction(
         await createBranchAt(ctx, sha, shortSha(sha));
         break;
       case 'createTag':
-        if (refManagementAvailable(label)) await createTagAt(ctx, sha);
+        await createTag(ctx, repoId, { revision: sha, label: shortSha(sha) });
         break;
       case 'switchDetached':
         await engine.request('mutate/switch', { repoId, ref: sha });
@@ -309,7 +245,7 @@ export async function runRefAction(
   ) {
     return;
   }
-  const { engine, repoId } = ctx;
+  const { repoId } = ctx;
   try {
     switch (action) {
       case 'checkout':
@@ -324,51 +260,21 @@ export async function runRefAction(
       case 'createBranch':
         await createBranchAt(ctx, sha, ref.name);
         break;
-      case 'rename': {
-        if (!refManagementAvailable(label)) return;
-        const newName = await vscode.window.showInputBox({
-          prompt: `Rename branch '${ref.name}'`,
-          value: ref.name,
-          validateInput: (value) => (value.trim() ? undefined : 'Branch name is required'),
-        });
-        if (!newName?.trim() || newName.trim() === ref.name) return;
-        await requestRefManagement(engine, 'branch/rename', {
-          repoId,
-          name: ref.name,
-          newName: newName.trim(),
-        });
-        setStatus(`Renamed '${ref.name}' to '${newName.trim()}'`);
+      case 'rename':
+        await renameBranch(ctx, repoId, ref.name);
         break;
-      }
       case 'delete':
-        await deleteBranch(ctx, ref.name);
+        await deleteBranch(ctx, repoId, ref.name);
         break;
       case 'push':
-        await pushBranch(ctx, ref);
+        await pushBranch(ctx, repoId, { name: ref.name, upstream: ref.upstream?.name });
         break;
-      case 'pushTag': {
-        if (!refManagementAvailable(label)) return;
-        const remote = await pickRemote(ctx, `Push tag '${ref.name}' to`);
-        if (!remote) return;
-        await requestRefManagement(engine, 'tag/push', { repoId, name: ref.name, remote });
-        setStatus(`Pushed tag '${ref.name}' to ${remote}`);
+      case 'pushTag':
+        await pushTag(ctx, repoId, ref.name);
         break;
-      }
-      case 'deleteTag': {
-        if (!refManagementAvailable(label)) return;
-        const choice = await vscode.window.showWarningMessage(
-          `Delete tag '${ref.name}'?`,
-          {
-            modal: true,
-            detail: `git tag -d ${ref.name}\n\nThe tag stays on any remote it was pushed to.`,
-          },
-          'Delete',
-        );
-        if (choice !== 'Delete') return;
-        await requestRefManagement(engine, 'tag/delete', { repoId, name: ref.name });
-        setStatus(`Deleted tag '${ref.name}'`);
+      case 'deleteTag':
+        await deleteTag(ctx, repoId, ref.name);
         break;
-      }
     }
   } catch (error) {
     // A merge, cherry-pick, revert or rebase that git stopped half-way
@@ -395,25 +301,6 @@ async function createBranchAt(ctx: GraphActionContext, sha: string, at: string):
     checkout: mode === 'Create and Switch',
   });
   setStatus(`Created branch '${name.trim()}' at ${at}`);
-}
-
-async function createTagAt(ctx: GraphActionContext, sha: string): Promise<void> {
-  const name = await vscode.window.showInputBox({
-    prompt: `Tag name (at ${shortSha(sha)})`,
-    validateInput: (value) => (value.trim() ? undefined : 'Tag name is required'),
-  });
-  if (!name?.trim()) return;
-  const message = await vscode.window.showInputBox({
-    prompt: 'Tag message (leave empty for a lightweight tag)',
-  });
-  if (message === undefined) return;
-  await requestRefManagement(ctx.engine, 'tag/create', {
-    repoId: ctx.repoId,
-    name: name.trim(),
-    ref: sha,
-    ...(message.trim() ? { message: message.trim() } : {}),
-  });
-  setStatus(`Created tag '${name.trim()}' at ${shortSha(sha)}`);
 }
 
 async function mergeRef(ctx: GraphActionContext, ref: string, label: string): Promise<void> {
@@ -476,53 +363,6 @@ async function checkoutRef(ctx: GraphActionContext, ref: GraphRef): Promise<void
   await engine.request('mutate/switch', { repoId, ref: ref.name });
   setStatus(
     ref.kind === 'tag' ? `Checked out ${ref.name} (detached HEAD)` : `Switched to '${ref.name}'`,
-  );
-}
-
-async function deleteBranch(ctx: GraphActionContext, name: string): Promise<void> {
-  if (!(await confirmDestructive(confirmBranchDelete(name)))) return;
-  try {
-    await ctx.engine.request('mutate/branchDelete', { repoId: ctx.repoId, name, force: false });
-  } catch (error) {
-    // git refuses to delete a branch that is not merged; offer to force it.
-    if (!/not fully merged/i.test(errorMessage(error))) throw error;
-    if (!(await confirmDestructive(confirmBranchForceDelete(name)))) return;
-    await ctx.engine.request('mutate/branchDelete', { repoId: ctx.repoId, name, force: true });
-  }
-  setStatus(`Deleted branch '${name}'`);
-}
-
-async function pushBranch(ctx: GraphActionContext, ref: GraphRef): Promise<void> {
-  const { engine, repoId } = ctx;
-  const head = await currentBranch(ctx);
-  if (!head.detached && head.name === ref.name) {
-    // The checked-out branch: publish it when it has no upstream yet.
-    await engine.request('mutate/push', { repoId, setUpstream: !ref.upstream });
-    setStatus(`Pushed '${ref.name}'`);
-    return;
-  }
-  if (!refManagementAvailable(`push '${ref.name}'`)) return;
-  const result = await requestRefManagement(engine, 'branch/push', {
-    repoId,
-    name: ref.name,
-    setUpstream: !ref.upstream,
-  });
-  setStatus(`Pushed '${ref.name}' to ${result.remote}`);
-}
-
-async function pickRemote(
-  ctx: GraphActionContext,
-  placeHolder: string,
-): Promise<string | undefined> {
-  const { remotes } = await ctx.engine.request('remote/list', { repoId: ctx.repoId });
-  if (remotes.length === 0) {
-    void vscode.window.showWarningMessage('GitGlasses: this repository has no remotes.');
-    return undefined;
-  }
-  if (remotes.length === 1) return remotes[0].name;
-  return vscode.window.showQuickPick(
-    remotes.map((remote) => remote.name),
-    { placeHolder },
   );
 }
 

@@ -135,6 +135,9 @@ function quickInput(kind: 'input' | 'pick') {
     get value() {
       return shown.value;
     },
+    set value(value: string) {
+      shown.value = value;
+    },
     get selectedItems() {
       return shown.selectedItems;
     },

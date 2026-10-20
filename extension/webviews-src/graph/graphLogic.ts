@@ -642,9 +642,6 @@ export interface MenuItem<A extends string> {
 export interface MenuOptions {
   /** False in Restricted Mode: nothing that changes the repository. */
   canMutate: boolean;
-  /** Whether the engine serves branch renames, pushes of a branch that is not
-   *  checked out, and tag creation, pushes and deletion. */
-  refManagement: boolean;
 }
 
 /** Row actions that change the repository. */
@@ -708,9 +705,7 @@ export function rowMenu(
         ? [{ action: 'compare' as const, label: 'Compare Selected Commits' }]
         : []),
       { action: 'createBranch', label: 'Create Branch Here…', group: true },
-      ...(options.refManagement
-        ? [{ action: 'createTag' as const, label: 'Create Tag Here…' }]
-        : []),
+      { action: 'createTag', label: 'Create Tag Here…' },
       { action: 'switchDetached', label: 'Switch to Commit (Detached)' },
       {
         action: 'cherryPick',
@@ -729,13 +724,13 @@ export function rowMenu(
 }
 
 /** The chip menu for a ref. `current` is true for the checked-out branch
- *  (and for HEAD itself), which pushes without the branch management methods. */
+ *  (and for HEAD itself), which cannot be checked out, merged, rebased onto
+ *  or deleted. */
 export function refMenu(
   ref: Pick<GraphRef, 'kind' | 'name'>,
   current: boolean,
   options: MenuOptions,
 ): MenuItem<RefMenuAction>[] {
-  const managed = options.refManagement;
   let items: MenuItem<RefMenuAction>[];
   switch (ref.kind) {
     case 'head':
@@ -754,11 +749,9 @@ export function refMenu(
               { action: 'rebase' as const, label: `Rebase Current Branch onto ${ref.name}…` },
             ]),
         { action: 'createBranch', label: 'Create Branch Here…', group: true },
-        ...(managed ? [{ action: 'rename' as const, label: 'Rename Branch…' }] : []),
+        { action: 'rename', label: 'Rename Branch…' },
         ...(current ? [] : [{ action: 'delete' as const, label: 'Delete Branch…' }]),
-        ...(current || managed
-          ? [{ action: 'push' as const, label: 'Push Branch', group: true }]
-          : []),
+        { action: 'push', label: 'Push Branch', group: true },
         { action: 'copyName', label: 'Copy Branch Name', group: true },
       ];
       break;
@@ -776,12 +769,8 @@ export function refMenu(
         { action: 'checkout', label: `Checkout ${ref.name} (Detached)` },
         { action: 'merge', label: `Merge ${ref.name} into Current Branch…` },
         { action: 'createBranch', label: 'Create Branch Here…', group: true },
-        ...(managed
-          ? [
-              { action: 'pushTag' as const, label: 'Push Tag…', group: true },
-              { action: 'deleteTag' as const, label: 'Delete Tag…' },
-            ]
-          : []),
+        { action: 'pushTag', label: 'Push Tag…', group: true },
+        { action: 'deleteTag', label: 'Delete Tag…' },
         { action: 'copyName', label: 'Copy Tag Name', group: true },
       ];
       break;

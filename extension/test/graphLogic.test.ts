@@ -588,8 +588,8 @@ describe('restoreStep', () => {
   });
 });
 
-const FULL = { canMutate: true, refManagement: true };
-const RESTRICTED = { canMutate: false, refManagement: true };
+const FULL = { canMutate: true };
+const RESTRICTED = { canMutate: false };
 
 describe('rowMenu', () => {
   const actions = (items: { action: string }[]): string[] => items.map((item) => item.action);
@@ -621,11 +621,10 @@ describe('rowMenu', () => {
     expect(items[0].group).toBeFalsy();
   });
 
-  it('offers to create a tag only when the engine can', () => {
-    expect(actions(rowMenu('commit', 1, FULL))).toContain('createTag');
-    const items = actions(rowMenu('commit', 1, { canMutate: true, refManagement: false }));
-    expect(items).not.toContain('createTag');
-    expect(items).toContain('createBranch');
+  it('offers to create a tag next to creating a branch, but not in Restricted Mode', () => {
+    const items = actions(rowMenu('commit', 1, FULL));
+    expect(items.indexOf('createTag')).toBe(items.indexOf('createBranch') + 1);
+    expect(actions(rowMenu('commit', 1, RESTRICTED))).not.toContain('createTag');
   });
 });
 
@@ -659,26 +658,19 @@ describe('refMenu', () => {
     );
   });
 
-  it('leaves out what needs branch and tag management when the engine lacks it', () => {
-    const limited = { canMutate: true, refManagement: false };
-    expect(actions(refMenu({ kind: 'branch', name: 'feature' }, false, limited))).toEqual([
-      'checkout',
-      'merge',
-      'rebase',
+  it('offers renaming and pushing on the current branch, and tag management on tags', () => {
+    expect(actions(refMenu({ kind: 'branch', name: 'main' }, true, FULL))).toEqual([
       'createBranch',
-      'delete',
-      'copyName',
-    ]);
-    // The checked-out branch still pushes.
-    expect(actions(refMenu({ kind: 'branch', name: 'main' }, true, limited))).toEqual([
-      'createBranch',
+      'rename',
       'push',
       'copyName',
     ]);
-    expect(actions(refMenu({ kind: 'tag', name: 'v1.0' }, false, limited))).toEqual([
+    expect(actions(refMenu({ kind: 'tag', name: 'v1.0' }, false, FULL))).toEqual([
       'checkout',
       'merge',
       'createBranch',
+      'pushTag',
+      'deleteTag',
       'copyName',
     ]);
   });
