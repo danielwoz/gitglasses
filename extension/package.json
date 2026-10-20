@@ -99,7 +99,8 @@
       },
       {
         "command": "gitglasses.searchCommits",
-        "title": "GitGlasses: Search Commits…",
+        "title": "Search Commits…",
+        "category": "GitGlasses",
         "icon": "$(search)"
       },
       {
@@ -390,7 +391,7 @@
     "viewsWelcome": [
       {
         "view": "gitglasses.views.searchCompare",
-        "contents": "Search commits by message text or SHA.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)",
+        "contents": "Search commits by message, author, code change, file or date.\n[Search Commits…](command:gitglasses.searchCommits)\n\nOr describe what you are looking for in plain language.\n[AI Search Commits…](command:gitglasses.ai.nlSearch)",
         "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
