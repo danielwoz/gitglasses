@@ -194,6 +194,16 @@ add_executable(gitglasses-engine
   src/server.cpp
 )
 target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_version gg_warnings)
+# The manifest makes the process code page UTF-8, so narrow Win32 and CRT
+# calls see paths and arguments as UTF-8. MSVC merges .manifest sources into
+# the one its linker writes; mingw-w64 links it as a resource.
+if(WIN32)
+  if(MSVC)
+    target_sources(gitglasses-engine PRIVATE src/gitglasses-engine.manifest)
+  else()
+    target_sources(gitglasses-engine PRIVATE src/gitglasses-engine.rc)
+  endif()
+endif()
 
 if(GG_STATIC_RUNTIME AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(gitglasses-engine PRIVATE -static-libstdc++ -static-libgcc)
