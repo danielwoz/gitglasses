@@ -45,6 +45,34 @@ export interface RuntimeOptions {
 }
 
 /**
+ * `resolve` with its answer kept for the session once it finds a runtime.
+ * Callers that arrive while a probe runs share it. A probe that finds none
+ * (or timed out on a busy machine) is not kept, so the next caller probes
+ * again.
+ */
+export function memoizeRuntime(
+  resolve: () => Promise<NodeRuntime | undefined>,
+): () => Promise<NodeRuntime | undefined> {
+  let pending: Promise<NodeRuntime | undefined> | undefined;
+  return () => {
+    if (!pending) {
+      const probe = resolve().then(
+        (runtime) => {
+          if (!runtime && pending === probe) pending = undefined;
+          return runtime;
+        },
+        (error: unknown) => {
+          if (pending === probe) pending = undefined;
+          throw error;
+        },
+      );
+      pending = probe;
+    }
+    return pending;
+  };
+}
+
+/**
  * The runtime for the server, or undefined when there is none. `--version`
  * is the probe because it is harmless either way: with ELECTRON_RUN_AS_NODE
  * honoured it prints Node's version, and an editor that ignores the variable

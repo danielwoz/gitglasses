@@ -13,7 +13,7 @@ import {
   type StdioDefinition,
 } from '../src/mcp/mcpRegistration';
 import { mcpStatusSummary } from '../src/mcp/mcpStatusText';
-import { resolveNodeRuntime } from '../src/mcp/nodeRuntime';
+import { memoizeRuntime, resolveNodeRuntime } from '../src/mcp/nodeRuntime';
 
 const folderA = path.resolve('/work/app');
 const folderB = path.resolve('/work/lib');
@@ -299,6 +299,75 @@ describe('registration failures and bursts of changes', () => {
     for (const call of calls as unknown[][]) registered += call[0] === 'register' ? 1 : -1;
     expect(registered).toBe(1);
     expect((calls.at(-1) as unknown[])[0]).toBe('register');
+  });
+});
+
+// After activation the extension looks for a runtime early, so the Home view
+// can tell at once when the server cannot start; it starts no process where
+// the editor's registration is off or there is none.
+describe('the runtime check after activation', () => {
+  const editorNode: NodeRuntime = { command: '/opt/editor/code', electron: true };
+
+  it('looks for a runtime only while the registration is on and needs one', async () => {
+    let probes = 0;
+    const counting = {
+      runtime: async () => {
+        probes++;
+        return editorNode;
+      },
+    };
+    await registerMcpServer(setup({}, counting).host).checkRuntime();
+    const off = setup(vscodeApi().api, counting);
+    off.state.enabled = false;
+    await registerMcpServer(off.host).checkRuntime();
+    const empty = setup(vscodeApi().api, counting);
+    empty.state.folders = [];
+    await registerMcpServer(empty.host).checkRuntime();
+    expect(probes).toBe(0);
+
+    await registerMcpServer(setup(vscodeApi().api, counting).host).checkRuntime();
+    expect(probes).toBe(1);
+  });
+
+  it('reports a missing runtime, and recovers once one is found', async () => {
+    const { api, registered } = vscodeApi();
+    const { state, host } = setup(api);
+    state.runtime = undefined;
+    const registration = registerMcpServer(host);
+    const statuses: string[] = [];
+    registration.onDidChangeStatus((status) => statuses.push(status.state));
+    await registration.checkRuntime();
+    expect(registration.status()).toMatchObject({ state: 'unavailable', host: 'vscode' });
+    expect(statuses).toEqual(['unavailable']);
+
+    state.runtime = editorNode;
+    expect(await registered[0].provider.provideMcpServerDefinitions()).toHaveLength(1);
+    expect(registration.status()).toMatchObject({ state: 'registered', host: 'vscode' });
+  });
+
+  it('keeps a runtime it found, shares a probe in flight, and probes again after none', async () => {
+    const answers: (NodeRuntime | undefined)[] = [undefined, editorNode];
+    let probes = 0;
+    const runtime = memoizeRuntime(async () => {
+      probes++;
+      return answers.shift();
+    });
+    expect(await Promise.all([runtime(), runtime()])).toEqual([undefined, undefined]);
+    expect(probes).toBe(1);
+    expect(await runtime()).toEqual(editorNode);
+    expect(await runtime()).toEqual(editorNode);
+    expect(probes).toBe(2);
+  });
+
+  it('probes again after a probe that failed', async () => {
+    let probes = 0;
+    const runtime = memoizeRuntime(async () => {
+      if (probes++ === 0) throw new Error('spawn EAGAIN');
+      return editorNode;
+    });
+    await expect(runtime()).rejects.toThrow('EAGAIN');
+    expect(await runtime()).toEqual(editorNode);
+    expect(probes).toBe(2);
   });
 });
 

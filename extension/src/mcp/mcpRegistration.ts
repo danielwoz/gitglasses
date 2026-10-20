@@ -69,7 +69,7 @@ export interface McpRegistrationHost {
   enabled(): boolean;
   /** Fires when folders, trust or the setting may have changed. */
   onDidChangeWorkspace: Event<void>;
-  /** The program that runs the server, resolved once and cached by the caller. */
+  /** The program that runs the server; the caller keeps a runtime it found. */
   runtime(): Promise<NodeRuntime | undefined>;
   /** The bundled server script, or undefined when the build has none. */
   cliPath: string | undefined;
@@ -99,6 +99,12 @@ export interface McpRegistration extends Disposable {
    * (with the reason logged) when no runtime or bundled script exists.
    */
   launch(allowedRoots: readonly string[]): Promise<McpLaunch | undefined>;
+  /**
+   * Looks for the runtime ahead of an agent's first request, so the Home
+   * view can say early when there is none. Only while the editor's
+   * registration is on and will need it.
+   */
+  checkRuntime(): Promise<void>;
   /** Where the editor's server runs git right now. */
   gitRoots(): string[];
 }
@@ -264,10 +270,17 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
     }),
   );
 
+  const checkRuntime = async (): Promise<void> => {
+    if (status().state !== 'registered') return;
+    await launch([]);
+    statusChanged.fire(status());
+  };
+
   return {
     status,
     onDidChangeStatus: statusChanged.event,
     launch,
+    checkRuntime,
     gitRoots,
     dispose: () => {
       for (const disposable of disposables) disposable.dispose();

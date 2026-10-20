@@ -8,9 +8,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { registerMcpCommands } from './mcpCommands';
 import { mcpHomeSection } from './mcpHome';
-import type { NodeRuntime } from './mcpLogic';
 import { registerMcpServer, type McpApi, type McpRegistration } from './mcpRegistration';
-import { resolveNodeRuntime } from './nodeRuntime';
+import { memoizeRuntime, resolveNodeRuntime } from './nodeRuntime';
 import type { ViewNode } from '../views/viewBase';
 
 /** The setting that turns the editor registration off. */
@@ -60,7 +59,21 @@ export function startMcpService(
 ): vscode.Disposable[] {
   const cli = context.asAbsolutePath(path.join('dist', 'mcp', 'cli.js'));
   const changed = new vscode.EventEmitter<void>();
-  let runtime: Promise<NodeRuntime | undefined> | undefined;
+  const runtime = memoizeRuntime(() =>
+    resolveNodeRuntime({
+      execPath: process.execPath,
+      electron: typeof process.versions.electron === 'string',
+      env: process.env,
+      platform: process.platform,
+    }).then((resolved) => {
+      options.log(
+        resolved
+          ? `MCP server: runs with ${resolved.command}${resolved.electron ? ' (ELECTRON_RUN_AS_NODE)' : ''}`
+          : 'MCP server: no Node.js runtime found; looking again when it is next needed',
+      );
+      return resolved;
+    }),
+  );
 
   const registration: McpRegistration = registerMcpServer({
     api: vscode as unknown as McpApi,
@@ -68,20 +81,7 @@ export function startMcpService(
     trusted: () => vscode.workspace.isTrusted,
     enabled: () => vscode.workspace.getConfiguration().get<boolean>(MCP_ENABLED_SETTING, true),
     onDidChangeWorkspace: changed.event,
-    runtime: () =>
-      (runtime ??= resolveNodeRuntime({
-        execPath: process.execPath,
-        electron: typeof process.versions.electron === 'string',
-        env: process.env,
-        platform: process.platform,
-      }).then((resolved) => {
-        options.log(
-          resolved
-            ? `MCP server: runs with ${resolved.command}${resolved.electron ? ' (ELECTRON_RUN_AS_NODE)' : ''}`
-            : 'MCP server: no Node.js runtime found',
-        );
-        return resolved;
-      })),
+    runtime,
     cliPath: fs.existsSync(cli) ? cli : undefined,
     enginePath: options.enginePath,
     version: String(context.extension.packageJSON.version ?? ''),
@@ -95,8 +95,13 @@ export function startMcpService(
     options.setHomeSection(() => mcpHomeSection(registration.status(), registration.gitRoots()));
   refreshHome();
 
+  // Off the startup path, and not at all where the editor has no MCP API or
+  // the setting is off: the commands look for a runtime when they run.
   const timer = setTimeout(() => {
-    void registration.launch([]).then(() => refreshHome());
+    registration
+      .checkRuntime()
+      .catch((error: unknown) => options.log(`MCP server: runtime check failed: ${String(error)}`))
+      .finally(() => refreshHome());
   }, RUNTIME_CHECK_DELAY_MS);
   timer.unref?.();
 
