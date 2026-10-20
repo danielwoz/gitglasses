@@ -669,6 +669,12 @@
         "icon": "$(globe)"
       },
       {
+        "command": "gitglasses.provenance.fetchNotes",
+        "title": "Fetch git-ai Notes with Every Fetch…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
         "command": "gitglasses.rebase.show",
         "title": "Show Paused Rebase",
         "category": "GitGlasses"
@@ -1548,6 +1554,10 @@
           "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
         },
         {
+          "command": "gitglasses.provenance.fetchNotes",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
           "command": "gitglasses.rebase.show",
           "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress"
         },
@@ -1739,6 +1749,12 @@
           "scope": "window",
           "default": true,
           "description": "Show git blame CodeLens above files and top-level symbols"
+        },
+        "gitglasses.provenance.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "markdownDescription": "Show the AI provenance commits declare: an `AI` badge and a filter in the Commit Graph, a line in the blame hover and in Commit Details, and a mark in the Commits and File History views. Only declarations are read: git-ai notes in `refs/notes/ai`, `Co-authored-by`, `Assisted-by` and `Generated-by` trailers, and authors or committers that are known agent identities. Nothing is inferred from the code. Turn off to hide provenance everywhere."
         },
         "gitglasses.engine.path": {
           "type": "string",

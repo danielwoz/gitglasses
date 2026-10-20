@@ -11,6 +11,7 @@ import type {
   GraphRow,
 } from '@gitglasses/protocol';
 import type { BranchOption, FindMatch, RefMenuAction, RowMenuAction } from './graphLogic';
+import type { ProvenanceFilter } from '../../src/provenance/provenanceLogic';
 
 export type {
   BranchOption,
@@ -22,6 +23,25 @@ export type {
   GraphRow,
 };
 
+// --- Provenance -------------------------------------------------------------
+
+/** What a commit declares about who wrote it, as the graph and the details
+ *  view show it. Only commits that declare something have one. */
+export interface ProvenanceMark {
+  /** An AI agent is declared. */
+  agent: boolean;
+  /** 'AI-authored', 'AI-assisted' or 'Human-written'. */
+  label: string;
+  /** "Co-authored-by: Claude Opus 4.7". */
+  via: string;
+  /** "AI-assisted (declared via Co-authored-by: Claude Opus 4.7)". */
+  text: string;
+  /** Every declaration, one per line, for tooltips. */
+  lines: string[];
+  /** An http(s) link to the agent session: rendered, never fetched. */
+  sessionUrl?: string;
+}
+
 // --- Details --------------------------------------------------------------
 
 /** What the details pane (and the Commit Details panel) shows. */
@@ -31,6 +51,8 @@ export type DetailsView =
       details: CommitDetails;
       /** stash@{n} when the commit is a stash entry. */
       stash?: { index: number };
+      /** Declared provenance; absent when none is declared or it is turned off. */
+      provenance?: ProvenanceMark;
     }
   | {
       kind: 'compare';
@@ -92,6 +114,8 @@ export interface GraphViewState {
   /** Share of the panel height the details pane takes. */
   detailsShare?: number;
   query?: string;
+  /** The declared-provenance filter. */
+  provenanceFilter?: ProvenanceFilter;
 }
 
 export type HostToWebviewMessage =
@@ -108,6 +132,8 @@ export type HostToWebviewMessage =
       /** The webview's saved state belongs to this repository: apply it, if
        *  not applied yet, once its rows are loaded. */
       restore?: boolean;
+      /** Declared provenance is shown (gitglasses.provenance.enabled). */
+      provenance?: boolean;
     }
   /** A page of rows. `replace` swaps out every loaded row (a refresh) and
    *  keeps the selection and scroll position on the same commits. */
@@ -131,7 +157,10 @@ export type HostToWebviewMessage =
     }
   /** The working tree changed: a shown WIP details view is out of date. */
   | { type: 'wipChanged' }
-  | { type: 'settings'; maxLanes: number; canMutate: boolean }
+  | { type: 'settings'; maxLanes: number; canMutate: boolean; provenance?: boolean }
+  /** Declared provenance of loaded commits, keyed by sha; null for a commit
+   *  that declares nothing. */
+  | { type: 'provenance'; marks: Record<string, ProvenanceMark | null> }
   | { type: 'theme' }
   /** Why the graph is empty: no repository, or a failed graph/rows. */
   | { type: 'error'; message: string };

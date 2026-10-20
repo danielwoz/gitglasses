@@ -6,7 +6,13 @@
 
 import './details.css';
 import { shortSha } from '@gitglasses/protocol/sha';
-import type { CommitFileChange, DetailsToHostMessage, DetailsView, FileChange } from './ipc';
+import type {
+  CommitFileChange,
+  DetailsToHostMessage,
+  DetailsView,
+  FileChange,
+  ProvenanceMark,
+} from './ipc';
 import { relativeTime } from './graphLogic';
 import {
   ChangeSummary,
@@ -106,6 +112,23 @@ function header(subject: string, options: DetailsOptions, ...actions: HTMLElemen
   return bar;
 }
 
+/** The declared provenance: its label, what declared it and, when the commit
+ *  names one, a link to the agent session for the user to open. */
+function provenanceValue(mark: ProvenanceMark): Node[] {
+  const label = el('strong', undefined, mark.label);
+  const via = el('span', 'details-muted', ` (declared via ${mark.via})`);
+  const value = el('span', 'details-provenance');
+  value.title = mark.lines.join('\n');
+  value.append(label, via);
+  if (mark.sessionUrl && /^https?:\/\//i.test(mark.sessionUrl)) {
+    const link = el('a', 'details-link', 'session link');
+    link.href = mark.sessionUrl;
+    link.title = mark.sessionUrl;
+    value.append(' · ', link);
+  }
+  return [value];
+}
+
 function copyButton(text: string, label: string, options: DetailsOptions): HTMLButtonElement {
   return button(
     label,
@@ -181,6 +204,7 @@ function renderCommit(
     committed.title = absoluteDate(d.committer.time);
     row('Committed', committed);
   }
+  if (view.provenance) row('Provenance', ...provenanceValue(view.provenance));
   info.append(meta);
 
   if (d.body) info.append(el('div', 'details-message', d.body));

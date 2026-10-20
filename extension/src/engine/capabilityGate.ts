@@ -26,6 +26,7 @@ const CLI_METHODS = new Set([
   'history/file',
   'history/line',
   'search/log',
+  'notes/addFetchRefspec',
 ]);
 
 /** True when the method needs the gitCli capability to work. */

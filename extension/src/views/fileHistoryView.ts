@@ -1,19 +1,26 @@
 import * as vscode from 'vscode';
-import { FileHistoryEntry } from '@gitglasses/protocol';
+import { CommitProvenance, FileHistoryEntry } from '@gitglasses/protocol';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
 import { EngineClient } from '@gitglasses/rpc';
 import { ActiveRepo, ViewBase, ViewNode, loadMoreNode, messageNode } from './viewBase';
 import { fileHistoryNode } from './nodes';
 import { PageState, appendPage, emptyPageState } from './viewLogic';
 import { viewPageSize } from '../system/settings';
+import { type ProvenanceLookup, lookupProvenance } from '../provenance/provenanceView';
 
 // Follows the active editor and pages that file's history (rename-following
 // is the engine's job; entries carry the path at each commit).
 export class FileHistoryViewProvider extends ViewBase {
   private current: LocatedFile | undefined;
   private state: PageState<FileHistoryEntry> = emptyPageState();
+  /** What the loaded commits declare about who wrote them. */
+  private provenance = new Map<string, CommitProvenance>();
 
-  constructor(engine: EngineClient, repos: RepositoryService) {
+  constructor(
+    engine: EngineClient,
+    repos: RepositoryService,
+    private readonly provenanceSource?: ProvenanceLookup,
+  ) {
     super(engine, repos);
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor((editor) => void this.trackEditor(editor)),
@@ -41,11 +48,13 @@ export class FileHistoryViewProvider extends ViewBase {
     }
     this.current = located;
     this.state = emptyPageState();
+    this.provenance = new Map();
     this.fireChange();
   }
 
   protected override invalidate(): void {
     this.state = emptyPageState();
+    this.provenance = new Map();
   }
 
   override async getChildren(node?: ViewNode): Promise<ViewNode[]> {
@@ -73,7 +82,9 @@ export class FileHistoryViewProvider extends ViewBase {
     if (this.state.items.length === 0) {
       return [messageNode(`No history for ${file.relativePath}`)];
     }
-    const nodes = this.state.items.map((entry) => fileHistoryNode(file.repoId, entry));
+    const nodes = this.state.items.map((entry) =>
+      fileHistoryNode(file.repoId, entry, this.provenance.get(entry.sha)),
+    );
     if (this.state.nextCursor !== undefined) {
       nodes.push(loadMoreNode(() => void this.loadMore(file)));
     }
@@ -88,6 +99,12 @@ export class FileHistoryViewProvider extends ViewBase {
       limit: viewPageSize(),
     });
     this.state = appendPage(this.state, { items: result.entries, nextCursor: result.nextCursor });
+    const declared = await lookupProvenance(
+      this.provenanceSource,
+      file.repoId,
+      result.entries.map((entry) => entry.sha),
+    );
+    for (const [sha, provenance] of declared) this.provenance.set(sha, provenance);
   }
 
   private async loadMore(file: LocatedFile): Promise<void> {

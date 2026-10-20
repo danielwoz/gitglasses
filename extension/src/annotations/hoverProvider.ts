@@ -1,10 +1,17 @@
 import * as vscode from 'vscode';
-import { UNCOMMITTED_SHA, type BlameHunk, type CommitDetails } from '@gitglasses/protocol';
+import {
+  UNCOMMITTED_SHA,
+  type BlameHunk,
+  type CommitDetails,
+  type CommitProvenance,
+} from '@gitglasses/protocol';
 import type { CancellationLike, EngineClient } from '@gitglasses/rpc';
 import type { RepoDescriptor } from '@gitglasses/integrations';
 import { escapeMarkdown } from '../system/markdown';
 import { supportsRemoteUrls } from '../integrations/remoteUrls';
 import type { FileBlame } from '../model/blameModel';
+import { summarizeProvenance } from '../provenance/provenanceLogic';
+import { provenanceHoverLine } from '../provenance/provenanceMarkdown';
 import { lfsHasUncommittedChange, lfsLastChange } from './blameFormat';
 import {
   BLAME_HOVER_COMMANDS,
@@ -31,6 +38,9 @@ export interface HoverEnrichment {
   autolink?(text: string, repoRoot: string): Promise<string>;
   /** The forge hosting a repository, from its remotes (no network). */
   hosting?(repoRoot: string): Promise<{ providerId: string; repo: RepoDescriptor } | undefined>;
+  /** What the commit declares about who wrote it; undefined when provenance
+   *  is turned off or the commit declares nothing. */
+  provenance?(repoId: string, sha: string): Promise<CommitProvenance | undefined>;
 }
 
 function delay(ms: number): Promise<undefined> {
@@ -78,10 +88,16 @@ export class BlameHoverRenderer {
     const commit = blame.commits[hunk.sha];
     if (!commit) return undefined;
 
-    const [details, hosting] = await Promise.all([
+    const [details, hosting, provenance] = await Promise.all([
       Promise.race([this.commitDetails(target.repoId, hunk.sha), delay(DETAILS_WAIT_MS)]),
       target.rootPath && this.enrichment.hosting
         ? this.enrichment.hosting(target.rootPath).catch(() => undefined)
+        : undefined,
+      this.enrichment.provenance
+        ? Promise.race([
+            this.enrichment.provenance(target.repoId, hunk.sha).catch(() => undefined),
+            delay(DETAILS_WAIT_MS),
+          ])
         : undefined,
     ]);
     if (token?.isCancellationRequested) return undefined;
@@ -107,6 +123,7 @@ export class BlameHoverRenderer {
         ? pullRequestUrl(hosting.providerId, hosting.repo, number)
         : undefined;
 
+    const declared = summarizeProvenance(provenance);
     const body = renderCommitHover({
       hunk,
       commit,
@@ -118,6 +135,7 @@ export class BlameHoverRenderer {
       stats: details?.stats,
       pullRequest: prUrl && number !== undefined ? { number, url: prUrl } : undefined,
       remote: hosting !== undefined && supportsRemoteUrls(hosting.providerId),
+      provenance: declared && provenanceHoverLine(declared),
     });
     markdown.appendMarkdown(notice ? `${notice}\n\n${body}` : body);
     return markdown;
