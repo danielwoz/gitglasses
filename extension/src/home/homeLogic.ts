@@ -1,5 +1,6 @@
 // Pure home-view logic (no vscode imports): branch card formatting and
-// actions, launchpad glimpse selection, and get-started visibility.
+// actions, launchpad glimpse selection, get-started visibility and the
+// walkthrough's tab check.
 
 import { shortSha } from '@gitglasses/protocol/sha';
 
@@ -158,4 +159,22 @@ export function glimpsePrs<T>(
 /** The get-started section shows until the user dismisses it. */
 export function showGetStarted(dismissed: boolean | undefined): boolean {
   return dismissed !== true;
+}
+
+/** The walkthrough contributed in package.json, as openWalkthrough names it. */
+export const WALKTHROUGH_ID = 'gitglasses.gitglasses#gitglasses.getStarted';
+export const WALKTHROUGH_TITLE = 'Get Started with GitGlasses';
+
+/**
+ * What the active tab says about an attempt to open the walkthrough: 'shown'
+ * when its title names ours, 'welcome' for the Welcome editor showing a
+ * walkthrough it does not name (recent VS Code releases title every
+ * walkthrough tab "Welcome"; browser hosts fall back to their own setup
+ * walkthrough when asked for one that has not registered yet), and
+ * 'elsewhere' for any other tab, which means the user has moved on.
+ */
+export function walkthroughTabState(label: string | undefined): 'shown' | 'welcome' | 'elsewhere' {
+  if (label === `Walkthrough: ${WALKTHROUGH_TITLE}`) return 'shown';
+  if (label === 'Welcome' || label?.startsWith('Walkthrough: ')) return 'welcome';
+  return 'elsewhere';
 }

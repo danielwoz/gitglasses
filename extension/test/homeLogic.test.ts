@@ -10,6 +10,7 @@ import {
   formatDirtySummary,
   glimpsePrs,
   showGetStarted,
+  walkthroughTabState,
 } from '../src/home/homeLogic';
 
 function status(overrides: Partial<BranchStatus> = {}): BranchStatus {
@@ -179,5 +180,15 @@ describe('branch card for each kind of HEAD', () => {
     expect(branchActionLabel('pull', s)).toBe('Pull 3 commits');
     expect(branchActionLabel('pull', status())).toBe('Pull');
     expect(branchActionLabel('publish', s)).toBe('Publish Branch');
+  });
+});
+
+describe('walkthroughTabState', () => {
+  it('recognises our walkthrough, the Welcome editor showing another, and anything else', () => {
+    expect(walkthroughTabState('Walkthrough: Get Started with GitGlasses')).toBe('shown');
+    expect(walkthroughTabState('Walkthrough: Setup VS Code Web')).toBe('welcome');
+    expect(walkthroughTabState('Welcome')).toBe('welcome');
+    expect(walkthroughTabState('app.ts')).toBe('elsewhere');
+    expect(walkthroughTabState(undefined)).toBe('elsewhere');
   });
 });

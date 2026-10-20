@@ -60,6 +60,7 @@ import { HomeViewProvider, registerHomeCommands } from './home/homeView';
 import { ModeController } from './modes/modeController';
 import { registerSuggestChange } from './reviews/suggestCommands';
 import { registerCommitDetails } from './commitDetails/commitDetails';
+import { openWalkthrough } from './home/walkthrough';
 
 /** Views whose contents follow HEAD and the ref graph. */
 export const HISTORY_VIEWS = [
@@ -416,13 +417,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
     vscode.commands.registerCommand('gitglasses.selectRepository', () => activeRepo.pick()),
     ...registerKeyboardShortcuts(),
-    vscode.commands.registerCommand('gitglasses.openWalkthrough', () =>
-      vscode.commands.executeCommand(
-        'workbench.action.openWalkthrough',
-        'gitglasses.gitglasses#gitglasses.getStarted',
-        false,
-      ),
-    ),
+    vscode.commands.registerCommand('gitglasses.openWalkthrough', () => openWalkthrough(deps.log)),
     vscode.commands.registerCommand('gitglasses.loadMore', (loadMore: unknown) => {
       if (typeof loadMore === 'function') (loadMore as () => void)();
     }),
