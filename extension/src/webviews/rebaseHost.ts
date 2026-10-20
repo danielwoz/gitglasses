@@ -25,6 +25,7 @@ import type {
 } from '../../webviews-src/rebase/ipc';
 import {
   RebaseSession,
+  autoStashKeptWarning,
   autoStashPrompt,
   isDirty,
   staleReason,
@@ -449,15 +450,22 @@ export class RebaseWebviewHost implements vscode.Disposable {
   }
 
   // Runs one rebase step and shows where it left the repository.
-  private async run(step: () => Promise<{ completed: boolean; conflicts: boolean }>): Promise<void> {
+  private async run(
+    step: () => Promise<{ completed: boolean; conflicts: boolean; autoStashKept?: boolean }>,
+  ): Promise<void> {
     this.running = true;
     await this.post({ type: 'busy', busy: true });
     try {
       const result = await step();
       this.running = false;
       if (result.completed) {
-        void vscode.window.showInformationMessage('GitGlasses: rebase completed.');
+        const repo = this.repo;
         this.panel?.dispose();
+        if (result.autoStashKept && repo) {
+          await this.warnAutoStashKept(repo);
+        } else {
+          void vscode.window.showInformationMessage('GitGlasses: rebase completed.');
+        }
       } else {
         await this.showPausedPanel(undefined, result.conflicts ? 'conflicts' : 'stopped');
       }
@@ -469,6 +477,22 @@ export class RebaseWebviewHost implements vscode.Disposable {
       await this.post({ type: 'busy', busy: false });
       this.emitter.fire();
     }
+  }
+
+  // The rebase finished, but git kept the autostashed changes as stash@{0}
+  // instead of restoring them, usually leaving conflicts in the working tree.
+  private async warnAutoStashKept(repo: ActiveRepo): Promise<void> {
+    let conflicted: string[] = [];
+    try {
+      conflicted = (await this.engine.request('status/summary', { repoId: repo.repoId }))
+        .conflicted;
+    } catch (error) {
+      this.log(`status after rebase failed: ${errorMessage(error)}`);
+    }
+    const message = autoStashKeptWarning(conflicted);
+    this.log(message);
+    const choice = await vscode.window.showWarningMessage(message, 'Open Source Control');
+    if (choice) await vscode.commands.executeCommand('workbench.view.scm');
   }
 
   // A failure that left the rebase under way is a paused rebase with git's

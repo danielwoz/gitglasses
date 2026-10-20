@@ -27,6 +27,23 @@ export const EmptyObject = Type.Object({}, strict);
 
 const StageAction = Type.Union([Type.Literal('stage'), Type.Literal('unstage')]);
 
+/** Where a rebase/start, rebase/continue or rebase/skip run left the rebase. */
+const RebaseRunResult = Type.Object(
+  {
+    /** git stopped on conflicts; the rebase is paused. */
+    conflicts: Type.Boolean(),
+    /** The rebase finished. False with no conflicts means a planned stop
+     *  (edit), also paused. */
+    completed: Type.Boolean(),
+    /** Present (true) when the rebase finished but git could not re-apply
+     *  the uncommitted changes it stashed first (autostash): they are kept
+     *  as stash@{0}, and the working tree may hold the conflicts of the
+     *  attempt. */
+    autoStashKept: Type.Optional(Type.Boolean()),
+  },
+  strict,
+);
+
 /** Page size the engine serves when a paged read omits `limit`. */
 export const DEFAULT_LIMIT = 100;
 
@@ -791,27 +808,18 @@ export const RequestSchemas = {
       },
       strict,
     ),
-    result: Type.Object(
-      { conflicts: Type.Boolean(), completed: Type.Boolean() },
-      strict,
-    ),
+    result: RebaseRunResult,
   },
   'rebase/continue': {
     description:
       'Resumes a paused rebase once the conflicts are staged. A rebase rebase/start began keeps applying its plan\'s messages.',
     params: Type.Object({ repoId: Type.String() }, strict),
-    result: Type.Object(
-      { conflicts: Type.Boolean(), completed: Type.Boolean() },
-      strict,
-    ),
+    result: RebaseRunResult,
   },
   'rebase/skip': {
     description: 'Resumes a paused rebase without the commit it stopped at (--skip).',
     params: Type.Object({ repoId: Type.String() }, strict),
-    result: Type.Object(
-      { conflicts: Type.Boolean(), completed: Type.Boolean() },
-      strict,
-    ),
+    result: RebaseRunResult,
   },
   'rebase/abort': {
     description: 'Restores the pre-rebase state.',

@@ -156,17 +156,31 @@ std::string gitMessage(const GitOutput& output) {
   return text;
 }
 
+// The commit refs/stash points at, or "" when the stash is empty.
+std::string stashTop(const core::Repo& repo, const CancelToken& token) {
+  auto output = runGit(repo, {"rev-parse", "--verify", "--quiet", "refs/stash"}, token);
+  if (!output) throw rpc::HandlerError{{output.error()}};
+  if (output.value().exitCode != 0 || output.value().lines.empty()) return "";
+  return output.value().lines.front();
+}
+
 // Shared result mapping for rebase runs: exit 0 with no rebase state left is
 // completion (an 'edit' stop also exits 0 but leaves state); a nonzero exit
 // with rebase state on disk means git stopped on conflicts. `refusal` is the
 // sequence editor's reason for refusing the plan, reported in place of git's
-// generic editor failure.
+// generic editor failure. `stashBefore` is stashTop() from before the run:
+// a finishing rebase re-applies its autostash, and when that conflicts git
+// still exits 0 but keeps the changes as a new stash entry, which is reported
+// as autoStashKept.
 rpc::Json rebaseRunResult(const core::Repo& repo, const Result<GitOutput>& output,
-                          const std::string& what, const std::string& refusal = "") {
+                          const std::string& what, const std::string& stashBefore,
+                          const CancelToken& token, const std::string& refusal = "") {
   if (!output) throw rpc::HandlerError{{output.error()}};
   const bool inProgress = rebaseInProgress(repo);
   if (output.value().exitCode == 0) {
-    return {{"completed", !inProgress}, {"conflicts", false}};
+    rpc::Json result = {{"completed", !inProgress}, {"conflicts", false}};
+    if (!inProgress && stashTop(repo, token) != stashBefore) result["autoStashKept"] = true;
+    return result;
   }
   if (inProgress) return {{"completed", false}, {"conflicts", true}};
   if (!refusal.empty()) {
@@ -203,8 +217,9 @@ rpc::Json resumeRebase(ServiceContext& context, const rpc::Json& params, const C
     env = {{"GIT_EDITOR", "true"}};
   }
   args.insert(args.end(), {"rebase", flag});
+  const std::string stashBefore = stashTop(repo, token);
   auto output = runGitWithEnv(repo.workdir(), std::move(args), env, token);
-  return rebaseRunResult(repo, output, "git rebase " + flag);
+  return rebaseRunResult(repo, output, "git rebase " + flag, stashBefore, token);
 }
 
 }  // namespace
@@ -313,12 +328,13 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           args.push_back(params["updateRefs"].get<bool>() ? "--update-refs" : "--no-update-refs");
         }
         args.push_back(upstream);
+        const std::string stashBefore = stashTop(repo, token);
         auto output =
             runGitWithEnv(repo.workdir(), std::move(args),
                           {{"GIT_SEQUENCE_EDITOR", shimCommand("--edit-sequence", control.path())},
                            {"GIT_EDITOR", shimCommand("--edit-message", control.path())}},
                           token);
-        return rebaseRunResult(repo, output, "git rebase", control.error());
+        return rebaseRunResult(repo, output, "git rebase", stashBefore, token, control.error());
       },
       rpc::Mode::Serial);
 

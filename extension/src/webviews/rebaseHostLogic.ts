@@ -31,7 +31,8 @@ export function autoStashPrompt(status: WorkingTreeStatus): { message: string; d
     detail:
       `${count} changed file${count === 1 ? '' : 's'}. A rebase needs a clean working tree. ` +
       'GitGlasses can stash the changes, rebase, and restore them afterwards ' +
-      '(git rebase --autostash).',
+      '(git rebase --autostash). If they conflict with the rebased branch, they stay ' +
+      'in the stash.',
   };
 }
 
@@ -53,4 +54,19 @@ export function staleReason(
     );
   }
   return reasons.length === 0 ? undefined : `${reasons.join('; ')} since this plan was made.`;
+}
+
+/** What to tell the user when a rebase finished but git could not put the
+ *  changes it stashed first back on top (it keeps them as stash@{0}).
+ *  `conflicted` are the files the attempt left in conflict. */
+export function autoStashKeptWarning(conflicted: readonly string[]): string {
+  if (conflicted.length === 0) {
+    return 'GitGlasses: the rebase completed, but your uncommitted changes could not be restored. They are kept in stash@{0}; apply it when you are ready.';
+  }
+  const shown = conflicted.slice(0, 3).join(', ');
+  const more = conflicted.length > 3 ? ` and ${conflicted.length - 3} more` : '';
+  return (
+    `GitGlasses: the rebase completed, but your uncommitted changes conflict with it ` +
+    `(${shown}${more}). Resolve the conflicts, then drop stash@{0}, which still holds the changes.`
+  );
 }

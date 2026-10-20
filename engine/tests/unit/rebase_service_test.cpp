@@ -664,8 +664,72 @@ TEST(RebaseService, AutoStashRebasesOverUncommittedChanges) {
           {{"repoId", repoId}, {"upstream", shas.base}, {"plan", plan}, {"autoStash", true}}));
   ASSERT_TRUE(start.contains("result")) << start.dump();
   EXPECT_TRUE(start["result"]["completed"].get<bool>());
+  EXPECT_FALSE(start["result"].contains("autoStashKept")) << start.dump();
   EXPECT_EQ(subjects(fixture.root(), shas.base), "c1 reworded\nc2\nc3\n");
   EXPECT_EQ(slurp(fixture.root() / "README.md"), "uncommitted\n");
+  EXPECT_EQ(gitOut(fixture.root(), "stash list"), "");
+}
+
+// When the rebased branch changes a file the stashed changes also touch, git
+// cannot re-apply them: it finishes the rebase, leaves the conflict in the
+// working tree and keeps the changes as stash@{0}. That is not a plain
+// completion.
+TEST(RebaseService, AutoStashThatCannotBeRestoredIsReported) {
+  FixtureRepo fixture;
+  fixture.run("git branch upstream");
+  const Seeded shas = seedDistinct(fixture);
+  fixture.run("git checkout -q upstream");
+  fixture.writeFile("README.md", "upstream change\n");
+  fixture.run("git add README.md");
+  commitTick(fixture, "upstream edit", 4);
+  fixture.run("git checkout -q -");
+  fixture.writeFile("README.md", "my uncommitted edit\n");
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json start = session.request(
+      req(10, "rebase/start",
+          {{"repoId", repoId},
+           {"upstream", "upstream"},
+           {"plan", Json::array({entry("pick", shas.c1, "c1"), entry("pick", shas.c2, "c2"),
+                                 entry("pick", shas.c3, "c3")})},
+           {"autoStash", true}}));
+  ASSERT_TRUE(start.contains("result")) << start.dump();
+  EXPECT_TRUE(start["result"]["completed"].get<bool>());
+  EXPECT_FALSE(start["result"]["conflicts"].get<bool>());
+  EXPECT_EQ(start["result"].value("autoStashKept", false), true) << start.dump();
+  EXPECT_EQ(subjects(fixture.root(), "upstream"), "c1\nc2\nc3\n");
+  EXPECT_EQ(gitOut(fixture.root(), "stash list --format=%gs"), "autostash\n");
+  EXPECT_EQ(gitOut(fixture.root(), "diff --name-only --diff-filter=U"), "README.md\n");
+}
+
+// The same holds for a rebase that finishes on rebase/continue.
+TEST(RebaseService, AutoStashThatCannotBeRestoredAfterContinueIsReported) {
+  FixtureRepo fixture;
+  const Seeded shas = seedConflicting(fixture);
+  fixture.writeFile("README.md", "my uncommitted edit\n");
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json start = session.request(
+      req(10, "rebase/start",
+          {{"repoId", repoId},
+           {"upstream", shas.base},
+           {"plan", Json::array({entry("pick", shas.c1, "c1"), entry("drop", shas.c2, "c2"),
+                                 entry("pick", shas.c3, "c3")})},
+           {"autoStash", true}}));
+  ASSERT_TRUE(start["result"]["conflicts"].get<bool>()) << start.dump();
+  EXPECT_FALSE(start["result"].contains("autoStashKept")) << start.dump();
+
+  // The resolution also commits a change to the file the stash holds.
+  fixture.writeFile("f.txt", "three\n");
+  fixture.writeFile("README.md", "resolved differently\n");
+  fixture.run("git add f.txt README.md");
+  Json cont = session.request(req(11, "rebase/continue", {{"repoId", repoId}}));
+  ASSERT_TRUE(cont.contains("result")) << cont.dump();
+  EXPECT_TRUE(cont["result"]["completed"].get<bool>());
+  EXPECT_EQ(cont["result"].value("autoStashKept", false), true) << cont.dump();
+  EXPECT_EQ(gitOut(fixture.root(), "stash list --format=%gs"), "autostash\n");
 }
 
 TEST(RebaseService, SkipDropsTheConflictedCommit) {

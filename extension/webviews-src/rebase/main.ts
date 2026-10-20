@@ -366,7 +366,9 @@ function renderNotices(mergeCount: number, autoStash: boolean): void {
     );
   }
   if (autoStash) {
-    notices.push('Your uncommitted changes are stashed before the rebase and restored after it.');
+    notices.push(
+      'Your uncommitted changes are stashed before the rebase and restored after it. If they conflict with the rebased branch, they stay in the stash.',
+    );
   }
   noticesEl.replaceChildren(
     ...notices.map((text) => {

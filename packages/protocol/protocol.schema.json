@@ -2815,6 +2815,9 @@
           },
           "completed": {
             "type": "boolean"
+          },
+          "autoStashKept": {
+            "type": "boolean"
           }
         }
       }
@@ -2846,6 +2849,9 @@
           },
           "completed": {
             "type": "boolean"
+          },
+          "autoStashKept": {
+            "type": "boolean"
           }
         }
       }
@@ -2876,6 +2882,9 @@
             "type": "boolean"
           },
           "completed": {
+            "type": "boolean"
+          },
+          "autoStashKept": {
             "type": "boolean"
           }
         }
