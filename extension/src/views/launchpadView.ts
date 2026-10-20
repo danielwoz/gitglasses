@@ -81,9 +81,8 @@ class LaunchpadViewProvider implements vscode.TreeDataProvider<LaunchpadNode> {
       void this.reload();
       return [messageNode('Loading…')];
     }
-    if (!this.model.connected) {
-      return [messageNode('No integrations connected — run "GitGlasses: Connect Integration"')];
-    }
+    // Empty, so the view's welcome content (with its Connect button) shows.
+    if (!this.model.connected) return [];
     if (this.model.groups.length === 0) {
       return [messageNode('No open pull requests involving you')];
     }

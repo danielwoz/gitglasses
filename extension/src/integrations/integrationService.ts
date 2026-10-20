@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import {
   AuthError,
   CredentialScopeError,
+  DEFAULT_HOSTING_HOSTS,
   parseRemoteUrl,
   type AuthContext,
   type AutolinkPattern,
@@ -25,16 +26,23 @@ import {
   addIssueSetting,
   describeIssueSetting,
   HOSTING_PROVIDER_CHOICES,
-  ISSUE_PROVIDER_CHOICES,
+  issueTrackerLabel,
   isValidDomain,
+  normalizeAzureOrganization,
   normalizeDomain,
+  normalizeJiraSite,
+  providerLabel,
   removeHostSetting,
   removeIssueSetting,
+  type ProviderChoice,
 } from './integrationSettings';
 import {
   buildHostingEntries,
   buildIssueEntries,
+  detectHosts,
+  issueCredentialHost,
   toAuthContext,
+  type DetectedHost,
   type HostingEntry,
   type HostSetting,
   type IssueProviderEntry,
@@ -60,6 +68,21 @@ export interface BranchPullRequest {
   /** The repository the pull request lives in, with its credentials. */
   hosting: ConnectedHosting;
   pr: PullRequest;
+}
+
+/** What a connection is being set up for. */
+interface ConnectTarget {
+  kind: 'hosting' | 'issues';
+  providerId: string;
+  /** Host the credential is stored under ('' for Linear). */
+  host: string;
+  /** Settings entry the connection needs, when it has none yet. */
+  setting?: HostSetting | IssueSetting;
+}
+
+interface ConnectItem extends vscode.QuickPickItem {
+  /** Resolves to the connection to set up, after any follow-up prompts. */
+  choose?: () => Promise<ConnectTarget | undefined>;
 }
 
 /**
@@ -198,7 +221,7 @@ export class IntegrationService implements vscode.Disposable {
       });
   }
 
-  /** All hosting endpoints with a provider: github.com plus configured hosts. */
+  /** All hosting endpoints with a provider: the public hosts plus configured ones. */
   getHostingEntries(): HostingEntry[] {
     return [...this.hostingEntries.values()];
   }
@@ -337,82 +360,9 @@ export class IntegrationService implements vscode.Disposable {
     return applyAutolinks(text, patterns);
   }
 
-  /**
-   * Adds an integration to settings through prompts, so a self-hosted forge or
-   * issue tracker can be set up without hand-editing settings.json. The scope
-   * written to is the one settingScope resolves.
-   */
+  /** Adding and connecting are one flow; the command names both. */
   async addIntegration(): Promise<void> {
-    const kind = await vscode.window.showQuickPick(
-      [
-        {
-          label: '$(repo) Git hosting instance',
-          detail: 'GitHub Enterprise, GitLab, Bitbucket, Azure DevOps',
-          itemKind: 'hosting' as const,
-        },
-        {
-          label: '$(issues) Issue tracker',
-          detail: 'Jira, Linear',
-          itemKind: 'issues' as const,
-        },
-      ],
-      { placeHolder: 'What would you like to add?' },
-    );
-    if (!kind) return;
-
-    const choices =
-      kind.itemKind === 'hosting' ? HOSTING_PROVIDER_CHOICES : ISSUE_PROVIDER_CHOICES;
-    const provider = await vscode.window.showQuickPick(
-      choices.map((choice) => ({ label: choice.label, detail: choice.detail, choice })),
-      { placeHolder: 'Which provider?' },
-    );
-    if (!provider) return;
-
-    let host = '';
-    if (provider.choice.needsHost) {
-      const entered = await vscode.window.showInputBox({
-        prompt: `Hostname for ${provider.choice.label}`,
-        placeHolder: 'git.example.com',
-        validateInput: (value) =>
-          value.trim() === '' || isValidDomain(value)
-            ? undefined
-            : 'Enter a hostname such as git.example.com',
-      });
-      if (entered === undefined) return;
-      if (!isValidDomain(entered)) return;
-      host = normalizeDomain(entered);
-    }
-
-    if (kind.itemKind === 'hosting') {
-      const scope = settingScope<HostSetting>('integrations.hosts');
-      await vscode.workspace
-        .getConfiguration('gitglasses')
-        .update(
-          'integrations.hosts',
-          addHostSetting(scope.values, { domain: host, provider: provider.choice.id }),
-          scope.target,
-        );
-    } else {
-      const scope = settingScope<IssueSetting>('integrations.issues');
-      await vscode.workspace
-        .getConfiguration('gitglasses')
-        .update(
-          'integrations.issues',
-          addIssueSetting(scope.values, {
-            provider: provider.choice.id,
-            ...(host ? { host } : {}),
-          }),
-          scope.target,
-        );
-    }
-
-    this.reloadConfiguration();
-    const added = host ? `${provider.choice.label} (${host})` : provider.choice.label;
-    const next = await vscode.window.showInformationMessage(
-      `GitGlasses: added ${added}.`,
-      'Connect Now',
-    );
-    if (next === 'Connect Now') await this.connectIntegration();
+    await this.connectIntegration();
   }
 
   /** Removes a configured integration from settings. */
@@ -468,72 +418,343 @@ export class IntegrationService implements vscode.Disposable {
     void vscode.window.showInformationMessage('GitGlasses: integration removed.');
   }
 
-  /** Connect flow: pick an integration, authenticate, validate, greet. */
-  async connectIntegration(): Promise<void> {
-    interface Candidate extends vscode.QuickPickItem {
-      itemKind: 'hosting' | 'issues';
-      providerId: string;
-      host: string;
+  /**
+   * Hosts found among the remotes of the workspace folders and of the
+   * repositories integrations have already resolved.
+   */
+  private async detectWorkspaceHosts(): Promise<DetectedHost[]> {
+    const roots = new Set<string>([
+      ...(vscode.workspace.workspaceFolders ?? [])
+        .filter((folder) => folder.uri.scheme === 'file')
+        .map((folder) => folder.uri.fsPath),
+      ...this.hostingCache.keys(),
+    ]);
+    const remotes: RemoteConfig[] = [];
+    for (const root of roots) {
+      const text = await readGitConfig(root);
+      if (text !== undefined) remotes.push(...parseGitConfigRemotes(text));
     }
-    const candidates: Candidate[] = this.getHostingEntries().map((entry) => ({
-      itemKind: 'hosting' as const,
-      providerId: entry.providerId,
-      host: entry.host,
-      label: `$(repo) ${entry.host}`,
-      description: entry.providerId,
-    }));
-    for (const entry of this.issueEntries) {
-      candidates.push({
-        itemKind: 'issues',
-        providerId: entry.providerId,
-        host: entry.host ?? '',
-        label: `$(issues) ${entry.providerId}${entry.host ? ` (${entry.host})` : ''}`,
-        description: 'issue tracker',
+    const configured = new Map(
+      [...this.hostingEntries.values()].map((entry) => [entry.host, entry.providerId]),
+    );
+    return detectHosts(remotes, configured);
+  }
+
+  /**
+   * Connect flow: one list of the hosts detected in the workspace, the
+   * integrations already set up, and every kind that can be added. Only a
+   * self-hosted server asks for a hostname.
+   */
+  async connectIntegration(): Promise<void> {
+    const items: ConnectItem[] = [];
+    const offered = new Set<string>();
+    const connectedLabel = async (providerId: string, host: string): Promise<string> =>
+      (await this.auth.isConnected(providerId, host)) ? 'connected' : '';
+
+    const detected = await this.detectWorkspaceHosts();
+    const detectedItems: ConnectItem[] = [];
+    for (const found of detected) {
+      const item = this.detectedItem(found);
+      if (!item) continue;
+      offered.add(item.key);
+      const status = await connectedLabel(found.providerId ?? '', found.domain);
+      detectedItems.push({
+        ...item.item,
+        description: [item.item.description, status].filter(Boolean).join(' · '),
       });
     }
-    if (candidates.length === 0) {
-      const add = await vscode.window.showInformationMessage(
-        'GitGlasses: no integrations configured yet.',
-        'Add Integration…',
+    if (detectedItems.length > 0) {
+      items.push({ label: 'In this workspace', kind: vscode.QuickPickItemKind.Separator });
+      items.push(...detectedItems);
+    }
+
+    const configured: ConnectItem[] = [];
+    for (const entry of this.hostingEntries.values()) {
+      const key = `${entry.providerId}:${entry.host}`;
+      if (offered.has(key)) continue;
+      const status = await connectedLabel(entry.providerId, entry.host);
+      // The public hosts are listed under "Add" until they are connected.
+      if (status === '' && isPublicHost(entry.host)) continue;
+      offered.add(key);
+      configured.push({
+        label: `$(repo) ${entry.host}`,
+        description: [providerLabel(entry.providerId, entry.host), status]
+          .filter(Boolean)
+          .join(' · '),
+        choose: async () => ({ kind: 'hosting', providerId: entry.providerId, host: entry.host }),
+      });
+    }
+    for (const entry of this.issueEntries) {
+      const host = issueCredentialHost(entry);
+      const status = await connectedLabel(entry.providerId, host);
+      offered.add(`issues:${entry.providerId}:${host}`);
+      configured.push({
+        label: `$(issues) ${issueTrackerLabel(entry.providerId, entry.host)}`,
+        description: [entry.host, status].filter(Boolean).join(' · '),
+        choose: async () => ({ kind: 'issues', providerId: entry.providerId, host }),
+      });
+    }
+    if (configured.length > 0) {
+      items.push({ label: 'Set up', kind: vscode.QuickPickItemKind.Separator });
+      items.push(...configured);
+    }
+
+    items.push({ label: 'Add', kind: vscode.QuickPickItemKind.Separator });
+    for (const choice of HOSTING_PROVIDER_CHOICES) {
+      if (choice.needsHost) continue;
+      if (!choice.needsOrganization && offered.has(`${choice.id}:${choice.defaultHost}`)) continue;
+      items.push({
+        label: `$(repo) ${choice.label}${choice.needsOrganization ? '…' : ''}`,
+        description: choice.detail ?? choice.defaultHost,
+        choose: () => this.chooseHosting(choice),
+      });
+    }
+    items.push({
+      label: '$(server) Self-hosted server…',
+      description: 'GitHub Enterprise Server, GitLab self-managed, Bitbucket Data Center',
+      choose: () => this.chooseSelfHosted(),
+    });
+    items.push({
+      label: '$(issues) Jira Cloud…',
+      description: 'issue tracker',
+      choose: () => this.chooseIssueTracker('jira'),
+    });
+    if (!offered.has('issues:linear:')) {
+      items.push({
+        label: '$(issues) Linear',
+        description: 'issue tracker',
+        choose: () => this.chooseIssueTracker('linear'),
+      });
+    }
+    if (!offered.has('issues:github:github.com')) {
+      items.push({
+        label: '$(issues) GitHub Issues',
+        description: 'issue tracker',
+        choose: () => this.chooseIssueTracker('github'),
+      });
+    }
+
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Connect which integration?',
+      matchOnDescription: true,
+    });
+    const target = picked?.choose ? await picked.choose() : undefined;
+    if (!target) return;
+    if (target.setting) await this.saveSetting(target.kind, target.setting);
+    await this.authenticate(target);
+  }
+
+  /** A pick-list item for a host found among the remotes. */
+  private detectedItem(found: DetectedHost): { key: string; item: ConnectItem } | undefined {
+    const remote = `from remote "${found.remote}"`;
+    if (found.providerId === 'azuredevops') {
+      if (!found.organization) return undefined;
+      // One organization is configured per host, so this one replaces any
+      // other the entry names.
+      const setting: HostSetting = {
+        domain: found.domain,
+        provider: 'azuredevops',
+        organization: found.organization,
+      };
+      return {
+        key: `azuredevops:${found.domain}`,
+        item: {
+          label: `$(repo) ${found.domain}/${found.organization}`,
+          description: `Azure DevOps · ${remote}`,
+          choose: async () => ({
+            kind: 'hosting',
+            providerId: 'azuredevops',
+            host: found.domain,
+            setting,
+          }),
+        },
+      };
+    }
+    const providerId = found.providerId;
+    const known = this.hostingEntries.get(found.domain);
+    if (!known) {
+      // A self-hosted server: the name only hints at what it runs, so the
+      // user confirms the product, with the hinted one first.
+      const hint =
+        providerId === undefined ? 'self-hosted' : `${providerLabel(providerId, found.domain)}?`;
+      return {
+        key: `?:${found.domain}`,
+        item: {
+          label: `$(repo) ${found.domain}`,
+          description: `${hint} · ${remote}`,
+          choose: () => this.chooseSelfHosted(found.domain, providerId),
+        },
+      };
+    }
+    return {
+      key: `${known.providerId}:${known.host}`,
+      item: {
+        label: `$(repo) ${found.domain}`,
+        description: `${providerLabel(known.providerId, known.host)} · ${remote}`,
+        choose: async () => ({ kind: 'hosting', providerId: known.providerId, host: known.host }),
+      },
+    };
+  }
+
+  /** A cloud hosting service; Azure DevOps also asks for the organization. */
+  private async chooseHosting(choice: ProviderChoice): Promise<ConnectTarget | undefined> {
+    const host = choice.defaultHost ?? '';
+    if (!choice.needsOrganization) {
+      return { kind: 'hosting', providerId: choice.id, host };
+    }
+    const entered = await vscode.window.showInputBox({
+      prompt: 'Azure DevOps organization',
+      placeHolder: 'contoso (from https://dev.azure.com/contoso)',
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim() === '' || normalizeAzureOrganization(value)
+          ? undefined
+          : 'Enter the organization name, e.g. contoso',
+    });
+    const organization = entered === undefined ? undefined : normalizeAzureOrganization(entered);
+    if (!organization) return undefined;
+    return {
+      kind: 'hosting',
+      providerId: choice.id,
+      host,
+      setting: { domain: host, provider: choice.id, organization },
+    };
+  }
+
+  /**
+   * A self-hosted server: which product it runs, then its hostname unless it
+   * came from a remote. `hint` is listed first.
+   */
+  private async chooseSelfHosted(
+    knownHost?: string,
+    hint?: string,
+  ): Promise<ConnectTarget | undefined> {
+    const kinds = HOSTING_PROVIDER_CHOICES.filter((choice) => choice.needsHost).sort(
+      (a, b) => Number(b.id === hint) - Number(a.id === hint),
+    );
+    const kind = await vscode.window.showQuickPick(
+      kinds.map((choice) => ({ label: choice.label, choice })),
+      { placeHolder: knownHost ? `What does ${knownHost} run?` : 'Which server?' },
+    );
+    if (!kind) return undefined;
+    let host = knownHost;
+    if (host === undefined) {
+      const entered = await vscode.window.showInputBox({
+        prompt: `Hostname of your ${kind.choice.label}`,
+        placeHolder: 'git.example.com',
+        ignoreFocusOut: true,
+        validateInput: (value) =>
+          value.trim() === '' || isValidDomain(value)
+            ? undefined
+            : 'Enter a hostname such as git.example.com',
+      });
+      if (entered === undefined || !isValidDomain(entered)) return undefined;
+      host = normalizeDomain(entered);
+    }
+    return {
+      kind: 'hosting',
+      providerId: kind.choice.id,
+      host,
+      setting: { domain: host, provider: kind.choice.id },
+    };
+  }
+
+  private async chooseIssueTracker(providerId: string): Promise<ConnectTarget | undefined> {
+    if (providerId === 'github') {
+      return { kind: 'issues', providerId, host: 'github.com', setting: { provider: 'github' } };
+    }
+    if (providerId === 'linear') {
+      return { kind: 'issues', providerId, host: '', setting: { provider: 'linear' } };
+    }
+    const entered = await vscode.window.showInputBox({
+      prompt: 'Jira Cloud site',
+      placeHolder: 'yoursite.atlassian.net',
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim() === '' || normalizeJiraSite(value)
+          ? undefined
+          : 'Enter your Jira Cloud site, e.g. yoursite.atlassian.net',
+    });
+    const site = entered === undefined ? undefined : normalizeJiraSite(entered);
+    if (!site) return undefined;
+    return {
+      kind: 'issues',
+      providerId,
+      host: site,
+      setting: { provider: providerId, host: site },
+    };
+  }
+
+  /** Writes a settings entry through the scope settingScope resolves. */
+  private async saveSetting(
+    kind: ConnectTarget['kind'],
+    setting: HostSetting | IssueSetting,
+  ): Promise<void> {
+    const config = vscode.workspace.getConfiguration('gitglasses');
+    if (kind === 'hosting') {
+      const scope = settingScope<HostSetting>('integrations.hosts');
+      await config.update(
+        'integrations.hosts',
+        addHostSetting(scope.values, setting as HostSetting),
+        scope.target,
       );
-      if (add === 'Add Integration…') await this.addIntegration();
+    } else {
+      const scope = settingScope<IssueSetting>('integrations.issues');
+      await config.update(
+        'integrations.issues',
+        addIssueSetting(scope.values, setting as IssueSetting),
+        scope.target,
+      );
+    }
+    this.reloadConfiguration();
+  }
+
+  /** Authenticate, then check the credential with one small request. */
+  private async authenticate(target: ConnectTarget): Promise<void> {
+    // A Jira site is named by its host; Linear and GitHub Issues by product.
+    const name =
+      target.kind === 'hosting' || target.providerId === 'jira'
+        ? target.host
+        : issueTrackerLabel(target.providerId, target.host);
+    const hosting = target.kind === 'hosting' ? this.hostingEntries.get(target.host) : undefined;
+    const issues =
+      target.kind === 'issues'
+        ? this.issueEntries.find(
+            (entry) =>
+              entry.providerId === target.providerId && issueCredentialHost(entry) === target.host,
+          )
+        : undefined;
+    if (!hosting && !issues) {
+      void vscode.window.showWarningMessage(
+        `GitGlasses: ${name} could not be set up; check gitglasses.integrations in settings.`,
+      );
       return;
     }
-    const picked = await vscode.window.showQuickPick(candidates, {
-      placeHolder: 'Connect which integration?',
-    });
-    if (!picked) return;
 
-    const credential = await this.auth.getAuth(picked.providerId, picked.host, {
+    const credential = await this.auth.getAuth(target.providerId, target.host, {
       interactive: true,
-      needsUsername: picked.providerId === 'jira',
     });
     if (!credential) return;
-    const auth = toAuthContext(credential, picked.host);
+    const auth = toAuthContext(credential, target.host);
 
     try {
-      if (picked.itemKind === 'hosting') {
-        const provider = this.hostingEntries.get(picked.host)?.provider;
-        await provider?.getMyPullRequests(auth, { limit: 1 });
+      if (hosting) {
+        await hosting.provider.getMyPullRequests(auth, { limit: 1 });
       } else {
-        const provider = this.issueEntries.find(
-          (entry) =>
-            entry.providerId === picked.providerId && (entry.host ?? '') === picked.host,
-        )?.provider;
-        await provider?.getMyIssues(auth, { limit: 1 });
+        await issues?.provider.getMyIssues(auth, { limit: 1 });
       }
     } catch (error) {
-      if (error instanceof CredentialScopeError) {
-        void vscode.window.showErrorMessage(`GitGlasses: ${errorText(error)}`);
-        return;
-      }
       if (error instanceof AuthError) {
-        await this.auth.signOut(picked.providerId, picked.host);
+        await this.auth.signOut(target.providerId, target.host);
         const retry = await vscode.window.showErrorMessage(
-          `GitGlasses: authentication with ${picked.host || picked.providerId} failed — the token was rejected.`,
+          `GitGlasses: authentication with ${name} failed — the token was rejected.`,
           'Try Again',
         );
-        if (retry === 'Try Again') await this.connectIntegration();
+        if (retry === 'Try Again') await this.authenticate(target);
+        return;
+      }
+      if (error instanceof CredentialScopeError) {
+        void vscode.window.showErrorMessage(`GitGlasses: ${errorText(error)}`);
         return;
       }
       void vscode.window.showWarningMessage(
@@ -541,9 +762,7 @@ export class IntegrationService implements vscode.Disposable {
       );
     }
     this.emitter.fire();
-    void vscode.window.showInformationMessage(
-      `GitGlasses: connected to ${picked.host || picked.providerId}. Welcome aboard!`,
-    );
+    void vscode.window.showInformationMessage(`GitGlasses: connected to ${name}.`);
   }
 
   async disconnectIntegration(): Promise<void> {
@@ -558,11 +777,13 @@ export class IntegrationService implements vscode.Disposable {
       }
     }
     for (const entry of this.issueEntries) {
-      if (await this.auth.isConnected(entry.providerId, entry.host ?? '')) {
+      const host = issueCredentialHost(entry);
+      if (await this.auth.isConnected(entry.providerId, host)) {
+        const label = issueTrackerLabel(entry.providerId, entry.host);
         candidates.push({
           providerId: entry.providerId,
-          host: entry.host ?? '',
-          label: `${entry.providerId}${entry.host ? ` (${entry.host})` : ''}`,
+          host,
+          label: entry.host ? `${label} (${entry.host})` : label,
         });
       }
     }
@@ -587,4 +808,9 @@ export class IntegrationService implements vscode.Disposable {
 /** A setting value as an array, whatever a hand-edited settings file holds. */
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+/** Hosts served out of the box, which need no settings entry. */
+function isPublicHost(host: string): boolean {
+  return DEFAULT_HOSTING_HOSTS.some((entry) => entry.domain === host);
 }

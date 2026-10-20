@@ -118,9 +118,11 @@ describe('providers never send a credential off its host', () => {
       { provider: 'github', host: 'ghe.corp.example', owner: 'acme', name: 'widgets' },
       '#7'
     );
+    await provider.getMyIssues({ token: 't', host: 'ghe.corp.example' });
     expect(requests.map((r) => r.url)).toEqual([
       'https://ghe.corp.example/api/graphql',
       'https://ghe.corp.example/api/v3/repos/acme/widgets/issues/7',
+      'https://ghe.corp.example/api/v3/issues?filter=assigned&state=open&sort=updated&per_page=50',
     ]);
   });
 

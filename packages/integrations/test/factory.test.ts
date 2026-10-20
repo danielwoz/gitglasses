@@ -125,6 +125,8 @@ describe('createHostingProvider', () => {
 const ISSUE_CASES = [
   { providerId: 'jira', host: 'acme.atlassian.net', expected: ['acme.atlassian.net'] },
   { providerId: 'linear', host: undefined, expected: ['api.linear.app'] },
+  { providerId: 'github', host: undefined, expected: ['api.github.com'] },
+  { providerId: 'github-enterprise', host: 'ghe.corp.example', expected: ['ghe.corp.example'] },
 ];
 
 describe('createIssueProvider', () => {
@@ -147,6 +149,7 @@ describe('createIssueProvider', () => {
     [{ providerId: 'jira' }, /plain hostname/],
     [{ providerId: 'jira', host: 'jira.corp.example' }, /not supported yet/],
     [{ providerId: 'linear', host: 'linear.corp.example' }, /only served from linear\.app/],
+    [{ providerId: 'github-enterprise' }, /plain hostname/],
     [{ providerId: 'youtrack', host: 'x.example' }, /Unknown issue provider/],
   ])('rejects %j', (config, message) => {
     expect(() => createIssueProvider(config)).toThrow(IntegrationConfigError);

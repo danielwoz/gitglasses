@@ -7,6 +7,7 @@ import {
   createHostingProvider,
   createIssueProvider,
   DEFAULT_HOSTING_HOSTS,
+  parseRemoteUrl,
   type AuthContext,
   type FetchLike,
   type HostingProvider,
@@ -76,9 +77,10 @@ function reason(error: unknown): string {
 }
 
 /**
- * Hosting providers keyed by host: github.com out of the box, then one per
- * settings entry, an entry replacing the default for its host. Entries no
- * provider can serve are left out and described in `problems`.
+ * Hosting providers keyed by host: github.com, gitlab.com and bitbucket.org
+ * out of the box, then one per settings entry, an entry replacing the default
+ * for its host. Entries no provider can serve are left out and described in
+ * `problems`.
  */
 export function buildHostingEntries(
   settings: readonly unknown[],
@@ -140,4 +142,71 @@ export function buildIssueEntries(
     }
   }
   return { entries, problems };
+}
+
+/**
+ * Host the credential for an issue entry is stored under. GitHub Issues
+ * shares the github.com sign-in; other trackers keep their own entry.
+ */
+export function issueCredentialHost(entry: { providerId: string; host?: string }): string {
+  if (entry.providerId === 'github' && !entry.host) return 'github.com';
+  return entry.host ?? '';
+}
+
+/** A git host found among a workspace's remotes. */
+export interface DetectedHost {
+  /** Provider id that serves the host, when it could be told. */
+  providerId?: string;
+  domain: string;
+  /** Azure DevOps organization the remote belongs to. */
+  organization?: string;
+  /** Name of the remote it was found on, e.g. "origin". */
+  remote: string;
+}
+
+/** Hosts served without a settings entry, by provider id. */
+const PUBLIC_HOSTS = new Map(
+  DEFAULT_HOSTING_HOSTS.map(({ domain, providerId }) => [domain, providerId]),
+);
+
+/**
+ * The provider a self-hosted instance most likely runs, from its hostname:
+ * instances are commonly named after the product. Undefined when the name
+ * says nothing.
+ */
+export function guessProviderFromHostname(host: string): string | undefined {
+  const labels = host.toLowerCase().split(/[.-]/);
+  if (labels.includes('gitlab')) return 'gitlab';
+  if (labels.includes('github') || labels.includes('ghe')) return 'github-enterprise';
+  if (labels.includes('bitbucket') || labels.includes('stash')) return 'bitbucketDC';
+  return undefined;
+}
+
+/**
+ * Hosts among `remotes` and the provider for each: the configured provider
+ * for a host already in settings, the public provider for github.com,
+ * gitlab.com, bitbucket.org and dev.azure.com, and a guess from the hostname
+ * otherwise. Each host (and Azure DevOps organization) is reported once.
+ */
+export function detectHosts(
+  remotes: ReadonlyArray<{ name: string; url?: string; pushUrl?: string }>,
+  configured: ReadonlyMap<string, string>,
+): DetectedHost[] {
+  const found = new Map<string, DetectedHost>();
+  for (const remote of remotes) {
+    const url = remote.url ?? remote.pushUrl;
+    const parsed = url === undefined ? undefined : parseRemoteUrl(url);
+    if (!parsed) continue;
+    const domain = parsed.host;
+    const organization =
+      domain === 'dev.azure.com' ? parsed.owner.split('/')[0] || undefined : undefined;
+    const key = organization ? `${domain}/${organization.toLowerCase()}` : domain;
+    if (found.has(key)) continue;
+    const providerId =
+      configured.get(domain) ??
+      PUBLIC_HOSTS.get(domain) ??
+      (domain === 'dev.azure.com' ? 'azuredevops' : guessProviderFromHostname(domain));
+    found.set(key, { providerId, domain, organization, remote: remote.name });
+  }
+  return [...found.values()];
 }

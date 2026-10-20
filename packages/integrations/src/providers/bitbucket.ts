@@ -117,6 +117,11 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
   };
 }
 
+/** True for an Atlassian account email, which Bitbucket API tokens pair with. */
+function isAccountEmail(username: string | undefined): boolean {
+  return username !== undefined && username.includes('@');
+}
+
 /**
  * Bitbucket Cloud hosting provider (api.bitbucket.org/2.0).
  *
@@ -153,7 +158,8 @@ export class BitbucketProvider implements HostingProvider {
       baseUrlLabel: 'Bitbucket apiBaseUrl',
       credentialHost: this.host,
       headers: { accept: 'application/json' },
-      // An app password authenticates as a named account; OAuth tokens do not.
+      // An API token or app password authenticates as a named account (the
+      // Atlassian email or the Bitbucket username); access tokens do not.
       authorize: (auth) =>
         auth.username
           ? `Basic ${base64Encode(`${auth.username}:${auth.token}`)}`
@@ -221,7 +227,9 @@ export class BitbucketProvider implements HostingProvider {
       return undefined;
     }
     const cached = this.identity.peek(auth.token);
-    const viewer = auth.username ?? cached?.username ?? cached?.nickname;
+    const viewer = isAccountEmail(auth.username)
+      ? (cached?.username ?? cached?.nickname)
+      : (auth.username ?? cached?.username ?? cached?.nickname);
     const role: ViewerRole =
       viewer !== undefined && mapAccount(pr.author).username === viewer ? 'author' : 'none';
     return this.mapPullRequest(pr, role);
@@ -324,12 +332,17 @@ export class BitbucketProvider implements HostingProvider {
     };
   }
 
+  /**
+   * The account `/pullrequests/{selected_user}` is asked about: the username
+   * an app password was paired with, or the profile's uuid when the account
+   * is identified by its Atlassian email (API tokens) or not at all.
+   */
   private async username(auth: AuthContext): Promise<string> {
-    if (auth.username) {
+    if (auth.username && !isAccountEmail(auth.username)) {
       return auth.username;
     }
     const user = await this.user(auth);
-    const username = user.username ?? user.nickname;
+    const username = user.uuid ?? user.username ?? user.nickname;
     if (!username) {
       throw new Error('Bitbucket /user returned no username');
     }

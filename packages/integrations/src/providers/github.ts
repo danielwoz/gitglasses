@@ -5,6 +5,8 @@ import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  IssueProvider,
+  IssueQueryOptions,
   PrComments,
   PullRequestHead,
   PullRequestQueryOptions,
@@ -30,7 +32,13 @@ import type {
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
 import { ISSUE_TTL_MS, p, ProviderClient } from './client.js';
-import { assertKnownOptions, assertPlainHost, isGistRawOrigin, isSameOriginAs } from './shared.js';
+import {
+  assertKnownOptions,
+  assertPlainHost,
+  isGistRawOrigin,
+  isSameOriginAs,
+  slugify,
+} from './shared.js';
 
 export interface GitHubProviderOptions {
   /** Provider id used in RepoDescriptors. Default "github". */
@@ -94,6 +102,20 @@ interface GraphQlBranchPullRequestNode extends GraphQlPullRequestNode {
 interface GraphQlBranchData {
   viewer?: { login: string };
   repository?: { pullRequests?: { nodes: Array<GraphQlBranchPullRequestNode | null> } } | null;
+}
+
+interface RestAssignedIssue {
+  id?: number;
+  node_id?: string;
+  number?: number;
+  title?: string;
+  html_url?: string;
+  state?: string;
+  updated_at?: string;
+  pull_request?: unknown;
+  assignee?: { login?: string; avatar_url?: string } | null;
+  repository?: { name?: string; full_name?: string; owner?: { login?: string } };
+  repository_url?: string;
 }
 
 const PR_FRAGMENT = `
@@ -223,9 +245,12 @@ function mapAccount(account: GraphQlAccount | null): Account {
 /**
  * GitHub hosting provider backed by the real api.github.com GraphQL/REST APIs.
  * Any host other than github.com is treated as GitHub Enterprise Server and
- * served from that host's own API endpoints.
+ * served from that host's own API endpoints. Also an issue provider for the
+ * issues assigned to the authenticated user.
  */
-export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSuggestions, PrComments {
+export class GitHubProvider
+  implements HostingProvider, IssueProvider, SnippetHost, ReviewSuggestions, PrComments
+{
   readonly id: string;
   readonly host: string;
   readonly capabilities: ReadonlySet<HostingCapability> = new Set<HostingCapability>([
@@ -317,6 +342,54 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
         n.headRepositoryOwner?.login.toLowerCase() === headOwner
     );
     return node ? this.mapPullRequest(node, viewer) : undefined;
+  }
+
+  /** Open issues assigned to the authenticated user, across repositories. */
+  async getMyIssues(auth: AuthContext, opts?: IssueQueryOptions): Promise<Issue[]> {
+    // The endpoint pages at 100 and counts pull requests against the page.
+    const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 100);
+    const json = await this.client.getJson<RestAssignedIssue[]>(
+      auth,
+      p`/issues?filter=assigned&state=open&sort=updated&per_page=${limit}`
+    );
+    const issues: Issue[] = [];
+    for (const item of json ?? []) {
+      if (item.pull_request !== undefined) {
+        continue;
+      }
+      const path = repoOfAssignedIssue(item);
+      if (path) {
+        const repo: RepoDescriptor = { provider: this.id, host: this.host, ...path };
+        issues.push(this.mapRestIssue(item as Record<string, unknown>, repo));
+      }
+    }
+    return issues;
+  }
+
+  /** Resolves an "owner/name#123" key to its issue; pull requests resolve to undefined. */
+  async getIssue(auth: AuthContext, key: string): Promise<Issue | undefined> {
+    const match = /^(.+)\/([^/#]+)#(\d+)$/.exec(key.trim());
+    if (!match) {
+      return undefined;
+    }
+    const repo: RepoDescriptor = {
+      provider: this.id,
+      host: this.host,
+      owner: match[1],
+      name: match[2],
+    };
+    const found = await this.getIssueOrPr(auth, repo, match[3]);
+    return found !== undefined && !('headSha' in found) ? found : undefined;
+  }
+
+  /** "<number>-<slug>", the shape GitHub's own "Create a branch" uses. */
+  suggestBranchName(issue: Issue): string {
+    const number = /#(\d+)$/.exec(issue.key)?.[1];
+    const slug = slugify(issue.title, 40);
+    if (number === undefined) {
+      return slug;
+    }
+    return slug ? `${number}-${slug}` : number;
   }
 
   async getIssueOrPr(
@@ -548,6 +621,17 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
       reviewRequestedFromViewer: false,
     };
   }
+}
+
+/** Owner and name of the repository an /issues result belongs to. */
+function repoOfAssignedIssue(item: RestAssignedIssue): { owner: string; name: string } | undefined {
+  const fullName =
+    item.repository?.full_name ?? /\/repos\/([^/]+\/[^/]+)$/.exec(item.repository_url ?? '')?.[1];
+  const slash = fullName?.indexOf('/') ?? -1;
+  if (fullName === undefined || slash <= 0) {
+    return undefined;
+  }
+  return { owner: fullName.slice(0, slash), name: fullName.slice(slash + 1) };
 }
 
 /**

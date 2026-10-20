@@ -83,6 +83,24 @@ describe('parseRemoteUrl', () => {
     });
   });
 
+  it('parses ssh.dev.azure.com remotes', () => {
+    expect(parseRemoteUrl('git@ssh.dev.azure.com:v3/contoso/webapp/frontend')).toEqual({
+      host: 'dev.azure.com',
+      owner: 'contoso/webapp',
+      name: 'frontend',
+    });
+  });
+
+  it('maps an organization.visualstudio.com remote onto dev.azure.com', () => {
+    const expected = { host: 'dev.azure.com', owner: 'contoso/webapp', name: 'frontend' };
+    expect(parseRemoteUrl('https://contoso.visualstudio.com/webapp/_git/frontend')).toEqual(
+      expected
+    );
+    expect(
+      parseRemoteUrl('https://contoso.visualstudio.com/DefaultCollection/webapp/_git/frontend')
+    ).toEqual(expected);
+  });
+
   it('returns undefined for non-remote strings', () => {
     expect(parseRemoteUrl('not a url')).toBeUndefined();
     expect(parseRemoteUrl('')).toBeUndefined();

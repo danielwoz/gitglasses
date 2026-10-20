@@ -85,6 +85,23 @@ describe('BitbucketProvider.getMyPullRequests', () => {
     expect(declined.state).toBe('closed');
   });
 
+  it('asks about the account uuid when the credential is an email and API token', async () => {
+    const { fetchFn, requests } = stubFetch((url) =>
+      url.endsWith('/user')
+        ? jsonResponse({ uuid: '{u-1}', nickname: 'alice' })
+        : jsonResponse({ values: [] })
+    );
+    const provider = new BitbucketProvider({ fetchFn });
+    await provider.getMyPullRequests({ token: 'api-token', username: 'alice@example.com' });
+    expect(requests.map((r) => r.url)).toEqual([
+      'https://api.bitbucket.org/2.0/user',
+      'https://api.bitbucket.org/2.0/pullrequests/%7Bu-1%7D?state=OPEN&pagelen=50',
+    ]);
+    expect(requests[0].init?.headers?.authorization).toBe(
+      `Basic ${Buffer.from('alice@example.com:api-token').toString('base64')}`
+    );
+  });
+
   it('resolves the username via /user (with bearer auth) when not supplied, and caches it', async () => {
     const { fetchFn, requests } = stubFetch((url) =>
       url.endsWith('/user') ? jsonResponse({ username: 'alice' }) : jsonResponse({ values: [] })

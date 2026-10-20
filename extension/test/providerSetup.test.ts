@@ -10,8 +10,15 @@ import {
   type HttpResponseLike,
 } from '@gitglasses/integrations';
 import {
+  HOSTING_PROVIDER_CHOICES,
+  ISSUE_PROVIDER_CHOICES,
+} from '../src/integrations/integrationSettings';
+import {
   buildHostingEntries,
   buildIssueEntries,
+  detectHosts,
+  guessProviderFromHostname,
+  issueCredentialHost,
   toAuthContext,
 } from '../src/integrations/providerSetup';
 
@@ -57,25 +64,21 @@ function credentialedHosts(requests: Recorded): string[] {
 
 const credential = { token: 'SECRET', username: 'alice@example.com' };
 
-const HOSTING_SETTINGS = [
-  { domain: 'github.com', provider: 'github' },
-  { domain: 'ghe.corp.example', provider: 'github-enterprise' },
-  { domain: 'gitlab.com', provider: 'gitlab' },
-  { domain: 'gitlab.corp.example', provider: 'gitlab' },
-  { domain: 'bitbucket.org', provider: 'bitbucket' },
-  { domain: 'bitbucket.corp.example', provider: 'bitbucketDC' },
-  { domain: 'dev.azure.com', provider: 'azuredevops', organization: 'contoso' },
-];
-
 describe('hosting integrations', () => {
-  for (const setting of HOSTING_SETTINGS) {
-    const { domain } = setting;
-    it(`${setting.provider} on ${domain} sends its token to ${domain} only`, async () => {
+  // Every choice the connect flow offers, configured the way it writes it.
+  for (const choice of HOSTING_PROVIDER_CHOICES) {
+    const domain = choice.defaultHost ?? `${choice.id.toLowerCase()}.corp.example`;
+    it(`${choice.label} on ${domain} sends its token to ${domain} only`, async () => {
       const { fetchFn, requests } = recordingFetch();
+      const setting = {
+        domain,
+        provider: choice.id,
+        ...(choice.needsOrganization ? { organization: 'contoso' } : {}),
+      };
       const { entries, problems } = buildHostingEntries([setting], fetchFn);
       expect(problems).toEqual([]);
       const entry = entries.get(domain);
-      expect(entry?.providerId).toBe(setting.provider);
+      expect(entry?.providerId).toBe(choice.id);
       await entry?.provider.getMyPullRequests(toAuthContext(credential, domain), { limit: 1 });
       expect(requests.length).toBeGreaterThan(0);
       expect(credentialedHosts(requests)).toEqual([
@@ -104,12 +107,17 @@ describe('hosting integrations', () => {
     expect(requests.map((r) => r.url)).toEqual(['https://ghe.corp/api/graphql']);
   });
 
+  it('serves gitlab.com and bitbucket.org with no settings at all', () => {
+    const { entries } = buildHostingEntries([]);
+    expect([...entries.keys()].sort()).toEqual(['bitbucket.org', 'github.com', 'gitlab.com']);
+    const gitlab = entries.get('gitlab.com')?.provider;
+    expect(gitlab?.matchesRemote('git@gitlab.com:a/b.git')).toBeTruthy();
+    expect(entries.get('bitbucket.org')?.providerId).toBe('bitbucket');
+  });
+
   it('refuses to send a credential stored for another host', async () => {
     const { fetchFn, requests } = recordingFetch();
-    const { entries } = buildHostingEntries(
-      [{ domain: 'gitlab.com', provider: 'gitlab' }],
-      fetchFn,
-    );
+    const { entries } = buildHostingEntries([], fetchFn);
     const gitlab = entries.get('gitlab.com');
     const error = await gitlab?.provider
       .getMyPullRequests(toAuthContext(credential, 'gitlab.corp.example'))
@@ -122,13 +130,13 @@ describe('hosting integrations', () => {
     const { entries, problems } = buildHostingEntries([
       { domain: 'git.corp.example', provider: 'bitbucket' },
       { domain: 'dev.azure.com', provider: 'azuredevops' },
-      { domain: 'github.com', provider: 'nonsense' },
+      { domain: 'gitlab.com', provider: 'nonsense' },
       { provider: 'gitlab' },
     ]);
     expect(entries.has('git.corp.example')).toBe(false);
     expect(entries.has('dev.azure.com')).toBe(false);
     // A bad entry for a public host keeps the built-in provider for it.
-    expect(entries.get('github.com')?.providerId).toBe('github');
+    expect(entries.get('gitlab.com')?.providerId).toBe('gitlab');
     expect(problems).toHaveLength(4);
     expect(problems[0]).toMatch(/only serves bitbucket\.org/);
     expect(problems[1]).toMatch(/organization/);
@@ -151,19 +159,29 @@ describe('hosting integrations', () => {
 });
 
 describe('issue integrations', () => {
-  const ISSUE_SETTINGS = [
-    { setting: { provider: 'jira', host: 'acme.atlassian.net' }, expected: 'acme.atlassian.net' },
-    { setting: { provider: 'linear' }, expected: 'api.linear.app' },
-  ];
+  const HOSTS: Record<string, string | undefined> = {
+    jira: 'acme.atlassian.net',
+    linear: undefined,
+    github: undefined,
+  };
+  const EXPECTED: Record<string, string> = {
+    jira: 'acme.atlassian.net',
+    linear: 'api.linear.app',
+    github: 'api.github.com',
+  };
 
-  for (const { setting, expected } of ISSUE_SETTINGS) {
-    it(`${setting.provider} sends its token to ${expected} only`, async () => {
+  for (const choice of ISSUE_PROVIDER_CHOICES) {
+    it(`${choice.label} sends its token to ${EXPECTED[choice.id]} only`, async () => {
       const { fetchFn, requests } = recordingFetch();
-      const { entries, problems } = buildIssueEntries([setting], fetchFn);
+      const { entries, problems } = buildIssueEntries(
+        [{ provider: choice.id, host: HOSTS[choice.id] }],
+        fetchFn,
+      );
       expect(problems).toEqual([]);
       const entry = entries[0];
-      await entry.provider.getMyIssues(toAuthContext(credential, entry.host), { limit: 1 });
-      expect(credentialedHosts(requests)).toEqual([expected]);
+      const host = issueCredentialHost(entry);
+      await entry.provider.getMyIssues(toAuthContext(credential, host), { limit: 1 });
+      expect(credentialedHosts(requests)).toEqual([EXPECTED[choice.id]]);
     });
   }
 
@@ -188,6 +206,14 @@ describe('issue integrations', () => {
     expect(problems[0]).toMatch(/not supported yet/);
     expect(problems[1]).toMatch(/Unknown issue provider/);
   });
+
+  it('stores GitHub Issues under the github.com sign-in', () => {
+    expect(issueCredentialHost({ providerId: 'github' })).toBe('github.com');
+    expect(issueCredentialHost({ providerId: 'linear' })).toBe('');
+    expect(issueCredentialHost({ providerId: 'jira', host: 'acme.atlassian.net' })).toBe(
+      'acme.atlassian.net',
+    );
+  });
 });
 
 describe('toAuthContext', () => {
@@ -198,5 +224,51 @@ describe('toAuthContext', () => {
       host: 'gitlab.corp.example',
     });
     expect(toAuthContext({ token: 't' }, '')).toEqual({ token: 't' });
+  });
+});
+
+describe('detectHosts', () => {
+  const configured = new Map([['git.corp.example', 'gitlab']]);
+
+  it('names the provider for public, configured and Azure DevOps hosts', () => {
+    const found = detectHosts(
+      [
+        { name: 'origin', url: 'git@gitlab.com:acme/widgets.git' },
+        { name: 'corp', url: 'https://git.corp.example/team/tool.git' },
+        { name: 'ado', url: 'https://contoso@dev.azure.com/contoso/Web/_git/widgets' },
+        { name: 'mirror', url: 'git@gitlab.com:acme/other.git' },
+      ],
+      configured,
+    );
+    expect(found).toEqual([
+      { providerId: 'gitlab', domain: 'gitlab.com', organization: undefined, remote: 'origin' },
+      { providerId: 'gitlab', domain: 'git.corp.example', organization: undefined, remote: 'corp' },
+      {
+        providerId: 'azuredevops',
+        domain: 'dev.azure.com',
+        organization: 'contoso',
+        remote: 'ado',
+      },
+    ]);
+  });
+
+  it('guesses a self-hosted server from its hostname', () => {
+    const found = detectHosts(
+      [
+        { name: 'origin', url: 'git@gitlab.example.org:a/b.git' },
+        { name: 'other', url: 'https://code.example.org/a/b.git' },
+      ],
+      new Map(),
+    );
+    expect(found.map((f) => f.providerId)).toEqual(['gitlab', undefined]);
+  });
+
+  it('reads the hostname hint', () => {
+    expect(guessProviderFromHostname('github.corp.example')).toBe('github-enterprise');
+    expect(guessProviderFromHostname('ghe.example.com')).toBe('github-enterprise');
+    expect(guessProviderFromHostname('bitbucket.corp.example')).toBe('bitbucketDC');
+    expect(guessProviderFromHostname('stash.example.com')).toBe('bitbucketDC');
+    expect(guessProviderFromHostname('gitlab-ce.example.com')).toBe('gitlab');
+    expect(guessProviderFromHostname('code.example.com')).toBeUndefined();
   });
 });

@@ -387,7 +387,7 @@
       },
       {
         "view": "gitglasses.views.launchpad",
-        "contents": "Launchpad collects your pull requests and issues in one place.\n[Add Integration…](command:gitglasses.addIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required.",
+        "contents": "Launchpad collects your pull requests and issues in one place.\n[Connect Integration…](command:gitglasses.connectIntegration)\n\nIntegrations are free and work with self-hosted servers. No account required.",
         "when": "!gitglasses.noRepository && !gitglasses.engineUnavailable"
       },
       {
@@ -607,7 +607,7 @@
           {
             "id": "integrations",
             "title": "Connect issues and pull requests",
-            "description": "Launchpad gathers your pull requests and issues. Add a self-hosted forge or issue tracker without editing settings by hand.\n[Add Integration…](command:gitglasses.addIntegration)",
+            "description": "Launchpad gathers your pull requests and issues. Connect a forge or issue tracker, cloud or self-hosted, without editing settings by hand.\n[Connect Integration…](command:gitglasses.connectIntegration)",
             "media": {
               "markdown": "media/walkthrough/integrations.md"
             },
@@ -788,6 +788,10 @@
           "when": "editorHasSelection"
         },
         {
+          "command": "gitglasses.addIntegration",
+          "when": "false"
+        },
+        {
           "command": "gitglasses.copySha",
           "when": "false"
         },
@@ -917,7 +921,7 @@
           "type": "array",
           "scope": "machine-overridable",
           "default": [],
-          "description": "Self-hosted git hosting instances, e.g. [{ \"domain\": \"github.example.com\", \"provider\": \"github-enterprise\" }]",
+          "description": "Git hosting instances beyond github.com, gitlab.com and bitbucket.org, e.g. [{ \"domain\": \"github.example.com\", \"provider\": \"github-enterprise\" }]. Azure DevOps takes dev.azure.com plus an organization.",
           "items": {
             "type": "object",
             "required": [
@@ -931,7 +935,27 @@
               },
               "provider": {
                 "type": "string",
-                "description": "Provider id serving this domain, e.g. github-enterprise, gitlab"
+                "enum": [
+                  "github",
+                  "github-enterprise",
+                  "gitlab",
+                  "bitbucket",
+                  "bitbucketDC",
+                  "azuredevops"
+                ],
+                "enumDescriptions": [
+                  "GitHub (github.com; any other domain is treated as GitHub Enterprise Server)",
+                  "GitHub Enterprise Server",
+                  "GitLab (gitlab.com or self-managed)",
+                  "Bitbucket Cloud (bitbucket.org only)",
+                  "Bitbucket Data Center",
+                  "Azure DevOps Services (dev.azure.com only; needs organization)"
+                ],
+                "description": "Provider serving this domain"
+              },
+              "organization": {
+                "type": "string",
+                "description": "Azure DevOps organization, e.g. contoso for https://dev.azure.com/contoso"
               }
             }
           }
@@ -949,11 +973,23 @@
             "properties": {
               "provider": {
                 "type": "string",
-                "description": "Issue provider id: jira or linear"
+                "enum": [
+                  "jira",
+                  "linear",
+                  "github",
+                  "github-enterprise"
+                ],
+                "enumDescriptions": [
+                  "Jira Cloud (*.atlassian.net)",
+                  "Linear",
+                  "GitHub Issues (github.com unless host names a GitHub Enterprise Server)",
+                  "GitHub Enterprise Server issues"
+                ],
+                "description": "Issue tracker"
               },
               "host": {
                 "type": "string",
-                "description": "Provider host, when applicable (e.g. mycompany.atlassian.net)"
+                "description": "Tracker host: the Jira Cloud site (e.g. mycompany.atlassian.net) or the GitHub Enterprise Server hostname"
               }
             }
           }

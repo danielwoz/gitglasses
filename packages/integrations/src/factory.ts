@@ -29,11 +29,13 @@ export const HOSTING_PROVIDER_IDS = [
 ] as const;
 
 /** Issue tracker ids a settings entry may name. */
-export const ISSUE_PROVIDER_IDS = ['jira', 'linear'] as const;
+export const ISSUE_PROVIDER_IDS = ['jira', 'linear', 'github', 'github-enterprise'] as const;
 
 /** Public hosts that need no configuration, and the provider serving each. */
 export const DEFAULT_HOSTING_HOSTS: ReadonlyArray<{ providerId: string; domain: string }> = [
   { providerId: 'github', domain: 'github.com' },
+  { providerId: 'gitlab', domain: 'gitlab.com' },
+  { providerId: 'bitbucket', domain: 'bitbucket.org' },
 ];
 
 /** The one host Azure DevOps Services serves every organization from. */
@@ -156,6 +158,21 @@ export function createIssueProvider(config: IssueProviderConfig): IssueProvider 
         throw new IntegrationConfigError(`Linear is only served from linear.app, not ${host}`);
       }
       return new LinearProvider({ fetchFn });
+    case 'github': {
+      const domain = host === undefined ? 'github.com' : plainHost(host, 'GitHub host');
+      return domain === 'github.com'
+        ? new GitHubProvider({ fetchFn })
+        : new GitHubProvider({ id: 'github', host: domain, fetchFn });
+    }
+    case 'github-enterprise': {
+      const domain = plainHost(host, 'GitHub Enterprise host');
+      if (domain === 'github.com') {
+        throw new IntegrationConfigError(
+          'github.com is GitHub, not GitHub Enterprise Server; use the "github" provider'
+        );
+      }
+      return createGitHubEnterpriseProvider(domain, fetchFn);
+    }
     default:
       throw new IntegrationConfigError(
         `Unknown issue provider "${config.providerId}" (expected one of ${ISSUE_PROVIDER_IDS.join(', ')})`

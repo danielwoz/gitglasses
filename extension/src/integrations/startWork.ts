@@ -4,7 +4,8 @@ import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
 import { activeWorkspaceRepo } from '../views/viewBase';
 import type { IntegrationService } from './integrationService';
-import { toAuthContext, type IssueProviderEntry } from './providerSetup';
+import { issueTrackerLabel } from './integrationSettings';
+import { issueCredentialHost, toAuthContext, type IssueProviderEntry } from './providerSetup';
 import { fallbackBranchName, sanitizeBranchName } from './startWorkLogic';
 
 function suggestName(provider: IssueProvider, issue: Issue): string {
@@ -23,7 +24,7 @@ async function pickIssueProvider(
   if (entries.length === 1) return entries[0];
   const picked = await vscode.window.showQuickPick(
     entries.map((entry) => ({
-      label: entry.providerId,
+      label: issueTrackerLabel(entry.providerId, entry.host),
       description: entry.host ?? '',
       entry,
     })),
@@ -41,15 +42,12 @@ export function registerStartWork(
   return vscode.commands.registerCommand('gitglasses.startWork', async () => {
     const entries = integrations.getIssueProviders();
     if (entries.length === 0) {
-      const open = await vscode.window.showInformationMessage(
-        'GitGlasses: no issue providers configured. Add one to "gitglasses.integrations.issues".',
-        'Open Settings',
+      const add = await vscode.window.showInformationMessage(
+        'GitGlasses: no issue tracker is set up. Connect Jira Cloud, Linear or GitHub Issues to start work from an issue.',
+        'Connect Integration…',
       );
-      if (open === 'Open Settings') {
-        await vscode.commands.executeCommand(
-          'workbench.action.openSettings',
-          'gitglasses.integrations.issues',
-        );
+      if (add === 'Connect Integration…') {
+        await vscode.commands.executeCommand('gitglasses.connectIntegration');
       }
       return;
     }
@@ -57,24 +55,23 @@ export function registerStartWork(
     const entry = await pickIssueProvider(entries);
     if (!entry) return;
     const provider = entry.provider;
+    const host = issueCredentialHost(entry);
+    const name = issueTrackerLabel(entry.providerId, entry.host);
 
-    const auth = await integrations.auth.getAuth(entry.providerId, entry.host ?? '', {
-      interactive: true,
-      needsUsername: entry.providerId === 'jira',
-    });
+    const auth = await integrations.auth.getAuth(entry.providerId, host, { interactive: true });
     if (!auth) return;
 
     let issues: Issue[];
     try {
-      issues = await provider.getMyIssues(toAuthContext(auth, entry.host), { limit: 50 });
+      issues = await provider.getMyIssues(toAuthContext(auth, host), { limit: 50 });
     } catch (error) {
       if (error instanceof AuthError) {
         const reconnect = await vscode.window.showErrorMessage(
-          `GitGlasses: ${entry.providerId} rejected the stored credentials.`,
+          `GitGlasses: ${name} rejected the stored credentials.`,
           'Reconnect',
         );
         if (reconnect === 'Reconnect') {
-          await integrations.auth.signOut(entry.providerId, entry.host ?? '');
+          await integrations.auth.signOut(entry.providerId, host);
           await vscode.commands.executeCommand('gitglasses.startWork');
         }
         return;
