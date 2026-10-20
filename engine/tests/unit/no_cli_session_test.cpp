@@ -165,6 +165,39 @@ TEST_F(NoCliSessionTest, StagingRefusesFilteredPathsWithoutGitCli) {
             "D\tgone.md\nM\tplain.md\n");
 }
 
+// Deleting a file stores no content, so no filter is involved: the deletion
+// of a Git LFS or git-crypt file stages without the CLI.
+TEST_F(NoCliSessionTest, StagingDeletionOfFilteredFileWithoutGitCli) {
+  FixtureRepo fixture;
+  fixture.run("git config filter.crypt.clean cat");
+  fixture.run("git config filter.crypt.smudge cat");
+  fixture.writeFile(".gitattributes", "*.bin filter=crypt -text\n");
+  fixture.writeFile("big.bin", "payload\n");
+  fixture.writeFile("kept.bin", "payload\n");
+  fixture.run("git add .gitattributes big.bin kept.bin");
+  fixture.commit("seed");
+  std::filesystem::remove(fixture.root() / "big.bin");
+  fixture.writeFile("kept.bin", "payload\nmore\n");
+
+  InteractiveSession session;
+  session.request(gg::testing::initRequest(1));
+  Json discovered = session.request(req(2, "repo/discover", {{"path", fixture.root().string()}}));
+  const std::string repoId = discovered["result"].value("repoId", "");
+  ASSERT_FALSE(repoId.empty()) << discovered.dump();
+
+  Json stage = session.request(
+      req(3, "stage/files", {{"repoId", repoId}, {"paths", {"big.bin"}}, {"action", "stage"}}));
+  ASSERT_TRUE(stage.contains("result")) << stage.dump();
+  EXPECT_EQ(gg::testing::gitCapture(fixture.root(), "diff --cached --name-status"),
+            "D\tbig.bin\n");
+
+  // A filtered file that is present still needs the CLI.
+  Json kept = session.request(
+      req(4, "stage/files", {{"repoId", repoId}, {"paths", {"kept.bin"}}, {"action", "stage"}}));
+  ASSERT_TRUE(kept.contains("error")) << kept.dump();
+  EXPECT_EQ(kept["error"].value("code", 0), -32010) << kept.dump();
+}
+
 TEST_F(NoCliSessionTest, StagingWithoutGitCliKeepsSparseAndNonAsciiPathsRight) {
   FixtureRepo fixture;
   fixture.writeFile("keep/k.txt", "keep\n");

@@ -160,10 +160,12 @@ void stageWithGit(const core::Repo& repo, git_index* index,
 // Staging for engines without the git CLI. libgit2 performs only its built-in
 // CRLF and ident conversions, so a path with a filter driver or
 // working-tree-encoding is refused before the index changes rather than
-// staged as raw working-tree bytes.
+// staged as raw working-tree bytes. A path gone from the working tree stages
+// as a removal, which involves no content and so no filter.
 void stageWithLibgit2(const core::Repo& repo, git_index* index,
                       const std::vector<std::string>& paths) {
   for (const auto& path : paths) {
+    if (!status_detail::workdirHas(repo, path)) continue;
     const status_detail::PathFilter filter = status_detail::pathFilter(repo.raw(), path);
     if (filter.any()) {
       throw rpc::HandlerError{
