@@ -121,6 +121,16 @@
         "category": "GitGlasses"
       },
       {
+        "command": "gitglasses.blame.openChanges",
+        "title": "Open Changes in Commit",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.blame.previousRevision",
+        "title": "Blame Previous Revision",
+        "category": "GitGlasses"
+      },
+      {
         "command": "gitglasses.showGraph",
         "title": "GitGlasses: Show Commit Graph",
         "icon": "$(git-branch)"
@@ -827,6 +837,14 @@
           "when": "false"
         },
         {
+          "command": "gitglasses.blame.openChanges",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.blame.previousRevision",
+          "when": "false"
+        },
+        {
           "command": "gitglasses.worktrees.open",
           "when": "false"
         },
@@ -895,7 +913,94 @@
           "type": "boolean",
           "scope": "window",
           "default": true,
-          "description": "Show blame annotation for the current line"
+          "order": 10,
+          "markdownDescription": "Show blame at the end of the line the cursor is on. **GitGlasses: Toggle Inline Blame** flips this setting."
+        },
+        "gitglasses.currentLine.format": {
+          "type": "string",
+          "scope": "window",
+          "default": "${author}, ${date} • ${summary}",
+          "order": 11,
+          "markdownDescription": "Text of the current-line blame. Tokens: `${author}` (author name), `${email}` (author email), `${date}` (author date in the `#gitglasses.blame.dateStyle#` style), `${ago}` (author date, relative), `${summary}` (first line of the message), `${sha}` (short sha)."
+        },
+        "gitglasses.statusBar.blame": {
+          "type": "string",
+          "scope": "window",
+          "enum": [
+            "auto",
+            "show",
+            "hide"
+          ],
+          "enumDescriptions": [
+            "Show the current line's blame in the status bar unless VS Code's own Git blame item (`git.blame.statusBarItem.enabled`) is on, so the same line is not described twice",
+            "Always show it, next to VS Code's own item if that is on",
+            "Never show it"
+          ],
+          "default": "auto",
+          "order": 12,
+          "markdownDescription": "Status bar blame for the current line. Its tooltip shows the full commit like the hover does, and clicking it opens the commit's details. In `auto`, GitGlasses steps aside while VS Code's built-in `#git.blame.statusBarItem.enabled#` is on; set this to `show` (and optionally turn the built-in item off) to use the GitGlasses item instead."
+        },
+        "gitglasses.statusBar.format": {
+          "type": "string",
+          "scope": "window",
+          "default": "${author}, ${date}",
+          "order": 13,
+          "markdownDescription": "Text of the status bar blame, with the tokens of `#gitglasses.currentLine.format#`."
+        },
+        "gitglasses.hovers.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "order": 14,
+          "markdownDescription": "Show the blamed commit when hovering a line: author and dates, the full message, the pull request it came from when the message names one, and links to the commit's details and changes, the file before the commit, the sha and the commit on the remote."
+        },
+        "gitglasses.blame.dateStyle": {
+          "type": "string",
+          "scope": "window",
+          "enum": [
+            "relative",
+            "absolute",
+            "iso"
+          ],
+          "enumDescriptions": [
+            "3 days ago",
+            "Oct 17, 2026 (in your locale)",
+            "2026-10-17"
+          ],
+          "default": "relative",
+          "order": 15,
+          "markdownDescription": "How `${date}` renders in the current-line and status bar blame."
+        },
+        "gitglasses.blame.ignoreWhitespace": {
+          "type": "boolean",
+          "scope": "window",
+          "default": false,
+          "order": 16,
+          "markdownDescription": "Ignore whitespace-only changes when attributing lines (`git blame -w`)."
+        },
+        "gitglasses.blame.detectMovedLines": {
+          "type": "string",
+          "scope": "window",
+          "enum": [
+            "off",
+            "withinFile",
+            "acrossFiles"
+          ],
+          "enumDescriptions": [
+            "Attribute moved or copied lines to the commit that moved them, like plain `git blame`",
+            "Follow lines moved or copied within the file to the commit that wrote them (`git blame -M`)",
+            "Also follow lines moved or copied from other files changed in the same commit (`git blame -C`)"
+          ],
+          "default": "off",
+          "order": 17,
+          "markdownDescription": "Move and copy detection. Slower on large histories. Needs the git CLI; without it blame works as with `off`."
+        },
+        "gitglasses.blame.useIgnoreRevsFile": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "order": 18,
+          "markdownDescription": "Look through the commits listed in the files `blame.ignoreRevsFile` names (files that do not exist are skipped), or in the repository's `.git-blame-ignore-revs` when that git setting is unset, as GitHub does. Needs the git CLI."
         },
         "gitglasses.views.pageSize": {
           "type": "number",

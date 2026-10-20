@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import { BlameModel, FileBlame } from '../model/blameModel';
-import { RepositoryService } from '../model/repositoryService';
+import { FileBlame } from '../model/blameModel';
 import {
   ANNOTATION_MODES_KEY,
   AnnotationMode,
@@ -8,10 +7,12 @@ import {
   computeHeatmapRanges,
   continuationLabel,
   formatGutterLabel,
+  formatLfsGutterLabel,
   HEATMAP_COLORS,
   parseStoredModes,
   serializeModes,
 } from './annotationLogic';
+import { DocumentBlameService } from './documentBlame';
 
 export type { AnnotationMode };
 
@@ -76,8 +77,7 @@ export class FileAnnotationsController implements vscode.Disposable {
   private disposed = false;
 
   constructor(
-    private readonly blame: BlameModel,
-    private readonly repos: RepositoryService,
+    private readonly blame: DocumentBlameService,
     /** Stores the per-document modes, so annotations survive a window reload. */
     private readonly workspaceState?: vscode.Memento,
   ) {
@@ -194,22 +194,10 @@ export class FileAnnotationsController implements vscode.Disposable {
     this.latestRender.set(key, renderId);
     const version = document.version;
 
-    const located = await this.repos.locateOrDiscover(document.uri);
-    if (!located) {
-      this.clearDecorations(editor);
-      return;
-    }
-
-    let fileBlame: FileBlame;
-    try {
-      fileBlame = await this.blame.getBlame({
-        repoId: located.repoId,
-        path: located.relativePath,
-        version: document.isDirty ? version : -1,
-      });
-    } catch {
-      return;
-    }
+    // No token: a render outlives cursor moves, and the shared request it
+    // waits on is never cancelled by another surface's token. Failures are
+    // logged by the blame model.
+    const result = await this.blame.blameDocument(document);
 
     // Drop stale renders: a newer pass for this document supersedes us, and an
     // edited buffer will re-render via the debounced change handler.
@@ -219,7 +207,11 @@ export class FileAnnotationsController implements vscode.Disposable {
     // types are gone by then.
     if (this.disposed) return;
 
-    this.applyMode(editor, mode, fileBlame);
+    if (result.kind !== 'blame') {
+      this.clearDecorations(editor);
+      return;
+    }
+    this.applyMode(editor, mode, result.blame);
   }
 
   /** Clears only the decoration types the previous mode painted, then paints
@@ -231,9 +223,27 @@ export class FileAnnotationsController implements vscode.Disposable {
     else if (previous !== mode) this.clearMode(editor, previous);
     this.appliedModes.set(editor, mode);
 
+    // Line-by-line views of an LFS file would describe the pointer's three
+    // lines, so only a label saying where the content last changed is shown.
+    if (fileBlame.lfs) {
+      this.clearMode(editor, mode);
+      if (mode === 'blame') this.applyLfsLabel(editor, fileBlame);
+      return;
+    }
     if (mode === 'blame') this.applyGutterBlame(editor, fileBlame);
     else if (mode === 'changes') this.applyChanges(editor, fileBlame);
     else this.applyHeatmap(editor, fileBlame);
+  }
+
+  private applyLfsLabel(editor: vscode.TextEditor, fileBlame: FileBlame): void {
+    const label = formatLfsGutterLabel(fileBlame);
+    if (!label || editor.document.lineCount === 0) return;
+    editor.setDecorations(this.gutterHead, [
+      {
+        range: new vscode.Range(0, 0, 0, 0),
+        renderOptions: { before: { contentText: toDecorationText(label) } },
+      },
+    ]);
   }
 
   /** Empties the decoration types belonging to one mode. */

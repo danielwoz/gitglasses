@@ -14,7 +14,9 @@ import { RefsModel } from './model/refsModel';
 import { ConflictWatcher } from './model/conflictWatcher';
 import { LineBlameController } from './annotations/lineBlame';
 import { FileAnnotationsController } from './annotations/fileAnnotations';
-import { BlameHoverProvider } from './annotations/hoverProvider';
+import { BlameHoverProvider, BlameHoverRenderer } from './annotations/hoverProvider';
+import { BufferSync, DocumentBlameService } from './annotations/documentBlame';
+import { registerBlameCommands } from './annotations/blameCommands';
 import { BlameCodeLensProvider } from './codelens/blameCodeLens';
 import { RevisionContentProvider, encodeRevisionUri } from './scm/revisionContentProvider';
 import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
@@ -97,8 +99,9 @@ export function createRestrictedNotifier(): () => void {
   };
 }
 
-/** The document sync each host builds; core only drives its resync. */
-export interface DocumentSyncLike {
+/** The document sync each host builds: blame pushes unsaved buffers through
+ *  it, and core resyncs it after an engine respawn. */
+export interface DocumentSyncLike extends BufferSync {
   resync(): void;
 }
 
@@ -141,20 +144,32 @@ export interface Core {
   handleEngineRestarted(): void;
 }
 
+/** `selector` widened to the revision documents (gitglasses: scheme) that
+ *  both hosts serve, which blame describes at their revision. */
+function revisionDocumentsToo(selector: vscode.DocumentSelector): vscode.DocumentSelector {
+  if (selector === '*') return selector;
+  return [...(Array.isArray(selector) ? selector : [selector]), { scheme: 'gitglasses' }];
+}
+
 export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Core {
   const { engine, repos, docSync } = deps;
 
   const blame = new BlameModel(engine, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES, deps.log);
-  const lineBlame = new LineBlameController(blame, repos);
-  const fileAnnotations = new FileAnnotationsController(blame, repos, context.workspaceState);
-  const codeLens = new BlameCodeLensProvider(blame, repos);
+  const auth = new AuthManager(context.secrets);
+  const integrations = new IntegrationService(auth);
+  const documentBlame = new DocumentBlameService(blame, repos, docSync);
+  const blameHover = new BlameHoverRenderer(engine, {
+    autolink: (text, repoRoot) => integrations.autolinkText(text, repoRoot),
+    hosting: (repoRoot) => integrations.getHostingFor(repoRoot),
+  });
+  const lineBlame = new LineBlameController(documentBlame, blameHover);
+  const fileAnnotations = new FileAnnotationsController(documentBlame, context.workspaceState);
+  const codeLens = new BlameCodeLensProvider(documentBlame);
   const revisionContent = new RevisionContentProvider(engine);
 
   const scm = vscode.scm.createSourceControl('gitglasses', 'GitGlasses');
   scm.quickDiffProvider = new GitGlassesQuickDiffProvider(repos);
 
-  const auth = new AuthManager(context.secrets);
-  const integrations = new IntegrationService(auth);
   const launchpad = new LaunchpadService(integrations, context.globalState);
   const prChips = new PrChipProvider(integrations);
 
@@ -243,9 +258,11 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   updateCapabilityContext();
 
   const disposables: vscode.Disposable[] = [
+    documentBlame,
     lineBlame,
     fileAnnotations,
     codeLens,
+    documentBlame.onDidChangeSettings(() => refreshBlameConsumers()),
     scm,
     auth,
     integrations,
@@ -290,15 +307,14 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     // changes.
     vscode.workspace.onDidSaveTextDocument((doc) => {
       const located = repos.locate(doc.uri);
-      if (located) blame.invalidate(located.repoId);
+      if (located) blame.invalidatePath(located.repoId, located.relativePath);
       refreshBlameConsumers();
     }),
     vscode.languages.registerHoverProvider(
-      deps.documentSelector,
-      new BlameHoverProvider(blame, repos, (text, repoRoot) =>
-        integrations.autolinkText(text, repoRoot),
-      ),
+      revisionDocumentsToo(deps.documentSelector),
+      new BlameHoverProvider(documentBlame, blameHover),
     ),
+    ...registerBlameCommands(),
     vscode.languages.registerCodeLensProvider(deps.documentSelector, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
     ...registerCommitDetails(engine, repos),

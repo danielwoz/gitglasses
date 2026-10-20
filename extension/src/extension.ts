@@ -439,14 +439,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand('gitglasses.openOnRemote', () => openOnRemote('open')),
     vscode.commands.registerCommand('gitglasses.copyRemoteUrl', () => openOnRemote('copy')),
-    vscode.commands.registerCommand('gitglasses.openCommitOnRemote', async (node?: ViewNode) => {
-      if (typeof node?.sha !== 'string') return;
-      // The node carries no repo of its own, so the URL is built from the
-      // active repository — the same one the views the node came from render.
-      const repo = await requireRepo(repos);
-      if (!repo) return;
-      await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
-    }),
+    vscode.commands.registerCommand(
+      'gitglasses.openCommitOnRemote',
+      async (node?: ViewNode & { repoPath?: unknown }) => {
+        if (typeof node?.sha !== 'string') return;
+        // A blame hover names the repository; a view node carries none, so
+        // the URL is built from the active repository — the same one the
+        // views the node came from render.
+        if (typeof node.repoPath === 'string' && node.repoPath !== '') {
+          await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', node.repoPath);
+          return;
+        }
+        const repo = await requireRepo(repos);
+        if (!repo) return;
+        await revealOnRemote({ kind: 'commit', sha: node.sha }, 'open', repo.rootPath);
+      },
+    ),
     ...registerPatchCommands(engine, repos, integrations),
     // Internal: which repository a file resolves to and which repositories
     // the views can act on, so a test or a bug report can tell a resolution

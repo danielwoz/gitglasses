@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
-import { BlameModel, FileBlame } from '../model/blameModel';
-import { RepositoryService } from '../model/repositoryService';
 import {
   formatFileLensTitle,
+  formatLfsLensTitle,
   formatSymbolLensTitle,
   summarizeRange,
 } from '../annotations/annotationLogic';
+import { DocumentBlameService } from '../annotations/documentBlame';
 
 const SYMBOL_KINDS = new Set<vscode.SymbolKind>([
   vscode.SymbolKind.Function,
@@ -26,28 +26,22 @@ function lensTargets(symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] 
   return targets;
 }
 
-class BlameLens extends vscode.CodeLens {
-  constructor(
-    range: vscode.Range,
-    public readonly document: vscode.TextDocument,
-    public readonly kind: 'file' | 'symbol',
-  ) {
-    super(range);
-  }
+const LENS_COMMAND = 'gitglasses.toggleFileBlame';
+
+function lens(range: vscode.Range, title: string): vscode.CodeLens {
+  return new vscode.CodeLens(range, { title, command: LENS_COMMAND });
 }
 
-// Two-phase blame CodeLens: provideCodeLenses returns placement ranges fast
-// (file header + top-level symbols); resolveCodeLens fills titles from the
-// shared whole-file blame cache.
+// Blame CodeLens above the file and its top-level symbols. Lenses are only
+// offered once the file's blame is known, so a file outside any repository,
+// an untracked file or a failed blame gets no lens at all rather than one
+// that reads like an error.
 export class BlameCodeLensProvider implements vscode.CodeLensProvider, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeCodeLenses = this.emitter.event;
   private readonly configListener: vscode.Disposable;
 
-  constructor(
-    private readonly blame: BlameModel,
-    private readonly repos: RepositoryService,
-  ) {
+  constructor(private readonly blame: DocumentBlameService) {
     this.configListener = vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('gitglasses.codeLens.enabled')) this.emitter.fire();
     });
@@ -82,10 +76,20 @@ export class BlameCodeLensProvider implements vscode.CodeLensProvider, vscode.Di
     token: vscode.CancellationToken,
   ): Promise<vscode.CodeLens[]> {
     if (!this.enabled() || document.uri.scheme !== 'file') return [];
+    const result = await this.blame.blameDocument(document, token);
+    if (result.kind !== 'blame' || token.isCancellationRequested) return [];
+    const fileBlame = result.blame;
+    const top = new vscode.Range(0, 0, 0, 0);
 
-    const lenses: vscode.CodeLens[] = [
-      new BlameLens(new vscode.Range(0, 0, 0, 0), document, 'file'),
-    ];
+    if (fileBlame.lfs) {
+      const title = formatLfsLensTitle(fileBlame);
+      return title ? [lens(top, title)] : [];
+    }
+
+    const lenses: vscode.CodeLens[] = [];
+    const fileTitle = formatFileLensTitle(summarizeRange(fileBlame, 1, fileBlame.totalLines));
+    if (!fileTitle) return [];
+    lenses.push(lens(top, fileTitle));
     try {
       const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
         'vscode.executeDocumentSymbolProvider',
@@ -93,57 +97,15 @@ export class BlameCodeLensProvider implements vscode.CodeLensProvider, vscode.Di
       );
       if (token.isCancellationRequested) return [];
       for (const symbol of lensTargets(symbols ?? [])) {
-        lenses.push(new BlameLens(symbol.range, document, 'symbol'));
+        const title = formatSymbolLensTitle(
+          summarizeRange(fileBlame, symbol.range.start.line + 1, symbol.range.end.line + 1),
+        );
+        if (title) lenses.push(lens(symbol.range, title));
       }
     } catch {
       // No symbol provider for this language; the file lens still applies.
     }
     return lenses;
-  }
-
-  async resolveCodeLens(
-    lens: vscode.CodeLens,
-    token: vscode.CancellationToken,
-  ): Promise<vscode.CodeLens> {
-    if (!(lens instanceof BlameLens)) return lens;
-
-    let title = 'Blame unavailable';
-    try {
-      const fileBlame = await this.blameFor(lens.document, token);
-      if (fileBlame) {
-        if (lens.kind === 'file') {
-          const summary = summarizeRange(fileBlame, 1, fileBlame.totalLines);
-          title = formatFileLensTitle(summary);
-        } else {
-          const summary = summarizeRange(
-            fileBlame,
-            lens.range.start.line + 1,
-            lens.range.end.line + 1,
-          );
-          title = formatSymbolLensTitle(summary);
-        }
-      }
-    } catch {
-      // Keep the fallback title.
-    }
-    lens.command = { title, command: 'gitglasses.toggleFileBlame' };
-    return lens;
-  }
-
-  private async blameFor(
-    document: vscode.TextDocument,
-    token: vscode.CancellationToken,
-  ): Promise<FileBlame | undefined> {
-    const located = await this.repos.locateOrDiscover(document.uri);
-    if (!located || token.isCancellationRequested) return undefined;
-    return this.blame.getBlame(
-      {
-        repoId: located.repoId,
-        path: located.relativePath,
-        version: document.isDirty ? document.version : -1,
-      },
-      token,
-    );
   }
 
   dispose(): void {
