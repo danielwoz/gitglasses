@@ -1,0 +1,12 @@
+{
+  "method": "notes/read",
+  "kind": "result",
+  "payload": {
+    "ref": "refs/notes/ai",
+    "exists": true,
+    "notes": {
+      "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678": "src/parser.ts\n  s_c9883b05a2487d::t_9f8e7d6c5b4a32 1-10\n---\n{\"schema_version\": \"authorship/3.0.0\", \"prompts\": {}}\n"
+    },
+    "omitted": ["0f1e2d3c4b5a69788796a5b4c3d2e1f001234567"]
+  }
+}
