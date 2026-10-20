@@ -51,11 +51,12 @@ until it is pushed under its own name. Of the user's own git config, only
 When a suggestion cannot be anchored in the pull request diff, GitGlasses
 offers to post it as a comment instead. The comment carries the replacement
 and a patch of only the suggested lines, built from the file at the pull
-request head; nothing else from your working tree is included. On GitHub
-you can choose to upload the patch as a secret gist (unlisted, but readable
-by anyone with the link, which is posted on the pull request); otherwise the
-patch goes in the comment itself. The confirmation shows the patch before
-anything is posted.
+request head; nothing else from your working tree is included. By default
+the patch goes in the comment itself, readable by whoever can read the pull
+request. On GitHub you can choose to upload it as a secret gist instead
+(unlisted, but readable by anyone with the link, which is posted on the
+pull request). The confirmation shows the patch before anything is posted,
+and Preview Patch opens it in an editor to read in full.
 
 Suggestions are refused when the file differs from the pull request head
 above or within the selected lines, because the line numbers would land on

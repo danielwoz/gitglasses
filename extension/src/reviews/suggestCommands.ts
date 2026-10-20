@@ -24,10 +24,12 @@ import {
   buildSuggestionBody,
   buildSuggestionEnvelope,
   buildSuggestionPatch,
+  fallbackButtons,
   fallbackConfirmDetail,
   firstMismatchedLine,
   isAnchorRejection,
   patchUploadFor,
+  PREVIEW_PATCH,
   selectionToRange,
   type SuggestionRange,
 } from './suggestLogic';
@@ -91,23 +93,28 @@ async function sharePatchFallback(
     patch: envelope ? patch : undefined,
     upload,
   });
-  const commentOnly = upload ? 'Comment Only' : 'Post Comment';
-  const preview = 'Preview Patch';
-  const buttons = [...(upload ? [upload.action] : []), commentOnly, ...(json ? [preview] : [])];
-
-  let choice: string | undefined;
-  for (;;) {
-    choice = await vscode.window.showWarningMessage(
-      "Can't anchor a suggestion here — post it as a comment with a patch instead?",
-      { modal: true, detail },
-      ...buttons,
-    );
-    if (choice !== preview || !json) break;
-    // Exactly the text that would be uploaded or folded into the comment.
-    const document = await vscode.workspace.openTextDocument({ content: json, language: 'json' });
+  const buttons = fallbackButtons(upload, envelope !== undefined);
+  let choice = await vscode.window.showWarningMessage(
+    "Can't anchor a suggestion here — post it as a comment with a patch instead?",
+    { modal: true, detail },
+    ...buttons,
+  );
+  if (choice === PREVIEW_PATCH && patch) {
+    // The patch opens to read in full, and the choice is asked again without
+    // a modal, which would keep the editor from scrolling it. The envelope
+    // around the patch adds only the pull request's head commit and branch,
+    // the summary line and the time it was made.
+    const document = await vscode.workspace.openTextDocument({
+      content: patch.patch,
+      language: 'diff',
+    });
     await vscode.window.showTextDocument(document, { preview: true });
+    choice = await vscode.window.showWarningMessage(
+      `Post the suggestion for ${input.relativePath} on #${pr.number} as a comment with this patch?`,
+      ...buttons.filter((button) => button !== PREVIEW_PATCH),
+    );
   }
-  if (choice === undefined) return;
+  if (choice === undefined || choice === PREVIEW_PATCH) return;
 
   let patchUrl: string | undefined;
   if (upload && choice === upload.action && json && supportsSnippets(hosting.provider)) {

@@ -287,6 +287,22 @@ export function patchUploadFor(providerId: string, host: string): PatchUpload | 
   };
 }
 
+/** The button that opens the patch for reading before choosing. */
+export const PREVIEW_PATCH = 'Preview Patch';
+
+/**
+ * The fallback confirmation's buttons. Posting the patch in the comment
+ * comes first, which makes it the default: it stays with the pull request's
+ * readers, while an uploaded link reaches anyone it is passed to.
+ */
+export function fallbackButtons(upload: PatchUpload | undefined, canPreview: boolean): string[] {
+  return [
+    upload ? 'Comment Only' : 'Post Comment',
+    ...(upload ? [upload.action] : []),
+    ...(canPreview ? [PREVIEW_PATCH] : []),
+  ];
+}
+
 /** Longest diff the confirmation shows inline; Preview shows the rest. */
 const CONFIRM_DIFF_LINES = 30;
 
@@ -320,8 +336,9 @@ export function fallbackConfirmDetail(input: FallbackConfirmInput): string {
   );
   parts.push(
     input.upload
-      ? `${input.upload.action.replace(/ and Comment$/, '')} puts it in ${input.upload.where}. ${input.upload.visibility} ` +
-          'Comment Only puts the patch in the comment instead, visible to whoever can read the pull request.'
+      ? 'Comment Only puts the patch in the comment, visible to whoever can read the pull request. ' +
+          `${input.upload.action.replace(/ and Comment$/, '')} puts it in ${input.upload.where} instead. ` +
+          input.upload.visibility
       : 'The patch goes into the comment itself, visible to whoever can read the pull request; nothing is uploaded anywhere else.',
   );
   const diff = input.patch.patch.replace(/\n$/, '').split('\n');

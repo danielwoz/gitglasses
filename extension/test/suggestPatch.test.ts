@@ -10,9 +10,11 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildSuggestionPatch,
+  fallbackButtons,
   fallbackConfirmDetail,
   firstMismatchedLine,
   patchUploadFor,
+  PREVIEW_PATCH,
 } from '../src/reviews/suggestLogic';
 
 const dirs: string[] = [];
@@ -215,9 +217,35 @@ describe('fallbackConfirmDetail', () => {
     expect(detail).toContain('-line 5\n+five');
   });
 
+  it('describes the comment, the default, before the upload', () => {
+    const detail = fallbackConfirmDetail({
+      pr,
+      path: 'a.txt',
+      startLine: 5,
+      endLine: 5,
+      patch,
+      upload: patchUploadFor('github', 'github.com'),
+    });
+    expect(detail.indexOf('Comment Only')).toBeGreaterThan(-1);
+    expect(detail.indexOf('Comment Only')).toBeLessThan(detail.indexOf('Upload Secret Gist'));
+  });
+
   it('says nothing is uploaded when the patch goes in the comment', () => {
     const detail = fallbackConfirmDetail({ pr, path: 'a.txt', startLine: 5, endLine: 5, patch });
     expect(detail).toContain('nothing is uploaded anywhere else');
     expect(detail).not.toContain('gist');
+  });
+});
+
+describe('fallbackButtons', () => {
+  it('puts posting in the comment first, so the default uploads nothing', () => {
+    const upload = patchUploadFor('github', 'github.com');
+    expect(fallbackButtons(upload, true)).toEqual([
+      'Comment Only',
+      'Upload Secret Gist and Comment',
+      PREVIEW_PATCH,
+    ]);
+    expect(fallbackButtons(undefined, true)).toEqual(['Post Comment', PREVIEW_PATCH]);
+    expect(fallbackButtons(undefined, false)).toEqual(['Post Comment']);
   });
 });
