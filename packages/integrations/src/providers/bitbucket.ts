@@ -4,6 +4,7 @@ import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  PullRequestHead,
   PullRequestQueryOptions,
 } from '../hostingProvider.js';
 import type {
@@ -25,7 +26,7 @@ import {
   p,
   ProviderClient,
 } from './client.js';
-import { assertKnownOptions, base64Encode, escapeBbqlString } from './shared.js';
+import { assertKnownOptions, base64Encode, escapeBbqlString, sameRepoPath } from './shared.js';
 
 export interface BitbucketProviderOptions {
   /** Provider id used in RepoDescriptors. Default "bitbucket". */
@@ -52,7 +53,11 @@ interface BitbucketPullRequest {
   draft?: boolean;
   author?: BitbucketAccount;
   links?: { html?: { href?: string } };
-  source?: { branch?: { name?: string }; commit?: { hash?: string } };
+  source?: {
+    branch?: { name?: string };
+    commit?: { hash?: string };
+    repository?: { full_name?: string };
+  };
   destination?: {
     branch?: { name?: string };
     repository?: { full_name?: string };
@@ -188,16 +193,30 @@ export class BitbucketProvider implements HostingProvider {
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
+    // The branch name alone matches pull requests from every fork, so the
+    // source repository is part of the query and checked on each result.
     // Branch names come from the repository, so a quote in one is escaped
     // rather than closing the BBQL literal it sits in.
-    const q = `source.branch.name = "${escapeBbqlString(branch)}" AND state = "OPEN"`;
+    const source = head ?? repo;
+    const fullName = `${source.owner}/${source.name}`;
+    const q =
+      `source.branch.name = "${escapeBbqlString(branch)}" AND state = "OPEN" AND ` +
+      `source.repository.full_name = "${escapeBbqlString(fullName)}"`;
     const json = await this.client.getJson<{ values?: BitbucketPullRequest[] }>(
       auth,
       p`/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
     );
-    const pr = json?.values?.[0];
+    const pr = json?.values?.find((candidate) => {
+      const name = candidate.source?.repository?.full_name ?? '';
+      const slash = name.indexOf('/');
+      return (
+        slash > 0 &&
+        sameRepoPath({ owner: name.slice(0, slash), name: name.slice(slash + 1) }, source)
+      );
+    });
     if (!pr) {
       return undefined;
     }

@@ -25,7 +25,11 @@ function pr(overrides: Record<string, unknown> = {}): Record<string, unknown> {
       links: { avatar: { href: 'https://a/alice' } },
     },
     links: { html: { href: 'https://bitbucket.org/acme/widgets/pull-requests/12' } },
-    source: { branch: { name: 'feat/widgets' }, commit: { hash: 'cafe1234' } },
+    source: {
+      branch: { name: 'feat/widgets' },
+      commit: { hash: 'cafe1234' },
+      repository: { full_name: 'acme/widgets' },
+    },
     destination: { branch: { name: 'main' }, repository: { full_name: 'acme/widgets' } },
     created_on: '2026-07-01T00:00:00Z',
     updated_on: '2026-07-02T00:00:00Z',
@@ -101,10 +105,48 @@ describe('BitbucketProvider.getPullRequestForBranch', () => {
     const found = await provider.getPullRequestForBranch(auth, repo, 'feat/widgets');
     expect(requests[0].url).toBe(
       'https://api.bitbucket.org/2.0/repositories/acme/widgets/pullrequests?q=' +
-        encodeURIComponent('source.branch.name = "feat/widgets" AND state = "OPEN"')
+        encodeURIComponent(
+          'source.branch.name = "feat/widgets" AND state = "OPEN" AND ' +
+            'source.repository.full_name = "acme/widgets"'
+        )
     );
     expect(found?.number).toBe(12);
     expect(found?.viewerRole).toBe('author');
+  });
+
+  it("ignores a stranger's fork whose branch shares the name", async () => {
+    const fork = pr({
+      id: 13,
+      source: {
+        branch: { name: 'feat/widgets' },
+        commit: { hash: 'beef' },
+        repository: { full_name: 'mallory/widgets' },
+      },
+    });
+    const { fetchFn } = stubFetch(() => jsonResponse({ values: [fork] }));
+    const provider = new BitbucketProvider({ fetchFn });
+    expect(await provider.getPullRequestForBranch(auth, repo, 'feat/widgets')).toBeUndefined();
+  });
+
+  it('asks for the head fork when one is given', async () => {
+    const fork = pr({
+      id: 14,
+      source: {
+        branch: { name: 'feat/widgets' },
+        commit: { hash: 'beef' },
+        repository: { full_name: 'alice/widgets' },
+      },
+    });
+    const { fetchFn, requests } = stubFetch(() => jsonResponse({ values: [fork] }));
+    const provider = new BitbucketProvider({ fetchFn });
+    const found = await provider.getPullRequestForBranch(auth, repo, 'feat/widgets', {
+      owner: 'alice',
+      name: 'widgets',
+    });
+    expect(decodeURIComponent(requests[0].url)).toContain(
+      'source.repository.full_name = "alice/widgets"'
+    );
+    expect(found?.number).toBe(14);
   });
 
   it('returns undefined when no PR matches', async () => {

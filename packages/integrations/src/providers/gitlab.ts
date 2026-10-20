@@ -6,6 +6,7 @@ import type {
   HostingCapability,
   HostingProvider,
   PrComments,
+  PullRequestHead,
   PullRequestQueryOptions,
   ReviewSuggestionInput,
   ReviewSuggestions,
@@ -38,7 +39,7 @@ import {
   p,
   ProviderClient,
 } from './client.js';
-import { assertKnownOptions, credentialHostOfUrl } from './shared.js';
+import { assertKnownOptions, credentialHostOfUrl, sameRepoPath } from './shared.js';
 
 export interface GitLabProviderOptions {
   /** Provider id used in RepoDescriptors. Default "gitlab". */
@@ -60,6 +61,8 @@ interface GitLabMergeRequest {
   id: number;
   iid: number;
   project_id: number;
+  source_project_id?: number;
+  target_project_id?: number;
   title: string;
   web_url: string;
   state: string;
@@ -237,13 +240,28 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
     const list = await this.client.getJson<GitLabMergeRequest[]>(
       auth,
       p`/projects/${projectPath(repo)}/merge_requests?state=opened&source_branch=${branch}`
     );
-    const mr = list?.[0];
+    if (!list || list.length === 0) {
+      return undefined;
+    }
+    // source_branch matches merge requests from every fork; only the one
+    // whose source project is the head repository is this branch's.
+    const forked = head !== undefined && !sameRepoPath(head, repo);
+    const forkId = forked ? await this.projectId(auth, `${head.owner}/${head.name}`) : undefined;
+    if (forked && forkId === undefined) {
+      return undefined;
+    }
+    const mr = list.find(
+      (candidate) =>
+        candidate.source_project_id ===
+        (forked ? forkId : (candidate.target_project_id ?? candidate.project_id))
+    );
     if (!mr) {
       return undefined;
     }
@@ -460,6 +478,12 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
       owner: segments.slice(0, -1).join('/'),
       name: segments[segments.length - 1] ?? '',
     };
+  }
+
+  /** Numeric id of the project at `path`, or undefined when it is not visible. */
+  private async projectId(auth: AuthContext, path: string): Promise<number | undefined> {
+    const project = await this.client.getJson<{ id?: number }>(auth, p`/projects/${path}`);
+    return typeof project?.id === 'number' ? project.id : undefined;
   }
 
   private async username(auth: AuthContext): Promise<string> {

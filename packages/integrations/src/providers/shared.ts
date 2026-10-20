@@ -241,3 +241,16 @@ export function tokenFingerprint(token: string): string {
   }
   return hash.toString(16).padStart(8, '0');
 }
+
+/** Owner and name of a repository, as a pull request lookup compares them. */
+export interface RepoPath {
+  owner: string;
+  name: string;
+}
+
+/** True when two repository paths name the same repository (case-insensitive). */
+export function sameRepoPath(a: RepoPath, b: RepoPath): boolean {
+  return (
+    a.owner.toLowerCase() === b.owner.toLowerCase() && a.name.toLowerCase() === b.name.toLowerCase()
+  );
+}

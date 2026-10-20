@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { orderedRemoteUrls, parseGitConfigRemotes } from '../src/integrations/gitConfig';
+import {
+  orderedRemoteUrls,
+  parseGitConfig,
+  parseGitConfigRemotes,
+  pullRequestRemotes,
+} from '../src/integrations/gitConfig';
 
 describe('parseGitConfigRemotes', () => {
   it('parses multiple remotes with their urls', () => {
@@ -74,5 +79,85 @@ describe('orderedRemoteUrls', () => {
       { name: 'broken' },
     ];
     expect(orderedRemoteUrls(remotes)).toEqual(['git@example.com:a/b.git']);
+  });
+});
+
+describe('parseGitConfig', () => {
+  it('reads branch tracking and remote.pushDefault', () => {
+    const config = [
+      '[remote "origin"]',
+      '\turl = git@github.com:alice/widgets.git',
+      '[remote]',
+      '\tpushDefault = origin',
+      '[branch "feature/x"]',
+      '\tremote = upstream',
+      '\tmerge = refs/heads/main',
+      '\tpushRemote = fork',
+      '[branch "main"]',
+      '\tremote = origin',
+    ].join('\n');
+    const summary = parseGitConfig(config);
+    expect(summary.pushDefault).toBe('origin');
+    expect(summary.branches.get('feature/x')).toEqual({
+      remote: 'upstream',
+      merge: 'refs/heads/main',
+      pushRemote: 'fork',
+    });
+    expect(summary.branches.get('main')).toEqual({ remote: 'origin' });
+    expect(summary.remotes).toEqual([{ name: 'origin', url: 'git@github.com:alice/widgets.git' }]);
+  });
+});
+
+describe('pullRequestRemotes', () => {
+  const remotes = (...names: string[]) =>
+    names.map((name) => ({ name, url: `https://github.com/${name}/widgets.git` }));
+
+  it('looks in origin for a branch pushed there, when there is no upstream', () => {
+    const plan = pullRequestRemotes(
+      {
+        remotes: remotes('origin'),
+        branches: new Map([['fix', { remote: 'origin', merge: 'refs/heads/fix' }]]),
+      },
+      'fix',
+    );
+    expect(plan?.headRemote.name).toBe('origin');
+    expect(plan?.headBranch).toBe('fix');
+    expect(plan?.baseRemotes.map((r) => r.name)).toEqual(['origin']);
+  });
+
+  it('asks upstream first for a fork contributor pushing to origin', () => {
+    const plan = pullRequestRemotes(
+      { remotes: remotes('origin', 'upstream'), branches: new Map() },
+      'fix',
+    );
+    expect(plan?.headRemote.name).toBe('origin');
+    expect(plan?.baseRemotes.map((r) => r.name)).toEqual(['upstream', 'origin']);
+  });
+
+  it("follows git's push precedence and the tracked branch name", () => {
+    const config = {
+      remotes: remotes('origin', 'upstream', 'fork'),
+      branches: new Map([
+        ['local-name', { remote: 'fork', merge: 'refs/heads/remote-name' }],
+        ['triangular', { remote: 'upstream', merge: 'refs/heads/main', pushRemote: 'fork' }],
+      ]),
+      pushDefault: 'origin',
+    };
+    const tracked = pullRequestRemotes({ ...config, pushDefault: undefined }, 'local-name');
+    expect(tracked?.headRemote.name).toBe('fork');
+    expect(tracked?.headBranch).toBe('remote-name');
+
+    // Pushes go to the push remote under the local name, not to the branch
+    // it pulls from.
+    const triangular = pullRequestRemotes(config, 'triangular');
+    expect(triangular?.headRemote.name).toBe('fork');
+    expect(triangular?.headBranch).toBe('triangular');
+    expect(triangular?.baseRemotes.map((r) => r.name)).toEqual(['upstream', 'fork']);
+
+    expect(pullRequestRemotes(config, 'untracked')?.headRemote.name).toBe('origin');
+  });
+
+  it('has nothing to look in without remotes', () => {
+    expect(pullRequestRemotes({ remotes: [], branches: new Map() }, 'main')).toBeUndefined();
   });
 });

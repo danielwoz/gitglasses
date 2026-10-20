@@ -182,17 +182,70 @@ describe('GitHubProvider.getMyPullRequests', () => {
 });
 
 describe('GitHubProvider.getPullRequestForBranch', () => {
-  it('searches by head and repo and returns the mapped PR', async () => {
-    const { fetchFn, requests } = stubFetch(() => jsonResponse(searchResponse([prNode()])));
+  function branchResponse(nodes: unknown[], viewerLogin = 'alice'): unknown {
+    return {
+      data: { viewer: { login: viewerLogin }, repository: { pullRequests: { nodes } } },
+    };
+  }
+
+  /** A pull request whose head branch lives in `owner`'s repository. */
+  function headedBy(owner: string | null, overrides: Record<string, unknown> = {}) {
+    return prNode({ headRepositoryOwner: owner === null ? null : { login: owner }, ...overrides });
+  }
+
+  it("asks the repository for the branch's open pull requests", async () => {
+    const { fetchFn, requests } = stubFetch(() =>
+      jsonResponse(branchResponse([headedBy('acme')]))
+    );
     const provider = new GitHubProvider({ fetchFn });
     const pr = await provider.getPullRequestForBranch(auth, repo, 'fix/flux');
     const body = JSON.parse(requests[0].init?.body ?? '{}');
-    expect(body.variables.searchQuery).toBe('is:pr state:open head:fix/flux repo:acme/widgets');
+    expect(body.variables).toMatchObject({ owner: 'acme', name: 'widgets', branch: 'fix/flux' });
+    expect(body.query).toContain('headRefName: $branch');
+    expect(body.query).toContain('headRepositoryOwner');
     expect(pr?.number).toBe(42);
   });
 
+  it("never matches a stranger's fork with a same-named branch", async () => {
+    // GitHub matches headRefName in every fork: a maintainer on "main" gets
+    // contributors' "main" pull requests back.
+    const { fetchFn } = stubFetch(() =>
+      jsonResponse(branchResponse([headedBy('mallory', { number: 7 })]))
+    );
+    const provider = new GitHubProvider({ fetchFn });
+    expect(await provider.getPullRequestForBranch(auth, repo, 'main')).toBeUndefined();
+  });
+
+  it("picks the repository's own pull request past forks' ones", async () => {
+    const { fetchFn } = stubFetch(() =>
+      jsonResponse(
+        branchResponse([
+          headedBy('mallory', { number: 7 }),
+          headedBy(null, { number: 8 }),
+          headedBy('ACME', { number: 9 }),
+        ])
+      )
+    );
+    const provider = new GitHubProvider({ fetchFn });
+    expect((await provider.getPullRequestForBranch(auth, repo, 'main'))?.number).toBe(9);
+  });
+
+  it("matches the head fork's owner when one is given", async () => {
+    const { fetchFn } = stubFetch(() =>
+      jsonResponse(
+        branchResponse([headedBy('acme', { number: 1 }), headedBy('alice', { number: 2 })])
+      )
+    );
+    const provider = new GitHubProvider({ fetchFn });
+    const pr = await provider.getPullRequestForBranch(auth, repo, 'fix/flux', {
+      owner: 'alice',
+      name: 'widgets',
+    });
+    expect(pr?.number).toBe(2);
+  });
+
   it('returns undefined when no PR matches the branch', async () => {
-    const { fetchFn } = stubFetch(() => jsonResponse(searchResponse([])));
+    const { fetchFn } = stubFetch(() => jsonResponse(branchResponse([])));
     const provider = new GitHubProvider({ fetchFn });
     const pr = await provider.getPullRequestForBranch(auth, repo, 'no-such-branch');
     expect(pr).toBeUndefined();

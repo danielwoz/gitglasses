@@ -160,21 +160,6 @@ export function registerSuggestChange(
       return;
     }
 
-    const hosting = await integrations.getConnectedHostingFor(located.rootPath, true);
-    if (!hosting) {
-      void vscode.window.showInformationMessage(
-        'GitGlasses: no connected hosting integration for this repository.',
-      );
-      return;
-    }
-    const canSuggest = supportsReviewSuggestions(hosting.provider);
-    if (!canSuggest && !supportsPrComments(hosting.provider)) {
-      void vscode.window.showInformationMessage(
-        `GitGlasses: ${hosting.providerId} does not support review suggestions.`,
-      );
-      return;
-    }
-
     let branch = '';
     try {
       const { head } = await engine.request('repo/state', { repoId: located.repoId });
@@ -189,18 +174,28 @@ export function registerSuggestChange(
       return;
     }
 
-    let pr;
+    // Only the pull request opened from this branch's own push remote; a
+    // same-named branch in someone else's fork is a different pull request.
+    let found;
     try {
-      pr = await hosting.provider.getPullRequestForBranch(hosting.auth, hosting.repo, branch);
+      found = await integrations.findPullRequestForBranch(located.rootPath, branch, true);
     } catch (error) {
       void vscode.window.showErrorMessage(
         `GitGlasses: looking up the pull request failed: ${errorMessage(error)}`,
       );
       return;
     }
-    if (!pr) {
+    if (!found) {
       void vscode.window.showInformationMessage(
-        `GitGlasses: no open pull request for branch "${branch}".`,
+        `GitGlasses: no open pull request from branch "${branch}" (or no connected integration for its remote).`,
+      );
+      return;
+    }
+    const { hosting, pr } = found;
+    const canSuggest = supportsReviewSuggestions(hosting.provider);
+    if (!canSuggest && !supportsPrComments(hosting.provider)) {
+      void vscode.window.showInformationMessage(
+        `GitGlasses: ${hosting.providerId} does not support review suggestions.`,
       );
       return;
     }

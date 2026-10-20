@@ -8,11 +8,18 @@ import {
   type AuthContext,
   type AutolinkPattern,
   type HostingProvider,
+  type PullRequest,
   type RepoDescriptor,
 } from '@gitglasses/integrations';
 import { AuthManager, type AuthInfo } from './auth';
 import { applyAutolinks, jiraPattern, repoIssuePatterns, userPatterns } from './autolinks';
-import { orderedRemoteUrls, parseGitConfigRemotes } from './gitConfig';
+import {
+  orderedRemoteUrls,
+  parseGitConfig,
+  parseGitConfigRemotes,
+  pullRequestRemotes,
+  type RemoteConfig,
+} from './gitConfig';
 import {
   addHostSetting,
   addIssueSetting,
@@ -46,6 +53,13 @@ export interface HostingInfo {
 export interface ConnectedHosting extends HostingInfo {
   auth: AuthContext;
   username?: string;
+}
+
+/** A branch's open pull request and the connection that found it. */
+export interface BranchPullRequest {
+  /** The repository the pull request lives in, with its credentials. */
+  hosting: ConnectedHosting;
+  pr: PullRequest;
 }
 
 /**
@@ -244,6 +258,53 @@ export class IntegrationService implements vscode.Disposable {
     const auth = await this.auth.getAuth(hosting.providerId, hosting.host, { interactive });
     if (!auth) return undefined;
     return { ...hosting, auth: toAuthContext(auth, hosting.host), username: auth.username };
+  }
+
+  /**
+   * The open pull request for `branch`, opened from the remote the branch is
+   * pushed to. A fork's pull request lives in the repository it was forked
+   * from, so `upstream` is asked before the push remote's own repository; a
+   * pull request whose head is in any other fork never matches.
+   */
+  async findPullRequestForBranch(
+    repoRoot: string,
+    branch: string,
+    interactive = false,
+  ): Promise<BranchPullRequest | undefined> {
+    const text = await readGitConfig(repoRoot);
+    if (text === undefined) return undefined;
+    const plan = pullRequestRemotes(parseGitConfig(text), branch);
+    const headUrl = plan && (plan.headRemote.pushUrl ?? plan.headRemote.url);
+    const head = headUrl ? this.hostingForUrl(headUrl) : undefined;
+    if (!plan || !head) return undefined;
+
+    const credential = await this.auth.getAuth(head.providerId, head.host, { interactive });
+    if (!credential) return undefined;
+    const auth = toAuthContext(credential, head.host);
+
+    let failure: unknown;
+    for (const remote of plan.baseRemotes) {
+      const base = this.baseHostingFor(remote);
+      if (!base || base.host !== head.host) continue;
+      try {
+        const pr = await base.provider.getPullRequestForBranch(auth, base.repo, plan.headBranch, {
+          owner: head.repo.owner,
+          name: head.repo.name,
+        });
+        if (pr) {
+          return { hosting: { ...base, auth, username: credential.username }, pr };
+        }
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure !== undefined) throw failure;
+    return undefined;
+  }
+
+  private baseHostingFor(remote: RemoteConfig): HostingInfo | undefined {
+    const url = remote.url ?? remote.pushUrl;
+    return url ? this.hostingForUrl(url) : undefined;
   }
 
   /** All hosting endpoints that currently have stored credentials. */
