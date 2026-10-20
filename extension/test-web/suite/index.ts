@@ -103,5 +103,21 @@ export async function run(): Promise<void> {
   }, 'hover on line 3 never attributed Bob');
   log(`hover line 3: ${bobText.split('\n')[0]}`);
 
+  // The line's story on the web: blame and commit from the wasm engine, and
+  // no history, which needs the git CLI.
+  const story = await vscode.commands.executeCommand<{
+    commit: { state: string; value?: { author: { name: string } } };
+    history: { state: string; reason?: string };
+  }>('gitglasses.showLineStory', { uri: fileUri.toString(), line: 3 });
+  assert(
+    story?.commit.state === 'ready' && story.commit.value?.author.name === 'Bob',
+    `line story lacked Bob's commit; got: ${JSON.stringify(story?.commit)}`,
+  );
+  assert(
+    story.history.state === 'unavailable' && story.history.reason === 'noGit',
+    `line story history should need git; got: ${JSON.stringify(story.history)}`,
+  );
+  log('line story: commit and no history');
+
   log('all web smoke checks passed');
 }
