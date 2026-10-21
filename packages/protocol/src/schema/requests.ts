@@ -6,6 +6,8 @@ import { Type } from '@sinclair/typebox';
 
 import {
   BlameCommit,
+  BlameOptions,
+  CommitDetails,
   CommitSummaryInfo,
   DiffHunk,
   FileChange,
@@ -13,8 +15,10 @@ import {
   GraphRow,
   HeadState,
   PatchEnvelope,
+  PatchFileChange,
   RebaseEntry,
   RepoInfo,
+  SequencerOperation,
   SequencerState,
   Sha,
   strict,
@@ -25,6 +29,23 @@ import {
 export const EmptyObject = Type.Object({}, strict);
 
 const StageAction = Type.Union([Type.Literal('stage'), Type.Literal('unstage')]);
+
+/** Where a rebase/start, rebase/continue or rebase/skip run left the rebase. */
+const RebaseRunResult = Type.Object(
+  {
+    /** git stopped on conflicts; the rebase is paused. */
+    conflicts: Type.Boolean(),
+    /** The rebase finished. False with no conflicts means a planned stop
+     *  (edit), also paused. */
+    completed: Type.Boolean(),
+    /** Present (true) when the rebase finished but git could not re-apply
+     *  the uncommitted changes it stashed first (autostash): they are kept
+     *  as stash@{0}, and the working tree may hold the conflicts of the
+     *  attempt. */
+    autoStashKept: Type.Optional(Type.Boolean()),
+  },
+  strict,
+);
 
 /** Page size the engine serves when a paged read omits `limit`. */
 export const DEFAULT_LIMIT = 100;
@@ -39,6 +60,10 @@ export const DEFAULT_FILE_BYTES = 4 * 1024 * 1024;
  * inside the engine's frame limit once JSON escaping is applied. */
 export const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
+/** Most files commit/details lists; a commit that changes more sets
+ *  `truncated`. */
+export const COMMIT_DETAILS_MAX_FILES = 2000;
+
 const Limit = Type.Optional(
   Type.Integer({
     minimum: 1,
@@ -47,6 +72,29 @@ const Limit = Type.Optional(
     description: `Maximum entries in the page. Omitted means ${DEFAULT_LIMIT}.`,
   }),
 );
+
+/** An ISO 8601 date, or a date and time with an optional UTC offset. A bare
+ *  date, or a time without an offset, is read in the engine's local time zone;
+ *  a bare date means the start of that day. */
+const IsoDate = Type.String({
+  pattern: '^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})?)?$',
+});
+
+/** The roots a graph walk starts from, instead of HEAD and every branch. */
+const GraphRefs = Type.Optional(
+  Type.Array(Type.String({ minLength: 1 }), {
+    minItems: 1,
+    description:
+      'Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.',
+  }),
+);
+
+/** Content hash of the ref set a graph walk covers. */
+const RefsFingerprint = Type.Integer({
+  minimum: 0,
+  description:
+    'Content hash of the ref set the page was sliced from. Constant across the pages of one snapshot and different once any ref moves; unrelated to the monotonic counter in repo/didChange.',
+});
 
 /** Continuation token, copied verbatim from the previous page's `nextCursor`.
  *  The encoding is the engine's and differs per method, so clients neither
@@ -107,7 +155,23 @@ export const RequestSchemas = {
   initialize: {
     description:
       'Handshake. The engine rejects a protocolVersion it does not implement, so this must be the first request of a session.',
-    params: Type.Object({ protocolVersion: Type.String({ minLength: 1 }) }, strict),
+    params: Type.Object(
+      {
+        protocolVersion: Type.String({ minLength: 1 }),
+        clientCapabilities: Type.Optional(
+          Type.Object(
+            {
+              /** The client answers ui/askpass requests. Without it the engine
+               * gives git no credential prompt, and anything git would ask
+               * for fails as it does without a terminal. */
+              askpass: Type.Optional(Type.Boolean()),
+            },
+            { additionalProperties: true },
+          ),
+        ),
+      },
+      strict,
+    ),
     result: Type.Object(
       {
         engineVersion: Type.String(),
@@ -158,7 +222,7 @@ export const RequestSchemas = {
   },
   'blame/file': {
     description:
-      'Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table.',
+      'Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table. The request runs after every doc/didChange the engine received before it, so a buffer pushed ahead of the request is the one blamed.',
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -174,6 +238,14 @@ export const RequestSchemas = {
           minLength: 1,
           description: 'Correlates the blame/hunks notifications of this request.',
         }),
+        docVersion: Type.Optional(
+          Type.Integer({
+            minimum: -1,
+            description:
+              'Working-tree blame only: the editor buffer the client means. A doc/didChange version blames the buffer pushed for the path (the result says which version that was); -1 blames the file on disk even while a pushed buffer is held. Omitted blames whatever buffer was pushed last, or the file on disk.',
+          }),
+        ),
+        options: Type.Optional(BlameOptions),
       },
       strict,
     ),
@@ -185,12 +257,26 @@ export const RequestSchemas = {
         fromCache: Type.Boolean(),
         /** Commit metadata for every sha referenced by the streamed hunks. */
         commits: Type.Record(Type.String(), BlameCommit),
+        docVersion: Type.Optional(
+          Type.Integer({
+            minimum: -1,
+            description:
+              'Working-tree blame only: the doc/didChange version of the buffer the hunks describe, or -1 for the file on disk. A client compares it with the version it asked about before trusting the hunks for a buffer.',
+          }),
+        ),
+        lfs: Type.Optional(
+          Type.Boolean({
+            description:
+              'The path is tracked with Git LFS (filter=lfs): git stores, and so blames, the small pointer file rather than the content, so hunks describe the pointer\'s lines (version, oid, size), not the lines of the file an editor shows. The newest commit among them is the last one that changed the content.',
+          }),
+        ),
       },
       strict,
     ),
   },
   'log/commits': {
-    description: 'Topo-ordered commit page from a ref (default HEAD).',
+    description:
+      'Topo-ordered commit page from a ref (default HEAD). Later pages continue the history the first page listed, even after the ref moves.',
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -210,6 +296,19 @@ export const RequestSchemas = {
       },
       strict,
     ),
+  },
+  'commit/details': {
+    description: `One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most ${COMMIT_DETAILS_MAX_FILES} files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.`,
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        sha: positional(
+          'Revision naming the commit: a full or short sha, HEAD, a branch or a tag.',
+        ),
+      },
+      strict,
+    ),
+    result: CommitDetails,
   },
   'history/file': {
     description: 'File history following renames, newest first.',
@@ -288,9 +387,64 @@ export const RequestSchemas = {
       strict,
     ),
   },
+  'search/log': {
+    description:
+      "Commit search over HEAD history through `git log`, adding what search/commits cannot answer from libgit2 alone: changes to the code (pickaxe), a path and a commit-date window. Matches stream as search/matches notifications tagged with `streamId`, newest first. Needs the git CLI, so a Restricted Mode or CLI-less engine refuses it.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        streamId: Type.String({
+          minLength: 1,
+          description: 'Correlates the search/matches notifications of this request.',
+        }),
+        limit: Limit,
+        query: Type.Optional(
+          Type.Object(
+            {
+              /** Case-insensitive substring of the commit message. */
+              text: Type.Optional(Type.String({ minLength: 1 })),
+              /** Case-insensitive substring of the author name or email. */
+              author: Type.Optional(Type.String({ minLength: 1 })),
+              /** Code the commit adds or removes: an exact string (`git log -S`)
+               *  or, with contentMode 'regex', an extended regular expression
+               *  matched against added and removed lines (`git log -G`). */
+              content: Type.Optional(Type.String({ minLength: 1 })),
+              contentMode: Type.Optional(
+                Type.Union([Type.Literal('string'), Type.Literal('regex')], {
+                  default: 'string',
+                }),
+              ),
+              /** Pathspec relative to the repository root; git's glob rules apply. */
+              path: Type.Optional(Type.String({ minLength: 1 })),
+              /** Commits committed at or after this moment. */
+              since: Type.Optional(IsoDate),
+              /** Commits committed before this moment. */
+              until: Type.Optional(IsoDate),
+            },
+            {
+              ...strict,
+              default: {},
+              description:
+                'Criteria, ANDed together. An absent or empty query matches every commit, so the page is bounded only by `limit`.',
+            },
+          ),
+        ),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        streamId: Type.String(),
+        total: Type.Integer({ minimum: 0 }),
+        /** True when the search stopped at `limit` with matches left unseen. */
+        truncated: Type.Boolean(),
+      },
+      strict,
+    ),
+  },
   'rev/fileAtRev': {
     description:
-      'Contents of a file at a revision, passed through the repository\'s checkout filters so it compares byte-for-byte against an editor buffer. Binary blobs are reported, not returned.',
+      "Contents of a file at a revision, passed through the repository's checkout filters so it compares byte-for-byte against an editor buffer. Binary blobs are reported, not returned.",
     params: Type.Object(
       {
         repoId: Type.String(),
@@ -396,8 +550,15 @@ export const RequestSchemas = {
     params: Type.Object(
       {
         repoId: Type.String(),
-        cursor: Cursor,
+        cursor: Type.Optional(
+          Type.String({
+            minLength: 1,
+            description:
+              'nextCursor of the previous page. A cursor is valid for one ref set only: once any ref moves (or with another `refs` filter) it fails with InvalidParams, and the first page has to be requested again.',
+          }),
+        ),
         limit: Limit,
+        refs: GraphRefs,
         include: Type.Optional(
           Type.Object(
             { stashes: Type.Optional(Type.Boolean()), wip: Type.Optional(Type.Boolean()) },
@@ -417,11 +578,51 @@ export const RequestSchemas = {
         rows: Type.Array(GraphRow),
         /** Present only while more rows remain. */
         nextCursor: Type.Optional(Type.String()),
-        refsFingerprint: Type.Integer({
-          minimum: 0,
-          description:
-            'Content hash of the ref set the page was sliced from. Constant across the pages of one snapshot and different once any ref moves; unrelated to the monotonic counter in repo/didChange.',
-        }),
+        refsFingerprint: RefsFingerprint,
+      },
+      strict,
+    ),
+  },
+  'graph/find': {
+    description:
+      "The rows of a graph/rows walk that match a find query, in row order: a sha prefix, a ref the row shows, or case-insensitive text in the commit message (a stash row's own message) or the author's name or email. The walk is the one graph/rows pages through with the same `refs` and stash rows, so every match is a row the graph can show.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        query: Type.String({ minLength: 1 }),
+        limit: Limit,
+        refs: GraphRefs,
+        include: Type.Optional(
+          Type.Object(
+            { stashes: Type.Optional(Type.Boolean()) },
+            {
+              ...strict,
+              default: { stashes: false },
+              description: 'Whether stash rows are searched (and counted in `index`).',
+            },
+          ),
+        ),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        matches: Type.Array(
+          Type.Object(
+            {
+              sha: Sha,
+              index: Type.Integer({
+                minimum: 0,
+                description:
+                  "The row's position in the walk, not counting the uncommitted-changes row graph/rows may put first.",
+              }),
+            },
+            strict,
+          ),
+        ),
+        /** True when the search stopped at `limit` with matches left. */
+        truncated: Type.Boolean(),
+        refsFingerprint: RefsFingerprint,
       },
       strict,
     ),
@@ -596,11 +797,7 @@ export const RequestSchemas = {
       {
         repoId: Type.String(),
         ref: positional('Revision to reset onto.'),
-        mode: Type.Union([
-          Type.Literal('soft'),
-          Type.Literal('mixed'),
-          Type.Literal('hard'),
-        ]),
+        mode: Type.Union([Type.Literal('soft'), Type.Literal('mixed'), Type.Literal('hard')]),
       },
       strict,
     ),
@@ -611,7 +808,7 @@ export const RequestSchemas = {
     params: Type.Object(
       {
         repoId: Type.String(),
-        remote: optionalPositional('Remote to fetch. Omitted uses git\'s default.'),
+        remote: optionalPositional("Remote to fetch. Omitted uses git's default."),
         prune: Type.Optional(Type.Boolean()),
       },
       strict,
@@ -619,32 +816,78 @@ export const RequestSchemas = {
     result: EmptyObject,
   },
   'mutate/pull': {
-    description: "Pulls into the current branch using git's configured strategy.",
+    description:
+      "Pulls into the current branch. Without `strategy` git's configured one applies; when the branches diverged and nothing is configured the error carries data.kind 'divergent'. Conflicts are a result, not an error.",
     params: Type.Object(
-      { repoId: Type.String(), autoStash: Type.Optional(Type.Boolean()) },
+      {
+        repoId: Type.String(),
+        autoStash: Type.Optional(Type.Boolean()),
+        /** How to reconcile a branch that diverged from its upstream: merge
+         * (fast-forwarding when possible), rebase, or fast-forward only. */
+        strategy: Type.Optional(
+          Type.Union([Type.Literal('merge'), Type.Literal('rebase'), Type.Literal('ff-only')]),
+        ),
+        /** Also records `strategy` in the repository's config (pull.rebase,
+         * or pull.ff for ff-only), so later pulls use it without asking. */
+        remember: Type.Optional(Type.Boolean()),
+      },
       strict,
     ),
-    result: EmptyObject,
+    result: Type.Object({ conflicts: Type.Boolean() }, strict),
   },
   'mutate/push': {
-    description: 'Pushes the current branch.',
+    description:
+      "Pushes the current branch. With `setUpstream` it publishes the branch and sets its upstream: to `remote` when given, otherwise to the remote git's config names for it (branch.<name>.pushRemote, remote.pushDefault, branch.<name>.remote) or the repository's only remote. With several remotes and none of those set, the error carries data.kind 'noRemote' and the remotes to choose from.",
     params: Type.Object(
       {
         repoId: Type.String(),
         setUpstream: Type.Optional(Type.Boolean()),
+        remote: optionalPositional('Remote to publish to; only read with `setUpstream`.'),
         /** Only the lease-checked force is offered; a bare --force is not. */
         force: Type.Optional(Type.Literal('with-lease')),
       },
       strict,
     ),
-    result: EmptyObject,
+    result: Type.Object(
+      {
+        /** Remote the branch was published to; set with `setUpstream`. */
+        remote: Type.Optional(Type.String()),
+      },
+      strict,
+    ),
+  },
+  'mutate/sequencer': {
+    description:
+      'Continues, skips or aborts the merge, rebase, cherry-pick or revert the repository is stopped in the middle of. Continuing while files are still conflicted changes nothing and reports conflicts.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        action: Type.Union([
+          Type.Literal('continue'),
+          Type.Literal('skip'),
+          Type.Literal('abort'),
+        ]),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        /** The operation acted on. */
+        operation: SequencerOperation,
+        /** Nothing is left in progress. */
+        completed: Type.Boolean(),
+        /** The operation stopped again on conflicts. */
+        conflicts: Type.Boolean(),
+      },
+      strict,
+    ),
   },
   'stash/push': {
     description: 'Stashes the working tree.',
     params: Type.Object(
       {
         repoId: Type.String(),
-        message: optionalPositional('Stash message. Omitted uses git\'s generated one.'),
+        message: optionalPositional("Stash message. Omitted uses git's generated one."),
         includeUntracked: Type.Optional(Type.Boolean()),
       },
       strict,
@@ -721,7 +964,8 @@ export const RequestSchemas = {
     result: EmptyObject,
   },
   'rebase/preview': {
-    description: 'Commits upstream..HEAD, oldest first — the editable rebase plan.',
+    description:
+      'The commits `git rebase -i <upstream>` will replay, in its order, oldest first: the editable rebase plan. Merges are left out (git flattens them) and so are commits whose change the upstream already has.',
     params: Type.Object(
       { repoId: Type.String(), upstream: positional('Revision to rebase onto.') },
       strict,
@@ -729,39 +973,171 @@ export const RequestSchemas = {
     result: Type.Object(
       {
         entries: Type.Array(Type.Object({ sha: Sha, summary: Type.String() }, strict)),
+        /** HEAD when the plan was made; pass it back as rebase/start's expectedHead. */
+        headSha: Sha,
+        /** The commit `upstream` named; pass it back as expectedUpstream. */
+        upstreamSha: Sha,
+        /** Merge commits in upstream..HEAD, which the rebase flattens. */
+        mergeCount: Type.Integer({ minimum: 0 }),
       },
       strict,
     ),
   },
   'rebase/start': {
     description:
-      'Executes an interactive rebase with the given plan via sequence-editor interception. Conflicts pause the rebase; repo/state then reports the sequencer step.',
+      'Executes an interactive rebase with the given plan via sequence-editor interception. A plan that no longer matches the commits git would replay is refused before anything changes. Conflicts and edit steps pause the rebase; repo/state then reports the sequencer step, and rebase/continue, rebase/skip and rebase/abort resume or end it.',
     params: Type.Object(
       {
         repoId: Type.String(),
         upstream: positional('Revision to rebase onto.'),
         plan: Type.Array(RebaseEntry, {
-          description: 'Steps in execution order. An empty plan rebases nothing.',
+          minItems: 1,
+          description:
+            'Every commit rebase/preview returned, in execution order. A commit to remove is listed with action drop: one left out means the plan is stale, and the rebase is refused.',
         }),
+        expectedHead: Type.Optional(
+          Type.String({
+            pattern: '^[0-9a-f]{40}$',
+            description: "rebase/preview's headSha. The rebase is refused when HEAD moved since.",
+          }),
+        ),
+        expectedUpstream: Type.Optional(
+          Type.String({
+            pattern: '^[0-9a-f]{40}$',
+            description:
+              "rebase/preview's upstreamSha. The rebase is refused when `upstream` moved since.",
+          }),
+        ),
+        /** Stashes uncommitted changes first and restores them afterwards (--autostash). */
+        autoStash: Type.Optional(Type.Boolean()),
+        /** Moves branches that point into the rebased range (--update-refs /
+         *  --no-update-refs). Omitted follows rebase.updateRefs. */
+        updateRefs: Type.Optional(Type.Boolean()),
       },
       strict,
     ),
-    result: Type.Object(
-      { conflicts: Type.Boolean(), completed: Type.Boolean() },
-      strict,
-    ),
+    result: RebaseRunResult,
   },
   'rebase/continue': {
-    description: 'Resumes a paused rebase once the conflicts are staged.',
+    description:
+      'Resumes a paused rebase once the conflicts are staged. A rebase rebase/start began keeps applying its plan\'s messages.',
     params: Type.Object({ repoId: Type.String() }, strict),
-    result: Type.Object(
-      { conflicts: Type.Boolean(), completed: Type.Boolean() },
-      strict,
-    ),
+    result: RebaseRunResult,
+  },
+  'rebase/skip': {
+    description: 'Resumes a paused rebase without the commit it stopped at (--skip).',
+    params: Type.Object({ repoId: Type.String() }, strict),
+    result: RebaseRunResult,
   },
   'rebase/abort': {
     description: 'Restores the pre-rebase state.',
     params: Type.Object({ repoId: Type.String() }, strict),
+    result: EmptyObject,
+  },
+  'branch/rename': {
+    description: 'Renames a local branch (git branch -m).',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Branch to rename.'),
+        newName: positional('Its new name.'),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'branch/setUpstream': {
+    description: "Sets or clears the remote-tracking branch a local branch follows.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Local branch.'),
+        upstream: optionalPositional(
+          'Remote-tracking branch to follow, e.g. origin/main. Omitted clears the upstream.',
+        ),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'branch/push': {
+    description:
+      "Pushes a local branch, checked out or not, to the remote branch of the same name. Pushing to the remote the branch tracks follows push.default: with upstream (or tracking) it updates the tracked branch, and with simple (git's default) a tracked branch of another name refuses the push rather than updating it. Publishing (setUpstream) always uses the branch's own name.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Local branch to push.'),
+        remote: optionalPositional(
+          "Remote to push to. Omitted uses the branch's pushRemote, remote.pushDefault, the remote it tracks, or the only remote; with several and none configured the push is refused.",
+        ),
+        /** Makes the pushed branch the local branch's upstream (-u). */
+        setUpstream: Type.Optional(Type.Boolean()),
+        /** Only the lease-checked force is offered; a bare --force is not. */
+        force: Type.Optional(Type.Literal('with-lease')),
+        /** Resolves the remote and branch the push would update, refusing as
+         *  the push would, without contacting the remote or pushing. */
+        dryRun: Type.Optional(Type.Boolean()),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        remote: Type.String({ description: 'The remote pushed to.' }),
+        branch: Type.String({
+          description:
+            'The branch on that remote the push updates (a full ref when it is not a branch).',
+        }),
+      },
+      strict,
+    ),
+  },
+  'tag/create': {
+    description: 'Creates a tag: annotated when a message is given, lightweight otherwise.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Tag to create.'),
+        ref: optionalPositional('Revision to tag. Omitted means HEAD.'),
+        message: Type.Optional(Type.String({ minLength: 1, description: 'Annotation message.' })),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'tag/delete': {
+    description: 'Deletes a local tag.',
+    params: Type.Object({ repoId: Type.String(), name: positional('Tag to delete.') }, strict),
+    result: EmptyObject,
+  },
+  'tag/push': {
+    description: 'Pushes a tag to a remote, or deletes it there.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Tag to push.'),
+        remote: positional('Remote to push to.'),
+        /** Deletes the tag on the remote instead; the local tag stays. */
+        delete: Type.Optional(Type.Boolean()),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'remote/add': {
+    description: 'Adds a remote.',
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        name: positional('Remote name.'),
+        url: positional('Fetch URL.'),
+      },
+      strict,
+    ),
+    result: EmptyObject,
+  },
+  'remote/remove': {
+    description: 'Removes a remote and its remote-tracking branches.',
+    params: Type.Object({ repoId: Type.String(), name: positional('Remote to remove.') }, strict),
     result: EmptyObject,
   },
 
@@ -816,7 +1192,7 @@ export const RequestSchemas = {
         summary: Type.Optional(
           Type.String({
             minLength: 1,
-            description: "Overrides the summary derived from the source.",
+            description: 'Overrides the summary derived from the source.',
           }),
         ),
       },
@@ -825,17 +1201,36 @@ export const RequestSchemas = {
     result: Type.Object({ envelope: PatchEnvelope }, strict),
   },
   'patch/apply': {
-    description: 'Applies a patch envelope; 3-way when the base is missing.',
+    description:
+      "Applies a patch envelope with `git apply --3way`. With `dryRun`, changes nothing and lists the files git would change, read by git's own patch parser.",
     params: Type.Object(
-      { repoId: Type.String(), envelope: PatchEnvelope },
+      {
+        repoId: Type.String(),
+        envelope: PatchEnvelope,
+        dryRun: Type.Optional(
+          Type.Boolean({
+            description:
+              'Do not apply: return the files the patch would change in `files`. A patch git cannot read fails with GitError.',
+          }),
+        ),
+      },
       strict,
     ),
     result: Type.Object(
       {
+        /** Always false for a dry run. */
         applied: Type.Boolean(),
         conflicts: Type.Boolean(),
         /** True when the envelope's base commit exists in this repository. */
         baseFound: Type.Boolean(),
+        files: Type.Optional(
+          Type.Array(PatchFileChange, {
+            description: 'Dry runs only: every file the patch changes, in patch order.',
+          }),
+        ),
+        message: Type.Optional(
+          Type.String({ description: "git's explanation when the patch was not applied." }),
+        ),
       },
       strict,
     ),
@@ -862,8 +1257,10 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'stash/list',
   'status/summary',
   'graph/rows',
+  'graph/find',
   'diff/commit',
   'diff/refs',
   'diff/fileHunks',
   'remote/list',
+  'commit/details',
 ];

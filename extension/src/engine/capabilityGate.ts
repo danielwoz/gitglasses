@@ -14,8 +14,10 @@ export const RESTRICTED_MESSAGE =
 const RESTRICTED_MODE_SERVED: ReadonlySet<string> = new Set(RESTRICTED_MODE_METHODS);
 
 // Method families the engine can only serve by shelling out to git.
-const CLI_METHOD_PREFIXES = ['mutate/', 'rebase/', 'patch/'];
+const CLI_METHOD_PREFIXES = ['mutate/', 'rebase/', 'patch/', 'branch/', 'tag/'];
 const CLI_METHODS = new Set([
+  'remote/add',
+  'remote/remove',
   'stash/push',
   'stash/apply',
   'stash/drop',
@@ -23,6 +25,7 @@ const CLI_METHODS = new Set([
   'worktree/remove',
   'history/file',
   'history/line',
+  'search/log',
 ]);
 
 /** True when the method needs the gitCli capability to work. */

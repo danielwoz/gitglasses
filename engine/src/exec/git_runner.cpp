@@ -4,6 +4,7 @@
 #include <string_view>
 #include <utility>
 
+#include "exec/askpass.h"
 #include "exec/git_process.h"
 
 namespace gg::exec {
@@ -54,11 +55,16 @@ Result<RunStatus> runGit(const std::string& cwd, std::vector<std::string> args, 
   RunStatus status;
   status.exitCode = process.value().wait(token);
   status.stderrText = process.value().stderrOutput();
+  status.promptDeclined = process.value().promptDeclined();
   // Output produced before the kill is truncated at an arbitrary point, so a
   // timed-out run is an error rather than a short result.
   if (process.value().timedOut()) {
     std::string message = "git timed out after " + std::to_string(opts.timeout.count()) + "ms";
-    if (mayPrompt) {
+    if (mayPrompt && askpassEnabled()) {
+      message +=
+          "; it may have been waiting for input in a window outside the editor, such as a "
+          "signing passphrase dialog or a credential helper's sign-in";
+    } else if (mayPrompt) {
       message +=
           "; it may have been waiting for input GitGlasses cannot show, such as an ssh or "
           "signing passphrase, a host-key confirmation or a credential";

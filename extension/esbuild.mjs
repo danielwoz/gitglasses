@@ -50,6 +50,16 @@ const configs = [
     minify: !watch,
   },
   {
+    entryPoints: ['webviews-src/graph/commitPanel.ts'],
+    bundle: true,
+    outfile: 'dist/webviews/commitDetails.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2022',
+    sourcemap: true,
+    minify: !watch,
+  },
+  {
     entryPoints: ['webviews-src/rebase/main.ts'],
     bundle: true,
     outfile: 'dist/webviews/rebase.js',

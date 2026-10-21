@@ -4,18 +4,31 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 #include "core/git2.h"
 #include "core/git2_json.h"
 #include "exec/git_process.h"
 #include "exec/git_runner.h"
 #include "exec/parsers/history_log.h"
+#include "services/history/log_order_cache.h"
 #include "services/params.h"
+#include "util/sha256.h"
 
 namespace gg::services {
 
@@ -61,31 +74,165 @@ rpc::Json historyEntryJson(const exec::HistoryEntry& entry) {
           {"deletions", entry.deletions}};
 }
 
-// Creates a topo+time revwalk starting at `ref`. Returns a null walk (not an
-// error) when the ref is HEAD-ish and unborn, so callers answer with empty
-// results instead of failing on a fresh repository.
-Result<RevwalkPtr> newWalk(const core::Repo& repo, const std::string& ref, unsigned int sorting) {
+// Resolves `ref` to the commit it names, peeling tags. Empty (not an error)
+// when the ref is HEAD-ish and unborn, so callers answer with empty results
+// instead of failing on a fresh repository.
+Result<std::optional<git_oid>> resolveTip(const core::Repo& repo, const std::string& ref) {
   git_object* obj = nullptr;
   if (git_revparse_single(&obj, repo.raw(), ref.c_str()) != 0) {
-    if (headUnborn(repo)) return RevwalkPtr{};
+    if (headUnborn(repo)) return std::optional<git_oid>{};
     return core::gitError("resolve '" + ref + "'");
   }
-  std::unique_ptr<git_object, decltype(&git_object_free)> objGuard(obj, git_object_free);
-
+  core::ObjectPtr objGuard(obj);
   git_object* peeled = nullptr;
   if (git_object_peel(&peeled, obj, GIT_OBJECT_COMMIT) != 0) {
     return core::gitError("'" + ref + "' does not point to a commit");
   }
-  std::unique_ptr<git_object, decltype(&git_object_free)> peeledGuard(peeled, git_object_free);
+  core::ObjectPtr peeledGuard(peeled);
+  return std::optional<git_oid>{*git_object_id(peeled)};
+}
 
+// Creates a revwalk with `sorting` starting at `ref`. Returns a null walk
+// (not an error) when the ref is HEAD-ish and unborn.
+Result<RevwalkPtr> newWalk(const core::Repo& repo, const std::string& ref, unsigned int sorting) {
+  auto tip = resolveTip(repo, ref);
+  if (!tip) return tip.error();
+  if (!tip.value()) return RevwalkPtr{};
   git_revwalk* rawWalk = nullptr;
   if (git_revwalk_new(&rawWalk, repo.raw()) != 0) return core::gitError("revwalk");
   RevwalkPtr walk(rawWalk);
   git_revwalk_sorting(walk.get(), sorting);
-  if (git_revwalk_push(walk.get(), git_object_id(peeled)) != 0) {
+  if (git_revwalk_push(walk.get(), &*tip.value()) != 0) {
     return core::gitError("revwalk push '" + ref + "'");
   }
   return walk;
+}
+
+// --- log/commits paging ------------------------------------------------------
+
+#if defined(__GLIBC__)
+// Commits sorted by one walk past which the allocator is asked to hand freed
+// memory back to the system. A whole-history walk of a large repository
+// allocates hundreds of megabytes on a worker thread; glibc keeps that in the
+// thread's arena otherwise, and every worker ratchets up its own.
+constexpr std::size_t kTrimAfterWalk = 20000;
+#endif
+
+// Contents of a file in the common dir, or "" when it does not exist.
+std::string readCommonFile(const core::Repo& repo, const char* name) {
+  const char* commondir = git_repository_commondir(repo.raw());
+  std::ifstream in(std::filesystem::path(commondir ? commondir : repo.gitdir()) / name,
+                   std::ios::binary);
+  if (!in) return {};
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  return buffer.str();
+}
+
+// Identifies the history a tip reaches in this repository: the commit DAG
+// below a commit never changes, except where the shallow boundary or grafts
+// cut it.
+std::string logOrderKey(const core::Repo& repo, const git_oid& tip) {
+  std::string key = repo.gitdir();
+  key += '\n';
+  key += core::oidToHex(tip);
+  const std::string cuts =
+      readCommonFile(repo, "shallow") + '\0' + readCommonFile(repo, "info/grafts");
+  if (cuts.size() > 1) {
+    key += '\n';
+    key += util::sha256Hex(cuts);
+  }
+  return key;
+}
+
+// Extends the forced run (see LogOrder) until it holds `want` commits, reaches
+// a root (the run is then the whole history), or ends at a merge.
+void extendRun(const core::Repo& repo, const git_oid& tip, history_detail::LogOrder& order,
+               std::size_t want, const CancelToken& token) {
+  if (order.oids.empty()) order.oids.push_back(tip);
+  while (!order.complete && !order.runEnded && order.oids.size() < want) {
+    token.throwIfCancelled();
+    git_commit* rawCommit = nullptr;
+    if (git_commit_lookup(&rawCommit, repo.raw(), &order.oids.back()) != 0) {
+      throw rpc::HandlerError{
+          {core::gitError("lookup commit " + core::oidToHex(order.oids.back()))}};
+    }
+    core::CommitPtr commit(rawCommit);
+    const unsigned int parents = git_commit_parentcount(commit.get());
+    if (parents == 0) {
+      order.complete = true;
+    } else if (parents > 1) {
+      order.runEnded = true;
+    } else {
+      order.oids.push_back(*git_commit_parent_id(commit.get(), 0));
+    }
+  }
+}
+
+// Replaces the run with the full topological + time order of the tip's
+// history. The walk sorts everything before yielding the first commit.
+void completeOrder(const core::Repo& repo, const git_oid& tip, history_detail::LogOrder& order,
+                   const CancelToken& token) {
+  std::vector<git_oid> oids;
+  {
+    git_revwalk* rawWalk = nullptr;
+    if (git_revwalk_new(&rawWalk, repo.raw()) != 0) {
+      throw rpc::HandlerError{{core::gitError("revwalk")}};
+    }
+    RevwalkPtr walk(rawWalk);
+    git_revwalk_sorting(walk.get(), GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
+    if (git_revwalk_push(walk.get(), &tip) != 0) {
+      throw rpc::HandlerError{{core::gitError("revwalk push " + core::oidToHex(tip))}};
+    }
+    oids.reserve(std::max<std::size_t>(order.oids.size(), 1024));
+    git_oid oid;
+    int status = 0;
+    while ((status = git_revwalk_next(&oid, walk.get())) == 0) {
+      if ((oids.size() & 0x3ff) == 0) token.throwIfCancelled();
+      oids.push_back(oid);
+    }
+    // A walk cut short (a missing or corrupt commit) must not be kept as the
+    // whole history.
+    if (status != GIT_ITEROVER) {
+      throw rpc::HandlerError{{core::gitError("walk history of " + core::oidToHex(tip))}};
+    }
+  }
+  oids.shrink_to_fit();
+  order.oids = std::move(oids);
+  order.complete = true;
+#if defined(__GLIBC__)
+  if (order.oids.size() >= kTrimAfterWalk) malloc_trim(0);
+#endif
+}
+
+// "<tip sha>:<offset>": the history snapshot a page belongs to and where the
+// next page starts in it.
+std::string encodeLogCursor(const git_oid& tip, std::size_t offset) {
+  return core::oidToHex(tip) + ":" + std::to_string(offset);
+}
+
+bool isHexSha(std::string_view text) {
+  return text.size() == GIT_OID_HEXSZ &&
+         text.find_first_not_of("0123456789abcdef") == std::string_view::npos;
+}
+
+struct LogCursor {
+  git_oid tip{};
+  std::size_t offset = 0;
+};
+
+std::optional<LogCursor> decodeLogCursor(const std::string& cursor) {
+  if (cursor.size() < GIT_OID_HEXSZ + 2 || cursor[GIT_OID_HEXSZ] != ':') return std::nullopt;
+  const std::string_view sha(cursor.data(), GIT_OID_HEXSZ);
+  const std::string_view digits = std::string_view(cursor).substr(GIT_OID_HEXSZ + 1);
+  if (!isHexSha(sha) || digits.size() > 15 ||
+      digits.find_first_not_of("0123456789") != std::string_view::npos) {
+    return std::nullopt;
+  }
+  LogCursor decoded;
+  if (git_oid_fromstrn(&decoded.tip, sha.data(), sha.size()) != 0) return std::nullopt;
+  decoded.offset = static_cast<std::size_t>(std::stoull(std::string(digits)));
+  return decoded;
 }
 
 // Runs `git log <args>` in the repo and feeds every stdout line through
@@ -126,50 +273,105 @@ bool containsCi(const char* haystack, std::string_view loweredNeedle) {
 }  // namespace
 
 void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
-  // Topo-ordered commit page from a ref (default HEAD). The cursor is the sha
-  // of the first commit of the next page; resuming re-walks from the ref up
-  // to that sha, an O(history) cost that is acceptable for v1 page sizes.
+  // Topo-ordered commit page from a ref (default HEAD). The order of a tip's
+  // history is computed once and shared by every page of it (and by other
+  // requests for the same tip); pages within the tip's first-parent run up
+  // to its first merge never need the whole-history sort at all. The cursor
+  // pins the tip the first page resolved, so later pages continue the same
+  // snapshot even after the ref moves. A bare sha cursor (the next commit)
+  // is still accepted and resolved against the ref's current tip.
+  auto orders = std::make_shared<history_detail::LogOrderCache>();
   dispatcher.method(
       "log/commits",
-      [&context](const rpc::Json& params, const CancelToken& token,
-                 const rpc::NotifyFn&) -> rpc::Json {
-        const std::int64_t limit = pageLimit(params);
+      [&context, orders](const rpc::Json& params, const CancelToken& token,
+                         const rpc::NotifyFn&) -> rpc::Json {
+        const auto limit = static_cast<std::size_t>(pageLimit(params));
         std::string ref = optionalString(params, "ref");
         if (ref.empty()) ref = "HEAD";
         const std::string cursor = optionalString(params, "cursor");
+        std::optional<LogCursor> position;
+        if (!cursor.empty()) {
+          position = decodeLogCursor(cursor);
+          if (!position && !isHexSha(cursor)) {
+            throw rpc::HandlerError{{ErrorCode::InvalidParams, "invalid cursor"}};
+          }
+        }
         auto repo = context.registry.open(params.value("repoId", ""));
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
-        auto walk = newWalk(repo.value(), ref, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
-        if (!walk) throw rpc::HandlerError{{walk.error()}};
         rpc::Json commits = rpc::Json::array();
-        if (!walk.value()) return {{"commits", std::move(commits)}};  // unborn HEAD
+        git_oid tip;
+        if (position) {
+          tip = position->tip;
+          // A snapshot whose tip no longer exists (history rewritten and
+          // collected) has nothing left to page through.
+          git_commit* rawTip = nullptr;
+          if (git_commit_lookup(&rawTip, repo.value().raw(), &tip) != 0) {
+            return {{"commits", std::move(commits)}};
+          }
+          git_commit_free(rawTip);
+        } else {
+          auto resolved = resolveTip(repo.value(), ref);
+          if (!resolved) throw rpc::HandlerError{{resolved.error()}};
+          if (!resolved.value()) return {{"commits", std::move(commits)}};  // unborn HEAD
+          tip = *resolved.value();
+        }
 
-        bool started = cursor.empty();
-        std::optional<std::string> nextCursor;
-        git_oid oid;
-        while (git_revwalk_next(&oid, walk.value().get()) == 0) {
+        const std::string key = logOrderKey(repo.value(), tip);
+        const std::shared_ptr<history_detail::LogOrder> order = orders->acquire(key);
+        std::vector<git_oid> page;
+        bool hasMore = false;
+        std::size_t start = position ? position->offset : 0;
+        {
+          const history_detail::OrderHold hold(*order, token);
+          if (!cursor.empty() && !position) {
+            // Legacy cursor: the sha of the next commit under the current tip.
+            git_oid next;
+            if (git_oid_fromstr(&next, cursor.c_str()) != 0) {
+              throw rpc::HandlerError{{ErrorCode::InvalidParams, "invalid cursor"}};
+            }
+            const auto findNext = [&] {
+              return std::find_if(order->oids.begin(), order->oids.end(),
+                                  [&](const git_oid& oid) { return git_oid_equal(&oid, &next); });
+            };
+            auto found = findNext();
+            if (found == order->oids.end() && !order->complete) {
+              completeOrder(repo.value(), tip, *order, token);
+              found = findNext();
+            }
+            // A cursor that no longer exists (history rewritten) yields an
+            // empty final page rather than an error.
+            start = static_cast<std::size_t>(found - order->oids.begin());
+          }
+          // One past the page: knowing whether anything follows it decides
+          // whether a next cursor is due.
+          const std::size_t end = start + limit;
+          extendRun(repo.value(), tip, *order, end + 1, token);
+          if (!order->complete && order->oids.size() < end) {
+            completeOrder(repo.value(), tip, *order, token);
+          }
+          if (start < order->oids.size()) {
+            const std::size_t stop = std::min(end, order->oids.size());
+            page.assign(order->oids.begin() + static_cast<std::ptrdiff_t>(start),
+                        order->oids.begin() + static_cast<std::ptrdiff_t>(stop));
+          }
+          // An incomplete sequence ends in a commit that still has parents.
+          hasMore = order->oids.size() > end || (!order->complete && order->oids.size() >= end);
+          orders->resized(key, *order, order->oids.size());
+        }
+
+        for (const git_oid& oid : page) {
           token.throwIfCancelled();
-          std::string sha = core::oidToHex(oid);
-          if (!started) {
-            if (sha != cursor) continue;
-            started = true;
-          }
-          if (commits.size() >= static_cast<size_t>(limit)) {
-            nextCursor = std::move(sha);
-            break;
-          }
           git_commit* rawCommit = nullptr;
+          const std::string sha = core::oidToHex(oid);
           if (git_commit_lookup(&rawCommit, repo.value().raw(), &oid) != 0) {
             throw rpc::HandlerError{{core::gitError("lookup commit " + sha)}};
           }
           core::CommitPtr commit(rawCommit);
           commits.push_back(commitSummaryJson(commit.get(), sha));
         }
-        // A cursor that no longer exists (history rewritten) yields an empty
-        // final page rather than an error.
         rpc::Json result = {{"commits", std::move(commits)}};
-        if (nextCursor) result["nextCursor"] = *nextCursor;
+        if (hasMore) result["nextCursor"] = encodeLogCursor(tip, start + limit);
         return result;
       },
       rpc::Mode::Concurrent);
@@ -206,8 +408,11 @@ void registerHistoryMethods(rpc::Dispatcher& dispatcher, ServiceContext& context
         exec::HistoryLogParser parser(
             exec::HistoryLogParser::Stats::Numstat, startPath,
             [&parsed](const exec::HistoryEntry& entry) { parsed.push_back(entry); });
-        std::vector<std::string> args = {"log", "--follow", "--numstat", kLogFormat,
-                                         "--max-count=" + std::to_string(limit + 1)};
+        // The path is literal: `app/[id]/page.tsx` must not match
+        // `app/i/page.tsx`.
+        std::vector<std::string> args = {
+            "--literal-pathspecs", "log",      "--follow",
+            "--numstat",           kLogFormat, "--max-count=" + std::to_string(limit + 1)};
         if (!startRev.empty()) {
           // Precedes the "--" separator; reject option-looking revs.
           if (exec::looksLikeGitOption(startRev)) {

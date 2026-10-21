@@ -4,6 +4,7 @@
 import { BlameCommit, BlameHunk, UNCOMMITTED_SHA } from '@gitglasses/protocol';
 import { FileBlame } from '../model/blameModel';
 import { relativeTime } from '../system/dates';
+import { lfsLastChange } from './blameFormat';
 
 /** Documents whose mode is remembered across reloads; the oldest entries past
  *  this are dropped. */
@@ -66,6 +67,20 @@ export function formatGutterLabel(
   return padGutterLabel(
     `${hunk.sha.slice(0, SHORT_SHA_LENGTH)} ${truncateName(commit.author.name)} ` +
       relativeTime(commit.author.time, nowUnixSeconds),
+  );
+}
+
+/** The single gutter label of a Git LFS file: where its content last
+ *  changed, since its blame lines describe the pointer git stores. */
+export function formatLfsGutterLabel(
+  blame: FileBlame,
+  nowUnixSeconds?: number,
+): string | undefined {
+  const last = lfsLastChange(blame);
+  if (!last) return undefined;
+  return padGutterLabel(
+    `LFS ${last.sha.slice(0, SHORT_SHA_LENGTH)} ${truncateName(last.commit.author.name)} ` +
+      relativeTime(last.commit.author.time, nowUnixSeconds),
   );
 }
 
@@ -213,18 +228,34 @@ export function summarizeRange(
   return { authorCount: authors.size, mostRecent, hasUncommitted };
 }
 
-export function formatFileLensTitle(summary: RangeSummary, nowUnixSeconds?: number): string {
-  if (!summary.mostRecent) {
-    return summary.hasUncommitted ? 'Uncommitted changes' : 'Blame unavailable';
-  }
+/** Title of the lens above a file, or undefined when its blame names
+ *  nobody (nothing committed and nothing changed). */
+export function formatFileLensTitle(
+  summary: RangeSummary,
+  nowUnixSeconds?: number,
+): string | undefined {
+  if (!summary.mostRecent) return summary.hasUncommitted ? 'Uncommitted changes' : undefined;
   const plural = summary.authorCount === 1 ? 'author' : 'authors';
   const when = relativeTime(summary.mostRecent.time, nowUnixSeconds);
   return `${summary.authorCount} ${plural} (${summary.mostRecent.author}, ${when})`;
 }
 
-export function formatSymbolLensTitle(summary: RangeSummary, nowUnixSeconds?: number): string {
-  if (!summary.mostRecent) {
-    return summary.hasUncommitted ? 'Uncommitted changes' : 'Blame unavailable';
-  }
+/** Title of the lens above a symbol, or undefined when its lines have no
+ *  blame. */
+export function formatSymbolLensTitle(
+  summary: RangeSummary,
+  nowUnixSeconds?: number,
+): string | undefined {
+  if (!summary.mostRecent) return summary.hasUncommitted ? 'Uncommitted changes' : undefined;
   return `${summary.mostRecent.author}, ${relativeTime(summary.mostRecent.time, nowUnixSeconds)}`;
+}
+
+/** Title of the file lens of a Git LFS file: where its content last changed. */
+export function formatLfsLensTitle(blame: FileBlame, nowUnixSeconds?: number): string | undefined {
+  const last = lfsLastChange(blame);
+  if (!last) return undefined;
+  return `LFS file · last changed by ${last.commit.author.name}, ${relativeTime(
+    last.commit.author.time,
+    nowUnixSeconds,
+  )}`;
 }

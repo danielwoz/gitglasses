@@ -4,7 +4,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import type { PatchEnvelope, RequestParams } from '@gitglasses/protocol';
+import type { PatchEnvelope, PatchFileChange, RequestParams } from '@gitglasses/protocol';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { defaultFetch, supportsSnippets } from '@gitglasses/integrations';
 import type { EngineClient } from '@gitglasses/rpc';
@@ -16,13 +16,18 @@ import { errorMessage, showConflictGuidance } from '../commands/ui';
 import {
   classifySnippetUrl,
   confirmDetail,
+  confirmMessage,
   envelopeToJson,
-  extractDiffStat,
   parseEnvelope,
   patchFileName,
   snippetProviderHost,
 } from './patchLogic';
-import { decryptEnvelope, encryptEnvelope, isEncryptedEnvelope } from './envelopeCrypto';
+import {
+  EnvelopeFormatError,
+  decryptEnvelope,
+  encryptEnvelope,
+  isEncryptedEnvelope,
+} from './envelopeCrypto';
 
 type PatchSource = RequestParams<'patch/create'>['source'];
 
@@ -174,7 +179,10 @@ async function deliverPatch(
   if (destination.id === 'encrypted') {
     const passphrase = await promptNewPassphrase();
     if (passphrase === undefined) return;
-    json = encryptEnvelope(json, passphrase);
+    json = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'GitGlasses: encrypting patch…' },
+      () => encryptEnvelope(json, passphrase),
+    );
     if (snippetHost) {
       const how = await vscode.window.showQuickPick(
         [
@@ -320,10 +328,69 @@ async function obtainEnvelopeText(
   return vscode.env.clipboard.readText();
 }
 
+const PATCH_SCHEME = 'gitglasses-patch';
+
+/** Read-only documents showing a patch before it is applied. */
+class PatchDocuments implements vscode.TextDocumentContentProvider, vscode.Disposable {
+  private readonly contents = new Map<string, string>();
+  private next = 1;
+
+  async show(envelope: PatchEnvelope): Promise<void> {
+    const name = patchFileName(envelope.summary).replace(/\.ggpatch$/, '.diff');
+    const uri = vscode.Uri.from({ scheme: PATCH_SCHEME, path: `/${this.next++}/${name}` });
+    // Only the latest few stay; an older tab shows a note instead.
+    if (this.contents.size >= 8) {
+      const oldest = this.contents.keys().next().value;
+      if (oldest !== undefined) this.contents.delete(oldest);
+    }
+    this.contents.set(uri.toString(), envelope.patch);
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.languages.setTextDocumentLanguage(document, 'diff');
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.toString()) ?? 'This patch is no longer available.\n';
+  }
+
+  dispose(): void {
+    this.contents.clear();
+  }
+}
+
+/** Asks for the passphrase of an encrypted envelope, three attempts, and
+ *  returns the decrypted envelope text. Undefined when the user gives up. */
+async function decryptWithPrompt(text: string): Promise<string | undefined> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const passphrase = await vscode.window.showInputBox({
+      prompt:
+        attempt === 1
+          ? 'This patch is encrypted — enter its passphrase'
+          : `Wrong passphrase — try again (attempt ${attempt} of 3)`,
+      password: true,
+      ignoreFocusOut: true,
+    });
+    if (passphrase === undefined) return undefined;
+    try {
+      return await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'GitGlasses: decrypting patch…' },
+        () => decryptEnvelope(text, passphrase),
+      );
+    } catch (error) {
+      if (attempt === 3 || error instanceof EnvelopeFormatError) {
+        void vscode.window.showErrorMessage(`GitGlasses: ${errorMessage(error)}.`);
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
 async function applyPatch(
   engine: EngineClient,
   repos: RepositoryService,
   integrations: IntegrationService,
+  patchDocuments: PatchDocuments,
 ): Promise<void> {
   const repo = await requireRepo(repos);
   if (!repo) return;
@@ -339,28 +406,8 @@ async function applyPatch(
   }
   if (text === undefined) return;
 
-  // Encrypted envelopes: prompt for the passphrase, three attempts.
   if (isEncryptedEnvelope(text)) {
-    let decrypted: string | undefined;
-    for (let attempt = 1; attempt <= 3 && decrypted === undefined; attempt++) {
-      const passphrase = await vscode.window.showInputBox({
-        prompt:
-          attempt === 1
-            ? 'This patch is encrypted — enter its passphrase'
-            : `Wrong passphrase — try again (attempt ${attempt} of 3)`,
-        password: true,
-        ignoreFocusOut: true,
-      });
-      if (passphrase === undefined) return;
-      try {
-        decrypted = decryptEnvelope(text, passphrase);
-      } catch (error) {
-        if (attempt === 3) {
-          void vscode.window.showErrorMessage(`GitGlasses: ${errorMessage(error)}.`);
-          return;
-        }
-      }
-    }
+    const decrypted = await decryptWithPrompt(text);
     if (decrypted === undefined) return;
     text = decrypted;
   }
@@ -372,12 +419,43 @@ async function applyPatch(
   }
   const envelope = parsed.envelope;
 
-  const stat = extractDiffStat(envelope.patch);
-  const choice = await vscode.window.showWarningMessage(
-    'Apply this patch to the repository?',
-    { modal: true, detail: confirmDetail(envelope, stat) },
+  // The confirmation lists what git apply itself reads in the patch, so a
+  // plain diff or a mislabelled envelope cannot understate what it changes.
+  let files: PatchFileChange[];
+  try {
+    const preview = await engine.request('patch/apply', {
+      repoId: repo.repoId,
+      envelope,
+      dryRun: true,
+    });
+    files = preview.files ?? [];
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      `GitGlasses: cannot apply patch — git cannot read it: ${errorMessage(error)}`,
+    );
+    return;
+  }
+  if (files.length === 0) {
+    void vscode.window.showErrorMessage('GitGlasses: cannot apply patch — it changes no files.');
+    return;
+  }
+
+  const message = confirmMessage(files);
+  const detail = confirmDetail(envelope, files);
+  let choice = await vscode.window.showWarningMessage(
+    message,
+    { modal: true, detail },
     'Apply',
+    'Show Patch',
   );
+  if (choice === 'Show Patch') {
+    await patchDocuments.show(envelope);
+    // Not modal, so the patch can be read and scrolled while this waits.
+    choice = await vscode.window.showWarningMessage(
+      `${message} (${files.length} ${files.length === 1 ? 'file' : 'files'}, shown in the editor)`,
+      'Apply',
+    );
+  }
   if (choice !== 'Apply') return;
 
   try {
@@ -400,7 +478,9 @@ async function applyPatch(
       );
       return;
     }
-    void vscode.window.showErrorMessage('GitGlasses: the patch could not be applied.');
+    void vscode.window.showErrorMessage(
+      `GitGlasses: the patch could not be applied${result.message ? `: ${result.message}` : '.'}`,
+    );
   } catch (error) {
     void vscode.window.showErrorMessage(`GitGlasses: applying patch failed: ${errorMessage(error)}`);
   }
@@ -411,12 +491,15 @@ export function registerPatchCommands(
   repos: RepositoryService,
   integrations: IntegrationService,
 ): vscode.Disposable[] {
+  const patchDocuments = new PatchDocuments();
   return [
+    patchDocuments,
+    vscode.workspace.registerTextDocumentContentProvider(PATCH_SCHEME, patchDocuments),
     vscode.commands.registerCommand('gitglasses.createPatch', (node?: ViewNode) =>
       createPatch(engine, repos, integrations, node),
     ),
     vscode.commands.registerCommand('gitglasses.applyPatch', () =>
-      applyPatch(engine, repos, integrations),
+      applyPatch(engine, repos, integrations, patchDocuments),
     ),
   ];
 }

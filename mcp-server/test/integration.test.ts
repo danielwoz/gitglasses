@@ -97,6 +97,33 @@ describe.skipIf(!enginePath)('engine integration', () => {
     git(repoDir, 'checkout', '--', 'hello.txt');
   });
 
+  it('apply_patch says why git did not apply a patch', async () => {
+    // A patch that adds a file the working tree already has, in a repository
+    // of its own so the shared fixture keeps its state.
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'gitglasses-mcp-apply-'));
+    try {
+      git(dir, 'init', '-b', 'main');
+      git(dir, 'config', 'user.name', 'Test Author');
+      git(dir, 'config', 'user.email', 'test@example.com');
+      git(dir, 'commit', '--allow-empty', '-m', 'Initial commit');
+      await writeFile(path.join(dir, 'added.txt'), 'new\n');
+      const local = createToolHandlers({ client, allow: [dir], env: {} });
+      const patch = await local.create_patch({ repoPath: dir, source: 'wip' });
+      expect(patch).toContain('added.txt');
+
+      const text = await local.apply_patch({ repoPath: dir, envelopeJson: patch });
+      expect(text).toContain('applied: false');
+      expect(text).toContain('conflicts: false');
+      expect(text).toMatch(/^message: .+/m);
+      expect(text).toContain('added.txt');
+      // git's further lines stay with the message rather than reading as
+      // fields of their own.
+      for (const line of text.split('\n').slice(4)) expect(line).toMatch(/^ {2}\S/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses to apply a truncated patch', async () => {
     await writeFile(path.join(repoDir, 'hello.txt'), 'one\nTWO\nthree\n');
     const patch = await handlers.create_patch({

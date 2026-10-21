@@ -816,11 +816,18 @@ export function createToolHandlers(context: ToolContext) {
       }
       const { client, repoId } = await repoFor(args.repoPath);
       const result = await client.request('patch/apply', { repoId, envelope });
-      return [
+      const lines = [
         `applied: ${result.applied}`,
         `conflicts: ${result.conflicts}`,
         `base found: ${result.baseFound}`,
-      ].join('\n');
+      ];
+      // git's explanation of a patch it did not apply; its later lines are
+      // indented under the first.
+      if (result.message) {
+        const [first, ...rest] = result.message.split(/\r?\n/);
+        lines.push(`message: ${first}`, ...rest.map((line) => `  ${line}`));
+      }
+      return lines.join('\n');
     },
 
     // Takes no arguments: the provider is GitHub, and the token and host both

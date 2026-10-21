@@ -1,0 +1,16 @@
+{
+  "method": "ui/askpass",
+  "kind": "params",
+  "payload": {
+    "requestId": 42,
+    "method": "mutate/push",
+    "repoId": "r1",
+    "kind": "password",
+    "prompt": "Password for 'https://alice@git.example.com': ",
+    "protocol": "https",
+    "host": "git.example.com",
+    "username": "alice",
+    "secret": true,
+    "interactive": true
+  }
+}

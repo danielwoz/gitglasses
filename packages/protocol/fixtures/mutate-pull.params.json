@@ -1,0 +1,10 @@
+{
+  "method": "mutate/pull",
+  "kind": "params",
+  "payload": {
+    "repoId": "r1",
+    "autoStash": true,
+    "strategy": "rebase",
+    "remember": true
+  }
+}

@@ -42,6 +42,12 @@ export function findEngineBinary(options: {
   return options.candidates.find((candidate) => fs.existsSync(candidate));
 }
 
+/** How long kill() waits for the engine to exit on its own before killing
+ *  it. Once its stdin closes the engine lets requests in flight finish for
+ *  up to 2 s, then cancels the rest and gives their git up to 1 s to exit on
+ *  SIGTERM; killing the engine sooner would leave that git running. */
+export const ENGINE_EXIT_GRACE_MS = 5000;
+
 /** Factory for EngineClient: each call yields a fresh transport, so respawns
  *  never reuse a dead process's streams. */
 export function createProcessTransportFactory(
@@ -56,6 +62,9 @@ export class ProcessTransport implements EngineTransport {
   private messageHandler: ((payload: string) => void) | undefined;
   private exitHandler: ((info: { code: number | null }) => void) | undefined;
   private exited = false;
+  // Set when a write to the engine's stdin failed (EPIPE once the engine has
+  // gone); later sends are dropped instead of failing again.
+  private stdinBroken = false;
 
   constructor(private readonly options: ProcessTransportOptions) {}
 
@@ -78,6 +87,13 @@ export class ProcessTransport implements EngineTransport {
     child.stderr.on('data', (chunk: Buffer) => {
       this.options.onLog?.(chunk.toString('utf8').trimEnd());
     });
+    // A write racing the engine's exit fails asynchronously with EPIPE on the
+    // stdin stream. Unhandled, that 'error' event throws and takes the host
+    // process down; the exit that follows is reported through 'exit'.
+    child.stdin.on('error', (error) => {
+      this.stdinBroken = true;
+      this.options.onLog?.(`engine stdin: ${error.message}`);
+    });
     child.on('exit', (code) => this.emitExit(code));
     child.on('error', (error) => {
       // Spawn failures (missing binary, EACCES) surface as an exit without a
@@ -95,6 +111,7 @@ export class ProcessTransport implements EngineTransport {
   }
 
   send(payload: string): void {
+    if (this.exited || this.stdinBroken) return;
     const stdin = this.process?.stdin;
     if (!stdin?.writable) return;
     try {
@@ -109,6 +126,8 @@ export class ProcessTransport implements EngineTransport {
     child?.stdin?.end(); // engine exits when stdin closes
     // Backstop for an engine that does not; unref'd so the wait never holds
     // the host process open.
-    setTimeout(() => child?.kill('SIGKILL'), 2000).unref?.();
+    setTimeout(() => {
+      if (!this.exited) child?.kill('SIGKILL');
+    }, ENGINE_EXIT_GRACE_MS).unref?.();
   }
 }

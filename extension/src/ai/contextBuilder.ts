@@ -56,6 +56,32 @@ export function rankFiles<T extends { path: string }>(files: readonly T[]): T[] 
     .map((entry) => entry.file);
 }
 
+/** The `max` files most worth showing a model: ranked source > config >
+ *  docs, with generated files last so they are only named, never read. */
+export function pickFilesToShow<T extends { path: string }>(files: readonly T[], max: number): T[] {
+  const generated = files.filter((file) => isGeneratedPath(file.path));
+  const kept = files.filter((file) => !isGeneratedPath(file.path));
+  return [...rankFiles(kept), ...generated].slice(0, max);
+}
+
+/** Largest commit whose whole patch is read for a model. A bigger one (a
+ *  vendor drop, an initial import) would mostly be cut from the context, so
+ *  only the files that can fit are read instead. */
+export const WHOLE_PATCH_MAX_FILES = 300;
+export const WHOLE_PATCH_MAX_LINES = 30_000;
+
+export function wholePatchFits(commit: {
+  truncated: boolean;
+  files: readonly unknown[];
+  stats: { additions: number; deletions: number };
+}): boolean {
+  return (
+    !commit.truncated &&
+    commit.files.length <= WHOLE_PATCH_MAX_FILES &&
+    commit.stats.additions + commit.stats.deletions <= WHOLE_PATCH_MAX_LINES
+  );
+}
+
 export const CHARS_PER_TOKEN = 4;
 
 export function estimateTokens(text: string): number {
@@ -122,21 +148,37 @@ export function buildDiffContext(files: readonly DiffFile[], budgetTokens: numbe
   const ranked = rankFiles(kept);
   const budgetChars = Math.max(0, budgetTokens * CHARS_PER_TOKEN);
 
-  // Omit lowest-ranked files until the per-file cap gives everyone a useful
-  // allocation within the budget (headers and markers reserved up front).
-  const included = [...ranked];
-  let cap: number | undefined;
-  for (; included.length > 0; included.pop()) {
-    const overhead = included.reduce(
-      (sum, file) => sum + sectionHeader(file.path).length + TRUNCATION_MARKER.length + 1,
-      0,
-    );
-    cap = biggestFirstCap(
-      included.map((file) => file.patch.length),
-      budgetChars - overhead,
-    );
-    if (cap !== undefined) break;
+  // Keep the longest run of top-ranked files whose per-file cap still gives
+  // each a useful allocation within the budget (headers and markers reserved
+  // up front). Dropping a file only frees budget for the rest, so whether the
+  // first k fit is monotone in k and a binary search finds the longest run.
+  // No more files can fit than their reserved overhead alone allows.
+  const overheads = [0];
+  for (const file of ranked) {
+    const next =
+      overheads[overheads.length - 1] +
+      sectionHeader(file.path).length +
+      TRUNCATION_MARKER.length +
+      1;
+    if (next > budgetChars) break;
+    overheads.push(next);
   }
+  const capFor = (count: number): number | undefined =>
+    count === 0
+      ? undefined
+      : biggestFirstCap(
+          ranked.slice(0, count).map((file) => file.patch.length),
+          budgetChars - overheads[count],
+        );
+  let low = 0;
+  let high = overheads.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (capFor(middle) !== undefined) low = middle;
+    else high = middle - 1;
+  }
+  const included = ranked.slice(0, low);
+  const cap = capFor(low);
 
   const omitted = [...ranked.slice(included.length).map((file) => file.path), ...generated];
   let truncated = false;
@@ -156,4 +198,76 @@ export function buildDiffContext(files: readonly DiffFile[], budgetTokens: numbe
     omittedPaths: omitted,
     truncated,
   };
+}
+
+// --- Patch text → per-file sections ------------------------------------------
+
+/** Undoes git's C-style quoting of a path ("a/t\303\244st \"x\""). */
+export function unquoteGitPath(text: string): string {
+  if (!(text.startsWith('"') && text.endsWith('"') && text.length >= 2)) return text;
+  const bytes: number[] = [];
+  const inner = text.slice(1, -1);
+  const escapes: Record<string, number> = { n: 10, t: 9, r: 13, b: 8, f: 12, a: 7, v: 11 };
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== '\\' || i + 1 >= inner.length) {
+      bytes.push(...new TextEncoder().encode(ch));
+      continue;
+    }
+    const next = inner[++i];
+    if (/[0-7]/.test(next) && /^[0-7]{3}$/.test(inner.slice(i, i + 3))) {
+      bytes.push(parseInt(inner.slice(i, i + 3), 8));
+      i += 2;
+    } else if (escapes[next] !== undefined) {
+      bytes.push(escapes[next]);
+    } else {
+      bytes.push(...new TextEncoder().encode(next));
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+function stripSidePrefix(path: string, side: 'a/' | 'b/'): string {
+  return path.startsWith(side) ? path.slice(2) : path;
+}
+
+/** The file a `diff --git` section is about: its post-image path from the
+ *  `+++` line, the pre-image path for a deletion, or the header otherwise. */
+function sectionPath(lines: readonly string[]): string {
+  const plus = lines.find((line) => line.startsWith('+++ '));
+  const minus = lines.find((line) => line.startsWith('--- '));
+  const field = (line: string): string => unquoteGitPath(line.slice(4).replace(/\t.*$/, ''));
+  if (plus && field(plus) !== '/dev/null') return stripSidePrefix(field(plus), 'b/');
+  if (minus && field(minus) !== '/dev/null') return stripSidePrefix(field(minus), 'a/');
+  const rename = lines.find((line) => line.startsWith('rename to '));
+  if (rename) return unquoteGitPath(rename.slice('rename to '.length));
+  const header = lines[0].slice('diff --git '.length);
+  const quoted = /^"(?:[^"\\]|\\.)*" ("(?:[^"\\]|\\.)*")$/.exec(header);
+  if (quoted) return stripSidePrefix(unquoteGitPath(quoted[1]), 'b/');
+  // Unquoted "a/x b/x": both halves are the same length when unrenamed.
+  const half = (header.length - 1) / 2;
+  if (Number.isInteger(half) && header[half] === ' ') {
+    return stripSidePrefix(header.slice(half + 1), 'b/');
+  }
+  return header;
+}
+
+/** Splits `git diff` output into one DiffFile per file. */
+export function splitPatch(patch: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  let current: string[] | undefined;
+  const flush = (): void => {
+    if (!current) return;
+    files.push({ path: sectionPath(current), patch: current.join('\n').trimEnd() });
+  };
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      flush();
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  flush();
+  return files;
 }

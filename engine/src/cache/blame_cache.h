@@ -19,8 +19,9 @@ struct BlameResult {
 };
 
 // Byte-budgeted LRU of parsed blame results. Keys are content-addressed —
-// (blamed commit OID, blob OID) — so entries never go stale; they are only
-// evicted. Thread-safe.
+// (blamed commit OID, blob OID, path), extended by the caller with whatever
+// else shapes the answer — so entries never go stale; they are only evicted.
+// Thread-safe.
 class BlameCache {
  public:
   explicit BlameCache(size_t byteBudget = 64 << 20) : budget_(byteBudget) {}
@@ -28,7 +29,10 @@ class BlameCache {
   std::shared_ptr<const BlameResult> get(const std::string& key);
   void put(const std::string& key, std::shared_ptr<const BlameResult> result);
 
-  static std::string makeKey(const std::string& commitOid, const std::string& blobOid);
+  // The path is part of the key: two files with identical contents in one
+  // commit share a blob but not a history.
+  static std::string makeKey(const std::string& commitOid, const std::string& blobOid,
+                             const std::string& path);
 
   size_t bytesUsed() const;
 

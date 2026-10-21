@@ -102,6 +102,11 @@ TEST_F(NoCliSessionTest, FullSessionWithoutGitCli) {
 
   Json status = session.request(req(7, "status/summary", {{"repoId", repoId}}));
   ASSERT_TRUE(status.contains("result")) << status.dump();
+
+  Json details = session.request(req(8, "commit/details", {{"repoId", repoId}, {"sha", "HEAD"}}));
+  ASSERT_TRUE(details.contains("result")) << details.dump();
+  EXPECT_EQ(details["result"].value("subject", ""), "add app");
+  EXPECT_EQ(details["result"]["stats"].value("files", 0), 1);
 }
 
 // Without the CLI nothing can run a clean filter or working-tree-encoding,

@@ -7,10 +7,11 @@ import {
   formatCommitDoc,
   historyEntryDiffSpec,
 } from './viewLogic';
-import { shortSha } from '@gitglasses/protocol/sha';
-import { ViewNode } from './viewBase';
+import { ViewNode, requireRepo } from './viewBase';
+import type { RepositoryService } from '../model/repositoryService';
+import { SHOW_COMMIT_DETAILS_COMMAND } from '../commitDetails/commitDetails';
 
-/** Commit node: click copies the sha and opens the plain-text summary doc. */
+/** Commit node: click shows the commit's details. */
 export function commitNode(commit: CommitSummaryInfo): ViewNode {
   const item = new vscode.TreeItem(commit.summary, vscode.TreeItemCollapsibleState.None);
   item.description = commitDescription(commit);
@@ -53,8 +54,10 @@ export async function openCommitDoc(commit: CommitSummaryInfo): Promise<void> {
   await vscode.window.showTextDocument(doc, { preview: true });
 }
 
-/** Handler for gitglasses.openCommitDiff (tree clicks and context menus). */
-export async function openCommitDiff(node?: ViewNode): Promise<void> {
+/** Handler for gitglasses.openCommitDiff (tree clicks and context menus). A
+ *  commit node carries no repository of its own; it came from a view of the
+ *  active one. */
+export async function openCommitDiff(node?: ViewNode, repos?: RepositoryService): Promise<void> {
   if (node?.diff) {
     const left = encodeRevisionUri(node.diff.left.repoId, node.diff.left.path, node.diff.left.rev);
     const right = encodeRevisionUri(
@@ -66,8 +69,14 @@ export async function openCommitDiff(node?: ViewNode): Promise<void> {
     return;
   }
   if (node?.commit) {
-    await vscode.env.clipboard.writeText(node.commit.sha);
-    await openCommitDoc(node.commit);
-    void vscode.window.setStatusBarMessage(`Copied ${shortSha(node.commit.sha)}`, 3000);
+    const repo = repos && (await requireRepo(repos));
+    if (!repo) {
+      await openCommitDoc(node.commit);
+      return;
+    }
+    await vscode.commands.executeCommand(SHOW_COMMIT_DETAILS_COMMAND, {
+      repoPath: repo.rootPath,
+      sha: node.commit.sha,
+    });
   }
 }

@@ -111,12 +111,41 @@ const TRUST_REQUIRED = [
   'gitglasses.suggestChange',
   'gitglasses.home.push',
   'gitglasses.home.pull',
+  'gitglasses.continueOperation',
+  'gitglasses.abortOperation',
   'gitglasses.home.switchBranch',
   'gitglasses.home.createBranch',
   'gitglasses.stageSelectedHunks',
   'gitglasses.unstageSelectedHunks',
   'gitglasses.showLineHistory',
   'gitglasses.showFileHistory',
+  'gitglasses.shortcut.gitCommands',
+  'gitglasses.shortcut.showFileHistory',
+  'gitglasses.branch.checkout',
+  'gitglasses.branch.create',
+  'gitglasses.branch.rename',
+  'gitglasses.branch.delete',
+  'gitglasses.branch.merge',
+  'gitglasses.branch.rebase',
+  'gitglasses.branch.push',
+  'gitglasses.branch.setUpstream',
+  'gitglasses.tag.create',
+  'gitglasses.tag.delete',
+  'gitglasses.tag.push',
+  'gitglasses.tag.deleteRemote',
+  'gitglasses.tag.checkout',
+  'gitglasses.stash.apply',
+  'gitglasses.stash.pop',
+  'gitglasses.stash.drop',
+  'gitglasses.stash.create',
+  'gitglasses.stash.createIncludeUntracked',
+  'gitglasses.remote.fetch',
+  'gitglasses.remote.prune',
+  'gitglasses.remote.add',
+  'gitglasses.remote.remove',
+  'gitglasses.rebase.continue',
+  'gitglasses.rebase.skip',
+  'gitglasses.rebase.abort',
 ];
 
 describe('manifest trust gates', () => {
@@ -137,9 +166,16 @@ describe('manifest trust gates', () => {
   });
 
   it('hides those commands from menus in Restricted Mode', () => {
+    // Every command that needs trust, listed above or not.
+    const gated = new Set(
+      [...commands.values()]
+        .filter((command) => /\bisWorkspaceTrusted\b/.test(command.enablement ?? ''))
+        .map((command) => command.command),
+    );
+    for (const id of TRUST_REQUIRED) expect(gated.has(id), id).toBe(true);
     for (const [menu, items] of Object.entries(manifest.contributes.menus)) {
       for (const item of items) {
-        if (!item.command || !TRUST_REQUIRED.includes(item.command)) continue;
+        if (!item.command || !gated.has(item.command)) continue;
         if (item.when === 'false') continue;
         expect(item.when ?? '', `${menu}: ${item.command}`).toMatch(/\bisWorkspaceTrusted\b/);
       }

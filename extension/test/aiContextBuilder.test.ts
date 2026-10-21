@@ -5,7 +5,13 @@ import {
   categorizeFile,
   estimateTokens,
   isGeneratedPath,
+  pickFilesToShow,
   rankFiles,
+  splitPatch,
+  unquoteGitPath,
+  wholePatchFits,
+  WHOLE_PATCH_MAX_FILES,
+  WHOLE_PATCH_MAX_LINES,
 } from '../src/ai/contextBuilder';
 
 describe('categorizeFile', () => {
@@ -153,5 +159,160 @@ describe('buildDiffContext', () => {
     expect(context.includedPaths).toEqual([]);
     expect(context.text).toContain('(no changes)');
     expect(context.text).toContain('yarn.lock');
+  });
+
+  /** Keeps the longest run of top-ranked files that fits by dropping the
+   *  last one at a time: the result the search must reproduce. */
+  function includedByDroppingOneAtATime(files: { path: string; patch: string }[], budget: number) {
+    const ranked = rankFiles(files.filter((file) => !isGeneratedPath(file.path)));
+    const included = [...ranked];
+    for (; included.length > 0; included.pop()) {
+      const overhead = included.reduce(
+        (sum, file) => sum + `=== ${file.path} ===\n`.length + '\n… [truncated]'.length + 1,
+        0,
+      );
+      const cap = biggestFirstCap(
+        included.map((file) => file.patch.length),
+        budget * 4 - overhead,
+      );
+      if (cap !== undefined) break;
+    }
+    return included.map((file) => file.path);
+  }
+
+  it('keeps the same files as dropping the lowest-ranked one at a time', () => {
+    let seed = 7;
+    const random = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed % n;
+    };
+    const names = ['src/a.ts', 'lib/b.c', 'conf.yaml', 'docs/x.md', 'README.md', 'pnpm-lock.yaml'];
+    for (let round = 0; round < 300; round++) {
+      const files = Array.from({ length: random(60) }, (_, i) => ({
+        path: `${i}/${names[random(names.length)]}`,
+        patch: 'p'.repeat(random(4) === 0 ? random(20_000) : random(600)),
+      }));
+      const budget = [50, 200, 1000, 6000][random(4)];
+      expect(buildDiffContext(files, budget).includedPaths).toEqual(
+        includedByDroppingOneAtATime(files, budget),
+      );
+    }
+  });
+
+  it('stays quick on a commit with tens of thousands of files', () => {
+    const files = Array.from({ length: 40_000 }, (_, i) => ({
+      path: `vendor/lib/module${i}/index.js`,
+      patch: `diff --git a/vendor/lib/module${i}/index.js b/vendor/lib/module${i}/index.js\n+export const a${i} = 1;`,
+    }));
+    const started = performance.now();
+    const context = buildDiffContext(files, 6000);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(context.includedPaths.length).toBeGreaterThan(0);
+    expect(context.includedPaths.length + context.omittedPaths.length).toBe(40_000);
+    expect(context.text.length).toBeLessThanOrEqual(6000 * 4 + 1000);
+  });
+});
+
+describe('pickFilesToShow', () => {
+  it('takes the best-ranked files and lists generated ones last', () => {
+    const picked = pickFilesToShow(
+      [
+        { path: 'pnpm-lock.yaml' },
+        { path: 'README.md' },
+        { path: 'src/b.ts' },
+        { path: 'config.json' },
+        { path: 'src/a.ts' },
+      ],
+      4,
+    );
+    expect(picked.map((file) => file.path)).toEqual([
+      'src/b.ts',
+      'src/a.ts',
+      'config.json',
+      'README.md',
+    ]);
+    expect(pickFilesToShow([{ path: 'yarn.lock' }], 30).map((file) => file.path)).toEqual([
+      'yarn.lock',
+    ]);
+  });
+});
+
+describe('wholePatchFits', () => {
+  const commit = (files: number, lines: number, truncated = false) => ({
+    truncated,
+    files: Array.from({ length: files }),
+    stats: { additions: lines, deletions: 0 },
+  });
+
+  it('reads an ordinary commit whole', () => {
+    expect(wholePatchFits(commit(12, 400))).toBe(true);
+    expect(wholePatchFits(commit(WHOLE_PATCH_MAX_FILES, WHOLE_PATCH_MAX_LINES))).toBe(true);
+  });
+
+  it('does not read a vendor drop or an initial import whole', () => {
+    expect(wholePatchFits(commit(WHOLE_PATCH_MAX_FILES + 1, 10))).toBe(false);
+    expect(wholePatchFits(commit(3, WHOLE_PATCH_MAX_LINES + 1))).toBe(false);
+    expect(wholePatchFits(commit(2000, 10, true))).toBe(false);
+  });
+});
+
+describe('splitPatch', () => {
+  const patch = [
+    'diff --git a/src/app.ts b/src/app.ts',
+    'index 1111111..2222222 100644',
+    '--- a/src/app.ts',
+    '+++ b/src/app.ts',
+    '@@ -1,2 +1,2 @@',
+    '-old',
+    '+new',
+    ' same',
+    'diff --git a/gone.txt b/gone.txt',
+    'deleted file mode 100644',
+    '--- a/gone.txt',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-bye',
+    'diff --git a/old name.md b/new name.md',
+    'similarity index 100%',
+    'rename from old name.md',
+    'rename to new name.md',
+    'diff --git "a/t\\303\\244st \\"q\\".txt" "b/t\\303\\244st \\"q\\".txt"',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ "b/t\\303\\244st \\"q\\".txt"',
+    '@@ -0,0 +1 @@',
+    '+hi',
+    'diff --git a/logo.png b/logo.png',
+    'Binary files a/logo.png and b/logo.png differ',
+    '',
+  ].join('\n');
+
+  it('splits git diff output into one section per file, named by its path', () => {
+    const files = splitPatch(patch);
+    expect(files.map((file) => file.path)).toEqual([
+      'src/app.ts',
+      'gone.txt',
+      'new name.md',
+      'täst "q".txt',
+      'logo.png',
+    ]);
+    expect(files[0].patch).toBe(
+      'diff --git a/src/app.ts b/src/app.ts\nindex 1111111..2222222 100644\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n same',
+    );
+    expect(files[4].patch).toContain('Binary files');
+  });
+
+  it('copes with prefix-less output and no files', () => {
+    expect(
+      splitPatch('diff --git x.txt x.txt\n--- x.txt\n+++ x.txt\n@@ -1 +1 @@\n-a\n+b\n')[0].path,
+    ).toBe('x.txt');
+    expect(splitPatch('')).toEqual([]);
+  });
+});
+
+describe('unquoteGitPath', () => {
+  it('decodes octal UTF-8 bytes and escapes, and leaves plain paths alone', () => {
+    expect(unquoteGitPath('"a/t\\303\\244st\\tx\\\\y"')).toBe('a/täst\tx\\y');
+    expect(unquoteGitPath('plain/path.ts')).toBe('plain/path.ts');
   });
 });

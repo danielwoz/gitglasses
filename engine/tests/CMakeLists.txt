@@ -12,10 +12,13 @@ add_executable(engine_tests
   unit/blame_service_test.cpp
   unit/doc_overlay_test.cpp
   unit/blame_backend_parity_test.cpp
+  unit/blame_session_test.cpp
   unit/no_cli_session_test.cpp
   unit/restricted_mode_test.cpp
   unit/history_log_parser_test.cpp
   unit/history_service_test.cpp
+  unit/search_service_test.cpp
+  unit/commit_service_test.cpp
   unit/rev_service_test.cpp
   unit/graph_service_test.cpp
   unit/status_service_test.cpp
@@ -23,11 +26,18 @@ add_executable(engine_tests
   unit/mutate_service_test.cpp
   unit/patch_service_test.cpp
   unit/rebase_service_test.cpp
+  unit/ref_methods_test.cpp
   unit/sha256_test.cpp
   unit/hardening_test.cpp
   unit/watch_manager_test.cpp
   unit/protocol_contract_test.cpp
   unit/version_test.cpp
+  unit/askpass_test.cpp
+  unit/network_auth_test.cpp
+  unit/sync_service_test.cpp
+  unit/task_pool_test.cpp
+  unit/git_errors_test.cpp
+  unit/client_channel_test.cpp
   ../src/server.cpp
 )
 target_include_directories(engine_tests PRIVATE ../src)
@@ -35,7 +45,8 @@ target_include_directories(engine_tests PRIVATE ../src)
 # artifact committed in the TypeScript protocol package.
 target_compile_definitions(engine_tests PRIVATE
   GG_PROTOCOL_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/protocol/protocol.schema.json"
-  GG_EXTENSION_MANIFEST_PATH="${PROJECT_SOURCE_DIR}/extension/package.json")
+  GG_EXTENSION_MANIFEST_PATH="${PROJECT_SOURCE_DIR}/extension/package.json"
+  GG_TEST_TOOLS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools")
 # The fixtures use std::fopen/std::getenv, which MSVC flags as "insecure".
 if(MSVC)
   target_compile_definitions(engine_tests PRIVATE _CRT_SECURE_NO_WARNINGS)

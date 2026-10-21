@@ -10,7 +10,8 @@ namespace gg::core {
 
 struct HeadState {
   std::string oid;              // empty for unborn HEAD
-  std::string branch;           // short name, empty when detached
+  std::string branch;           // short name, empty when detached; for an unborn
+                                // HEAD, the branch the first commit creates
   bool detached = false;
   bool unborn = false;
 };

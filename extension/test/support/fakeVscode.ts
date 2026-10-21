@@ -86,12 +86,18 @@ export const controls = {
   documentClosed: new EventEmitter<FakeTextDocument>(),
   documentSaved: new EventEmitter<FakeTextDocument>(),
   messages: [] as string[],
+  /** Documents workspace.textDocuments lists. */
+  openDocuments: [] as Array<{ uri: FakeUri }>,
+  /** Commands run through commands.executeCommand, with their arguments. */
+  executed: [] as Array<{ command: string; args: unknown[] }>,
 
   reset(): void {
     this.folders = [];
     this.settings.clear();
     this.watchedPatterns = [];
     this.messages = [];
+    this.openDocuments = [];
+    this.executed = [];
   },
 
   /** Fires a configuration change touching the given setting keys. */
@@ -125,8 +131,8 @@ export const workspace = {
       index,
     }));
   },
-  get textDocuments(): FakeTextDocument[] {
-    return [];
+  get textDocuments(): Array<{ uri: FakeUri }> {
+    return controls.openDocuments;
   },
   getConfiguration(section: string) {
     return {
@@ -175,6 +181,32 @@ export const window = {
     return undefined;
   },
 };
+
+export const commands = {
+  async executeCommand(command: string, ...args: unknown[]): Promise<undefined> {
+    controls.executed.push({ command, args });
+    return undefined;
+  },
+};
+
+export const TreeItemCollapsibleState = { None: 0, Collapsed: 1, Expanded: 2 } as const;
+
+export class ThemeIcon {
+  constructor(readonly id: string) {}
+}
+
+export class TreeItem {
+  description?: string;
+  tooltip?: string;
+  iconPath?: ThemeIcon;
+  contextValue?: string;
+  command?: { command: string; title: string; arguments?: unknown[] };
+
+  constructor(
+    readonly label: string,
+    readonly collapsibleState: number = TreeItemCollapsibleState.None,
+  ) {}
+}
 
 /** A text document for the change, close and save events. */
 export function textDocument(fsPath: string, text: string, version = 1): FakeTextDocument {

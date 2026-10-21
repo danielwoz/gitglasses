@@ -45,7 +45,6 @@ describe('files in a repository nested in a known one', () => {
   });
 
   it('sends unsaved contents to the inner repository', async () => {
-    vi.useFakeTimers();
     const { repos, notifications } = await knownParent();
     const sync = new DocumentSync(
       {
@@ -54,10 +53,11 @@ describe('files in a repository nested in a known one', () => {
       repos,
     );
     try {
-      controls.documentChanged.fire({
-        document: textDocument('/w/parent/sub/lib.txt', 'edited\n', 7),
+      const document = textDocument('/w/parent/sub/lib.txt', 'edited\n', 7);
+      expect(await sync.sync(document as unknown as vscode.TextDocument)).toEqual({
+        kind: 'buffer',
+        version: 7,
       });
-      await vi.advanceTimersByTimeAsync(200);
 
       expect(notifications).toEqual([
         {
@@ -89,12 +89,12 @@ describe('files in a repository nested in a known one', () => {
     );
     try {
       const document = textDocument('/w/parent/sub/lib.txt', 'edited\n');
-      controls.documentChanged.fire({ document });
+      const synced = sync.sync(document as unknown as vscode.TextDocument);
       await vi.advanceTimersByTimeAsync(200);
       document.isDirty = false;
       release();
-      await vi.advanceTimersByTimeAsync(0);
 
+      expect(await synced).toEqual({ kind: 'disk' });
       expect(notifications).toEqual([]);
     } finally {
       sync.dispose();

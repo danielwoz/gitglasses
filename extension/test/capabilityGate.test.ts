@@ -30,7 +30,16 @@ const CLI_METHODS = [
   'rebase/preview',
   'rebase/start',
   'rebase/continue',
+  'rebase/skip',
   'rebase/abort',
+  'branch/rename',
+  'branch/setUpstream',
+  'branch/push',
+  'tag/create',
+  'tag/delete',
+  'tag/push',
+  'remote/add',
+  'remote/remove',
   'stash/push',
   'stash/apply',
   'stash/drop',
@@ -40,6 +49,7 @@ const CLI_METHODS = [
   'patch/apply',
   'history/file',
   'history/line',
+  'search/log',
 ];
 
 const PURE_METHODS = [
@@ -59,6 +69,7 @@ const PURE_METHODS = [
   'diff/commit',
   'diff/refs',
   'diff/fileHunks',
+  'commit/details',
   'stage/files',
   'stage/hunks',
   'worktree/list',
@@ -121,6 +132,7 @@ describe('isMethodAvailable in Restricted Mode', () => {
       'diff/fileHunks',
       'rev/fileAtRev',
       'refs/list',
+      'commit/details',
     ]) {
       expect(isMethodAvailable(restricted, method), method).toBe(true);
     }
