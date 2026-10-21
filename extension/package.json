@@ -2085,7 +2085,7 @@
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.28.2",
     "mocha": "^10.8.2",
-    "typescript": "^5.6.0",
+    "typescript": "^6.0.3",
     "vitest": "^2.1.0"
   }
 }
