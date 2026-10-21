@@ -1,22 +1,27 @@
 #!/usr/bin/env node
-// Inspects a packaged VSIX and, optionally, runs the engine inside it.
+// Inspects a packaged VSIX and, optionally, runs the engine and the MCP server
+// inside it.
 // Usage:
 //   node scripts/verify-vsix.mjs <file.vsix> --target <target> [options]
 // Options:
 //   --version <v>             the release version the package must carry
 //                             (default: extension/package.json)
 //   --run                     run the packaged engine (--version and an
-//                             initialize handshake) on this machine
+//                             initialize handshake) on this machine, then
+//                             the packaged MCP server with it (handshake,
+//                             tools/list and git_status on a new repository)
 //   --extract-engine <path>   write the packaged engine to <path>, e.g. to
 //                             run it inside a container
 //
 // Exits non-zero, listing every problem, when the package is not releasable.
 
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { smokeTestEngine } from './lib/engine-smoke.mjs';
+import { smokeTestMcpServer } from './lib/mcp-smoke.mjs';
 import { inspectVsix } from './lib/vsix.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -47,7 +52,7 @@ if (!options.vsix || !options.target) {
 
 const readJson = (file) => JSON.parse(readFileSync(path.join(root, file), 'utf8'));
 const version = options.version ?? readJson('extension/package.json').version;
-const { problems, engine } = inspectVsix(readFileSync(options.vsix), {
+const { problems, engine, mcp } = inspectVsix(readFileSync(options.vsix), {
   target: options.target,
   version,
 });
@@ -70,6 +75,26 @@ if (engine && options.run) {
     );
   } catch (error) {
     fail(`${path.basename(options.vsix)}: the packaged engine failed to run: ${error.message}`);
+  }
+  // The MCP server alone in a directory with no node_modules, as the editor
+  // runs it, reading a repository through the packaged engine.
+  try {
+    const cli = path.join(dir, 'mcp', 'cli.js');
+    mkdirSync(path.dirname(cli));
+    writeFileSync(cli, mcp.data);
+    const repo = path.join(dir, 'repo');
+    mkdirSync(repo);
+    execFileSync('git', ['init', '-q', repo], { stdio: 'ignore' });
+    const { tools, text } = await smokeTestMcpServer(cli, {
+      version,
+      env: { GITGLASSES_ENGINE: file, GITGLASSES_ALLOWED_ROOTS: '' },
+      cwd: repo,
+      call: { name: 'git_status', arguments: { repoPath: repo } },
+    });
+    if (!text.includes('no commits yet')) throw new Error(`git_status answered: ${text}`);
+    console.log(`MCP server ran: ${tools.length} tools, git_status answered`);
+  } catch (error) {
+    fail(`${path.basename(options.vsix)}: the packaged MCP server failed to run: ${error.message}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

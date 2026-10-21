@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BlameCommit, BlameHunk } from '@gitglasses/protocol';
 import {
   BLAME_HOVER_COMMANDS,
+  MAX_BODY_LINES,
   commandLink,
   joinBlocks,
   messageBlocks,
@@ -101,6 +102,16 @@ describe('blame hover', () => {
     for (const link of found) expect(BLAME_HOVER_COMMANDS).toContain(link.command);
   });
 
+  it('asks why the hovered line is the way it is, first', () => {
+    const found = links(renderCommitHover(input({ documentUri: 'file:///repo/src/new.ts' })));
+    expect(found[0]).toEqual({
+      label: '$(question) Why this line?',
+      command: 'gitglasses.showLineStory',
+      arg: { uri: 'file:///repo/src/new.ts', line: 12 },
+    });
+    expect(BLAME_HOVER_COMMANDS).toContain('gitglasses.showLineStory');
+  });
+
   it('drops the links it cannot serve', () => {
     const rootCommit = { ...commit, boundary: true };
     const noPrevious = { ...hunk, previous: undefined };
@@ -170,6 +181,53 @@ describe('commit message body', () => {
     expect(joinBlocks(blocks.map((b) => ({ markdown: b.text, listItem: b.listItem })))).toBe(
       'First paragraph wrapped here.\n\n- one  \n- two\n\nCloses #4',
     );
+  });
+
+  it('keeps the lines of the trailer paragraph apart', () => {
+    const body = [
+      'Fix the parser.',
+      '',
+      'Signed-off-by: Ada <ada@example.com>',
+      'Signed-off-by: Grace',
+      ' <grace@example.com>',
+    ].join('\n');
+    const trailers = [
+      { key: 'Signed-off-by', value: 'Ada <ada@example.com>' },
+      { key: 'Signed-off-by', value: 'Grace\n <grace@example.com>' },
+    ];
+    const { blocks } = messageBlocks(body, MAX_BODY_LINES, trailers);
+    expect(blocks).toEqual([
+      { text: 'Fix the parser.', listItem: false },
+      { text: 'Signed-off-by: Ada <ada@example.com>', listItem: false, trailer: true },
+      { text: 'Signed-off-by: Grace <grace@example.com>', listItem: false, trailer: true },
+    ]);
+    expect(
+      joinBlocks(
+        blocks.map((b) => ({ markdown: b.text, listItem: b.listItem, trailer: b.trailer })),
+      ),
+    ).toBe(
+      'Fix the parser.\n\nSigned-off-by: Ada <ada@example.com>  \n' +
+        'Signed-off-by: Grace <grace@example.com>',
+    );
+    // A paragraph the trailers were not parsed from reflows like any other.
+    expect(messageBlocks(body).blocks.map((b) => b.text)).toEqual([
+      'Fix the parser.',
+      'Signed-off-by: Ada <ada@example.com> Signed-off-by: Grace <grace@example.com>',
+    ]);
+  });
+
+  it('ends the trailer lines where a patch starts', () => {
+    const body = 'Fix the parser.\n\nSigned-off-by: Ada\nAcked-by: Grace\n---\nv2: reworded';
+    const trailers = [
+      { key: 'Signed-off-by', value: 'Ada' },
+      { key: 'Acked-by', value: 'Grace' },
+    ];
+    expect(messageBlocks(body, MAX_BODY_LINES, trailers).blocks).toEqual([
+      { text: 'Fix the parser.', listItem: false },
+      { text: 'Signed-off-by: Ada', listItem: false, trailer: true },
+      { text: 'Acked-by: Grace', listItem: false, trailer: true },
+      { text: '--- v2: reworded', listItem: false },
+    ]);
   });
 
   it('cuts long messages short', () => {

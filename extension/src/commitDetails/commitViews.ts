@@ -7,7 +7,14 @@ import { shortSha } from '@gitglasses/protocol/sha';
 import { EngineClient } from '@gitglasses/rpc';
 import { encodeRevisionUri } from '../scm/revisionContentProvider';
 import { errorMessage } from '../commands/ui';
-import type { ChangesTarget, DetailsView, FileTarget } from '../../webviews-src/graph/ipc';
+import type { CommitProvenance } from '@gitglasses/protocol';
+import type {
+  ChangesTarget,
+  DetailsView,
+  FileTarget,
+  ProvenanceMark,
+} from '../../webviews-src/graph/ipc';
+import { provenanceLines, summarizeProvenance } from '../provenance/provenanceLogic';
 import {
   ChangeSide,
   changeTitle,
@@ -17,17 +24,48 @@ import {
   isMissingCommand,
 } from './commitDetailsLogic';
 
-/** One commit in full. `stashIndex` marks a stash entry. */
+/** Where the details views read what a commit declares about who wrote it. */
+export interface ProvenanceSource {
+  get(repoId: string, sha: string): Promise<CommitProvenance | undefined>;
+}
+
+/** The mark the graph and the details view show for `provenance`, or
+ *  undefined when it declares nothing. */
+export function provenanceMark(
+  provenance: CommitProvenance | undefined,
+): ProvenanceMark | undefined {
+  const summary = summarizeProvenance(provenance);
+  if (!summary) return undefined;
+  return {
+    agent: summary.agent,
+    label: summary.label,
+    via: summary.via,
+    text: summary.text,
+    lines: provenanceLines(provenance),
+    ...(summary.sessionUrl ? { sessionUrl: summary.sessionUrl } : {}),
+  };
+}
+
+/** One commit in full, with what it declares about who wrote it when
+ *  `provenance` is given. `stashIndex` marks a stash entry. */
 export async function loadCommitView(
   engine: EngineClient,
   repoId: string,
   sha: string,
   stashIndex?: number,
+  provenance?: ProvenanceSource,
 ): Promise<DetailsView> {
   const details = await engine.request('commit/details', { repoId, sha });
-  return stashIndex === undefined
-    ? { kind: 'commit', details }
-    : { kind: 'commit', details, stash: { index: stashIndex } };
+  const mark =
+    provenance && stashIndex === undefined
+      ? provenanceMark(await provenance.get(repoId, details.sha).catch(() => undefined))
+      : undefined;
+  return {
+    kind: 'commit',
+    details,
+    ...(stashIndex === undefined ? {} : { stash: { index: stashIndex } }),
+    ...(mark ? { provenance: mark } : {}),
+  };
 }
 
 /** The files that differ between two commits, `base` older than `head`. */

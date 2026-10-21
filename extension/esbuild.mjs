@@ -1,5 +1,5 @@
 import esbuild from 'esbuild';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,6 +60,16 @@ const configs = [
     minify: !watch,
   },
   {
+    entryPoints: ['webviews-src/lineStory/main.ts'],
+    bundle: true,
+    outfile: 'dist/webviews/lineStory.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2022',
+    sourcemap: true,
+    minify: !watch,
+  },
+  {
     entryPoints: ['webviews-src/rebase/main.ts'],
     bundle: true,
     outfile: 'dist/webviews/rebase.js',
@@ -80,6 +90,62 @@ const configs = [
     minify: !watch,
   },
 ];
+
+// The MCP server the extension registers with the editor's agents
+// (src/mcp/), as one self-contained CommonJS script that the editor's own
+// Node runs: everything it imports is bundled, and the version it reports is
+// compiled in. The npm package (mcp-server/esbuild.mjs) is built separately.
+const mcpVersion = JSON.parse(
+  readFileSync(join(root, '..', 'mcp-server', 'package.json'), 'utf8'),
+).version;
+const mcpConfig = {
+  entryPoints: ['../mcp-server/src/cli.ts'],
+  bundle: true,
+  outfile: 'dist/mcp/cli.js',
+  format: 'cjs',
+  platform: 'node',
+  target: 'node20',
+  minify: !watch,
+  metafile: true,
+  define: {
+    GITGLASSES_MCP_VERSION: JSON.stringify(mcpVersion),
+    'import.meta.dirname': '__dirname',
+    // Read only when no version is compiled in.
+    'import.meta.url': 'undefined',
+  },
+  plugins: [
+    {
+      name: 'notice-check',
+      setup(build) {
+        build.onEnd((result) => {
+          if (result.errors.length > 0 || !result.metafile) return;
+          const problems = unnoticedPackages(result.metafile);
+          if (problems.length === 0) return;
+          return {
+            errors: problems.map((name) => ({
+              text: `${name} is bundled into dist/mcp/cli.js but NOTICE does not name it; add its license to NOTICE`,
+            })),
+          };
+        });
+      },
+    },
+  ],
+};
+configs.push(mcpConfig);
+
+// Third-party packages inlined into a bundle that NOTICE does not name. The
+// workspace's own packages need no notice.
+function unnoticedPackages(metafile) {
+  const notice = readFileSync(join(root, '..', 'NOTICE'), 'utf8');
+  const packages = new Set();
+  for (const input of Object.keys(metafile.inputs)) {
+    const match = /node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?((?:@[^/]+\/)?[^/]+)/.exec(
+      input,
+    );
+    if (match && !match[1].startsWith('@gitglasses/')) packages.add(match[1]);
+  }
+  return [...packages].filter((name) => !notice.includes(name)).sort();
+}
 
 if (hasWasm) {
   // Web extension host bundle (vscode.dev): single cjs file, browser

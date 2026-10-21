@@ -2,8 +2,10 @@
 // author names and file paths are attacker-controlled in any repository a user
 // opens, and they are rendered by MarkdownString in hovers.
 
-/** ASCII punctuation CommonMark lets a backslash escape, plus the ones that matter here. */
-const METACHARACTERS = /[\\`*_{}[\]()#+\-.!|<>~&]/g;
+/** ASCII punctuation CommonMark lets a backslash escape, plus the ones that
+ *  matter here; `=` and `-` so a line of them cannot turn the line above it
+ *  into a heading. */
+const METACHARACTERS = /[\\`*_{}[\]()#+\-.!|<>~&=]/g;
 
 /**
  * `text` with Markdown metacharacters backslash-escaped and line breaks

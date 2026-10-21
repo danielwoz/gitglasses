@@ -10,6 +10,7 @@ import {
   waitForBlameHover,
   workspaceRoot,
 } from '../suite/helpers';
+import { mcpServiceState, startMcpServer } from '../suite/mcpClient';
 
 // The planted workspace opens untrusted. GitGlasses must show blame without
 // running any program the repository's config, attributes or hooks name, and
@@ -64,6 +65,28 @@ describe('Restricted Mode', () => {
     assert.deepStrictEqual(ran(), [], 'a planted program ran');
   });
 
+  // A line's story untrusted is its blame and its commit: no git runs for
+  // its history and the forge is not asked about its pull request.
+  it("tells a line's blame and commit, without running anything the repository names", async () => {
+    const uri = vscode.Uri.joinPath(workspaceRoot(), FIXTURE.blameFile);
+    await vscode.window.showTextDocument(uri);
+    const story = await vscode.commands.executeCommand<{
+      commit: { state: string; value?: { subject: string } };
+      pullRequests: { state: string; reason?: string };
+      history: { state: string; reason?: string };
+    }>('gitglasses.showLineStory', { uri: uri.toString(), line: 1 });
+    assert.strictEqual(story?.commit.state, 'ready');
+    assert.strictEqual(story?.commit.value?.subject, 'add alpha and tracked');
+    assert.deepStrictEqual(
+      [story?.history.state, story?.history.reason],
+      ['unavailable', 'restricted'],
+    );
+    assert.strictEqual(story?.pullRequests.state, 'noForge');
+    await settle(1000);
+    assert.deepStrictEqual(ran(), [], 'a planted program ran');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
   // The graph and commit details read through libgit2 alone, so they work
   // untrusted.
   it('shows the commit graph and a commit, without running anything the repository names', async () => {
@@ -90,5 +113,51 @@ describe('Restricted Mode', () => {
     await settle(1000);
     assert.deepStrictEqual(ran(), [], 'a planted program ran');
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
+
+  // The editor's agents get the MCP server here too, allowed to run git
+  // nowhere: it reads the workspace without git and refuses what needs it.
+  it('gives agents the MCP server without letting it run git', async () => {
+    const { status, launch } = await mcpServiceState();
+    assert.deepStrictEqual(status.gitRoots ?? [], [], 'git allowed in an untrusted workspace');
+    assert.ok(launch, 'no launch');
+    assert.strictEqual(launch.env.GITGLASSES_ALLOWED_ROOTS, '');
+    assert.strictEqual(launch.args.length, 1, `git allowed somewhere: ${launch.args.join(' ')}`);
+
+    const root = workspaceRoot().fsPath;
+    const session = await startMcpServer(launch, root);
+    try {
+      const blame = await session.callTool('git_blame', {
+        repoPath: root,
+        file: FIXTURE.blameFile,
+      });
+      assert.ok(blame.includes(FIXTURE.authorName), `git_blame: ${blame}`);
+      const status = await session.callTool('git_status', { repoPath: root });
+      assert.ok(status.includes(FIXTURE.dirtyFile), `git_status: ${status}`);
+      await assert.rejects(
+        session.callTool('git_file_history', { repoPath: root, file: FIXTURE.blameFile }),
+        /needs git/,
+      );
+    } finally {
+      session.close();
+    }
+    await settle(1000);
+    assert.deepStrictEqual(ran(), [], 'a planted program ran');
+  });
+
+  // Worktrees list and report their status through libgit2 alone.
+  it('lists the worktrees with their status, without running anything the repository names', async () => {
+    type Row = { label: string; description: string; tooltip: string };
+    const rows = await poll(async () => {
+      const listed = await vscode.commands.executeCommand<Row[]>('_gitglasses.worktreeRows');
+      const side = listed?.find((row) => row.label === 'side');
+      return side?.description.includes('merges cleanly') ? listed : undefined;
+    }, 'the worktree rows never showed their status');
+    assert.strictEqual(rows.length, 2, JSON.stringify(rows));
+    const side = rows.find((row) => row.label === 'side')!;
+    assert.strictEqual(side.description, '↑1 ↓0 · merges cleanly');
+    assert.match(side.tooltip, /No uncommitted changes/);
+    await settle(1000);
+    assert.deepStrictEqual(ran(), [], 'a planted program ran');
   });
 });

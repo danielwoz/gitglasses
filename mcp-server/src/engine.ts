@@ -3,6 +3,7 @@
 // process transport live in @gitglasses/rpc.
 
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { EngineClient } from '@gitglasses/rpc';
 import { ProcessTransport } from '@gitglasses/rpc/node';
@@ -18,6 +19,47 @@ export interface EnginePathOptions {
   pathSeparator?: string;
   /** Binary filename, injectable for tests. Defaults to the platform's. */
   binaryName?: string;
+  /** Engine packages to look for, in order. Defaults to this platform's. */
+  enginePackages?: readonly string[];
+  /**
+   * Directory of an installed npm package, or undefined when it is not
+   * installed. Defaults to Node's resolution from the package root.
+   */
+  resolvePackage?: (name: string) => string | undefined;
+}
+
+/** True on a Linux whose C library is musl (Alpine) rather than glibc. */
+export function isMuslLibc(): boolean {
+  if (process.platform !== 'linux') return false;
+  const report = process.report?.getReport() as
+    { header?: { glibcVersionRuntime?: string } } | undefined;
+  return report?.header?.glibcVersionRuntime === undefined;
+}
+
+/**
+ * The npm packages that carry the engine for a platform, best first:
+ * `@gitglasses/engine-<platform>-<arch>`, with a `-musl` suffix for the
+ * statically linked Alpine build. That build runs on any Linux, so a glibc
+ * system falls back to it; the glibc build does not run on musl.
+ */
+export function enginePackageNames(
+  platform: string = process.platform,
+  arch: string = process.arch,
+  musl: boolean = isMuslLibc(),
+): string[] {
+  const name = `@gitglasses/engine-${platform}-${arch}`;
+  if (platform !== 'linux') return [name];
+  return musl ? [`${name}-musl`] : [name, `${name}-musl`];
+}
+
+/** Where Node would load package `name` from, as seen from `packageRoot`. */
+function installedPackageDir(packageRoot: string, name: string): string | undefined {
+  try {
+    const require = createRequire(path.join(packageRoot, 'package.json'));
+    return path.dirname(require.resolve(`${name}/package.json`));
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -30,7 +72,9 @@ export function engineBinaryName(platform: string = process.platform): string {
 
 /**
  * Locate the engine binary: the GITGLASSES_ENGINE env var wins, then the
- * monorepo release build next to this package, then a PATH search.
+ * engine package npm installed for this platform (an optional dependency of
+ * gitglasses-mcp), then the monorepo release build next to this package, then
+ * a PATH search.
  */
 export function resolveEnginePath(options: EnginePathOptions = {}): string | undefined {
   const env = options.env ?? process.env;
@@ -41,6 +85,14 @@ export function resolveEnginePath(options: EnginePathOptions = {}): string | und
 
   if (env.GITGLASSES_ENGINE) {
     return env.GITGLASSES_ENGINE;
+  }
+  const resolvePackage =
+    options.resolvePackage ?? ((name: string) => installedPackageDir(packageRoot, name));
+  for (const name of options.enginePackages ?? enginePackageNames()) {
+    const dir = resolvePackage(name);
+    if (dir === undefined) continue;
+    const candidate = path.join(dir, 'bin', binary);
+    if (exists(candidate)) return candidate;
   }
   const local = path.resolve(packageRoot, '..', 'build', 'release', 'engine', binary);
   if (exists(local)) {
@@ -57,7 +109,8 @@ export function resolveEnginePath(options: EnginePathOptions = {}): string | und
 }
 
 export const ENGINE_NOT_FOUND_MESSAGE =
-  'gitglasses-engine binary not found; set GITGLASSES_ENGINE or add it to PATH';
+  'gitglasses-engine binary not found: no @gitglasses/engine-* package is installed for this ' +
+  'platform; set GITGLASSES_ENGINE or add the engine to PATH';
 
 export interface CreateEngineClientOptions {
   /** Resolved engine binary path; undefined defers the failure to first use. */

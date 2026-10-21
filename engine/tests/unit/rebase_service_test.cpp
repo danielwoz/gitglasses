@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -28,15 +27,6 @@ Json req(std::int64_t id, const std::string& method, Json params) {
 
 std::string gitOut(const std::filesystem::path& root, const std::string& args) {
   return gg::testing::gitCapture(root, args);
-}
-
-// Whether the git on PATH is at least `major`.`minor`.
-bool gitAtLeast(const std::filesystem::path& root, int major, int minor) {
-  int haveMajor = 0;
-  int haveMinor = 0;
-  const std::string version = gg::testing::gitLines(root, "--version").at(0);
-  if (std::sscanf(version.c_str(), "git version %d.%d", &haveMajor, &haveMinor) != 2) return true;
-  return haveMajor > major || (haveMajor == major && haveMinor >= minor);
 }
 
 std::string rev(const std::filesystem::path& root, const std::string& spec) {
@@ -629,7 +619,7 @@ TEST(RebaseService, StartWorksWithCommonRebaseConfig) {
   EXPECT_EQ(subjects(fixture.root(), shas.base), "c1 reworded\nc3\n");
   // stack-mid pointed at the dropped c2, so it now points at the commit
   // before it. Git before 2.38 has no rebase.updateRefs and leaves it.
-  if (gitAtLeast(fixture.root(), 2, 38)) {
+  if (gg::testing::gitAtLeast(fixture.root(), 2, 38)) {
     EXPECT_EQ(rev(fixture.root(), "stack-mid"), rev(fixture.root(), "HEAD~1"));
   }
 }

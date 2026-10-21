@@ -147,6 +147,15 @@ inline std::vector<std::string> gitLines(const std::filesystem::path& dir,
   return lines;
 }
 
+// Whether the git on PATH is at least `major`.`minor`.
+inline bool gitAtLeast(const std::filesystem::path& dir, int major, int minor) {
+  int haveMajor = 0;
+  int haveMinor = 0;
+  const std::string version = gitLines(dir, "--version").at(0);
+  if (std::sscanf(version.c_str(), "git version %d.%d", &haveMajor, &haveMinor) != 2) return true;
+  return haveMajor > major || (haveMajor == major && haveMinor >= minor);
+}
+
 // Creates a throwaway git repository with deterministic identity/dates and a
 // single initial commit. Removed on destruction.
 class FixtureRepo {
@@ -162,6 +171,10 @@ class FixtureRepo {
     run("git config user.name Fixture");
     run("git config user.email fixture@example.invalid");
     run("git config commit.gpgsign false");
+    // No background maintenance after commits: newer git starts a detached
+    // `git maintenance run --auto` that repacks while a test looks.
+    run("git config maintenance.auto false");
+    run("git config gc.auto 0");
     writeFile("README.md", "fixture\n");
     run("git add README.md");
     commit("initial commit");

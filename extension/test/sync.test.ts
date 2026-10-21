@@ -360,6 +360,21 @@ describe('fetch', () => {
     await fetch(fake as never, repo, false);
     expect(ui.messages[0].text).toBe('GitGlasses: Fetch failed: could not reach example.com.');
     expect(fake.calls).toHaveLength(2);
+    expect(fake.calls.map((call) => 'remote' in call.params)).toEqual([false, false]);
+  });
+
+  it('fetches the remote asked for, also when retrying', async () => {
+    const fake = engine({
+      'mutate/fetch': [
+        () => {
+          throw gitError('Could not resolve host', { kind: 'network', host: 'example.com' });
+        },
+        () => ({}),
+      ],
+    });
+    ui.messageChoices.push('Retry');
+    await fetch(fake as never, repo, false, 'upstream');
+    expect(fake.calls.map((call) => call.params.remote)).toEqual(['upstream', 'upstream']);
   });
 });
 

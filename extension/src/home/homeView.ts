@@ -105,6 +105,7 @@ function conflictsSection(repo: ActiveRepo, conflicted: readonly string[]): View
 // view's job, right below.
 export class HomeViewProvider extends ViewBase {
   private refreshTimer: NodeJS.Timeout | undefined;
+  private extraSections: (() => ViewNode[]) | undefined;
 
   constructor(
     engine: EngineClient,
@@ -118,6 +119,12 @@ export class HomeViewProvider extends ViewBase {
     this.disposables.push(
       this.engine.onNotification('repo/didChange', () => this.scheduleRefresh()),
     );
+  }
+
+  /** Sections a host adds below the launchpad glimpse, re-read on refresh. */
+  setExtraSections(sections: () => ViewNode[]): void {
+    this.extraSections = sections;
+    this.refresh();
   }
 
   private scheduleRefresh(): void {
@@ -137,6 +144,7 @@ export class HomeViewProvider extends ViewBase {
     const nodes: ViewNode[] = [this.branchCard(status, state.head, remotes.remotes.length > 0)];
     if (status.conflicted.length > 0) nodes.push(conflictsSection(repo, status.conflicted));
     nodes.push(glimpse);
+    nodes.push(...(this.extraSections?.() ?? []));
     if (showGetStarted(this.globalState.get<boolean>(GET_STARTED_DISMISSED_KEY))) {
       nodes.push(this.getStarted());
     }

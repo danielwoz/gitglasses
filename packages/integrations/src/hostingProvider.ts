@@ -85,11 +85,52 @@ export interface HostingProvider {
     ref: string
   ): Promise<Issue | PullRequest | undefined>;
 
+  /**
+   * The pull requests that contain commit `sha` (a full sha): for a commit on
+   * the default branch, the one that merged it, and otherwise the open or
+   * closed ones carrying it. Merged ones come first, oldest merge first, then
+   * open, then closed. Empty when the forge does not know the commit (not
+   * pushed yet, or rewritten). Results report mergedAt, body and the comment
+   * counts where the forge has them, and are cached per commit.
+   */
+  getPullRequestsForCommit?(
+    auth: AuthContext,
+    repo: RepoDescriptor,
+    sha: string
+  ): Promise<PullRequest[]>;
+
   /** Avatar URL for a commit author email, when the provider supports lookup. */
   getAvatarUrl?(auth: AuthContext, email: string): Promise<string | undefined>;
 
   /** Repo-configured autolink patterns, when the provider supports them. */
   getAutolinkPatterns?(auth: AuthContext, repo: RepoDescriptor): Promise<AutolinkPattern[]>;
+}
+
+/** True when the provider can list the pull requests that contain a commit. */
+export function supportsCommitPullRequests<T extends HostingProvider>(
+  provider: T
+): provider is T & Required<Pick<HostingProvider, 'getPullRequestsForCommit'>> {
+  return typeof provider.getPullRequestsForCommit === 'function';
+}
+
+/**
+ * Pull requests in the order getPullRequestsForCommit returns them: merged
+ * first, oldest merge first (the one that brought the commit in), then open,
+ * then closed, each group newest first.
+ */
+export function orderCommitPullRequests(prs: readonly PullRequest[]): PullRequest[] {
+  const rank = (pr: PullRequest): number =>
+    pr.state === 'merged' ? 0 : pr.state === 'open' ? 1 : 2;
+  return [...prs].sort((a, b) => {
+    const byState = rank(a) - rank(b);
+    if (byState !== 0) {
+      return byState;
+    }
+    if (a.state === 'merged') {
+      return (a.mergedAt ?? '').localeCompare(b.mergedAt ?? '');
+    }
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
 }
 
 export interface ReviewSuggestionInput {

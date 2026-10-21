@@ -7,7 +7,7 @@ export const COMMAND_AREAS = [
   ['Blame and annotations', /^gitglasses\.(toggle|clearAnnotations|switchMode|blame)/],
   [
     'History and the Commit Graph',
-    /^gitglasses\.(show(Graph|FileHistory|LineHistory|CommitDetails)|diffWith|openFileAtRevision|openCommitDiff$|graph\.|timeline\.)/,
+    /^gitglasses\.(show(Graph|FileHistory|LineHistory|LineStory|CommitDetails)|diffWith|openFileAtRevision|openCommitDiff$|graph\.|timeline\.)/,
   ],
   ['Search', /^gitglasses\.search/],
   [

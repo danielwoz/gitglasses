@@ -17,6 +17,7 @@ import type {
   DetailsToHostMessage,
 } from '../../webviews-src/graph/ipc';
 import {
+  type ProvenanceSource,
   copyText,
   errorView,
   loadCommitView,
@@ -74,6 +75,7 @@ class CommitDetailsPanel implements vscode.Disposable {
     private readonly engine: EngineClient,
     private readonly repos: RepositoryService,
     private readonly log: (line: string) => void,
+    private readonly provenance?: ProvenanceSource,
   ) {}
 
   async show(args: ShowCommitDetailsArgs): Promise<void> {
@@ -130,7 +132,7 @@ class CommitDetailsPanel implements vscode.Disposable {
     try {
       const repoId = await repoIdFor(this.repos, target.repoPath);
       if (!repoId) throw new Error(`no git repository at ${target.repoPath}`);
-      view = await loadCommitView(this.engine, repoId, target.sha);
+      view = await loadCommitView(this.engine, repoId, target.sha, undefined, this.provenance);
       // Name the panel by the full sha a branch or tag resolved to.
       if (view.kind === 'commit') shown = { ...target, sha: view.details.sha };
     } catch (error) {
@@ -194,8 +196,9 @@ export function registerCommitDetails(
   engine: EngineClient,
   repos: RepositoryService,
   log: (line: string) => void,
+  provenance?: ProvenanceSource,
 ): vscode.Disposable[] {
-  const panel = new CommitDetailsPanel(context, engine, repos, log);
+  const panel = new CommitDetailsPanel(context, engine, repos, log, provenance);
   return [
     panel,
     registerEmptyDocuments(),

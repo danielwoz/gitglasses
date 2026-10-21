@@ -53,6 +53,25 @@ button {
   white-space: nowrap;
 }
 
+/* The declared-provenance filter, in the toolbar's own look. */
+.toolbar-select {
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(--vscode-dropdown-background, transparent);
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font: inherit;
+}
+
+.toolbar-select[hidden] {
+  display: none;
+}
+
+.toolbar-select:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
 .toolbar-button:hover,
 .toolbar-button[aria-expanded='true'] {
   background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));

@@ -1,7 +1,7 @@
 // Pure chart math for the visual file history timeline: time scale and tick
-// generation, author lane assignment, bubble sizing and coloring, hit
-// testing, and zoom/pan domain arithmetic. No DOM or vscode imports so the
-// unit tests run without a browser.
+// generation, author lane assignment and label fitting, bubble sizing and
+// coloring, hit testing, and zoom/pan domain arithmetic. No DOM or vscode
+// imports so the unit tests run without a browser.
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 /** Zooming in stops once the visible domain covers a single day. */
@@ -240,6 +240,69 @@ export function assignAuthorLanes(
 
 export function laneForEntry(assignment: LaneAssignment, entry: TimelineEntryLike): number {
   return assignment.laneByAuthor.get(authorKey(entry.author)) ?? Math.max(0, assignment.lanes.length - 1);
+}
+
+// --- Lane labels ------------------------------------------------------------
+
+export const ELLIPSIS = '…';
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** Letters of the scripts written right to left. */
+const RIGHT_TO_LEFT =
+  /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Adlam}]/u;
+
+/** A right-to-left mark. */
+const RLM = '\u200f';
+
+/** `prefix` and an ellipsis, drawn at the cut. After right-to-left text a
+ *  right-to-left mark keeps the ellipsis on that text's left, where the cut
+ *  is, rather than past its first letter. */
+function cutShort(prefix: string): string {
+  const lastLetter = /\p{L}(?=\P{L}*$)/u.exec(prefix)?.[0];
+  return prefix + ELLIPSIS + (lastLetter && RIGHT_TO_LEFT.test(lastLetter) ? RLM : '');
+}
+
+/** `text` as it fits in `maxWidth`: whole when it fits, otherwise its longest
+ *  prefix that fits with an ellipsis after it, or empty when not even the
+ *  ellipsis does. `measure` gives the drawn width of a string. */
+export function fitText(text: string, maxWidth: number, measure: (text: string) => number): string {
+  if (measure(text) <= maxWidth) return text;
+  // Characters as they are drawn, so a surrogate pair, an accent or a joined
+  // emoji is never cut from the letter it belongs to.
+  const chars = Array.from(graphemes.segment(text), ({ segment }) => segment);
+  let low = 0;
+  let high = chars.length - 1;
+  let best = measure(ELLIPSIS) <= maxWidth ? ELLIPSIS : '';
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = cutShort(chars.slice(0, mid).join('').trimEnd());
+    if (measure(candidate) <= maxWidth) {
+      best = candidate;
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
+
+/** A drawn lane label: the band it sits in, in CSS pixels, and its text. */
+export interface LabelHit {
+  top: number;
+  bottom: number;
+  /** Right edge of the label column. */
+  right: number;
+  /** The whole label, which `truncated` says was drawn cut short. */
+  text: string;
+  truncated: boolean;
+}
+
+/** Index of the label whose column and lane contain the point, or undefined. */
+export function hitTestLabels(labels: readonly LabelHit[], x: number, y: number): number | undefined {
+  if (x < 0) return undefined;
+  const index = labels.findIndex((label) => x < label.right && y >= label.top && y < label.bottom);
+  return index === -1 ? undefined : index;
 }
 
 // --- Bubble radius ----------------------------------------------------------

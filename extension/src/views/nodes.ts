@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { CommitSummaryInfo, FileHistoryEntry } from '@gitglasses/protocol';
+import { CommitProvenance, CommitSummaryInfo, FileHistoryEntry } from '@gitglasses/protocol';
 import { relativeTime } from '../system/dates';
 import { encodeRevisionUri } from '../scm/revisionContentProvider';
 import {
@@ -10,14 +10,16 @@ import {
 import { ViewNode, requireRepo } from './viewBase';
 import type { RepositoryService } from '../model/repositoryService';
 import { SHOW_COMMIT_DETAILS_COMMAND } from '../commitDetails/commitDetails';
+import { decorateCommitItem } from '../provenance/provenanceView';
 
 /** Commit node: click shows the commit's details. */
-export function commitNode(commit: CommitSummaryInfo): ViewNode {
+export function commitNode(commit: CommitSummaryInfo, provenance?: CommitProvenance): ViewNode {
   const item = new vscode.TreeItem(commit.summary, vscode.TreeItemCollapsibleState.None);
   item.description = commitDescription(commit);
   item.iconPath = new vscode.ThemeIcon('git-commit');
   item.contextValue = 'gitglassesCommit';
   item.tooltip = `${commit.sha}\n${commit.author.name} <${commit.author.email}>\n${commit.summary}`;
+  decorateCommitItem(item, provenance);
   const node: ViewNode = { item, sha: commit.sha, commit };
   item.command = {
     command: 'gitglasses.openCommitDiff',
@@ -28,7 +30,11 @@ export function commitNode(commit: CommitSummaryInfo): ViewNode {
 }
 
 /** File-history node: click diffs the file sha~1 ↔ sha (rename-aware path). */
-export function fileHistoryNode(repoId: string, entry: FileHistoryEntry): ViewNode {
+export function fileHistoryNode(
+  repoId: string,
+  entry: FileHistoryEntry,
+  provenance?: CommitProvenance,
+): ViewNode {
   const item = new vscode.TreeItem(entry.summary, vscode.TreeItemCollapsibleState.None);
   item.description = commitDescription(entry);
   item.iconPath = new vscode.ThemeIcon('git-commit');
@@ -36,6 +42,7 @@ export function fileHistoryNode(repoId: string, entry: FileHistoryEntry): ViewNo
   item.tooltip = `${entry.sha}\n${entry.author.name} <${entry.author.email}>\n${
     entry.path
   }  +${entry.additions} −${entry.deletions}\n${relativeTime(entry.author.time)}`;
+  decorateCommitItem(item, provenance);
   const node: ViewNode = { item, sha: entry.sha, diff: historyEntryDiffSpec(repoId, entry) };
   item.command = {
     command: 'gitglasses.openCommitDiff',

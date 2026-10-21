@@ -20,7 +20,12 @@ export { PROTOCOL_VERSION } from './version.js';
 // The TypeBox schemas themselves, so consumers can validate at runtime.
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
-export { COMMIT_DETAILS_MAX_FILES, RESTRICTED_MODE_METHODS } from './schema/requests.js';
+export {
+  COMMIT_DETAILS_MAX_FILES,
+  COMMIT_PROVENANCE_MAX_SHAS,
+  NOTES_READ_MAX_SHAS,
+  RESTRICTED_MODE_METHODS,
+} from './schema/requests.js';
 
 // Sha helpers also have their own lean entry point: @gitglasses/protocol/sha.
 export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
@@ -95,7 +100,10 @@ export type CommitDetails = Static<typeof models.CommitDetails>;
 export type CommitFileChange = Static<typeof models.CommitFileChange>;
 export type CommitRef = Static<typeof models.CommitRef>;
 export type CommitTrailer = Static<typeof models.CommitTrailer>;
+export type CommitProvenance = Static<typeof models.CommitProvenance>;
+export type ProvenanceDeclaration = Static<typeof models.ProvenanceDeclaration>;
 export type FileHistoryEntry = Static<typeof models.FileHistoryEntry>;
+export type LineHistoryEntry = Static<typeof models.LineHistoryEntry>;
 export type FileChange = Static<typeof models.FileChange>;
 export type GraphRef = Static<typeof models.GraphRef>;
 export type GraphRow = Static<typeof models.GraphRow>;
@@ -103,6 +111,9 @@ export type DiffHunk = Static<typeof models.DiffHunk>;
 export type RebaseEntry = Static<typeof models.RebaseEntry>;
 export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
 export type PatchFileChange = Static<typeof models.PatchFileChange>;
+export type WorktreeEntry = Static<typeof models.WorktreeEntry>;
+export type WorktreeStatus = Static<typeof models.WorktreeStatus>;
+export type MergeSkipReason = Static<typeof models.MergeSkipReason>;
 export type SequencerState = Static<typeof models.SequencerState>;
 export type SequencerOperation = Static<typeof models.SequencerOperation>;
 export type GitErrorKind = Static<typeof models.GitErrorKind>;
@@ -143,7 +154,14 @@ export interface Requests {
   'repo/close': { params: P<'repo/close'>; result: Empty };
   'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
+  'log/compare': { params: P<'log/compare'>; result: R<'log/compare'> };
   'commit/details': { params: P<'commit/details'>; result: R<'commit/details'> };
+  'commit/provenance': { params: P<'commit/provenance'>; result: R<'commit/provenance'> };
+  'notes/read': { params: P<'notes/read'>; result: R<'notes/read'> };
+  'notes/addFetchRefspec': {
+    params: P<'notes/addFetchRefspec'>;
+    result: R<'notes/addFetchRefspec'>;
+  };
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };
   'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };
@@ -178,6 +196,7 @@ export interface Requests {
   'stash/apply': { params: P<'stash/apply'>; result: R<'stash/apply'> };
   'stash/drop': { params: P<'stash/drop'>; result: Empty };
   'worktree/list': { params: P<'worktree/list'>; result: R<'worktree/list'> };
+  'worktree/status': { params: P<'worktree/status'>; result: R<'worktree/status'> };
   'worktree/add': { params: P<'worktree/add'>; result: Empty };
   'worktree/remove': { params: P<'worktree/remove'>; result: Empty };
   'rebase/preview': { params: P<'rebase/preview'>; result: R<'rebase/preview'> };

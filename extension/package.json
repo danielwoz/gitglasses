@@ -2,7 +2,7 @@
   "name": "gitglasses",
   "displayName": "GitGlasses",
   "description": "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, file and line history, commit search, interactive rebase and worktrees. Works on private repos with no account, and your AI agents can use it over MCP.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "gitglasses",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -69,6 +69,7 @@
       "description": "In Restricted Mode GitGlasses runs no git commands, so no program the repository configures (hooks, filters, fsmonitor, diff drivers, ssh commands) can run: blame, commit history and the commit graph are read straight from the repository, while file and line history, patches and every command that changes the repository or contacts a remote stay off until the folder is trusted. Settings that choose an executable, a network endpoint or a link target are read from user settings only.",
       "restrictedConfigurations": [
         "gitglasses.engine.path",
+        "gitglasses.mcp.enabled",
         "gitglasses.web.maxRepoBytes",
         "gitglasses.integrations.hosts",
         "gitglasses.integrations.issues",
@@ -90,7 +91,8 @@
     "onStartupFinished",
     "onWebviewPanel:gitglasses.graph",
     "onWebviewPanel:gitglasses.timeline",
-    "onWebviewPanel:gitglasses.commitDetails"
+    "onWebviewPanel:gitglasses.commitDetails",
+    "onWebviewPanel:gitglasses.lineStory"
   ],
   "main": "./dist/extension.js",
   "browser": "./dist/web/extension.js",
@@ -168,6 +170,12 @@
         "command": "gitglasses.showCommitDetails",
         "title": "Show Commit Details",
         "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.showLineStory",
+        "title": "Why This Line?",
+        "category": "GitGlasses",
+        "icon": "$(question)"
       },
       {
         "command": "gitglasses.blame.openChanges",
@@ -268,6 +276,24 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
+        "command": "gitglasses.worktrees.removeWithBranch",
+        "title": "Remove Worktree and Branch…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
+        "command": "gitglasses.worktrees.compareWithBase",
+        "title": "Compare with Base",
+        "category": "GitGlasses",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "gitglasses.worktrees.chooseBase",
+        "title": "Choose Base for Worktrees…",
+        "category": "GitGlasses",
+        "icon": "$(target)"
+      },
+      {
         "command": "gitglasses.connectIntegration",
         "title": "Connect Integration…",
         "category": "GitGlasses"
@@ -353,6 +379,21 @@
       {
         "command": "gitglasses.ai.clearApiKey",
         "title": "Clear AI API Key…",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.mcp.addToClaudeCode",
+        "title": "Add MCP Server to Claude Code",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.mcp.addToCodex",
+        "title": "Add MCP Server to Codex",
+        "category": "GitGlasses"
+      },
+      {
+        "command": "gitglasses.mcp.copyConfig",
+        "title": "Copy MCP Server Config",
         "category": "GitGlasses"
       },
       {
@@ -669,6 +710,12 @@
         "icon": "$(globe)"
       },
       {
+        "command": "gitglasses.provenance.fetchNotes",
+        "title": "Fetch git-ai Notes with Every Fetch…",
+        "category": "GitGlasses",
+        "enablement": "isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+      },
+      {
         "command": "gitglasses.rebase.show",
         "title": "Show Paused Rebase",
         "category": "GitGlasses"
@@ -924,6 +971,11 @@
           "group": "navigation"
         },
         {
+          "command": "gitglasses.worktrees.chooseBase",
+          "when": "view == gitglasses.views.worktrees",
+          "group": "navigation"
+        },
+        {
           "command": "gitglasses.showFileHistory",
           "when": "view == gitglasses.views.fileHistory && isWorkspaceTrusted",
           "group": "navigation"
@@ -980,6 +1032,11 @@
       ],
       "editor/context": [
         {
+          "command": "gitglasses.showLineStory",
+          "when": "gitglasses.hasRepository && resourceScheme == file",
+          "group": "gitglasses@0"
+        },
+        {
           "command": "gitglasses.suggestChange",
           "when": "editorHasSelection && resourceScheme == file && isWorkspaceTrusted",
           "group": "gitglasses@1"
@@ -1027,17 +1084,34 @@
           "when": "view =~ /^gitglasses\\.views\\./ && viewItem =~ /^gitglasses(Commit|Stash)$/ && isWorkspaceTrusted"
         },
         {
-          "command": "gitglasses.worktrees.open",
+          "command": "gitglasses.worktrees.compareWithBase",
           "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current)?Worktree$/",
           "group": "inline"
         },
         {
           "command": "gitglasses.worktrees.open",
-          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current)?Worktree$/"
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current|Main)?Worktree$/",
+          "group": "inline"
+        },
+        {
+          "command": "gitglasses.worktrees.open",
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current|Main)?Worktree$/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "gitglasses.worktrees.compareWithBase",
+          "when": "view == gitglasses.views.worktrees && viewItem =~ /^gitglasses(Current|Main)?Worktree$/",
+          "group": "2_compare@1"
         },
         {
           "command": "gitglasses.worktrees.remove",
-          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree && isWorkspaceTrusted"
+          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree && isWorkspaceTrusted",
+          "group": "3_remove@1"
+        },
+        {
+          "command": "gitglasses.worktrees.removeWithBranch",
+          "when": "view == gitglasses.views.worktrees && viewItem == gitglassesWorktree && isWorkspaceTrusted && gitglasses.engineFullCapabilities",
+          "group": "3_remove@2"
         },
         {
           "command": "gitglasses.launchpad.open",
@@ -1260,6 +1334,10 @@
           "when": "false"
         },
         {
+          "command": "gitglasses.showLineStory",
+          "when": "gitglasses.hasRepository && (resourceScheme == file || resourceScheme == gitglasses || isWeb)"
+        },
+        {
           "command": "gitglasses.showGraph",
           "when": "gitglasses.hasRepository"
         },
@@ -1294,6 +1372,18 @@
         {
           "command": "gitglasses.worktrees.remove",
           "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.removeWithBranch",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.compareWithBase",
+          "when": "false"
+        },
+        {
+          "command": "gitglasses.worktrees.chooseBase",
+          "when": "gitglasses.hasRepository"
         },
         {
           "command": "gitglasses.startWork",
@@ -1548,6 +1638,10 @@
           "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
         },
         {
+          "command": "gitglasses.provenance.fetchNotes",
+          "when": "gitglasses.hasRepository && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
           "command": "gitglasses.rebase.show",
           "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress"
         },
@@ -1562,6 +1656,18 @@
         {
           "command": "gitglasses.rebase.abort",
           "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
+        },
+        {
+          "command": "gitglasses.mcp.addToClaudeCode",
+          "when": "gitglasses.hasRepository && !isWeb"
+        },
+        {
+          "command": "gitglasses.mcp.addToCodex",
+          "when": "gitglasses.hasRepository && !isWeb"
+        },
+        {
+          "command": "gitglasses.mcp.copyConfig",
+          "when": "gitglasses.hasRepository && !isWeb"
         }
       ]
     },
@@ -1575,6 +1681,12 @@
           }
         ],
         "priority": "option"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "gitglasses.mcp",
+        "label": "GitGlasses"
       }
     ],
     "configuration": {
@@ -1740,6 +1852,12 @@
           "default": true,
           "description": "Show git blame CodeLens above files and top-level symbols"
         },
+        "gitglasses.provenance.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "markdownDescription": "Show the AI provenance commits declare: an `AI` badge and a filter in the Commit Graph, a line in the blame hover and in Commit Details, and a mark in the Commits and File History views. Only declarations are read: git-ai notes in `refs/notes/ai`, `Co-authored-by`, `Assisted-by` and `Generated-by` trailers, and authors or committers that are known agent identities. Nothing is inferred from the code. Turn off to hide provenance everywhere."
+        },
         "gitglasses.engine.path": {
           "type": "string",
           "scope": "machine-overridable",
@@ -1764,6 +1882,12 @@
           ],
           "default": "warn",
           "description": "Engine log level (logs go to the GitGlasses output channel)"
+        },
+        "gitglasses.mcp.enabled": {
+          "type": "boolean",
+          "scope": "window",
+          "default": true,
+          "markdownDescription": "Register GitGlasses' MCP server with the editor's AI agents (VS Code 1.101 or newer, and Cursor), so they can read this workspace's blame, history, branch comparisons, status and diffs with no setup. Git runs only in the workspace's folders, and nowhere in an untrusted workspace. The **Add MCP Server** commands configure other agents."
         },
         "gitglasses.integrations.hosts": {
           "type": "array",

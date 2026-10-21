@@ -8,6 +8,7 @@ import {
   TimeDomain,
   assignAuthorLanes,
   hitTestBubbles,
+  hitTestLabels,
   minValue,
   panDomain,
   timeDomain,
@@ -119,7 +120,16 @@ function showTooltip(entry: FileHistoryEntry, clientX: number, clientY: number):
   dels.textContent = `−${entry.deletions}`;
   churn.append(adds, ' ', dels);
   tooltip.appendChild(churn);
+  placeTooltip(clientX, clientY);
+}
 
+/** The full name of an author whose lane label is cut short. */
+function showLabelTooltip(text: string, clientX: number, clientY: number): void {
+  tooltip.textContent = text;
+  placeTooltip(clientX, clientY);
+}
+
+function placeTooltip(clientX: number, clientY: number): void {
   tooltip.style.display = 'block';
   const x = Math.min(clientX + 14, window.innerWidth - tooltip.offsetWidth - 8);
   const y = Math.min(clientY + 14, window.innerHeight - tooltip.offsetHeight - 8);
@@ -179,8 +189,16 @@ canvas.addEventListener('mousemove', (event) => {
     hoverIndex = index;
     render();
   }
-  if (index !== undefined) showTooltip(entries[index], event.clientX, event.clientY);
-  else hideTooltip();
+  if (index !== undefined) {
+    showTooltip(entries[index], event.clientX, event.clientY);
+    return;
+  }
+  const label = hitTestLabels(renderer.labels, event.clientX, event.clientY);
+  if (label !== undefined && renderer.labels[label].truncated) {
+    showLabelTooltip(renderer.labels[label].text, event.clientX, event.clientY);
+  } else {
+    hideTooltip();
+  }
 });
 
 canvas.addEventListener('mouseleave', () => {

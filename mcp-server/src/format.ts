@@ -35,7 +35,7 @@ export function isoDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
-interface ChangeLineOptions {
+export interface ChangeLineOptions {
   /** Render "(binary)" in place of counts git reports as +0 -0 for binaries. */
   binary?: boolean;
   /** Drop "(+0 -0)" where the source does not compute counts at all. */
@@ -44,12 +44,15 @@ interface ChangeLineOptions {
 
 /**
  * One changed file: status, path (with the pre-rename path when there is one)
- * and line counts.
+ * and line counts. A partial clone may lack the file's contents, and the
+ * engine reading it without git cannot download them: its counts are then
+ * unknown, not zero.
  */
-function changeLine(change: FileChange, options: ChangeLineOptions = {}): string {
+export function changeLine(change: FileChange, options: ChangeLineOptions = {}): string {
   const rename = change.origPath ? `${change.origPath} -> ` : '';
   const path = `${change.status}  ${rename}${change.path}`;
   if (options.binary) return `${path} (binary)`;
+  if (change.statsUnavailable) return `${path} (+? -?: contents not in this partial clone)`;
   if (options.omitZeroCounts && change.additions === 0 && change.deletions === 0) return path;
   return `${path} (+${change.additions} -${change.deletions})`;
 }
@@ -115,6 +118,28 @@ export function formatCommits(
   return commits
     .map((c) => `${shortSha(c.sha)} ${c.author.name} ${isoDate(c.author.time)} ${c.summary}`)
     .join('\n');
+}
+
+/**
+ * Commits that changed a range of lines (git log -L), newest first. git
+ * follows the lines through moves and renames but reports neither paths nor
+ * counts for them, so only the commits are listed.
+ */
+export function formatLineHistory(
+  file: string,
+  startLine: number,
+  endLine: number,
+  entries: readonly FileHistoryEntry[],
+): string {
+  const range = startLine === endLine ? `line ${startLine}` : `lines ${startLine}-${endLine}`;
+  if (entries.length === 0) return `No history for ${file} ${range}`;
+  return [
+    `history ${file} ${range}`,
+    ...entries.map(
+      (entry) =>
+        `${shortSha(entry.sha)} ${entry.author.name} ${isoDate(entry.author.time)} ${entry.summary}`,
+    ),
+  ].join('\n');
 }
 
 /** History lines; a differing path marks where the file lived before a rename. */
@@ -416,7 +441,11 @@ export type PatchSourceParam =
   | { kind: 'stash'; index: number }
   | { kind: 'commit'; sha: string };
 
-/** Parse the tool-facing source string: 'wip' | 'stash:<n>' | 'commit:<sha>'. */
+/**
+ * Parse the tool-facing source string: 'wip' | 'stash:<n>' | 'commit:<rev>',
+ * where <rev> is any revision git resolves (a sha, HEAD~2, a branch or tag).
+ * A revision may not start with '-', so it can never read as a git option.
+ */
 export function parsePatchSource(source: string): PatchSourceParam {
   if (source === 'wip') {
     return { kind: 'wip', includeUntracked: true };
@@ -425,12 +454,12 @@ export function parsePatchSource(source: string): PatchSourceParam {
   if (stash) {
     return { kind: 'stash', index: Number(stash[1]) };
   }
-  const commit = /^commit:([0-9a-fA-F]{4,40})$/.exec(source);
+  const commit = /^commit:([^-\s]\S*)$/.exec(source);
   if (commit) {
     return { kind: 'commit', sha: commit[1] };
   }
   throw new Error(
-    `Invalid patch source "${source}"; expected 'wip', 'stash:<n>' or 'commit:<sha>'`,
+    `Invalid patch source "${source}"; expected 'wip', 'stash:<n>' or 'commit:<revision>'`,
   );
 }
 
@@ -487,14 +516,18 @@ export function parsePatchEnvelopeText(text: string): PatchEnvelope {
 
 // --- launchpad ---------------------------------------------------------------
 
-export function formatLaunchpad(groups: readonly LaunchpadGroup[]): string {
-  if (groups.length === 0) return 'No open pull requests involve you';
+/**
+ * Pull requests by launchpad bucket, each line indented by `indent`. Titles
+ * are the forge's free text, so they are quoted as data.
+ */
+export function formatLaunchpad(groups: readonly LaunchpadGroup[], indent = ''): string {
+  if (groups.length === 0) return `${indent}No open pull requests involve you`;
   const lines: string[] = [];
   for (const group of groups) {
-    lines.push(`${group.bucket} (${group.items.length}):`);
+    lines.push(`${indent}${group.bucket} (${group.items.length}):`);
     for (const pr of group.items) {
       lines.push(
-        `  #${pr.number} ${pr.title} [${pr.repo.owner}/${pr.repo.name}] by ${pr.author.username} ${pr.url}`,
+        `${indent}  #${pr.number} ${JSON.stringify(pr.title)} [${pr.repo.owner}/${pr.repo.name}] by ${pr.author.username} ${pr.url}`,
       );
     }
   }
