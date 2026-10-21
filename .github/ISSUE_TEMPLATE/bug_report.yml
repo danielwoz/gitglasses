@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in GitGlasses does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for reporting. Security problems belong in a private report
+        (see SECURITY.md), not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        The smallest set of steps that shows the problem. A public repository
+        or a short script that builds one helps most.
+      placeholder: |
+        1. Open a repository with ...
+        2. Run "GitGlasses: ..."
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: gitglasses-version
+    attributes:
+      label: GitGlasses version
+      placeholder: 0.1.2
+    validations:
+      required: true
+  - type: input
+    id: editor
+    attributes:
+      label: Editor and version
+      description: VS Code, VSCodium, Cursor, Theia, code-server, vscode.dev ...
+      placeholder: VS Code 1.105.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 x64, macOS 15 arm64, Ubuntu 24.04 ...
+    validations:
+      required: true
+  - type: input
+    id: git-version
+    attributes:
+      label: git version
+      description: The output of `git --version`, or "none" if git is not installed.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        Relevant lines from the GitGlasses output channel (View > Output >
+        GitGlasses). Remove anything private first.
+      render: text

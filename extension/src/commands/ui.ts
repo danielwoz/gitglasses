@@ -1,6 +1,6 @@
-// Thin vscode UI helpers shared by the git palette, graph actions, worktrees,
-// and the rebase host: back-button-capable pickers, destructive-operation
-// modals, and conflict guidance.
+// Thin vscode UI helpers shared across the command surfaces:
+// back-button-capable pickers, destructive-operation modals, error-message
+// extraction, status messages, and conflict guidance.
 
 import * as vscode from 'vscode';
 import { Confirmation } from './confirmations';

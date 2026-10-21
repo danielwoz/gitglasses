@@ -1,9 +1,7 @@
 // Pure worktree presentation helpers (no vscode imports) so the tree labels
 // and default paths stay unit-testable.
 
-function sha7(sha: string): string {
-  return sha.slice(0, 7);
-}
+import { shortSha } from '@gitglasses/protocol/sha';
 
 function stripTrailingSeparators(p: string): string {
   const stripped = p.replace(/[\\/]+$/, '');
@@ -22,7 +20,7 @@ export function worktreeDescription(
   worktree: { branch?: string; sha: string },
   current: boolean,
 ): string {
-  const base = `${worktree.branch ?? 'detached'}@${sha7(worktree.sha)}`;
+  const base = `${worktree.branch ?? 'detached'}@${shortSha(worktree.sha)}`;
   return current ? `${base} (current)` : base;
 }
 

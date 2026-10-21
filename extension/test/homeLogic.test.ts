@@ -17,6 +17,7 @@ function status(overrides: Partial<BranchStatus> = {}): BranchStatus {
     staged: [],
     unstaged: [],
     untracked: [],
+    conflicted: [],
     ...overrides,
   };
 }

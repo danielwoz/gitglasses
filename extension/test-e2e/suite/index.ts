@@ -7,6 +7,11 @@ import * as fs from 'node:fs';
 import Mocha from 'mocha';
 
 export function run(): Promise<void> {
+  return runMochaSuite(__dirname);
+}
+
+/** Runs every compiled *.test.js file in `directory`, in filename order. */
+export function runMochaSuite(directory: string): Promise<void> {
   const mocha = new Mocha({
     ui: 'bdd',
     color: true,
@@ -14,10 +19,10 @@ export function run(): Promise<void> {
   });
 
   const files = fs
-    .readdirSync(__dirname)
+    .readdirSync(directory)
     .filter((name) => name.endsWith('.test.js'))
     .sort();
-  for (const file of files) mocha.addFile(path.join(__dirname, file));
+  for (const file of files) mocha.addFile(path.join(directory, file));
 
   return new Promise((resolve, reject) => {
     try {

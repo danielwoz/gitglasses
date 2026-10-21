@@ -9,6 +9,7 @@
 
 #include "cache/blame_cache.h"
 #include "cache/doc_overlay.h"
+#include "cache/graph_cache.h"
 #include "exec/cli_detect.h"
 #include "repo/registry.h"
 #include "rpc/dispatcher.h"
@@ -25,10 +26,14 @@ namespace gg::services {
 struct ServiceContext {
   repo::Registry registry;
   cache::BlameCache blameCache;
+  cache::GraphCache graphCache;
   cache::DocOverlay docOverlay;
-  // Whether this process has a usable git CLI. Probed once per context (not
-  // statically) so capability reporting, method guards and the blame backend
-  // choice always agree for one server instance.
+  // Restricted Mode (exec::restrictedMode()): no git process runs and nothing
+  // in the repository changes. Read once at construction, like cliAvailable.
+  bool restricted = exec::restrictedMode();
+  // Whether this process has a usable git CLI it may run (never in Restricted
+  // Mode), read once at construction so capability reporting, method guards
+  // and the blame backend choice always agree for the life of the context.
   bool cliAvailable = exec::gitCliAvailable();
   BlameService blameService{blameCache, cliAvailable};
 
@@ -41,8 +46,10 @@ struct ServiceContext {
   // Single-threaded builds (wasm, debug-st) have no watcher threads; the
   // capability is reported as watch:false and watch requests are ignored.
   struct NullWatchManager {
-    void watch(const std::string&, const std::string&) {}
+    void watch(const std::string&, const std::string&, const std::string& = {}) {}
+    void unwatch(const std::string&) {}
     bool isWatching(const std::string&) const { return false; }
+    bool nativeBackendActive() const { return false; }
   };
   NullWatchManager watchManager;
 #else
@@ -59,8 +66,12 @@ struct ServiceContext {
 };
 
 // Rejects a method that shells out to the git CLI when this build/environment
-// has none, as a typed error the client can branch on.
+// has none, or when Restricted Mode forbids running it, as a typed error the
+// client can branch on.
 inline void requireGitCli(const ServiceContext& context) {
+  if (context.restricted) {
+    throw rpc::HandlerError{{ErrorCode::Restricted, exec::kRestrictedModeMessage}};
+  }
   if (context.cliAvailable) return;
   throw rpc::HandlerError{{ErrorCode::MethodNotSupported,
                            "requires the git CLI (not available in this engine build)"}};

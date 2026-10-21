@@ -92,6 +92,7 @@ if (hasWasm) {
       'node:crypto': './src/web/shims/crypto.ts',
       crypto: './src/web/shims/crypto.ts',
       'node:fs/promises': './src/web/shims/fsPromises.ts',
+      'node:os': './src/web/shims/os.ts',
       'gitglasses-engine-wasm': './dist/web/gitglasses-engine-wasm.mjs',
     },
     // The glue references import.meta.url for path-based wasm loading, which

@@ -4,14 +4,17 @@
 
 #include <chrono>
 #include <ctime>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "exec/git_process.h"
+#include "core/git2.h"
+#include "exec/git_runner.h"
 #include "services/mutate/mutate_common.h"
+#include "services/params.h"
 #include "util/sha256.h"
 #include "util/temp_file.h"
 
@@ -22,15 +25,9 @@ namespace {
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
 using mutate_detail::repoCwd;
-using mutate_detail::requireString;
+using mutate_detail::requirePositional;
 using mutate_detail::runGit;
 using mutate_detail::runGitOrThrow;
-
-Error patchGitError(const std::string& context) {
-  const git_error* err = git_error_last();
-  const std::string detail = err && err->message ? err->message : "unknown libgit2 error";
-  return {ErrorCode::GitError, context + ": " + detail};
-}
 
 // Captured `git` invocation whose stdout is kept byte-exact. Patch text must
 // survive round-trips unchanged (CR characters, exact trailing newlines), so
@@ -43,14 +40,15 @@ struct RawGitOutput {
 
 Result<RawGitOutput> runGitRaw(const core::Repo& repo, std::vector<std::string> args,
                                const CancelToken& token) {
-  exec::SpawnOpts opts;
+  exec::RunOpts opts;
   opts.rawOutput = true;
-  auto process = exec::GitProcess::spawn(repoCwd(repo), std::move(args), opts);
-  if (!process) return process.error();
   RawGitOutput output;
-  output.stdoutText = process.value().readAll(token);
-  output.exitCode = process.value().wait(token);
-  output.stderrText = process.value().stderrOutput();
+  auto status =
+      exec::runGit(repoCwd(repo), std::move(args), opts, token,
+                   [&output](std::string bytes) { output.stdoutText = std::move(bytes); });
+  if (!status) return status.error();
+  output.exitCode = status.value().exitCode;
+  output.stderrText = status.value().stderrText;
   return output;
 }
 
@@ -69,6 +67,9 @@ RawGitOutput runGitRawOrThrow(const core::Repo& repo, std::vector<std::string> a
 // Resolves `spec` to a full commit sha or throws GitError.
 std::string resolveCommit(const core::Repo& repo, const std::string& spec,
                           const CancelToken& token) {
+  // Concatenated into a rev-parse argument, so a leading '-' would survive as
+  // an option ("--output=x" -> "--output=x^{commit}").
+  requirePositional(spec, "sha");
   auto output = runGitOrThrow(repo, {"rev-parse", "--verify", spec + "^{commit}"}, token,
                               "git rev-parse " + spec);
   if (output.lines.empty()) {
@@ -110,10 +111,9 @@ std::optional<std::string> originFingerprint(git_repository* raw) {
   return util::sha256Hex(url).substr(0, 16);
 }
 
-// Diff of HEAD against the working tree. Untracked files are appended as
-// new-file diffs via `git diff --no-index /dev/null <path>` (git normalizes
-// the null side to a/b-prefixed new-file headers); `git add -N` would get the
-// same effect but mutates the index, which a create call must never do.
+// Diff of HEAD against the working tree, leaving the index untouched.
+// Untracked files are appended as new-file diffs via `git diff --no-index
+// /dev/null <path>`, which git normalizes to a/b-prefixed new-file headers.
 std::string wipPatchText(const core::Repo& repo, bool includeUntracked,
                          const CancelToken& token) {
   std::string patch =
@@ -151,11 +151,10 @@ struct EnvelopeSource {
   std::optional<std::string> branch;
 };
 
-// Commit and range sources emit plain `git diff` output rather than
-// format-patch: mail-style patches would need `git am` (which commits) on the
-// receiving side, while a bare unified diff keeps patch/apply a single
-// `git apply --3way` into the working tree. The commit message survives in
-// the envelope summary instead.
+// Builds the envelope's base, patch text and summary for one source kind.
+// Every kind emits a bare unified diff, which patch/apply feeds to a single
+// `git apply --3way` into the working tree; a commit's message travels in the
+// envelope summary.
 EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
                            const CancelToken& token) {
   const std::string kind = source.value("kind", "");
@@ -173,12 +172,9 @@ EnvelopeSource buildSource(const core::Repo& repo, const rpc::Json& source,
   }
 
   if (kind == "stash") {
-    if (!source.contains("index") || !source["index"].is_number_integer() ||
-        source["index"].get<std::int64_t>() < 0) {
-      throw rpc::HandlerError{
-          {ErrorCode::InvalidParams, "'source.index' must be a non-negative integer"}};
-    }
-    const std::string ref = "stash@{" + std::to_string(source["index"].get<std::int64_t>()) + "}";
+    const std::int64_t index =
+        requireInteger(source, "index", 0, std::numeric_limits<std::int64_t>::max());
+    const std::string ref = "stash@{" + std::to_string(index) + "}";
     // The stash's first parent is the commit the stash was taken on.
     auto parent = runGitOrThrow(repo, {"rev-parse", "--verify", ref + "^1"}, token,
                                 "git rev-parse " + ref);
@@ -250,7 +246,7 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         auto repo = openRepo(context, params);
         git_strarray names{};
         if (git_remote_list(&names, repo.raw()) != 0) {
-          throw rpc::HandlerError{{patchGitError("list remotes")}};
+          throw rpc::HandlerError{{core::gitError("list remotes")}};
         }
         rpc::Json remotes = rpc::Json::array();
         for (size_t i = 0; i < names.count; ++i) {
@@ -279,12 +275,12 @@ void registerPatchMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         if (!params.contains("source") || !params["source"].is_object()) {
           throw rpc::HandlerError{{ErrorCode::InvalidParams, "'source' is required"}};
         }
+        const std::string summaryOverride = optionalString(params, "summary");
         auto repo = openRepo(context, params);
         EnvelopeSource source = buildSource(repo, params["source"], token);
         if (source.patch.empty()) {
           throw rpc::HandlerError{{ErrorCode::GitError, "nothing to include in patch"}};
         }
-        const std::string summaryOverride = params.value("summary", "");
 
         rpc::Json envelope = {{"format", "gitglasses-patch"},
                               {"version", 1},

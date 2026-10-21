@@ -1,7 +1,8 @@
 import { CommitSummaryInfo } from '@gitglasses/protocol';
-import { ActiveRepo, ViewBase, ViewNode, loadMoreNode, messageNode } from './viewBase';
+import { ActiveRepo, ViewBase, ViewNode, loadMoreNode } from './viewBase';
 import { commitNode } from './nodes';
-import { PAGE_SIZE, PageState, appendPage, emptyPageState } from './viewLogic';
+import { PageState, appendPage, emptyPageState } from './viewLogic';
+import { viewPageSize } from '../system/settings';
 
 // Pages of commits from HEAD with a "Load more…" tail node.
 export class CommitsViewProvider extends ViewBase {
@@ -19,7 +20,7 @@ export class CommitsViewProvider extends ViewBase {
     }
     if (!this.state.loaded) await this.fetchPage(repo.repoId);
 
-    if (this.state.items.length === 0) return [messageNode('No commits')];
+    if (this.state.items.length === 0) return [];
     const nodes = this.state.items.map((commit) => commitNode(commit));
     if (this.state.nextCursor !== undefined) {
       const repoId = repo.repoId;
@@ -32,7 +33,7 @@ export class CommitsViewProvider extends ViewBase {
     const result = await this.engine.request('log/commits', {
       repoId,
       cursor: this.state.nextCursor,
-      limit: PAGE_SIZE,
+      limit: viewPageSize(),
     });
     this.state = appendPage(this.state, { items: result.commits, nextCursor: result.nextCursor });
   }

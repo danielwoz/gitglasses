@@ -134,7 +134,11 @@ describe('GitHubProvider snippets (gists)', () => {
       if (url.includes('/gists/')) {
         return jsonResponse({
           files: {
-            'patch.ggpatch': { content: 'cut', truncated: true, raw_url: 'https://raw.example/x' },
+            'patch.ggpatch': {
+              content: 'cut',
+              truncated: true,
+              raw_url: 'https://gist.githubusercontent.com/u/aa5a/raw/x',
+            },
           },
         });
       }
@@ -149,8 +153,35 @@ describe('GitHubProvider snippets (gists)', () => {
     });
     const provider = new GitHubProvider({ fetchFn });
     const content = await provider.getSnippet(auth, 'aa5a315d61ae9438b18d');
-    expect(requests[1].url).toBe('https://raw.example/x');
+    expect(requests[1].url).toBe('https://gist.githubusercontent.com/u/aa5a/raw/x');
     expect(content).toBe('the full content');
+    // raw_url is body-supplied, so it must never carry the token.
+    expect(requests[1].headers?.authorization ?? requests[1].headers?.Authorization).toBeUndefined();
+  });
+
+  // The body could name any host; following it with credentials attached was
+  // an exfiltration path that the runtime's redirect protection cannot catch,
+  // because this is a fresh request rather than a redirect.
+  it('refuses a raw_url pointing at an unexpected host', async () => {
+    const { fetchFn, requests } = stubFetch((url) => {
+      if (url.includes('/gists/')) {
+        return jsonResponse({
+          files: {
+            'patch.ggpatch': {
+              content: 'cut',
+              truncated: true,
+              raw_url: 'https://attacker.example/collect',
+            },
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+    const provider = new GitHubProvider({ fetchFn });
+    await expect(provider.getSnippet(auth, 'aa5a315d61ae9438b18d')).rejects.toBeInstanceOf(
+      ProviderError,
+    );
+    expect(requests.map((r) => r.url)).not.toContain('https://attacker.example/collect');
   });
 
   it('throws AuthError on 401 and ProviderError on malformed references', async () => {

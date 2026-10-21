@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import { AuthError, type Issue, type IssueProvider } from '@gitglasses/integrations';
-import type { EngineClient } from '../engine/engineClient';
+import type { EngineClient } from '@gitglasses/rpc';
 import type { RepositoryService } from '../model/repositoryService';
-import { firstWorkspaceRepo } from '../views/viewBase';
-import type { IntegrationService, IssueProviderEntry } from './integrationService';
+import { activeWorkspaceRepo } from '../views/viewBase';
+import type { IntegrationService } from './integrationService';
+import { issueTrackerLabel } from './integrationSettings';
+import { issueCredentialHost, toAuthContext, type IssueProviderEntry } from './providerSetup';
 import { fallbackBranchName, sanitizeBranchName } from './startWorkLogic';
 
 function suggestName(provider: IssueProvider, issue: Issue): string {
@@ -19,17 +21,10 @@ function suggestName(provider: IssueProvider, issue: Issue): string {
 async function pickIssueProvider(
   entries: IssueProviderEntry[],
 ): Promise<IssueProviderEntry | undefined> {
-  const usable = entries.filter((entry) => entry.provider !== undefined);
-  if (usable.length === 0) {
-    void vscode.window.showWarningMessage(
-      'GitGlasses: the configured issue providers are not available in this build.',
-    );
-    return undefined;
-  }
-  if (usable.length === 1) return usable[0];
+  if (entries.length === 1) return entries[0];
   const picked = await vscode.window.showQuickPick(
-    usable.map((entry) => ({
-      label: entry.providerId,
+    entries.map((entry) => ({
+      label: issueTrackerLabel(entry.providerId, entry.host),
       description: entry.host ?? '',
       entry,
     })),
@@ -47,40 +42,36 @@ export function registerStartWork(
   return vscode.commands.registerCommand('gitglasses.startWork', async () => {
     const entries = integrations.getIssueProviders();
     if (entries.length === 0) {
-      const open = await vscode.window.showInformationMessage(
-        'GitGlasses: no issue providers configured. Add one to "gitglasses.integrations.issues".',
-        'Open Settings',
+      const add = await vscode.window.showInformationMessage(
+        'GitGlasses: no issue tracker is set up. Connect Jira Cloud, Linear or GitHub Issues to start work from an issue.',
+        'Connect Integration…',
       );
-      if (open === 'Open Settings') {
-        await vscode.commands.executeCommand(
-          'workbench.action.openSettings',
-          'gitglasses.integrations.issues',
-        );
+      if (add === 'Connect Integration…') {
+        await vscode.commands.executeCommand('gitglasses.connectIntegration');
       }
       return;
     }
 
     const entry = await pickIssueProvider(entries);
-    if (!entry?.provider) return;
+    if (!entry) return;
     const provider = entry.provider;
+    const host = issueCredentialHost(entry);
+    const name = issueTrackerLabel(entry.providerId, entry.host);
 
-    const auth = await integrations.auth.getAuth(entry.providerId, entry.host ?? '', {
-      interactive: true,
-      needsUsername: entry.providerId === 'jira',
-    });
+    const auth = await integrations.auth.getAuth(entry.providerId, host, { interactive: true });
     if (!auth) return;
 
     let issues: Issue[];
     try {
-      issues = await provider.getMyIssues({ token: auth.token }, { limit: 50 });
+      issues = await provider.getMyIssues(toAuthContext(auth, host), { limit: 50 });
     } catch (error) {
       if (error instanceof AuthError) {
         const reconnect = await vscode.window.showErrorMessage(
-          `GitGlasses: ${entry.providerId} rejected the stored credentials.`,
+          `GitGlasses: ${name} rejected the stored credentials.`,
           'Reconnect',
         );
         if (reconnect === 'Reconnect') {
-          await integrations.auth.signOut(entry.providerId, entry.host ?? '');
+          await integrations.auth.signOut(entry.providerId, host);
           await vscode.commands.executeCommand('gitglasses.startWork');
         }
         return;
@@ -110,7 +101,7 @@ export function registerStartWork(
     });
     if (!branchName) return;
 
-    const repo = await firstWorkspaceRepo(repos);
+    const repo = await activeWorkspaceRepo(repos);
     if (!repo) {
       void vscode.window.showWarningMessage('GitGlasses: no git repository in this workspace.');
       return;

@@ -31,17 +31,30 @@ describe('buildPatchCommentBody', () => {
     expect(body).not.toContain('lines 7');
   });
 
-  it('falls back to naming the patch file when there is no URL', () => {
+  it('folds the patch into the comment when nothing was uploaded', () => {
+    const envelope = '{\n  "format": "gitglasses-patch"\n}\n';
     const body = buildPatchCommentBody({
       path: 'a.txt',
       startLine: 1,
       endLine: 2,
       replacement: 'x',
-      patchFileName: 'fix-login.ggpatch',
+      inlineEnvelope: envelope,
     });
-    expect(body).toContain('`fix-login.ggpatch`');
-    expect(body).toContain('shared separately');
+    expect(body).toContain('<details><summary>');
+    expect(body).toContain('```json\n{\n  "format": "gitglasses-patch"\n}\n```');
+    expect(body).toContain('From Clipboard');
     expect(body).not.toContain('http');
+  });
+
+  it('carries only the replacement when there is no patch at all', () => {
+    const body = buildPatchCommentBody({
+      path: 'a.txt',
+      startLine: 1,
+      endLine: 1,
+      replacement: 'x',
+    });
+    expect(body).toContain('Proposed replacement');
+    expect(body).not.toContain('Apply Patch');
   });
 
   it('omits the prose paragraph when no comment is given', () => {

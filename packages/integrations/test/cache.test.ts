@@ -89,6 +89,52 @@ describe('TtlCache', () => {
     expect(b.value).toBe('shared');
   });
 
+  it('delete drops the in-flight fetch so a forced refresh starts a new one', async () => {
+    const cache = new TtlCache<string>(new FakeClock());
+    const releases: Array<() => void> = [];
+    const fetcher = (): Promise<string> => {
+      const index = releases.length;
+      return new Promise<string>((resolve) => {
+        releases.push(() => resolve(index === 0 ? 'stale' : 'fresh'));
+      });
+    };
+    const first = cache.getOrFetch('k', 1000, 0, fetcher);
+    cache.delete('k');
+    const forced = cache.getOrFetch('k', 1000, 0, fetcher);
+    for (const release of releases) release();
+    const [a, b] = await Promise.all([first, forced]);
+
+    expect(releases).toHaveLength(2);
+    expect(a.value).toBe('stale');
+    expect(b.value).toBe('fresh');
+    // The superseded fetch does not write its result back over the new one.
+    expect(cache.get('k')).toBe('fresh');
+  });
+
+  it('clear drops in-flight fetches too', async () => {
+    const cache = new TtlCache<string>(new FakeClock());
+    let calls = 0;
+    const fetcher = async (): Promise<string> => {
+      calls += 1;
+      return `v${calls}`;
+    };
+    const first = cache.getOrFetch('k', 1000, 0, fetcher);
+    cache.clear();
+    await Promise.all([first, cache.getOrFetch('k', 1000, 0, fetcher)]);
+    expect(calls).toBe(2);
+  });
+
+  it('evicts the least recently written entry past maxEntries', () => {
+    const cache = new TtlCache<string>(new FakeClock(), 2);
+    cache.set('a', '1', 1000);
+    cache.set('b', '2', 1000);
+    cache.set('a', '1b', 1000);
+    cache.set('c', '3', 1000);
+    expect(cache.get('a')).toBe('1b');
+    expect(cache.get('c')).toBe('3');
+    expect(cache.get('b')).toBeUndefined();
+  });
+
   it('does not coalesce fetches across different keys', async () => {
     const clock = new FakeClock();
     const cache = new TtlCache<string>(clock);

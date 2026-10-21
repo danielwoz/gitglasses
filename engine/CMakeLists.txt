@@ -1,3 +1,8 @@
+# version.h carries the project version into main.cpp and server.cpp.
+configure_file(src/version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.h" @ONLY)
+add_library(gg_version INTERFACE)
+target_include_directories(gg_version INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 if(EMSCRIPTEN)
   # Wasm build: one module target from the service/cache/core/rpc sources.
   # Excluded relative to native: exec/git_process.cpp + exec/cli_detect's
@@ -20,9 +25,11 @@ if(EMSCRIPTEN)
     src/core/repo.cpp
     src/repo/registry.cpp
     src/exec/cli_detect.cpp
+    src/exec/git_runner.cpp
     src/exec/parsers/history_log.cpp
     src/exec/parsers/incremental_blame.cpp
     src/cache/blame_cache.cpp
+    src/cache/graph_cache.cpp
     src/rpc/framing.cpp
     src/rpc/dispatcher.cpp
     src/services/blame/blame_service.cpp
@@ -39,6 +46,7 @@ if(EMSCRIPTEN)
     src/services/status/diff_methods.cpp
     src/services/status/stage_methods.cpp
     src/services/status/status_methods.cpp
+    src/services/params.cpp
     src/services/repo_methods.cpp
     src/services/rev_methods.cpp
   )
@@ -52,6 +60,7 @@ if(EMSCRIPTEN)
     $<$<BOOL:${GG_WARNINGS_AS_ERRORS}>:-Werror>
     -Wno-missing-designated-field-initializers)
   target_link_libraries(gitglasses-engine-wasm PRIVATE
+    gg_version
     nlohmann_json::nlohmann_json
     libgit2::libgit2package)
   target_link_options(gitglasses-engine-wasm PRIVATE
@@ -104,7 +113,7 @@ add_library(gg_core STATIC
   src/core/repo.cpp
 )
 target_link_libraries(gg_core
-  PUBLIC gg_util libgit2::libgit2package
+  PUBLIC gg_util libgit2::libgit2package nlohmann_json::nlohmann_json
   PRIVATE gg_warnings)
 
 add_library(gg_repo STATIC
@@ -123,6 +132,7 @@ endif()
 add_library(gg_exec STATIC
   src/exec/cli_detect.cpp
   ${GG_GIT_PROCESS_SOURCE}
+  src/exec/git_runner.cpp
   src/exec/parsers/history_log.cpp
   src/exec/parsers/incremental_blame.cpp
   src/exec/sequence_editor.cpp
@@ -133,6 +143,7 @@ target_link_libraries(gg_exec
 
 add_library(gg_cache STATIC
   src/cache/blame_cache.cpp
+  src/cache/graph_cache.cpp
 )
 target_link_libraries(gg_cache PUBLIC gg_exec PRIVATE gg_warnings)
 
@@ -156,6 +167,7 @@ add_library(gg_services STATIC
   src/services/status/diff_methods.cpp
   src/services/status/stage_methods.cpp
   src/services/status/status_methods.cpp
+  src/services/params.cpp
   src/services/repo_methods.cpp
   src/services/rev_methods.cpp
 )
@@ -175,10 +187,13 @@ add_executable(gitglasses-engine
   src/main.cpp
   src/server.cpp
 )
-target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_warnings)
+target_link_libraries(gitglasses-engine PRIVATE gg_rpc gg_repo gg_services gg_version gg_warnings)
 
 if(GG_STATIC_RUNTIME AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(gitglasses-engine PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+if(GG_FULLY_STATIC AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(gitglasses-engine PRIVATE -static)
 endif()
 
 if(GG_BUILD_TESTS)

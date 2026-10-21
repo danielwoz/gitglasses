@@ -45,6 +45,15 @@ export function timeDomain(timesMs: readonly number[], nowMs: number): TimeDomai
   return { start: min - pad, end: max + pad };
 }
 
+/** Smallest value in `values`, or Infinity when empty. Math.min(...values)
+ *  throws RangeError past ~125k arguments, and a file can have that many
+ *  history entries. */
+export function minValue(values: readonly number[]): number {
+  let min = Infinity;
+  for (const value of values) if (value < min) min = value;
+  return min;
+}
+
 export interface TimeScale {
   domain: TimeDomain;
   rangeStart: number;

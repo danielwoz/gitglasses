@@ -4,7 +4,7 @@
 // membership is decided solely by RepositoryService.locate.
 
 import * as vscode from 'vscode';
-import { EngineClient } from '../engine/engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 
 const DEBOUNCE_MS = 150;

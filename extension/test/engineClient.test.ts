@@ -1,23 +1,30 @@
 // Integration tests against the real engine binary — the same contract the
 // extension host exercises, minus VS Code.
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EngineClient, EngineError } from '../src/engine/engineClient';
-import { createProcessTransportFactory } from '../src/engine/processTransport';
+import { EngineClient, EngineError } from '@gitglasses/rpc';
+import { createProcessTransportFactory } from '@gitglasses/rpc/node';
 import { BlameModel } from '../src/model/blameModel';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
+// Windows needs the .exe suffix here too.
+const engineExe = process.platform === 'win32' ? 'gitglasses-engine.exe' : 'gitglasses-engine';
 const enginePath = ['release', 'debug']
-  .map((p) => path.join(repoRoot, 'build', p, 'engine', 'gitglasses-engine'))
+  .map((p) => path.join(repoRoot, 'build', p, 'engine', engineExe))
   .find(existsSync);
 
+// Without an engine the suite is skipped, so TypeScript-only work can run the
+// rest of the tests; in CI a missing engine means the build broke, so it fails.
 if (!enginePath) {
-  throw new Error('engine binary not built; run: cmake --build --preset debug');
+  const message =
+    'engine binary not built; run `pnpm fetch-engine` or `cmake --build --preset debug`';
+  if (process.env.CI) throw new Error(message);
+  console.log(`${message}; skipping the engine client tests`);
 }
 
 function makeFixtureRepo(): string {
@@ -27,17 +34,23 @@ function makeFixtureRepo(): string {
     GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z',
     GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z',
   };
-  const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: root, env });
-  git('init -q -b main');
-  git('config user.name Fixture');
-  git('config user.email fixture@example.invalid');
+  // An argv array, not a shell string: cmd.exe leaves the single quotes sh
+  // strips, and they end up inside the commit message.
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root, env });
+  git('init', '-q', '-b', 'main');
+  // Hermetic against the host: Git for Windows sets core.autocrlf=true
+  // system-wide, and the blame assertions depend on the checked-out bytes.
+  git('config', 'core.autocrlf', 'false');
+  git('config', 'commit.gpgsign', 'false');
+  git('config', 'user.name', 'Fixture');
+  git('config', 'user.email', 'fixture@example.invalid');
   writeFileSync(path.join(root, 'file.txt'), 'one\ntwo\nthree\n');
-  git('add file.txt');
-  git("commit -q -m 'initial'");
+  git('add', 'file.txt');
+  git('commit', '-q', '-m', 'initial');
   return root;
 }
 
-describe('EngineClient', () => {
+describe.skipIf(!enginePath)('EngineClient', () => {
   let client: EngineClient;
   let fixture: string;
 

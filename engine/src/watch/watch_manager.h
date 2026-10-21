@@ -11,13 +11,23 @@
 namespace gg::watch {
 
 class RepoWatch;
+class InotifyHub;
 
-// Watches registered repositories' gitdirs and reports coalesced change
-// batches. Each watched repo runs on its own thread; callbacks are invoked
-// from that thread, so they must be thread-safe. Batches are debounced and
-// classified into the repo/didChange protocol categories ('HEAD', 'refs',
-// 'index', 'stash', 'sequencer'), with a per-repo generation counter that
-// starts at 1 and increases by one per batch.
+// Watches registered repositories' gitdirs (and, for linked worktrees, the
+// refs in their common dir) and reports coalesced change
+// batches. Callbacks are invoked from a watcher thread, so they must be
+// thread-safe. Batches are debounced and classified into the repo/didChange
+// protocol categories ('HEAD', 'refs', 'index', 'stash', 'worktrees',
+// 'sequencer'), with a per-repo generation counter that starts at 1 and
+// increases by one per batch.
+//
+// The kernel watcher is a single inotify instance shared by every repository,
+// with one watch descriptor per watched directory: instances are capped per
+// uid (fs.inotify.max_user_instances, typically 128, shared with the editor
+// process) while descriptors are not (max_user_watches, ~1M). A repository
+// falls back to its own periodic stat sweep thread when no inotify instance
+// can be obtained, or when the kernel refuses every descriptor for it; the
+// sweep costs CPU and reports changes late.
 class WatchManager {
  public:
   using Callback = std::function<void(const std::string& repoId, std::uint64_t generation,
@@ -35,15 +45,35 @@ class WatchManager {
   WatchManager& operator=(const WatchManager&) = delete;
 
   // Starts watching the repo's gitdir. Idempotent for already-watched repos.
-  void watch(const std::string& repoId, const std::string& gitdir);
+  //
+  // A linked worktree's gitdir ($GIT_DIR/worktrees/<name>) holds only its
+  // own HEAD, index and sequencer state; branches, tags, remote-tracking refs
+  // and the stash live in the common dir it shares with the main checkout.
+  // When `commondir` names a different directory, its refs/ tree and
+  // packed-refs are watched too and reported as 'refs' and 'stash'. The
+  // common dir's HEAD, index and worktrees/ belong to the main checkout and
+  // are not reported for this repo.
+  void watch(const std::string& repoId, const std::string& gitdir,
+             const std::string& commondir = {});
+
+  // Stops watching the repo and releases its watch descriptors or thread.
+  // Idempotent for repos that are not watched.
+  void unwatch(const std::string& repoId);
 
   bool isWatching(const std::string& repoId) const;
+
+  // True when the shared kernel watcher exists. Repositories whose watches it
+  // refused still poll, and a platform without a kernel watcher reports false.
+  bool nativeBackendActive() const;
 
  private:
   Callback callback_;
   Backend backend_;
   mutable std::mutex mutex_;
-  std::map<std::string, std::unique_ptr<RepoWatch>> watches_;
+  // Present only while the kernel watcher is available; one instance total.
+  std::unique_ptr<InotifyHub> hub_;
+  // Per-repo polling threads, used only for repos the hub cannot take.
+  std::map<std::string, std::unique_ptr<RepoWatch>> polls_;
 };
 
 }  // namespace gg::watch

@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -140,7 +141,7 @@ TEST(GraphService, LinearLayoutGolden) {
                                 {rev(fixture, "HEAD~1"), 0, Json::array()},
                                 {rev(fixture, "HEAD~2"), 0, Json::array()}});
   EXPECT_FALSE(result.contains("nextCursor"));
-  EXPECT_GT(result["generation"].get<std::int64_t>(), 0);
+  EXPECT_GT(result["refsFingerprint"].get<std::int64_t>(), 0);
 
   // Refs decorate the tip: HEAD flag first, then the branch.
   const Json& refs = result["rows"][0]["refs"];
@@ -310,7 +311,7 @@ TEST(GraphService, DeterministicAndPagingStable) {
   EXPECT_EQ(first.dump(), second.dump());
 
   // Paging with limit 2 concatenates to exactly the unpaged row list, with a
-  // stable generation across pages.
+  // stable refs fingerprint across pages.
   Json paged = Json::array();
   Json params = {{"limit", 2}};
   std::int64_t id = 20;
@@ -318,7 +319,7 @@ TEST(GraphService, DeterministicAndPagingStable) {
   for (;;) {
     Json page = graphRows(session, ++id, repoId, params);
     ++pages;
-    EXPECT_EQ(page["generation"], first["generation"]);
+    EXPECT_EQ(page["refsFingerprint"], first["refsFingerprint"]);
     for (const auto& row : page["rows"]) paged.push_back(row);
     if (!page.contains("nextCursor")) break;
     params["cursor"] = page["nextCursor"];
@@ -354,6 +355,45 @@ TEST(GraphService, WipRowSynthesizedWhenDirty) {
   // Not requested: no WIP row despite the dirty tree.
   Json without = graphRows(session, 12, repoId);
   EXPECT_EQ(without["rows"][0]["kind"], "commit");
+}
+
+// Dirtiness stops at the first changed entry and does not descend into
+// untracked directories, so an untracked directory must still count.
+TEST(GraphService, UntrackedDirectoryAloneMakesTheTreeDirty) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json clean = graphRows(session, 10, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  EXPECT_EQ(clean["rows"][0]["kind"], "commit");
+
+  std::filesystem::create_directories(fixture.root() / "untracked" / "nested");
+  fixture.writeFile("untracked/nested/file.txt", "content\n");
+
+  Json dirty = graphRows(session, 11, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  EXPECT_EQ(dirty["rows"][0]["kind"], "wip");
+}
+
+// The cached plan is keyed on the ref fingerprint, so a new commit must be
+// visible on the next request rather than served from the previous walk.
+TEST(GraphService, CachedPlanIsInvalidatedWhenRefsMove) {
+  FixtureRepo fixture;
+  commitTick(fixture, "c1", 1);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  Json before = graphRows(session, 10, repoId);
+  const size_t rowsBefore = before["rows"].size();
+  // A repeated request for the unchanged repo is served from the cache and
+  // must be byte-identical.
+  EXPECT_EQ(graphRows(session, 11, repoId).dump(), before.dump());
+
+  commitTick(fixture, "c2", 2);
+  Json after = graphRows(session, 12, repoId);
+  EXPECT_NE(after["refsFingerprint"], before["refsFingerprint"]);
+  ASSERT_EQ(after["rows"].size(), rowsBefore + 1);
+  EXPECT_EQ(after["rows"][0]["sha"], rev(fixture, "HEAD"));
 }
 
 TEST(GraphService, StashRowPrecedesItsBaseCommit) {
@@ -444,10 +484,7 @@ TEST(GraphService, UnbornHeadAndBadParams) {
   struct UnbornRepo {
     std::filesystem::path root;
     UnbornRepo() {
-      root = std::filesystem::temp_directory_path() /
-             ("gg-graph-unborn-" +
-              std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
-      std::filesystem::create_directories(root);
+      root = gg::testing::makeTempDir("gg-graph-unborn-");
       gg::testing::runGit(root, "git init -q -b main");
     }
     ~UnbornRepo() {
@@ -462,13 +499,101 @@ TEST(GraphService, UnbornHeadAndBadParams) {
   Json result = graphRows(session, 10, repoId);
   EXPECT_TRUE(result["rows"].empty());
   EXPECT_FALSE(result.contains("nextCursor"));
-  EXPECT_TRUE(result.contains("generation"));
+  EXPECT_TRUE(result.contains("refsFingerprint"));
 
+  // An omitted limit falls back to the default page size.
   Json noLimit = session.request(req(11, "graph/rows", {{"repoId", repoId}}));
-  EXPECT_EQ(noLimit["error"]["code"], -32602);
+  EXPECT_TRUE(noLimit["result"]["rows"].empty());
   Json badCursor = session.request(
       req(12, "graph/rows", {{"repoId", repoId}, {"limit", 10}, {"cursor", "!!!not-base64!!!"}}));
   EXPECT_EQ(badCursor["error"]["code"], -32602);
+}
+
+bool hasWipRow(InteractiveSession& session, std::int64_t id, const std::string& repoId) {
+  Json rows = graphRows(session, id, repoId, {{"include", {{"stashes", false}, {"wip", true}}}});
+  return !rows["rows"].empty() && rows["rows"][0]["kind"] == "wip";
+}
+
+// The WIP row follows git's verdict for files behind a clean filter: a new
+// mtime alone (a touch, a checkout, a racy timestamp) is not a change.
+TEST(GraphService, WipRowIgnoresTouchedFilteredFile) {
+  FixtureRepo fixture;
+  fixture.run("git config filter.scrub.clean \"sed -e s/SECRET/REDACTED/\"");
+  fixture.run("git config filter.scrub.smudge cat");
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.run("git add .gitattributes app.env");
+  commitTick(fixture, "seed", 1);
+  const auto file = fixture.root() / "app.env";
+  std::filesystem::last_write_time(
+      file, std::filesystem::last_write_time(file) + std::chrono::seconds(5));
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_FALSE(hasWipRow(session, 10, repoId));
+
+  fixture.writeFile("app.env", "token=SECRET\nport=2\n");
+  EXPECT_TRUE(hasWipRow(session, 11, repoId));
+}
+
+// A new executable bit is a change git commits, whatever the content.
+TEST(GraphService, WipRowKeepsModeChangeOfFilteredFile) {
+#ifdef _WIN32
+  GTEST_SKIP() << "Windows checkouts have no executable bit (core.fileMode=false)";
+#endif
+  FixtureRepo fixture;
+  fixture.run("git config filter.scrub.clean \"sed -e s/SECRET/REDACTED/\"");
+  fixture.run("git config filter.scrub.smudge cat");
+  fixture.writeFile(".gitattributes", "*.env filter=scrub\n");
+  fixture.writeFile("app.env", "token=SECRET\n");
+  fixture.run("git add .gitattributes app.env");
+  commitTick(fixture, "seed", 1);
+  std::filesystem::permissions(fixture.root() / "app.env", std::filesystem::perms::owner_exec,
+                               std::filesystem::perm_options::add);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_TRUE(hasWipRow(session, 10, repoId));
+}
+
+// Out-of-cone files of a sparse checkout are absent by design.
+TEST(GraphService, WipRowIgnoresSparseCheckoutExclusions) {
+  FixtureRepo fixture;
+  fixture.writeFile("keep/k.txt", "keep\n");
+  fixture.writeFile("other/f1.txt", "one\n");
+  fixture.run("git add keep other");
+  commitTick(fixture, "seed", 1);
+  fixture.run("git sparse-checkout set --cone keep");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_FALSE(hasWipRow(session, 10, repoId));
+
+  fixture.writeFile("keep/k.txt", "keep\nedited\n");
+  EXPECT_TRUE(hasWipRow(session, 11, repoId));
+}
+
+// Edits inside a submodule are the submodule's to commit; the parent only
+// changes when the submodule's commit does.
+TEST(GraphService, WipRowIgnoresSubmoduleLocalEdits) {
+  FixtureRepo library;
+  library.writeFile("lib.txt", "one\n");
+  library.run("git add lib.txt");
+  commitTick(library, "lib one", 1);
+
+  FixtureRepo fixture;
+  fixture.run("git -c protocol.file.allow=always submodule --quiet add \"" +
+              library.root().generic_string() + "\" sub");
+  commitTick(fixture, "add submodule", 2);
+  fixture.writeFile("sub/lib.txt", "one\nlocal\n");
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+  EXPECT_FALSE(hasWipRow(session, 10, repoId));
+
+  gg::testing::runGit(fixture.root() / "sub",
+                      "git -c user.name=F -c user.email=f@example.invalid commit -q -a -m local");
+  EXPECT_TRUE(hasWipRow(session, 11, repoId));
 }
 
 }  // namespace

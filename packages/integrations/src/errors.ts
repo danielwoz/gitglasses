@@ -3,8 +3,8 @@
 export class ProviderError extends Error {
   readonly status?: number;
 
-  constructor(message: string, status?: number) {
-    super(message);
+  constructor(message: string, status?: number, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = 'ProviderError';
     this.status = status;
   }
@@ -39,5 +39,16 @@ export class RateLimitError extends ProviderError {
     super(message, status);
     this.name = 'RateLimitError';
     this.resetAt = resetAt;
+  }
+}
+
+/**
+ * A request would have carried a credential to a host it was not issued for.
+ * Raised before anything is sent; never a reason to discard the credential.
+ */
+export class CredentialScopeError extends ProviderError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CredentialScopeError';
   }
 }

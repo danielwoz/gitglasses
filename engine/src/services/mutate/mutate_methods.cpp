@@ -4,7 +4,10 @@
 #include <utility>
 #include <vector>
 
+#include "exec/git_process.h"
+
 #include "services/mutate/mutate_common.h"
+#include "services/params.h"
 
 namespace gg::services {
 
@@ -12,8 +15,8 @@ namespace {
 
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
-using mutate_detail::requireString;
-using mutate_detail::requireStringArray;
+using mutate_detail::requirePositional;
+using mutate_detail::requirePositionals;
 using mutate_detail::runConflictAware;
 using mutate_detail::runGit;
 using mutate_detail::runGitOrThrow;
@@ -41,14 +44,16 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string name = requireString(params, "name");
-        const std::string startPoint = params.value("startPoint", "");
+        const std::string name = requirePositional(requireString(params, "name"), "name");
+        const std::string startPoint =
+            requirePositional(optionalString(params, "startPoint"), "startPoint");
         auto repo = openRepo(context, params);
         std::vector<std::string> args;
         if (params.value("checkout", false)) {
           args = {"switch", "-c", name};
         } else {
-          args = {"branch", name};
+          args = {"branch", "--"};
+          args.push_back(name);
         }
         if (!startPoint.empty()) args.push_back(startPoint);
         runGitOrThrow(repo, std::move(args), token, "git branch create");
@@ -61,10 +66,10 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string name = requireString(params, "name");
+        const std::string name = requirePositional(requireString(params, "name"), "name");
         auto repo = openRepo(context, params);
-        runGitOrThrow(repo, {"branch", params.value("force", false) ? "-D" : "-d", name}, token,
-                      "git branch delete");
+        runGitOrThrow(repo, {"branch", params.value("force", false) ? "-D" : "-d", "--", name},
+                      token, "git branch delete");
         return rpc::Json::object();
       },
       rpc::Mode::Serial);
@@ -74,7 +79,7 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string ref = requireString(params, "ref");
+        const std::string ref = requirePositional(requireString(params, "ref"), "ref");
         auto repo = openRepo(context, params);
         // A ref that is not a local branch (sha, tag, remote branch) needs an
         // explicit detach; `git switch` refuses it otherwise.
@@ -83,6 +88,7 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         const bool isBranch = probe.value().exitCode == 0;
         std::vector<std::string> args = {"switch"};
         if (!isBranch) args.push_back("--detach");
+        args.push_back("--");
         args.push_back(ref);
         runGitOrThrow(repo, std::move(args), token, "git switch");
         return rpc::Json::object();
@@ -94,7 +100,7 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string ref = requireString(params, "ref");
+        const std::string ref = requirePositional(requireString(params, "ref"), "ref");
         auto repo = openRepo(context, params);
         // --no-edit: the default merge-commit message is used; an editor must
         // never block a headless engine.
@@ -110,7 +116,8 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::vector<std::string> shas = requireStringArray(params, "shas");
+        const std::vector<std::string> shas =
+            requirePositionals(requireStringArray(params, "shas"), "shas");
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"cherry-pick"};
         args.insert(args.end(), shas.begin(), shas.end());
@@ -123,7 +130,8 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::vector<std::string> shas = requireStringArray(params, "shas");
+        const std::vector<std::string> shas =
+            requirePositionals(requireStringArray(params, "shas"), "shas");
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"revert", "--no-edit"};
         args.insert(args.end(), shas.begin(), shas.end());
@@ -136,7 +144,9 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string ref = requireString(params, "ref");
+        // `git reset <tree-ish> [--] [<pathspec>]`: the ref must precede any
+        // "--", so it cannot be separated and is validated instead.
+        const std::string ref = requirePositional(requireString(params, "ref"), "ref");
         const std::string mode = params.value("mode", "");
         if (mode != "soft" && mode != "mixed" && mode != "hard") {
           throw rpc::HandlerError{
@@ -156,12 +166,15 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"fetch"};
         if (params.value("prune", false)) args.push_back("--prune");
-        const std::string remote = params.value("remote", "");
-        if (!remote.empty()) args.push_back(remote);
-        runGitOrThrow(repo, std::move(args), token, "git fetch");
+        const std::string remote = requirePositional(optionalString(params, "remote"), "remote");
+        if (!remote.empty()) {
+          args.push_back("--");
+          args.push_back(remote);
+        }
+        runGitOrThrow(repo, std::move(args), token, "git fetch", exec::kNetworkGitTimeout);
         return rpc::Json::object();
       },
-      rpc::Mode::Serial);
+      rpc::Mode::SerialNetwork);
 
   dispatcher.method(
       "mutate/pull",
@@ -171,10 +184,10 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"pull"};
         if (params.value("autoStash", false)) args.push_back("--autostash");
-        runGitOrThrow(repo, std::move(args), token, "git pull");
+        runGitOrThrow(repo, std::move(args), token, "git pull", exec::kNetworkGitTimeout);
         return rpc::Json::object();
       },
-      rpc::Mode::Serial);
+      rpc::Mode::SerialNetwork);
 
   dispatcher.method(
       "mutate/push",
@@ -194,10 +207,10 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           args.push_back("HEAD");
         }
         if (force == "with-lease") args.push_back("--force-with-lease");
-        runGitOrThrow(repo, std::move(args), token, "git push");
+        runGitOrThrow(repo, std::move(args), token, "git push", exec::kNetworkGitTimeout);
         return rpc::Json::object();
       },
-      rpc::Mode::Serial);
+      rpc::Mode::SerialNetwork);
 }
 
 }  // namespace gg::services

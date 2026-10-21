@@ -2,10 +2,21 @@
 // hosting-provider integrations, and their registration on an McpServer.
 
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { RootsListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import type { BlameHunk, CommitSummaryInfo, PatchEnvelope } from '@gitglasses/protocol';
+import type {
+  BlameHunk,
+  CommitSummaryInfo,
+  FileChange,
+  PatchEnvelope,
+  RepoInfo,
+} from '@gitglasses/protocol';
+import { ErrorCodes, patchEnvelopeError } from '@gitglasses/protocol';
 import {
   GitHubProvider,
   createGitHubEnterpriseProvider,
@@ -13,61 +24,494 @@ import {
   type FetchLike,
   type HostingProvider,
 } from '@gitglasses/integrations';
-import type { EngineClient } from './engine.js';
+import type { EngineClient } from '@gitglasses/rpc';
 import {
+  binaryPathsInPatch,
+  emptyRepositoryMessage,
+  explainEngineError,
   formatBlame,
   formatCommitShow,
   formatCommits,
+  formatDiff,
   formatGraph,
   formatHistory,
   formatLaunchpad,
+  formatPatchEnvelope,
+  formatRefs,
   formatStatus,
+  parsePatchEnvelopeText,
   parsePatchSource,
+  truncateText,
+  type DiffFileEntry,
 } from './format.js';
+import { SERVER_VERSION } from './version.js';
+
+/**
+ * A bare hostname, optionally with a port: letters, digits, hyphens and dots.
+ *
+ * Anything that could redirect an authenticated request elsewhere is rejected:
+ * userinfo ("api.github.com@attacker.example" reads as GitHub but resolves to
+ * the attacker), a scheme, a path, or whitespace.
+ */
+export function isPlainHostname(value: string): boolean {
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(
+    value,
+  );
+}
+
+/**
+ * The GitHub host this server talks to, from operator configuration only.
+ * The host pairs with the token, so both come from the environment and
+ * neither is something a caller can name.
+ */
+export function configuredGitHubHost(env: Record<string, string | undefined>): string | undefined {
+  const host = env.GITGLASSES_GITHUB_HOST?.trim();
+  if (!host || host === 'github.com') return undefined;
+  if (!isPlainHostname(host)) {
+    throw new Error(`GITGLASSES_GITHUB_HOST is not a plain hostname: ${JSON.stringify(host)}`);
+  }
+  return host;
+}
+
+/**
+ * The working directory as the workspace root of a client that offers no MCP
+ * roots. A filesystem root, the home directory or any directory that holds it
+ * (such as /home, /Users or C:\Users) would admit every repository the user
+ * has, so none of them counts.
+ */
+export function workingDirectoryRoot(
+  cwd: string = process.cwd(),
+  home: string = os.homedir(),
+): string[] {
+  const resolved = canonicalPath(cwd);
+  if (path.parse(resolved).root === resolved || isWithinAllowedRoots(home, [resolved])) return [];
+  return [resolved];
+}
+
+/** The allow-list entry that admits every path. */
+export const ALLOW_ANY = '*';
+
+/**
+ * The operator's allow list: GITGLASSES_ALLOWED_ROOTS (path-separator
+ * delimited) followed by the directories passed with --allow. The server reads
+ * repositories inside these directories and runs git in them with each
+ * repository's own configuration. "*" admits every path.
+ */
+export function parseAllowedRoots(
+  raw: string | undefined,
+  extra: readonly string[] = [],
+): string[] {
+  return [...(raw ?? '').split(path.delimiter), ...extra]
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
+    .map((entry) => (entry === ALLOW_ANY ? ALLOW_ANY : canonicalPath(entry)));
+}
+
+/**
+ * `target` as an absolute path with every symlink resolved. When the path does
+ * not exist, the deepest existing ancestor is resolved and the remaining
+ * segments appended, so a symlinked parent directory is still followed.
+ */
+export function canonicalPath(target: string): string {
+  const resolved = path.resolve(target);
+  const remainder: string[] = [];
+  let current = resolved;
+  for (;;) {
+    try {
+      // The native realpath also expands Windows 8.3 short names (RUNNER~1),
+      // which the engine reports in their long form.
+      return path.join(fs.realpathSync.native(current), ...remainder);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return resolved;
+      remainder.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * True when `target` is one of `roots` or sits inside one, or `roots` holds
+ * "*". An empty list admits nothing. Both sides are canonicalised first, so a
+ * symlink that sits under a root but resolves outside it falls outside.
+ */
+export function isWithinAllowedRoots(target: string, roots: readonly string[]): boolean {
+  if (roots.includes(ALLOW_ANY)) return true;
+  const resolved = canonicalPath(target);
+  return roots.some((root) => {
+    const relative = path.relative(canonicalPath(root), resolved);
+    // Empty means target === root; a leading ".." or an absolute result means
+    // it escaped. path.relative already normalises the "repoA/../secret" case.
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
+}
+
+/** Blame hunks returned when the caller does not ask for a specific count. */
+export const DEFAULT_BLAME_HUNKS = 200;
+/** Hard ceiling, mirroring the limit the other tools accept. */
+export const MAX_BLAME_HUNKS = 500;
+
+/** Characters a text result carries when the caller does not ask for more. */
+export const DEFAULT_RESULT_CHARS = 20_000;
+/** Ceiling a caller may raise the character limit to. */
+export const MAX_RESULT_CHARS = 200_000;
+
+/** Files one git_diff call collects hunks for. */
+export const MAX_DIFF_FILES = 100;
+
+/** Files git_diff fetches concurrently before re-checking its character budget. */
+const DIFF_FETCH_BATCH = 8;
+
+/**
+ * Files git_commit_show probes for binary content. Only files reported as
+ * +0 -0 are probed, which is normally none.
+ */
+const MAX_BINARY_PROBES = 16;
+
+/** The character limit for one call, clamped to MAX_RESULT_CHARS. */
+function resultChars(maxChars: number | undefined): number {
+  return Math.min(maxChars ?? DEFAULT_RESULT_CHARS, MAX_RESULT_CHARS);
+}
+
+/**
+ * What to do about a truncated result. "Raise maxChars" is useless once the
+ * caller is already at the ceiling, so at the ceiling the hint names a way to
+ * ask for less instead.
+ */
+function charLimitHint(limit: number, narrow: string): string {
+  return limit >= MAX_RESULT_CHARS
+    ? narrow
+    : `pass a higher "maxChars" (max ${MAX_RESULT_CHARS}), or ${narrow}`;
+}
+
+/**
+ * An error whose message is already written for the agent. Engine failures are
+ * restated by explainEngineError; these are not.
+ */
+class ToolError extends Error {}
 
 export interface ToolContext {
+  /**
+   * Engine for repositories inside the operator's allow list (--allow,
+   * GITGLASSES_ALLOWED_ROOTS): git runs there with each repository's own
+   * configuration, hooks and filters.
+   */
   client: EngineClient;
+  /**
+   * Engine started with --restricted, for every other repository served: it
+   * runs no git, so nothing a repository's config, attributes or hooks name
+   * can run. Without it, only allow-listed repositories are served.
+   */
+  restrictedClient?: EngineClient;
+  /** Directories passed with --allow; merged with GITGLASSES_ALLOWED_ROOTS. */
+  allow?: readonly string[];
+  /**
+   * The client's MCP roots as local directories, or undefined when the client
+   * offers none. createServer supplies this from the MCP session.
+   */
+  clientRoots?: () => Promise<readonly string[] | undefined>;
   /** Environment for tokens; defaults to process.env. */
   env?: Record<string, string | undefined>;
   /** HTTP transport for hosting providers; tests inject a stub. */
   fetchFn?: FetchLike;
 }
 
+/** A discovered repository and the engine that serves it. */
+interface ServedRepo extends RepoInfo {
+  client: EngineClient;
+}
+
+/** What a tool's refusal in Restricted Mode needs explained. */
+const NEEDS_GIT: Record<string, string> = {
+  git_file_history: 'following a file through renames',
+  create_patch: 'creating a patch',
+  apply_patch: 'applying a patch',
+  git_commit_show: 'rendering the diff',
+};
+
 /**
  * Tool handlers returning plain text. Kept separate from MCP registration so
  * integration tests can drive them directly against a live engine.
  */
 export function createToolHandlers(context: ToolContext) {
-  const { client } = context;
   const env = context.env ?? process.env;
-  const repoIds = new Map<string, Promise<string>>();
+  // Discovered repositories, keyed by resolved path and capped at
+  // MAX_REPO_IDS entries; the oldest is dropped on overflow.
+  const repos = new Map<string, Promise<ServedRepo>>();
+  const MAX_REPO_IDS = 64;
 
-  function repoIdFor(repoPath: string): Promise<string> {
-    const key = path.resolve(repoPath);
-    let repoId = repoIds.get(key);
-    if (!repoId) {
-      repoId = client.request('repo/discover', { path: key }).then((info) => info.repoId);
-      repoId.catch(() => repoIds.delete(key));
-      repoIds.set(key, repoId);
-    }
-    return repoId;
+  const allowedRoots = parseAllowedRoots(env.GITGLASSES_ALLOWED_ROOTS, context.allow);
+
+  /**
+   * The directories served without the operator naming them: the client's
+   * MCP roots, or this process's working directory when the client offers
+   * none (see workingDirectoryRoot). An allow list replaces them entirely.
+   */
+  async function workspaceRoots(): Promise<readonly string[]> {
+    if (allowedRoots.length > 0 || !context.restrictedClient) return [];
+    return (await context.clientRoots?.()) ?? workingDirectoryRoot();
   }
 
-  return {
-    async git_blame(args: { repoPath: string; file: string; line?: number }): Promise<string> {
-      const repoId = await repoIdFor(args.repoPath);
+  /**
+   * How `target` may be served: 'trusted' inside the allow list (git runs),
+   * 'restricted' inside the workspace roots (no git runs), undefined when it
+   * may not be read at all.
+   */
+  async function accessFor(target: string): Promise<'trusted' | 'restricted' | undefined> {
+    if (isWithinAllowedRoots(target, allowedRoots)) return 'trusted';
+    if (isWithinAllowedRoots(target, await workspaceRoots())) return 'restricted';
+    return undefined;
+  }
+
+  async function outsideRootsError(target: string, repoRoot?: string): Promise<ToolError> {
+    const where =
+      allowedRoots.length > 0 || !context.restrictedClient
+        ? `the directories this server was started with (${allowedRoots.join(', ') || 'none'})`
+        : `the client's workspace roots (${(await workspaceRoots()).join(', ') || 'none'})`;
+    const subject =
+      repoRoot === undefined
+        ? `${target} is outside ${where}`
+        : `${target} belongs to the repository at ${repoRoot}, which extends outside ${where}`;
+    return new ToolError(
+      `${subject}. Start the server with --allow <dir> or set GITGLASSES_ALLOWED_ROOTS ` +
+        'to read repositories elsewhere.',
+    );
+  }
+
+  async function repoFor(repoPath: string): Promise<ServedRepo> {
+    const key = canonicalPath(repoPath);
+    const access = await accessFor(key);
+    if (access === undefined) throw await outsideRootsError(key);
+    const client = access === 'trusted' ? context.client : context.restrictedClient;
+    if (!client) throw await outsideRootsError(key);
+    let pending = repos.get(key);
+    if (!pending) {
+      pending = client
+        .request('repo/discover', { path: key })
+        .then((info) => ({ ...info, client }));
+      pending.catch(() => repos.delete(key));
+      if (repos.size >= MAX_REPO_IDS) {
+        const oldest = repos.keys().next().value;
+        if (oldest !== undefined) repos.delete(oldest);
+      }
+      repos.set(key, pending);
+    }
+    const repo = await pending;
+    // repo/discover walks upwards, so a path inside a root can belong to a
+    // repository that is mostly outside it; that repository is not served.
+    if ((await accessFor(repo.rootPath)) !== access) {
+      repos.delete(key);
+      throw await outsideRootsError(key, repo.rootPath);
+    }
+    return repo;
+  }
+
+  /**
+   * The already-discovered repository for `repoPath`, without discovering one.
+   * Failed discoveries leave no entry, so the error path never retries them.
+   */
+  async function discoveredRepo(repoPath: string): Promise<ServedRepo | undefined> {
+    try {
+      return await repos.get(canonicalPath(repoPath));
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** True when HEAD points at no commit; false when that cannot be determined. */
+  async function hasNoCommits(repo: ServedRepo): Promise<boolean> {
+    try {
+      return (await repo.client.request('repo/state', { repoId: repo.repoId })).head.unborn;
+    } catch {
+      return false;
+    }
+  }
+
+  /** True for an engine refusal caused by Restricted Mode. */
+  function hunklessReason(error: unknown): string | undefined {
+    switch ((error as { code?: unknown } | undefined)?.code) {
+      case ErrorCodes.FilterNeedsGitCli:
+        return 'a filter or working-tree-encoding that needs git applies to it';
+      case ErrorCodes.WholeFileOnly:
+        return 'a submodule or Git LFS file, changed as a whole';
+      default:
+        return undefined;
+    }
+  }
+
+  function isRestrictedRefusal(error: unknown): boolean {
+    return (error as { code?: unknown } | undefined)?.code === ErrorCodes.Restricted;
+  }
+
+  /** Why `tool` cannot run in a repository served without git. */
+  function restrictedMessage(tool: string, repoPath: string): string {
+    const purpose = NEEDS_GIT[tool] ?? 'this';
+    return (
+      `${tool} needs git for ${purpose}, and this server runs git only in repositories ` +
+      'inside the directories it was started with (--allow or GITGLASSES_ALLOWED_ROOTS). ' +
+      `${repoPath} is served from the client's workspace roots without running git, because ` +
+      "git would run programs that the repository's own configuration names."
+    );
+  }
+
+  /**
+   * `rendered` unless the repository has no commits, in which case that is the
+   * fact the caller needs: "nothing found" invites a retry, "no commits yet"
+   * does not. Costs one request, and only when a result came back empty.
+   */
+  async function orEmptyRepository(
+    repo: ServedRepo,
+    repoPath: string,
+    rendered: string,
+    isEmpty: boolean,
+  ): Promise<string> {
+    if (!isEmpty || !(await hasNoCommits(repo))) return rendered;
+    return emptyRepositoryMessage(repoPath);
+  }
+
+  /**
+   * An engine failure rewritten for the agent: the empty-repository case is
+   * confirmed against repo/state where the repository is known, and the rest
+   * goes through explainEngineError.
+   */
+  async function describeFailure(
+    tool: string,
+    repoPath: string | undefined,
+    error: unknown,
+  ): Promise<Error> {
+    if (error instanceof ToolError) return error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (repoPath === undefined) return new ToolError(message);
+    const repo = await discoveredRepo(repoPath);
+    if (repo && (await hasNoCommits(repo))) {
+      return new ToolError(emptyRepositoryMessage(repoPath));
+    }
+    if (isRestrictedRefusal(error)) return new ToolError(restrictedMessage(tool, repoPath));
+    return new ToolError(
+      explainEngineError(message, {
+        repoPath,
+        resolvedPaths: [canonicalPath(repoPath), repo?.rootPath].filter(
+          (value): value is string => value !== undefined,
+        ),
+      }),
+    );
+  }
+
+  /**
+   * Working-tree file content holds a NUL byte, as git's own binary test does.
+   * `file` reaches this from a tool argument, so the resolved path must stay
+   * inside the repository and inside the allowed roots; anything else reads as
+   * not binary and the rendering omits the marker.
+   */
+  async function isBinaryInWorkingTree(rootPath: string, file: string): Promise<boolean> {
+    const resolved = canonicalPath(path.join(rootPath, file));
+    if (!isWithinAllowedRoots(resolved, [rootPath])) return false;
+    if ((await accessFor(resolved)) === undefined) return false;
+    let handle: fs.promises.FileHandle | undefined;
+    try {
+      handle = await fs.promises.open(resolved, 'r');
+      const { buffer, bytesRead } = await handle.read(Buffer.alloc(8000), 0, 8000, 0);
+      return buffer.subarray(0, bytesRead).includes(0);
+    } catch {
+      return false;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  /**
+   * Paths in `files` whose change is binary. git reports binary changes as
+   * +0 -0, so only those files are probed; a mode-only change reports the same
+   * counts and is not binary.
+   */
+  async function binaryPathsInCommit(
+    repo: ServedRepo,
+    sha: string,
+    files: readonly FileChange[],
+  ): Promise<Set<string>> {
+    const candidates = files
+      .filter((file) => file.additions === 0 && file.deletions === 0)
+      .slice(0, MAX_BINARY_PROBES);
+    const found = await Promise.all(
+      candidates.map(async (file) => {
+        // A deleted file exists only in the parent commit.
+        const rev = file.status === 'D' ? `${sha}^` : sha;
+        try {
+          const { binary } = await repo.client.request('rev/fileAtRev', {
+            repoId: repo.repoId,
+            path: file.path,
+            rev,
+          });
+          return binary ? file.path : undefined;
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    return new Set(found.filter((path): path is string => path !== undefined));
+  }
+
+  const handlers = {
+    async git_blame(args: {
+      repoPath: string;
+      file: string;
+      line?: number;
+      startLine?: number;
+      limit?: number;
+    }): Promise<string> {
+      const repo = await repoFor(args.repoPath);
       const streamId = randomUUID();
+      // Caps the hunks held in memory and returned to the caller.
+      const limit = Math.min(args.limit ?? DEFAULT_BLAME_HUNKS, MAX_BLAME_HUNKS);
+      const startLine = args.startLine ?? 1;
+      // The engine streams hunks in blame order, not line order, so the lowest
+      // `limit` lines are selected by ordered insertion: bounded memory, and a
+      // page that really is the next one by line.
       const hunks: BlameHunk[] = [];
-      const sub = client.onNotification('blame/hunks', (params) => {
-        if (params.streamId === streamId) hunks.push(...params.hunks);
+      let truncated = false;
+      const sub = repo.client.onNotification('blame/hunks', (params) => {
+        if (params.streamId !== streamId) return;
+        for (const hunk of params.hunks) {
+          const lastLine = hunk.resultLine + hunk.lineCount - 1;
+          // A single-line or paged request only needs the hunks it covers.
+          if (lastLine < startLine) continue;
+          if (
+            args.line !== undefined &&
+            !(args.line >= hunk.resultLine && args.line < hunk.resultLine + hunk.lineCount)
+          ) {
+            continue;
+          }
+          let low = 0;
+          let high = hunks.length;
+          while (low < high) {
+            const mid = (low + high) >>> 1;
+            if (hunks[mid].resultLine < hunk.resultLine) low = mid + 1;
+            else high = mid;
+          }
+          hunks.splice(low, 0, hunk);
+          if (hunks.length > limit) {
+            hunks.pop();
+            truncated = true;
+          }
+        }
       });
       try {
-        const result = await client.request('blame/file', {
-          repoId,
+        const result = await repo.client.request('blame/file', {
+          repoId: repo.repoId,
           path: args.file,
           streamId,
         });
-        return formatBlame(args.file, hunks, result.commits, args.line);
+        const binary = await isBinaryInWorkingTree(repo.rootPath, args.file);
+        const rendered = formatBlame(args.file, hunks, result.commits, args.line, binary);
+        if (!truncated) {
+          return orEmptyRepository(repo, args.repoPath, rendered, hunks.length === 0);
+        }
+        const last = hunks[hunks.length - 1];
+        const nextLine = last.resultLine + last.lineCount;
+        return (
+          `${rendered}\n\n(showing ${limit} hunks of ${result.totalLines} lines; ` +
+          `pass startLine: ${nextLine} for the next page, or "line" to blame one line)`
+        );
       } finally {
         sub.dispose();
       }
@@ -78,14 +522,29 @@ export function createToolHandlers(context: ToolContext) {
       text?: string;
       author?: string;
       sha?: string;
+      cursor?: string;
       limit: number;
     }): Promise<string> {
-      const repoId = await repoIdFor(args.repoPath);
+      const repo = await repoFor(args.repoPath);
+      const { client, repoId } = repo;
       const hasQuery =
         args.text !== undefined || args.author !== undefined || args.sha !== undefined;
       if (!hasQuery) {
-        const page = await client.request('log/commits', { repoId, limit: args.limit });
-        return formatCommits(page.commits);
+        const page = await client.request('log/commits', {
+          repoId,
+          cursor: args.cursor,
+          limit: args.limit,
+        });
+        const rendered =
+          page.nextCursor === undefined
+            ? formatCommits(page.commits, 'No commits on this branch')
+            : `${formatCommits(page.commits)}\n\n(more commits: call again with cursor: ${JSON.stringify(page.nextCursor)})`;
+        return orEmptyRepository(repo, args.repoPath, rendered, page.commits.length === 0);
+      }
+      if (args.cursor !== undefined) {
+        throw new ToolError(
+          'cursor only pages the unfiltered log; with text, author or sha, raise "limit" (max 500) or narrow the query',
+        );
       }
       const streamId = randomUUID();
       const matches: CommitSummaryInfo[] = [];
@@ -100,7 +559,12 @@ export function createToolHandlers(context: ToolContext) {
           query: { text: args.text, author: args.author, sha: args.sha },
         });
         const rendered = formatCommits(matches);
-        return result.truncated ? `${rendered}\n(truncated at ${args.limit})` : rendered;
+        // The engine caps `total` at `limit`, so the count of matches beyond
+        // the limit is not available to report.
+        if (result.truncated) {
+          return `${rendered}\n\n(showing the first ${matches.length} matches; more exist — raise "limit" (max 500) or add author/sha filters)`;
+        }
+        return orEmptyRepository(repo, args.repoPath, rendered, matches.length === 0);
       } finally {
         sub.dispose();
       }
@@ -109,62 +573,248 @@ export function createToolHandlers(context: ToolContext) {
     async git_file_history(args: {
       repoPath: string;
       file: string;
+      cursor?: string;
       limit: number;
     }): Promise<string> {
-      const repoId = await repoIdFor(args.repoPath);
-      const result = await client.request('history/file', {
-        repoId,
+      const repo = await repoFor(args.repoPath);
+      const result = await repo.client.request('history/file', {
+        repoId: repo.repoId,
         path: args.file,
+        cursor: args.cursor,
         limit: args.limit,
       });
-      return formatHistory(args.file, result.entries);
+      const rendered =
+        result.nextCursor === undefined
+          ? formatHistory(args.file, result.entries)
+          : `${formatHistory(args.file, result.entries)}\n\n(more commits: call again with cursor: ${JSON.stringify(result.nextCursor)})`;
+      return orEmptyRepository(repo, args.repoPath, rendered, result.entries.length === 0);
     },
 
-    async git_commit_show(args: { repoPath: string; sha: string }): Promise<string> {
-      const repoId = await repoIdFor(args.repoPath);
+    async git_commit_show(args: {
+      repoPath: string;
+      sha: string;
+      includeDiff?: boolean;
+      maxChars?: number;
+    }): Promise<string> {
+      const repo = await repoFor(args.repoPath);
+      const { client, repoId } = repo;
       const [page, diff] = await Promise.all([
         client.request('log/commits', { repoId, ref: args.sha, limit: 1 }),
         client.request('diff/commit', { repoId, sha: args.sha }),
       ]);
       const commit = page.commits[0];
-      if (!commit) throw new Error(`Commit ${args.sha} not found`);
-      return formatCommitShow(commit, diff.files);
+      if (!commit) {
+        throw new ToolError(
+          `no commit at "${args.sha}"; call git_refs for branches and tags or git_log_search for shas`,
+        );
+      }
+      // The patch already labels its binary files, so the stat block only
+      // needs its own probe when the patch was not fetched.
+      let patch: string | undefined;
+      let omitted: string | undefined;
+      if (args.includeDiff) {
+        try {
+          const result = await client.request('patch/create', {
+            repoId,
+            source: { kind: 'commit', sha: commit.sha },
+          });
+          patch = result.envelope.patch;
+        } catch (error) {
+          // Served without git: the file list still stands, so the diff is
+          // left out with the reason rather than failing the whole call.
+          if (!isRestrictedRefusal(error)) throw error;
+          omitted = restrictedMessage('git_commit_show', args.repoPath);
+        }
+      }
+      const binaryPaths =
+        patch === undefined
+          ? await binaryPathsInCommit(repo, commit.sha, diff.files)
+          : binaryPathsInPatch(patch);
+      const rendered = formatCommitShow(commit, diff.files, { binaryPaths, diff: patch });
+      const limit = resultChars(args.maxChars);
+      return truncateText(
+        omitted === undefined ? rendered : `${rendered}\n\n(diff omitted: ${omitted})`,
+        limit,
+        charLimitHint(
+          limit,
+          args.includeDiff
+            ? 'omit "includeDiff" for the file list alone'
+            : 'the commit touches this many files',
+        ),
+      );
     },
 
-    async git_graph_summary(args: { repoPath: string; limit: number }): Promise<string> {
-      const repoId = await repoIdFor(args.repoPath);
-      const result = await client.request('graph/rows', {
-        repoId,
+    async git_graph_summary(args: {
+      repoPath: string;
+      cursor?: string;
+      limit: number;
+    }): Promise<string> {
+      const repo = await repoFor(args.repoPath);
+      const result = await repo.client.request('graph/rows', {
+        repoId: repo.repoId,
+        cursor: args.cursor,
         limit: args.limit,
         include: { stashes: true, wip: true },
       });
-      return formatGraph(result.rows);
+      const rendered =
+        result.nextCursor === undefined
+          ? formatGraph(result.rows)
+          : `${formatGraph(result.rows)}\n\n(more rows: call again with cursor: ${JSON.stringify(result.nextCursor)})`;
+      return orEmptyRepository(repo, args.repoPath, rendered, result.rows.length === 0);
     },
 
-    async git_status(args: { repoPath: string }): Promise<string> {
-      const repoId = await repoIdFor(args.repoPath);
-      const status = await client.request('status/summary', { repoId });
-      return formatStatus(status);
+    async git_status(args: { repoPath: string; maxChars?: number }): Promise<string> {
+      const { client, repoId } = await repoFor(args.repoPath);
+      const [status, state] = await Promise.all([
+        client.request('status/summary', { repoId }),
+        client.request('repo/state', { repoId }),
+      ]);
+      const limit = resultChars(args.maxChars);
+      return truncateText(
+        formatStatus(status, state.head),
+        limit,
+        charLimitHint(limit, 'the working tree has this many changed files'),
+      );
     },
 
-    async create_patch(args: { repoPath: string; source: string }): Promise<string> {
+    async git_diff(args: {
+      repoPath: string;
+      file?: string;
+      staged?: boolean;
+      maxChars?: number;
+    }): Promise<string> {
+      const repo = await repoFor(args.repoPath);
+      const staged = args.staged ?? false;
+      const scope = staged ? 'staged' : 'unstaged';
+      const status = await repo.client.request('status/summary', { repoId: repo.repoId });
+      // Untracked files are uncommitted work too, and the working-tree diff is
+      // the only place an agent would look for them.
+      const changed: { path: string; status: string; origPath?: string }[] = staged
+        ? status.staged.map((f) => ({ path: f.path, status: f.status, origPath: f.origPath }))
+        : [
+            ...status.unstaged.map((f) => ({
+              path: f.path,
+              status: f.status,
+              origPath: f.origPath,
+            })),
+            ...status.conflicted.map((path) => ({ path, status: 'U' })),
+            ...status.untracked.map((path) => ({ path, status: '?' })),
+          ];
+      const selected =
+        args.file === undefined
+          ? changed.slice(0, MAX_DIFF_FILES)
+          : changed.filter((f) => f.path === args.file);
+      const limit = resultChars(args.maxChars);
+      // Files are fetched in batches until the character budget is spent, so
+      // only as many diffs as the result can hold are read.
+      const entries: DiffFileEntry[] = [];
+      let budget = limit;
+      for (let start = 0; start < selected.length && budget > 0; start += DIFF_FETCH_BATCH) {
+        const batch = await Promise.all(
+          selected.slice(start, start + DIFF_FETCH_BATCH).map(async (file) => {
+            let hunks;
+            try {
+              ({ hunks } = await repo.client.request('diff/fileHunks', {
+                repoId: repo.repoId,
+                path: file.path,
+                staged,
+              }));
+            } catch (error) {
+              // A path whose content only the git CLI can clean, or whose change
+              // can't be split into hunks, is listed with the reason instead of
+              // failing the whole diff.
+              const omitted = hunklessReason(error);
+              if (omitted === undefined) throw error;
+              return { ...file, hunks: [], omitted };
+            }
+            return {
+              ...file,
+              hunks,
+              binary: hunks.length === 0 && (await isBinaryInWorkingTree(repo.rootPath, file.path)),
+            };
+          }),
+        );
+        for (const entry of batch) {
+          entries.push(entry);
+          for (const hunk of entry.hunks) {
+            budget -= hunk.header.length + hunk.lines.reduce((n, l) => n + l.length + 1, 0);
+          }
+        }
+      }
+      return truncateText(
+        formatDiff(
+          scope,
+          entries,
+          args.file,
+          args.file === undefined ? changed.length : entries.length,
+        ),
+        limit,
+        charLimitHint(limit, 'pass "file" to diff one file at a time'),
+      );
+    },
+
+    async git_refs(args: { repoPath: string; maxChars?: number }): Promise<string> {
+      const repo = await repoFor(args.repoPath);
+      const refs = await repo.client.request('refs/list', { repoId: repo.repoId });
+      const limit = resultChars(args.maxChars);
+      const empty =
+        refs.branches.length === 0 && refs.tags.length === 0 && refs.remotes.length === 0;
+      return orEmptyRepository(
+        repo,
+        args.repoPath,
+        truncateText(
+          formatRefs(refs),
+          limit,
+          charLimitHint(limit, 'the repository has this many refs'),
+        ),
+        empty,
+      );
+    },
+
+    async create_patch(args: {
+      repoPath: string;
+      source: string;
+      maxChars?: number;
+    }): Promise<string> {
       const source = parsePatchSource(args.source);
-      const repoId = await repoIdFor(args.repoPath);
+      const { client, repoId } = await repoFor(args.repoPath);
       const result = await client.request('patch/create', { repoId, source });
-      return JSON.stringify(result.envelope, null, 2);
+      const limit = resultChars(args.maxChars);
+      return truncateText(
+        formatPatchEnvelope(result.envelope),
+        limit,
+        `a truncated patch cannot be applied; ${charLimitHint(
+          limit,
+          "narrow the source to a single commit with 'commit:<sha>'",
+        )}`,
+      );
     },
 
     async apply_patch(args: { repoPath: string; envelopeJson: string }): Promise<string> {
       let envelope: PatchEnvelope;
-      try {
-        envelope = JSON.parse(args.envelopeJson) as PatchEnvelope;
-      } catch {
-        throw new Error('envelopeJson is not valid JSON');
+      // Two accepted forms: a JSON envelope, or the metadata lines plus raw
+      // patch that create_patch returns.
+      if (args.envelopeJson.trimStart().startsWith('{')) {
+        try {
+          envelope = JSON.parse(args.envelopeJson) as PatchEnvelope;
+        } catch {
+          throw new ToolError('envelopeJson is not valid JSON');
+        }
+      } else {
+        try {
+          envelope = parsePatchEnvelopeText(args.envelopeJson);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new ToolError(`envelopeJson is not create_patch output: ${message}`);
+        }
       }
-      if (envelope?.format !== 'gitglasses-patch') {
-        throw new Error('envelopeJson is not a gitglasses-patch envelope');
+      // The engine rejects a malformed envelope too; checking it here names
+      // the offending field instead of surfacing a round trip's -32602.
+      const envelopeError = patchEnvelopeError(envelope);
+      if (envelopeError) {
+        throw new ToolError(`envelopeJson is not a valid patch envelope: ${envelopeError}`);
       }
-      const repoId = await repoIdFor(args.repoPath);
+      const { client, repoId } = await repoFor(args.repoPath);
       const result = await client.request('patch/apply', { repoId, envelope });
       return [
         `applied: ${result.applied}`,
@@ -173,20 +823,38 @@ export function createToolHandlers(context: ToolContext) {
       ].join('\n');
     },
 
-    async list_my_prs(args: { provider: 'github'; host?: string }): Promise<string> {
+    // Takes no arguments: the provider is GitHub, and the token and host both
+    // come from the environment (see configuredGitHubHost).
+    async list_my_prs(_args?: Record<string, never>): Promise<string> {
       const token = env.GITHUB_TOKEN ?? env.GITGLASSES_GITHUB_TOKEN;
       if (!token) {
-        throw new Error('No GitHub token; set GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN');
+        throw new ToolError(
+          'No GitHub token; set GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN in the server environment',
+        );
       }
-      const provider: HostingProvider =
-        args.host !== undefined && args.host !== 'github.com'
-          ? createGitHubEnterpriseProvider(args.host, context.fetchFn)
-          : new GitHubProvider({ fetchFn: context.fetchFn });
+      const host = configuredGitHubHost(env);
+      const provider: HostingProvider = host
+        ? createGitHubEnterpriseProvider(host, context.fetchFn)
+        : new GitHubProvider({ fetchFn: context.fetchFn });
       const prs = await provider.getMyPullRequests({ token });
       const viewer = prs.find((pr) => pr.viewerRole === 'author')?.author.username ?? '';
       return formatLaunchpad(groupItems(prs, viewer));
     },
   };
+
+  // Every handler reports failures through describeFailure, so a direct caller
+  // and an MCP client see the same restated message.
+  const explained = {} as Record<string, (args: never) => Promise<string>>;
+  for (const [name, handler] of Object.entries(handlers)) {
+    explained[name] = async (args: { repoPath?: string }) => {
+      try {
+        return await (handler as (a: unknown) => Promise<string>)(args);
+      } catch (error) {
+        throw await describeFailure(name, args?.repoPath, error);
+      }
+    };
+  }
+  return explained as typeof handlers;
 }
 
 export type ToolHandlers = ReturnType<typeof createToolHandlers>;
@@ -207,22 +875,105 @@ function asToolResult<A>(fn: (args: A) => Promise<string>): (args: A) => Promise
   };
 }
 
-const repoPath = z.string().describe('Absolute path to (or inside) the git repository');
+const repoPath = z
+  .string()
+  .describe(
+    "Absolute path to (or inside) the git repository. Only repositories inside the client's " +
+      'workspace roots, or inside the directories the server was started with (--allow, ' +
+      'GITGLASSES_ALLOWED_ROOTS), are served; other paths are rejected.',
+  );
+
+const maxChars = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_RESULT_CHARS)
+  .optional()
+  .describe(
+    `Maximum characters to return before truncation (default ${DEFAULT_RESULT_CHARS}, max ${MAX_RESULT_CHARS})`,
+  );
+
+const cursor = z
+  .string()
+  .optional()
+  .describe('Opaque cursor from a previous call\'s "(more ...)" footer; fetches the next page');
+
+/** Tools that only read the repository and the hosting provider. */
+const readOnly = { readOnlyHint: true } as const;
+
+/** How long a roots/list request may take before the client counts as offering none. */
+const LIST_ROOTS_TIMEOUT_MS = 10_000;
+
+/**
+ * The client's MCP roots as canonical local directories, re-read after every
+ * notifications/roots/list_changed. Resolves to undefined when the client does
+ * not offer roots, and to an empty list when it does but the request fails or
+ * no root is a local directory, so a misbehaving client is served nothing
+ * rather than everything.
+ */
+export function trackClientRoots(server: McpServer): () => Promise<readonly string[] | undefined> {
+  let current: Promise<readonly string[] | undefined> | undefined;
+  const fetchRoots = async (): Promise<readonly string[] | undefined> => {
+    if (!server.server.getClientCapabilities()?.roots) return undefined;
+    try {
+      const { roots } = await server.server.listRoots(undefined, {
+        timeout: LIST_ROOTS_TIMEOUT_MS,
+      });
+      return roots.flatMap((root) => {
+        if (!root.uri.startsWith('file:')) return [];
+        try {
+          return [canonicalPath(fileURLToPath(root.uri))];
+        } catch {
+          return [];
+        }
+      });
+    } catch {
+      return [];
+    }
+  };
+  server.server.setNotificationHandler(RootsListChangedNotificationSchema, async () => {
+    current = fetchRoots();
+  });
+  // Capabilities are known once the client has initialized; a read before
+  // that would cache "no roots".
+  server.server.oninitialized = () => {
+    current = undefined;
+  };
+  return () => (current ??= fetchRoots());
+}
 
 export function createServer(context: ToolContext): McpServer {
-  const handlers = createToolHandlers(context);
-  const server = new McpServer({ name: 'gitglasses', version: '0.1.0' });
+  const server = new McpServer({ name: 'gitglasses', version: SERVER_VERSION });
+  const handlers = createToolHandlers({
+    ...context,
+    clientRoots: context.clientRoots ?? trackClientRoots(server),
+  });
 
   server.registerTool(
     'git_blame',
     {
       description:
-        'Blame a file (or a single line): per-hunk author, date, sha and commit summary.',
+        'Who last changed each line of a file: per-hunk author, date, sha and commit summary. ' +
+        'Pass "line" for one line, or "startLine" to page through a long file.',
       inputSchema: {
         repoPath,
         file: z.string().describe('File path relative to the repository root'),
         line: z.number().int().min(1).optional().describe('1-based line to blame'),
+        startLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based line to start from, skipping earlier hunks (default 1)'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_BLAME_HUNKS)
+          .optional()
+          .describe(`Maximum blame hunks to return (default ${DEFAULT_BLAME_HUNKS})`),
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_blame),
   );
@@ -230,14 +981,24 @@ export function createServer(context: ToolContext): McpServer {
   server.registerTool(
     'git_log_search',
     {
-      description: 'Search commits by message text, author or sha; without filters, list recent commits.',
+      description:
+        'Search commits by message text, author or sha; without filters, list recent commits newest first. ' +
+        'Filters are combined with AND.',
       inputSchema: {
         repoPath,
-        text: z.string().optional().describe('Substring to match in commit messages'),
-        author: z.string().optional().describe('Author name/email filter'),
-        sha: z.string().optional().describe('Commit sha (prefix) filter'),
+        text: z.string().optional().describe('Case-insensitive substring of the commit message'),
+        author: z
+          .string()
+          .optional()
+          .describe('Case-insensitive substring of the author name or email'),
+        sha: z.string().optional().describe('Commit sha, or a prefix of one'),
+        cursor: cursor.describe(
+          'Opaque cursor from a previous unfiltered call\'s "(more commits ...)" footer. ' +
+            'Filtered searches cannot be paged; raise "limit" instead.',
+        ),
         limit: z.number().int().min(1).max(500).default(20),
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_log_search),
   );
@@ -245,12 +1006,16 @@ export function createServer(context: ToolContext): McpServer {
   server.registerTool(
     'git_file_history',
     {
-      description: 'Commit history of a file, following renames, newest first.',
+      description:
+        'Commit history of a file, following renames, newest first. Runs git, so it works only ' +
+        'in repositories inside the directories the server was started with (--allow).',
       inputSchema: {
         repoPath,
         file: z.string().describe('File path relative to the repository root'),
+        cursor,
         limit: z.number().int().min(1).max(500).default(20),
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_file_history),
   );
@@ -258,17 +1023,80 @@ export function createServer(context: ToolContext): McpServer {
   server.registerTool(
     'git_commit_show',
     {
-      description: 'Commit metadata plus changed files with addition/deletion counts.',
-      inputSchema: { repoPath, sha: z.string().describe('Commit sha (or unique prefix)') },
+      description:
+        'What one commit changed: metadata, changed files with addition/deletion counts, ' +
+        'and with includeDiff the full patch text.',
+      inputSchema: {
+        repoPath,
+        sha: z
+          .string()
+          .describe(
+            'Any revision git resolves: a full sha, a unique prefix, a branch or tag name, ' +
+              'HEAD, or an expression such as HEAD~3',
+          ),
+        includeDiff: z
+          .boolean()
+          .optional()
+          .describe(
+            'Append the unified diff of the commit (default false). Binary files are ' +
+              'reported as differing rather than shown. The diff needs git, so outside the ' +
+              'directories the server was started with (--allow) it is omitted with a note.',
+          ),
+        maxChars,
+      },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_commit_show),
+  );
+
+  server.registerTool(
+    'git_diff',
+    {
+      description:
+        'Uncommitted changes as unified diff text: unstaged by default, staged with staged:true. ' +
+        'Pass "file" for one file. Use git_commit_show for a committed change.',
+      inputSchema: {
+        repoPath,
+        file: z
+          .string()
+          .optional()
+          .describe('Limit the diff to this path, relative to the repository root'),
+        staged: z
+          .boolean()
+          .optional()
+          .describe(
+            'Diff the index against HEAD instead of the working tree against the index ' +
+              '(default false). Untracked files appear only in the unstaged diff.',
+          ),
+        maxChars,
+      },
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_diff),
+  );
+
+  server.registerTool(
+    'git_refs',
+    {
+      description:
+        'Branches, remote-tracking branches and tags with the sha each points at. ' +
+        'Use it to find a valid ref for git_commit_show or git_log_search.',
+      inputSchema: { repoPath, maxChars },
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_refs),
   );
 
   server.registerTool(
     'git_graph_summary',
     {
       description: 'Text rendering of the commit graph: lane-indented sha, summary and refs.',
-      inputSchema: { repoPath, limit: z.number().int().min(1).max(500).default(30) },
+      inputSchema: {
+        repoPath,
+        cursor,
+        limit: z.number().int().min(1).max(500).default(30),
+      },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_graph_summary),
   );
@@ -276,8 +1104,11 @@ export function createServer(context: ToolContext): McpServer {
   server.registerTool(
     'git_status',
     {
-      description: 'Branch, ahead/behind, staged, unstaged, untracked and conflicted files.',
-      inputSchema: { repoPath },
+      description:
+        'Branch, ahead/behind, staged, unstaged, untracked and conflicted files. ' +
+        'Names an unborn or detached HEAD explicitly.',
+      inputSchema: { repoPath, maxChars },
+      annotations: readOnly,
     },
     asToolResult(handlers.git_status),
   );
@@ -286,11 +1117,13 @@ export function createServer(context: ToolContext): McpServer {
     'create_patch',
     {
       description:
-        "Create a shareable gitglasses patch envelope (JSON) from 'wip', 'stash:<n>' or 'commit:<sha>'.",
+        "Create a shareable gitglasses patch from 'wip', 'stash:<n>' or 'commit:<sha>': envelope metadata lines followed by the raw patch. Runs git, so it works only in repositories inside the directories the server was started with (--allow).",
       inputSchema: {
         repoPath,
         source: z.string().describe("Patch source: 'wip', 'stash:<n>' or 'commit:<sha>'"),
+        maxChars,
       },
+      annotations: readOnly,
     },
     asToolResult(handlers.create_patch),
   );
@@ -298,11 +1131,17 @@ export function createServer(context: ToolContext): McpServer {
   server.registerTool(
     'apply_patch',
     {
-      description: 'Apply a gitglasses patch envelope (JSON string) to the repository.',
+      description:
+        'Apply a gitglasses patch to the repository, writing to the working tree. Runs git, ' +
+        'so it works only in repositories inside the directories the server was started with ' +
+        '(--allow).',
       inputSchema: {
         repoPath,
-        envelopeJson: z.string().describe('Patch envelope JSON produced by create_patch'),
+        envelopeJson: z
+          .string()
+          .describe('create_patch output, or an equivalent patch envelope as JSON'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },
     asToolResult(handlers.apply_patch),
   );
@@ -311,11 +1150,9 @@ export function createServer(context: ToolContext): McpServer {
     'list_my_prs',
     {
       description:
-        'Open pull requests involving you, grouped into launchpad buckets (blocked, needs-your-review, ...). Token from GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN.',
-      inputSchema: {
-        provider: z.literal('github'),
-        host: z.string().optional().describe('GitHub Enterprise host; defaults to github.com'),
-      },
+        'Open GitHub pull requests involving you, grouped into launchpad buckets (blocked, needs-your-review, ...). Takes no arguments: the token comes from GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN and the GitHub Enterprise host from GITGLASSES_GITHUB_HOST.',
+      inputSchema: {},
+      annotations: readOnly,
     },
     asToolResult(handlers.list_my_prs),
   );

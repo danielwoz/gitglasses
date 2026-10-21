@@ -13,10 +13,10 @@ import {
   planFromPreview,
   setAction,
   setMessage,
-  sha7,
   toRebaseEntries,
   validate,
 } from './rebaseLogic';
+import { shortSha } from '@gitglasses/protocol/sha';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -99,7 +99,7 @@ function renderRow(entry: PlanEntry, index: number): HTMLElement {
 
   const shaEl = document.createElement('code');
   shaEl.className = 'sha';
-  shaEl.textContent = sha7(entry.sha);
+  shaEl.textContent = shortSha(entry.sha);
   shaEl.title = entry.sha;
 
   const select = document.createElement('select');

@@ -2,7 +2,10 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <string_view>
 
 #include "core/git2.h"
 #include "rpc/dispatcher.h"
@@ -21,13 +24,13 @@
 #include "services/status/diff_methods.h"
 #include "services/status/stage_methods.h"
 #include "services/status/status_methods.h"
+#include "version.h"
 
 namespace gg {
 
 namespace {
 
 constexpr const char* kProtocolVersion = "0.1.0";
-constexpr const char* kEngineVersion = "0.1.2";
 
 // watch/threads are static truths of the build: single-threaded builds
 // (wasm, debug-st) have no watcher threads and no worker pool.
@@ -39,31 +42,81 @@ constexpr bool kWatchCapability = true;
 constexpr bool kThreadsCapability = true;
 #endif
 
+// The methods a Restricted Mode engine serves: reads that go through libgit2
+// alone (blame/file switches to its libgit2 backend), so no program the
+// repository configures can run, and none of which changes the repository.
+// Every other request method is refused with ErrorCode::Restricted before its
+// handler runs, including methods added later, until they are vetted and
+// listed here. Notifications only feed these reads and stay registered.
+// Mirrors RESTRICTED_MODE_METHODS in packages/protocol; the protocol contract
+// test checks the two agree.
+constexpr std::array<std::string_view, 18> kRestrictedModeMethods = {
+    "initialize", "shutdown",       "repo/discover",  "repo/close",     "repo/list",
+    "repo/state", "blame/file",     "log/commits",    "search/commits", "rev/fileAtRev",
+    "refs/list",  "stash/list",     "status/summary", "graph/rows",     "diff/commit",
+    "diff/refs",  "diff/fileHunks", "remote/list",
+};
+
+// Replaces the handler of every method Restricted Mode does not serve.
+void refuseOutsideRestrictedMode(rpc::Dispatcher& dispatcher) {
+  for (const std::string& name : dispatcher.methodNames()) {
+    if (std::find(kRestrictedModeMethods.begin(), kRestrictedModeMethods.end(), name) !=
+        kRestrictedModeMethods.end()) {
+      continue;
+    }
+    dispatcher.method(
+        name, [](const rpc::Json&, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
+          throw rpc::HandlerError{{ErrorCode::Restricted, exec::kRestrictedModeMessage}};
+        });
+  }
+}
+
+// Which mechanism actually backs repo/didChange: "none" when the build has no
+// watcher, "inotify" for the kernel watcher, "polling" for the degraded
+// periodic stat sweep. Notifications are delivered either way; polling costs
+// CPU per watched repo and reports changes up to one sweep interval late.
+const char* watchBackendName(const services::ServiceContext& context) {
+#ifdef GG_SINGLE_THREADED
+  (void)context;
+  return "none";
+#else
+  return context.watchManager.nativeBackendActive() ? "inotify" : "polling";
+#endif
+}
+
 }  // namespace
 
 void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& context,
                          std::atomic<bool>& shutdownRequested) {
-  dispatcher.method("initialize", [&context](const rpc::Json& params, const CancelToken&,
-                                             const rpc::NotifyFn&) -> rpc::Json {
-    const std::string clientProtocol = params.value("protocolVersion", "");
-    if (clientProtocol != kProtocolVersion) {
-      throw rpc::HandlerError{{ErrorCode::InvalidRequest,
-                               std::string("protocol version mismatch: engine speaks ") +
-                                   kProtocolVersion + ", client sent '" + clientProtocol + "'"}};
-    }
-    return {{"engineVersion", kEngineVersion},
-            {"protocolVersion", kProtocolVersion},
-            {"capabilities",
-             {{"gitCli", context.cliAvailable},
-              {"watch", kWatchCapability},
-              {"threads", kThreadsCapability}}}};
-  });
+  dispatcher.method(
+      "initialize",
+      [&context](const rpc::Json& params, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
+        const std::string clientProtocol = params.value("protocolVersion", "");
+        if (clientProtocol != kProtocolVersion) {
+          throw rpc::HandlerError{
+              {ErrorCode::InvalidRequest, std::string("protocol version mismatch: engine speaks ") +
+                                              kProtocolVersion + ", client sent '" +
+                                              clientProtocol + "'"}};
+        }
+        return {{"engineVersion", kVersion},
+                {"protocolVersion", kProtocolVersion},
+                {"capabilities",
+                 {{"gitCli", context.cliAvailable},
+                  {"restricted", context.restricted},
+                  {"watch", kWatchCapability},
+                  {"watchBackend", watchBackendName(context)},
+                  {"threads", kThreadsCapability}}}};
+      },
+      rpc::Mode::Serial);
 
-  dispatcher.method("shutdown", [&shutdownRequested](const rpc::Json&, const CancelToken&,
-                                                     const rpc::NotifyFn&) -> rpc::Json {
-    shutdownRequested = true;
-    return rpc::Json::object();
-  });
+  dispatcher.method(
+      "shutdown",
+      [&shutdownRequested](const rpc::Json&, const CancelToken&,
+                           const rpc::NotifyFn&) -> rpc::Json {
+        shutdownRequested = true;
+        return rpc::Json::object();
+      },
+      rpc::Mode::Serial);
 
   services::registerRepoMethods(dispatcher, context);
   services::registerBlameMethods(dispatcher, context);
@@ -78,6 +131,8 @@ void configureDispatcher(rpc::Dispatcher& dispatcher, services::ServiceContext& 
   services::registerStashWorktreeMethods(dispatcher, context);
   services::registerRebaseMethods(dispatcher, context);
   services::registerPatchMethods(dispatcher, context);
+
+  if (context.restricted) refuseOutsideRestrictedMode(dispatcher);
 }
 
 int runServer(std::istream& in, std::ostream& out) {
@@ -88,21 +143,28 @@ int runServer(std::istream& in, std::ostream& out) {
   services::ServiceContext context;
   std::atomic<bool> shutdownRequested{false};
 
-  rpc::Dispatcher dispatcher(pool, [&writer](const rpc::Json& message) {
-    writer.write(message.dump());
-  });
+  rpc::Dispatcher dispatcher(
+      pool, [&writer](const rpc::Json& message) { writer.write(rpc::dumpForWire(message)); });
 
   // Server-initiated notifications (watcher pushes) go through the same
   // serialized frame writer as dispatcher responses.
   context.broadcast = [&writer](const std::string& method, const rpc::Json& params) {
-    writer.write(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}.dump());
+    writer.write(
+        rpc::dumpForWire(rpc::Json{{"jsonrpc", "2.0"}, {"method", method}, {"params", params}}));
   };
 
   configureDispatcher(dispatcher, context, shutdownRequested);
 
   while (!shutdownRequested) {
     auto payload = reader.read();
-    if (!payload) break;  // stdin closed: exit cleanly, never orphan
+    if (!payload) {
+      if (reader.failed()) {
+        spdlog::error("malformed frame; the stream cannot be resynchronized");
+        pool.shutdown();
+        return 1;
+      }
+      break;  // stdin closed: exit cleanly, never orphan
+    }
     dispatcher.dispatch(*payload);
   }
 

@@ -73,7 +73,7 @@
       "name": "asan",
       "inherits": "debug",
       "cacheVariables": {
-        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
       }
     },
@@ -84,6 +84,82 @@
         "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
       }
+    },
+    {
+      "name": "macos",
+      "hidden": true,
+      "vendor": {
+        "gitglasses": {
+          "notes": "Apple Silicon. Install deps with: $VCPKG_ROOT/vcpkg install --triplet arm64-osx-gg --overlay-triplets=ci/triplets --x-install-root=$HOME/.cache/gitglasses/vcpkg_installed. On an Intel Mac add -DVCPKG_TARGET_TRIPLET=x64-osx-gg and install that triplet instead."
+        }
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-osx-gg",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/ci/triplets",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "macOS debug",
+      "inherits": ["macos", "debug"],
+      "binaryDir": "${sourceDir}/build/debug"
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS release",
+      "inherits": ["macos", "release"],
+      "binaryDir": "${sourceDir}/build/release"
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "vendor": {
+        "gitglasses": {
+          "notes": "x64 with the static MSVC runtime; run from a Visual Studio developer prompt so Ninja finds cl.exe. Install deps with: & $env:VCPKG_ROOT\\vcpkg.exe install --triplet x64-windows-static --x-install-root=$env:USERPROFILE\\.cache\\gitglasses\\vcpkg_installed. On arm64 add -DVCPKG_TARGET_TRIPLET=arm64-windows-static and install that triplet instead."
+        }
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "VCPKG_INSTALLED_DIR": "$env{USERPROFILE}/.cache/gitglasses/vcpkg_installed"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows debug",
+      "inherits": ["windows", "debug"],
+      "binaryDir": "${sourceDir}/build/debug"
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows release",
+      "inherits": ["windows", "release"],
+      "binaryDir": "${sourceDir}/build/release"
+    },
+    {
+      "name": "linux-arm64",
+      "hidden": true,
+      "vendor": {
+        "gitglasses": {
+          "notes": "Install deps with: $VCPKG_ROOT/vcpkg install --triplet arm64-linux --x-install-root=$HOME/.cache/gitglasses/vcpkg_installed"
+        }
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": { "VCPKG_TARGET_TRIPLET": "arm64-linux" }
+    },
+    {
+      "name": "linux-arm64-debug",
+      "displayName": "Linux arm64 debug",
+      "inherits": ["linux-arm64", "debug"],
+      "binaryDir": "${sourceDir}/build/debug"
+    },
+    {
+      "name": "linux-arm64-release",
+      "displayName": "Linux arm64 release",
+      "inherits": ["linux-arm64", "release"],
+      "binaryDir": "${sourceDir}/build/release"
     }
   ],
   "buildPresets": [
@@ -93,13 +169,25 @@
     { "name": "mingw", "configurePreset": "mingw" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
-    { "name": "tsan", "configurePreset": "tsan" }
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "macos-debug", "configurePreset": "macos-debug" },
+    { "name": "macos-release", "configurePreset": "macos-release" },
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug" },
+    { "name": "linux-arm64-release", "configurePreset": "linux-arm64-release" }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
     { "name": "debug-st", "configurePreset": "debug-st", "output": { "outputOnFailure": true } },
     { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
     { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
-    { "name": "tsan", "configurePreset": "tsan", "output": { "outputOnFailure": true } }
+    { "name": "tsan", "configurePreset": "tsan", "output": { "outputOnFailure": true } },
+    { "name": "macos-debug", "configurePreset": "macos-debug", "output": { "outputOnFailure": true } },
+    { "name": "macos-release", "configurePreset": "macos-release", "output": { "outputOnFailure": true } },
+    { "name": "windows-debug", "configurePreset": "windows-debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-release", "configurePreset": "windows-release", "output": { "outputOnFailure": true } },
+    { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug", "output": { "outputOnFailure": true } },
+    { "name": "linux-arm64-release", "configurePreset": "linux-arm64-release", "output": { "outputOnFailure": true } }
   ]
 }

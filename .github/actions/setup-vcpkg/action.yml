@@ -1,0 +1,94 @@
+name: Set up vcpkg
+description: >-
+  Checks out vcpkg at the builtin-baseline that vcpkg.json pins, bootstraps
+  it, and installs the engine's dependencies for one triplet into a cached
+  directory under ~/.cache/gitglasses. Sets VCPKG_ROOT for later steps, which
+  the CMake presets read. Run it after any step that exports its own
+  VCPKG_ROOT, such as the Visual Studio developer environment.
+
+inputs:
+  triplet:
+    description: The vcpkg triplet to install for; the overlay triplets in ci/triplets are available.
+    required: true
+  install-dir:
+    description: The directory under ~/.cache/gitglasses to install into, matching the CMake preset.
+    required: false
+    default: vcpkg_installed
+  packages:
+    description: >-
+      Space-separated packages for a classic-mode install. Empty installs
+      everything vcpkg.json lists.
+    required: false
+    default: ''
+
+outputs:
+  install-root:
+    description: The absolute path the dependencies were installed into.
+    value: ${{ steps.paths.outputs.install-root }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve vcpkg paths
+      id: paths
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ inputs.install-dir }}
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        # Native Windows tools need C:/... paths, not the shell's /c/... form.
+        if [ "$RUNNER_OS" = Windows ]; then
+          home=$(cygpath -m "$USERPROFILE")
+          workspace=$(cygpath -m "$GITHUB_WORKSPACE")
+          action=$(cygpath -m "$GITHUB_ACTION_PATH")
+        else
+          home=$HOME
+          workspace=$GITHUB_WORKSPACE
+          action=$GITHUB_ACTION_PATH
+        fi
+        echo "install-root=$home/.cache/gitglasses/$INSTALL_DIR" >> "$GITHUB_OUTPUT"
+        echo "binary-cache=$home/.cache/vcpkg/archives" >> "$GITHUB_OUTPUT"
+        echo "action-path=$action" >> "$GITHUB_OUTPUT"
+        # Cache keys cannot hold the commas of a feature list.
+        echo "request=$(printf '%s' "$PACKAGES" | git hash-object --stdin | cut -c1-12)" >> "$GITHUB_OUTPUT"
+        echo "VCPKG_ROOT=$workspace/vcpkg" >> "$GITHUB_ENV"
+
+    - name: Bootstrap vcpkg at the manifest baseline
+      shell: bash
+      run: |
+        baseline=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
+        git init -q "$VCPKG_ROOT"
+        git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+        git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$baseline"
+        git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
+        if [ "$RUNNER_OS" = Windows ]; then
+          "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+        else
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+        fi
+
+    # Keyed on everything that changes the installed packages. After a
+    # baseline bump an older entry for the same triplet is restored only to
+    # seed the binary cache: install.sh rebuilds the install directory unless
+    # the key matched exactly.
+    - name: Cache vcpkg packages
+      id: cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/gitglasses/${{ inputs.install-dir }}
+          ~/.cache/vcpkg/archives
+        key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ inputs.triplet }}-${{ inputs.install-dir }}-${{ steps.paths.outputs.request }}-${{ hashFiles('vcpkg.json', 'ci/triplets/**') }}
+        restore-keys: |
+          vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ inputs.triplet }}-${{ inputs.install-dir }}-
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        TRIPLET: ${{ inputs.triplet }}
+        PACKAGES: ${{ inputs.packages }}
+        INSTALL_ROOT: ${{ steps.paths.outputs.install-root }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        VCPKG_DEFAULT_BINARY_CACHE: ${{ steps.paths.outputs.binary-cache }}
+        ACTION_DIR: ${{ steps.paths.outputs.action-path }}
+      run: bash "$ACTION_DIR/install.sh"

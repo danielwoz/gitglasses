@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { UNCOMMITTED_SHA } from '@gitglasses/protocol';
 import { BlameModel } from '../model/blameModel';
 import { RepositoryService } from '../model/repositoryService';
+import { codeSpan, escapeMarkdown } from '../system/markdown';
 
 // Commit details on hover over any line, from the same cached whole-file
 // blame the inline annotation uses.
@@ -10,7 +11,8 @@ export class BlameHoverProvider implements vscode.HoverProvider {
     private readonly blame: BlameModel,
     private readonly repos: RepositoryService,
     /** Optional enrichment: autolinks issue references in the commit summary
-     *  (pure text substitution — must never hit the network). */
+     *  (pure text substitution — must never hit the network). It returns
+     *  markdown with the surrounding text already escaped. */
     private readonly autolink?: (text: string, repoRoot: string) => Promise<string>,
   ) {}
 
@@ -45,15 +47,19 @@ export class BlameHoverProvider implements vscode.HoverProvider {
       const commit = fileBlame.commits[hunk.sha];
       if (!commit) return undefined;
       const date = new Date(commit.author.time * 1000);
-      let summary = commit.summary;
-      if (this.autolink) {
-        summary = await this.autolink(summary, located.rootPath).catch(() => commit.summary);
-      }
+      // Name, email, summary and path all come from the repository, so each is
+      // escaped before it reaches MarkdownString.
+      const summary = this.autolink
+        ? await this.autolink(commit.summary, located.rootPath).catch(() =>
+            escapeMarkdown(commit.summary),
+          )
+        : escapeMarkdown(commit.summary);
       markdown.appendMarkdown(
-        `$(git-commit) **${commit.author.name}** <${commit.author.email}>\n\n` +
+        `$(git-commit) **${escapeMarkdown(commit.author.name)}** ` +
+          `\\<${escapeMarkdown(commit.author.email)}\\>\n\n` +
           `${summary}\n\n` +
-          `\`${hunk.sha.slice(0, 12)}\` • ${date.toLocaleString()}` +
-          (hunk.path !== located.relativePath ? ` • was \`${hunk.path}\`` : ''),
+          `${codeSpan(hunk.sha.slice(0, 12))} • ${date.toLocaleString()}` +
+          (hunk.path !== located.relativePath ? ` • was ${codeSpan(hunk.path)}` : ''),
       );
     }
     return new vscode.Hover(markdown, document.lineAt(position.line).range);

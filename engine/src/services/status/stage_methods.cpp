@@ -2,16 +2,14 @@
 
 #include <git2.h>
 
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
-#include <memory>
+#include <chrono>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "exec/git_process.h"
+#include "core/git2.h"
+#include "services/params.h"
 #include "services/status/diff_common.h"
 #include "util/temp_file.h"
 
@@ -19,19 +17,36 @@ namespace gg::services {
 
 namespace {
 
-using status_detail::DiffPtr;
-using status_detail::PatchPtr;
-using status_detail::statusGitError;
+// Ceiling on hunk offsets: past it the value cannot address a real diff, and
+// the cast to long stays well defined on every supported platform.
+constexpr std::int64_t kMaxLine = 1LL << 40;
 
-struct IndexDeleter {
-  void operator()(git_index* index) const { git_index_free(index); }
+// One requested hunk, addressed by the ranges diff/fileHunks reported.
+struct HunkRange {
+  long oldStart = 0;
+  long oldLines = 0;
+  long newStart = 0;
+  long newLines = 0;
 };
-using IndexPtr = std::unique_ptr<git_index, IndexDeleter>;
 
-struct ObjectDeleter {
-  void operator()(git_object* object) const { git_object_free(object); }
-};
-using ObjectPtr = std::unique_ptr<git_object, ObjectDeleter>;
+// Reads the 'hunks' param. The ranges must select hunks of a diff the engine
+// re-derives, so they are validated up front: a fractional, negative or
+// missing offset can never match and is a client bug, not a stale diff.
+std::vector<HunkRange> requireHunkRanges(const rpc::Json& params) {
+  const rpc::Json requested = params.value("hunks", rpc::Json::array());
+  if (!requested.is_array() || requested.empty()) {
+    throw rpc::HandlerError{{ErrorCode::InvalidParams, "'hunks' must be a non-empty array"}};
+  }
+  std::vector<HunkRange> ranges;
+  ranges.reserve(requested.size());
+  for (const auto& want : requested) {
+    ranges.push_back({static_cast<long>(requireInteger(want, "oldStart", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "oldLines", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "newStart", 0, kMaxLine)),
+                      static_cast<long>(requireInteger(want, "newLines", 0, kMaxLine))});
+  }
+  return ranges;
+}
 
 std::string requireAction(const rpc::Json& params) {
   const std::string action = params.value("action", "");
@@ -51,69 +66,7 @@ Result<core::Repo> openWorktreeRepo(ServiceContext& context, const rpc::Json& pa
   return repo;
 }
 
-// One "@@ -o,l +n,m @@ ..." block of a unified-diff patch.
-struct HunkBlock {
-  long oldStart = 0;
-  long oldLines = 1;
-  long newStart = 0;
-  long newLines = 1;
-  std::string trailing;   // header text after the closing "@@" (function context)
-  std::string headerLine; // the original @@ line, including newline
-  std::string body;       // hunk lines, each including its newline
-};
-
-bool parseHunkHeader(const std::string& line, HunkBlock& out) {
-  if (line.rfind("@@ -", 0) != 0) return false;
-  const char* p = line.c_str() + 4;
-  char* end = nullptr;
-  out.oldStart = std::strtol(p, &end, 10);
-  if (end == p) return false;
-  p = end;
-  out.oldLines = 1;
-  if (*p == ',') {
-    ++p;
-    out.oldLines = std::strtol(p, &end, 10);
-    if (end == p) return false;
-    p = end;
-  }
-  if (p[0] != ' ' || p[1] != '+') return false;
-  p += 2;
-  out.newStart = std::strtol(p, &end, 10);
-  if (end == p) return false;
-  p = end;
-  out.newLines = 1;
-  if (*p == ',') {
-    ++p;
-    out.newLines = std::strtol(p, &end, 10);
-    if (end == p) return false;
-    p = end;
-  }
-  if (std::strncmp(p, " @@", 3) != 0) return false;
-  out.trailing = std::string(p + 3);
-  return true;
-}
-
-// Splits a single-file patch into its file header and hunk blocks.
-void splitPatch(const std::string& text, std::string& header, std::vector<HunkBlock>& blocks) {
-  size_t pos = 0;
-  while (pos < text.size()) {
-    size_t eol = text.find('\n', pos);
-    const size_t lineEnd = eol == std::string::npos ? text.size() : eol + 1;
-    std::string line = text.substr(pos, lineEnd - pos);
-    std::string bare = line;
-    while (!bare.empty() && (bare.back() == '\n' || bare.back() == '\r')) bare.pop_back();
-    HunkBlock parsed;
-    if (parseHunkHeader(bare, parsed)) {
-      parsed.headerLine = std::move(line);
-      blocks.push_back(std::move(parsed));
-    } else if (blocks.empty()) {
-      header += line;
-    } else {
-      blocks.back().body += line;
-    }
-    pos = lineEnd;
-  }
-}
+using status_detail::HunkBlock;
 
 // Rebuilds a patch containing only the selected hunks. For forward
 // application the new-side start of each kept hunk is renumbered as if the
@@ -123,6 +76,8 @@ void splitPatch(const std::string& text, std::string& header, std::vector<HunkBl
 std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBlock>& blocks,
                              const std::vector<bool>& selected, bool renumber) {
   std::string out = header;
+  // Line count each side of the file has gained from the hunks seen so far:
+  // over all of them, and over the kept ones alone.
   long cumulativeAll = 0;
   long cumulativeKept = 0;
   for (size_t i = 0; i < blocks.size(); ++i) {
@@ -130,6 +85,8 @@ std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBl
     const long delta = block.newLines - block.oldLines;
     if (selected[i]) {
       if (renumber) {
+        // newStart counts from a file carrying every earlier hunk; the subset
+        // carries only the kept ones, so swap one shift for the other.
         const long newStart = block.newStart - cumulativeAll + cumulativeKept;
         out += "@@ -" + std::to_string(block.oldStart) + "," + std::to_string(block.oldLines) +
                " +" + std::to_string(newStart) + "," + std::to_string(block.newLines) + " @@" +
@@ -145,19 +102,158 @@ std::string buildSubsetPatch(const std::string& header, const std::vector<HunkBl
   return out;
 }
 
-// Writes `contents` to a throwaway file for `git apply`; removed by caller.
-Result<std::filesystem::path> writeTempPatch(const std::string& contents) {
-  const std::filesystem::path file = util::randomTempPath("gg-hunk-", ".patch");
-  std::FILE* f = std::fopen(file.string().c_str(), "wb");
-  if (!f) return Error{ErrorCode::Internal, "cannot create temp patch file"};
-  const size_t written = std::fwrite(contents.data(), 1, contents.size(), f);
-  std::fclose(f);
-  if (written != contents.size()) {
-    std::error_code ec;
-    std::filesystem::remove(file, ec);
-    return Error{ErrorCode::Internal, "cannot write temp patch file"};
+// Refuses skip-worktree paths before anything is staged. Git treats such an
+// entry as unchanged whatever the working tree holds (`git add` stages the
+// other paths and then fails), and staging the absent file of an
+// out-of-cone entry would record its deletion.
+void refuseSkipWorktree(git_index* index, const std::vector<std::string>& paths) {
+  for (const auto& path : paths) {
+    if (status_detail::skipWorktree(index, path.c_str())) {
+      throw rpc::HandlerError{
+          {ErrorCode::GitError,
+           "'" + path + "' is outside the sparse checkout (skip-worktree); git does not stage it"}};
+    }
   }
-  return file;
+}
+
+// Ceiling on a git command that writes the index. Git holds index.lock for
+// the whole run, clean filters included, and a killed git leaves the lock
+// behind, which keeps every git tool out of the repository until someone
+// deletes it. The ceiling is sized for filters working through large files
+// (Git LFS, git-crypt), not for catching a stalled git.
+constexpr std::chrono::milliseconds kIndexWriteTimeout = std::chrono::hours(1);
+
+// Runs a git command that writes the index. For the same reason it is not
+// cancelled once started; callers check for cancellation before each run.
+void runIndexWriter(const core::Repo& repo, std::vector<std::string> args,
+                    const std::string& what) {
+  status_detail::runGitChecked(repo, std::move(args), CancelToken::none(), what, 0,
+                               kIndexWriteTimeout);
+}
+
+// `git add` runs every filter driver (git-lfs, git-crypt, custom clean
+// filters) and working-tree-encoding, so the index receives exactly what git
+// stores; -A stages a path missing from the working tree as a removal. Each
+// batch is one index update, so a failure or cancellation before a later
+// batch leaves the earlier ones staged, as separate `git add` commands would.
+void stageWithGit(const core::Repo& repo, git_index* index, const std::vector<std::string>& paths,
+                  const CancelToken& token) {
+  // Git rejects a pathspec that matches nothing and then stages none of its
+  // batch. A path in neither the index nor the working tree (an untracked
+  // file deleted since the client's last status) has nothing to stage, so it
+  // is left out rather than failing the others.
+  std::vector<std::string> matched;
+  matched.reserve(paths.size());
+  for (const auto& path : paths) {
+    if (status_detail::indexHas(index, path) || status_detail::workdirHas(repo, path)) {
+      matched.push_back(path);
+    }
+  }
+  for (auto& batch : status_detail::argvBatches(matched)) {
+    token.throwIfCancelled();
+    std::vector<std::string> args = {"--literal-pathspecs", "add", "-A", "--"};
+    for (auto& path : batch) args.push_back(std::move(path));
+    runIndexWriter(repo, std::move(args), "git add");
+  }
+}
+
+// Staging for engines without the git CLI. libgit2 performs only its built-in
+// CRLF and ident conversions, so a path with a filter driver or
+// working-tree-encoding is refused before the index changes rather than
+// staged as raw working-tree bytes. A path gone from the working tree stages
+// as a removal, which involves no content and so no filter.
+void stageWithLibgit2(const core::Repo& repo, git_index* index,
+                      const std::vector<std::string>& paths) {
+  for (const auto& path : paths) {
+    if (!status_detail::workdirHas(repo, path)) continue;
+    const status_detail::PathFilter filter = status_detail::pathFilter(repo.raw(), path);
+    if (filter.any()) {
+      throw rpc::HandlerError{
+          {ErrorCode::FilterNeedsGitCli,
+           "cannot stage '" + path + "': it goes through " + filter.describe() +
+               ", which only the git CLI can apply, and this engine has no git CLI"}};
+    }
+  }
+  for (const auto& path : paths) {
+    int rc = git_index_add_bypath(index, path.c_str());
+    // A path missing from the working tree stages as a removal.
+    if (rc == GIT_ENOTFOUND) rc = git_index_remove_bypath(index, path.c_str());
+    if (rc != 0) throw rpc::HandlerError{{core::gitError("stage '" + path + "'")}};
+  }
+  if (git_index_write(index) != 0) throw rpc::HandlerError{{core::gitError("write index")}};
+}
+
+// Restores the index entries for `paths` from HEAD's tree, as
+// `git reset -- <paths>` does: an entry absent from HEAD leaves the index,
+// and a directory covers its contents. Paths are literal, so unstaging
+// `app/[id]/page.tsx` never touches `app/i/page.tsx`.
+void resetToHead(const core::Repo& repo, git_index* index, const std::vector<std::string>& paths) {
+  core::ObjectPtr treeGuard;
+  git_tree* tree = nullptr;
+  auto head = repo.head();
+  if (!head) throw rpc::HandlerError{{head.error()}};
+  if (!head.value().unborn) {
+    git_object* rawTree = nullptr;
+    if (git_revparse_single(&rawTree, repo.raw(), "HEAD^{tree}") != 0) {
+      throw rpc::HandlerError{{core::gitError("resolve HEAD tree")}};
+    }
+    treeGuard.reset(rawTree);
+    tree = reinterpret_cast<git_tree*>(rawTree);
+  }
+
+  std::vector<std::string> owned = paths;
+  std::vector<char*> pointers;
+  pointers.reserve(owned.size());
+  for (auto& path : owned) pointers.push_back(path.data());
+  git_diff_options opts;
+  git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+  opts.pathspec = {pointers.data(), pointers.size()};
+  // Reversed, the new side is HEAD: what each entry goes back to.
+  opts.flags = GIT_DIFF_REVERSE | GIT_DIFF_DISABLE_PATHSPEC_MATCH;
+  git_diff* rawDiff = nullptr;
+  if (git_diff_tree_to_index(&rawDiff, repo.raw(), tree, index, &opts) != 0) {
+    throw rpc::HandlerError{{core::gitError("diff HEAD..index")}};
+  }
+  core::DiffPtr diff(rawDiff);
+
+  const size_t count = git_diff_num_deltas(diff.get());
+  for (size_t i = 0; i < count; ++i) {
+    const git_diff_delta* delta = git_diff_get_delta(diff.get(), i);
+    // Unstaging also drops any conflict entries for the path. GIT_ENOTFOUND
+    // means the index has no entry at all, which is the case for a path that
+    // exists only in HEAD.
+    int rc = git_index_conflict_remove(index, delta->old_file.path);
+    if (rc == GIT_ENOTFOUND) rc = 0;
+    if (rc == 0 && delta->status == GIT_DELTA_DELETED) {
+      rc = git_index_remove(index, delta->old_file.path, 0);
+    } else if (rc == 0) {
+      git_index_entry entry{};
+      entry.mode = delta->new_file.mode;
+      git_oid_cpy(&entry.id, &delta->new_file.id);
+      entry.path = delta->new_file.path;
+      rc = git_index_add(index, &entry);
+    }
+    if (rc != 0) {
+      throw rpc::HandlerError{
+          {core::gitError("unstage '" + std::string(delta->old_file.path) + "'")}};
+    }
+  }
+  if (git_index_write(index) != 0) throw rpc::HandlerError{{core::gitError("write index")}};
+}
+
+// Applies a patch to the index with `git apply --cached`. The patch goes
+// through a TempFile, which is removed on every exit path. --whitespace=nowarn
+// keeps an apply.whitespace setting from rewriting the lines being staged.
+void applyToIndexWithGit(const core::Repo& repo, const std::string& patch, bool reverse,
+                         const CancelToken& token) {
+  token.throwIfCancelled();
+  auto file = util::TempFile::create(patch, "gg-hunk-", ".patch");
+  if (!file) throw rpc::HandlerError{{file.error()}};
+  std::vector<std::string> args = {"apply", "--cached", "--whitespace=nowarn"};
+  if (reverse) args.emplace_back("--reverse");
+  args.push_back(file.value().path());
+  runIndexWriter(repo, std::move(args),
+                 reverse ? "git apply --cached --reverse" : "git apply --cached");
 }
 
 }  // namespace
@@ -166,59 +262,26 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
   // Whole-file stage/unstage. Serial: index writes must not interleave.
   dispatcher.method(
       "stage/files",
-      [&context](const rpc::Json& params, const CancelToken&, const rpc::NotifyFn&) -> rpc::Json {
+      [&context](const rpc::Json& params, const CancelToken& token,
+                 const rpc::NotifyFn&) -> rpc::Json {
         const std::string action = requireAction(params);
-        const rpc::Json paths = params.value("paths", rpc::Json::array());
-        if (!paths.is_array() || paths.empty()) {
-          throw rpc::HandlerError{
-              {ErrorCode::InvalidParams, "'paths' must be a non-empty array"}};
-        }
+        const std::vector<std::string> paths = requireStringArray(params, "paths");
         auto repo = openWorktreeRepo(context, params);
         if (!repo) throw rpc::HandlerError{{repo.error()}};
-        git_repository* raw = repo.value().raw();
+        auto index = status_detail::readIndex(repo.value().raw());
+        if (!index) throw rpc::HandlerError{{index.error()}};
 
         if (action == "stage") {
-          git_index* rawIndex = nullptr;
-          if (git_repository_index(&rawIndex, raw) != 0) {
-            throw rpc::HandlerError{{statusGitError("open index")}};
-          }
-          IndexPtr index(rawIndex);
-          for (const auto& entry : paths) {
-            const std::string path = entry.get<std::string>();
-            // A path deleted from the working tree stages as a removal.
-            std::error_code ec;
-            const bool exists = std::filesystem::symlink_status(
-                                    std::filesystem::path(repo.value().workdir()) / path, ec)
-                                    .type() != std::filesystem::file_type::not_found;
-            const int rc = exists ? git_index_add_bypath(index.get(), path.c_str())
-                                  : git_index_remove_bypath(index.get(), path.c_str());
-            if (rc != 0) throw rpc::HandlerError{{statusGitError("stage '" + path + "'")}};
-          }
-          if (git_index_write(index.get()) != 0) {
-            throw rpc::HandlerError{{statusGitError("write index")}};
+          refuseSkipWorktree(index.value().get(), paths);
+          if (context.cliAvailable) {
+            stageWithGit(repo.value(), index.value().get(), paths, token);
+          } else {
+            stageWithLibgit2(repo.value(), index.value().get(), paths);
           }
         } else {
-          // git_reset_default restores index entries from HEAD's tree (or
-          // removes them when HEAD is unborn or lacks the path).
-          ObjectPtr head;
-          auto headState = repo.value().head();
-          if (!headState) throw rpc::HandlerError{{headState.error()}};
-          if (!headState.value().unborn) {
-            git_object* rawHead = nullptr;
-            if (git_revparse_single(&rawHead, raw, "HEAD") != 0) {
-              throw rpc::HandlerError{{statusGitError("resolve HEAD")}};
-            }
-            head.reset(rawHead);
-          }
-          std::vector<std::string> owned;
-          for (const auto& entry : paths) owned.push_back(entry.get<std::string>());
-          std::vector<char*> pointers;
-          pointers.reserve(owned.size());
-          for (auto& path : owned) pointers.push_back(path.data());
-          git_strarray pathspec{pointers.data(), pointers.size()};
-          if (git_reset_default(raw, head.get(), &pathspec) != 0) {
-            throw rpc::HandlerError{{statusGitError("unstage paths")}};
-          }
+          // Unstaging copies blobs git already stores from HEAD's tree into
+          // the index, so no filter is involved and libgit2 suffices.
+          resetToHead(repo.value(), index.value().get(), paths);
         }
         return rpc::Json::object();
       },
@@ -227,67 +290,56 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
   // Hunk-level staging. A fresh single-file diff is taken and the requested
   // hunks are matched by their recorded ranges; a stale request (the file
   // changed since the client's diff/fileHunks call) fails instead of applying
-  // the wrong lines. Stage applies the subset patch to the index via
-  // libgit2's git_apply; unstage reverse-applies it through `git apply
-  // --cached --reverse` (libgit2 has no reverse apply, and the CLI keeps
-  // "no newline" marker semantics correct in reverse).
+  // the wrong lines. Stage applies the subset patch to the index via libgit2's
+  // git_apply, or through `git apply --cached` when the diff itself came from
+  // the git CLI because the path has a filter driver or working-tree-encoding;
+  // unstage reverse-applies it through `git apply --cached --reverse`, which
+  // libgit2 has no equivalent for, so unstage requires the git CLI.
   dispatcher.method(
       "stage/hunks",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         const std::string action = requireAction(params);
-        // Unstaging hunks reverse-applies through the git CLI (libgit2 has no
-        // reverse apply); staging stays libgit2-only and needs no CLI.
         if (action == "unstage") requireGitCli(context);
-        const std::string path = params.value("path", "");
-        const rpc::Json requested = params.value("hunks", rpc::Json::array());
-        if (path.empty()) {
-          throw rpc::HandlerError{{ErrorCode::InvalidParams, "'path' is required"}};
-        }
-        if (!requested.is_array() || requested.empty()) {
-          throw rpc::HandlerError{
-              {ErrorCode::InvalidParams, "'hunks' must be a non-empty array"}};
-        }
+        const std::string path = requireString(params, "path");
+        const std::vector<HunkRange> requested = requireHunkRanges(params);
         auto repo = openWorktreeRepo(context, params);
         if (!repo) throw rpc::HandlerError{{repo.error()}};
 
         const bool staged = action == "unstage";
-        auto diff = status_detail::singleFileDiff(repo.value(), path, staged);
-        if (!diff) throw rpc::HandlerError{{diff.error()}};
-        if (git_diff_num_deltas(diff.value().get()) == 0) {
+        const status_detail::FilePatch patch =
+            status_detail::filePatch(repo.value(), path, staged, context.cliAvailable, token);
+        // A gitlink has no lines to split, and a pointer's lines are not the
+        // file's: neither can be staged one hunk at a time.
+        if (patch.gitlink) {
+          throw rpc::HandlerError{{ErrorCode::WholeFileOnly,
+                                   "'" + path + "' is a submodule, which cannot be split into " +
+                                       "hunks; " + action + " it as a whole"}};
+        }
+        if (patch.text.empty()) {
           throw rpc::HandlerError{
               {ErrorCode::GitError, "no " + std::string(staged ? "staged" : "unstaged") +
                                         " changes for '" + path + "'"}};
         }
-        git_patch* rawPatch = nullptr;
-        if (git_patch_from_diff(&rawPatch, diff.value().get(), 0) != 0) {
-          throw rpc::HandlerError{{statusGitError("build patch for '" + path + "'")}};
+        if (patch.filter.lfs()) {
+          throw rpc::HandlerError{{ErrorCode::WholeFileOnly,
+                                   "'" + path + "' is stored as a Git LFS pointer, which cannot " +
+                                       "be split into hunks; " + action + " the whole file"}};
         }
-        PatchPtr patch(rawPatch);
-        git_buf buf = GIT_BUF_INIT;
-        if (git_patch_to_buf(&buf, patch.get()) != 0) {
-          throw rpc::HandlerError{{statusGitError("format patch for '" + path + "'")}};
-        }
-        std::string patchText(buf.ptr, buf.size);
-        git_buf_dispose(&buf);
 
         std::string header;
         std::vector<HunkBlock> blocks;
-        splitPatch(patchText, header, blocks);
+        status_detail::splitPatch(patch.text, header, blocks);
 
         std::vector<bool> selected(blocks.size(), false);
         size_t matched = 0;
         for (const auto& want : requested) {
           token.throwIfCancelled();
-          const long oldStart = want.value("oldStart", -1L);
-          const long oldLines = want.value("oldLines", -1L);
-          const long newStart = want.value("newStart", -1L);
-          const long newLines = want.value("newLines", -1L);
           bool found = false;
           for (size_t i = 0; i < blocks.size(); ++i) {
-            if (!selected[i] && blocks[i].oldStart == oldStart &&
-                blocks[i].oldLines == oldLines && blocks[i].newStart == newStart &&
-                blocks[i].newLines == newLines) {
+            if (!selected[i] && blocks[i].oldStart == want.oldStart &&
+                blocks[i].oldLines == want.oldLines && blocks[i].newStart == want.newStart &&
+                blocks[i].newLines == want.newLines) {
               selected[i] = true;
               ++matched;
               found = true;
@@ -307,39 +359,18 @@ void registerStageMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) 
         const std::string subset =
             buildSubsetPatch(header, blocks, selected, /*renumber=*/action == "stage");
 
-        if (action == "stage") {
+        if (action == "stage" && !patch.viaCli) {
           git_diff* rawSubset = nullptr;
           if (git_diff_from_buffer(&rawSubset, subset.data(), subset.size()) != 0) {
-            throw rpc::HandlerError{{statusGitError("parse subset patch")}};
+            throw rpc::HandlerError{{core::gitError("parse subset patch")}};
           }
-          DiffPtr subsetDiff(rawSubset);
+          core::DiffPtr subsetDiff(rawSubset);
           if (git_apply(repo.value().raw(), subsetDiff.get(), GIT_APPLY_LOCATION_INDEX,
                         nullptr) != 0) {
-            throw rpc::HandlerError{{statusGitError("apply hunks to index")}};
+            throw rpc::HandlerError{{core::gitError("apply hunks to index")}};
           }
         } else {
-          auto file = writeTempPatch(subset);
-          if (!file) throw rpc::HandlerError{{file.error()}};
-          auto process = exec::GitProcess::spawn(
-              repo.value().workdir(),
-              {"apply", "--cached", "--reverse", file.value().string()});
-          if (!process) {
-            std::error_code ec;
-            std::filesystem::remove(file.value(), ec);
-            throw rpc::HandlerError{{process.error()}};
-          }
-          std::string line;
-          while (process.value().readLine(line, token)) {
-          }
-          const int exitCode = process.value().wait(token);
-          std::error_code ec;
-          std::filesystem::remove(file.value(), ec);
-          if (exitCode != 0) {
-            throw rpc::HandlerError{
-                {ErrorCode::GitError, "git apply --cached --reverse failed (" +
-                                          std::to_string(exitCode) +
-                                          "): " + process.value().stderrOutput()}};
-          }
+          applyToIndexWithGit(repo.value(), subset, /*reverse=*/action == "unstage", token);
         }
         return rpc::Json::object();
       },

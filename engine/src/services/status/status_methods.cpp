@@ -2,27 +2,16 @@
 
 #include <git2.h>
 
-#include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "core/git2.h"
 #include "services/status/diff_common.h"
 
 namespace gg::services {
 
 namespace {
-
-using status_detail::statusGitError;
-
-struct ReferenceDeleter {
-  void operator()(git_reference* ref) const { git_reference_free(ref); }
-};
-using ReferencePtr = std::unique_ptr<git_reference, ReferenceDeleter>;
-
-struct StatusListDeleter {
-  void operator()(git_status_list* list) const { git_status_list_free(list); }
-};
-using StatusListPtr = std::unique_ptr<git_status_list, StatusListDeleter>;
 
 // A FileChange entry. additions/deletions are always 0 here: computing per
 // file line stats needs a content diff per entry, which is too expensive for
@@ -56,10 +45,10 @@ void registerStatusMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         if (!head.value().unborn && !head.value().detached) {
           git_reference* rawHead = nullptr;
           if (git_repository_head(&rawHead, raw) == 0) {
-            ReferencePtr headRef(rawHead);
+            core::ReferencePtr headRef(rawHead);
             git_reference* rawUpstream = nullptr;
             if (git_branch_upstream(&rawUpstream, headRef.get()) == 0) {
-              ReferencePtr upstream(rawUpstream);
+              core::ReferencePtr upstream(rawUpstream);
               const char* shorthand = git_reference_shorthand(upstream.get());
               const git_oid* localOid = git_reference_target(headRef.get());
               const git_oid* upstreamOid = git_reference_target(upstream.get());
@@ -78,14 +67,26 @@ void registerStatusMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
                      GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX;
         git_status_list* rawList = nullptr;
         if (git_status_list_new(&rawList, raw, &opts) != 0) {
-          throw rpc::HandlerError{{statusGitError("read status")}};
+          throw rpc::HandlerError{{core::gitError("read status")}};
         }
-        StatusListPtr list(rawList);
+        core::StatusListPtr list(rawList);
+
+        auto index = status_detail::readIndex(raw);
+        if (!index) throw rpc::HandlerError{{index.error()}};
 
         rpc::Json staged = rpc::Json::array();
-        rpc::Json unstaged = rpc::Json::array();
         rpc::Json untracked = rpc::Json::array();
         rpc::Json conflicted = rpc::Json::array();
+        // Unstaged entries are held back until filtered files have been
+        // rechecked, so the list keeps status order.
+        struct Unstaged {
+          const char* path;
+          char status;
+          const char* origPath;
+          int recheck;  // index into `rechecks`, or -1
+        };
+        std::vector<Unstaged> unstagedEntries;
+        std::vector<status_detail::CleanRecheck> rechecks;
         const size_t count = git_status_list_entrycount(list.get());
         for (size_t i = 0; i < count; ++i) {
           token.throwIfCancelled();
@@ -118,19 +119,37 @@ void registerStatusMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
               staged.push_back(fileChange(path, 'M', nullptr));
             }
           }
-          if (wtDelta) {
+          if (wtDelta && !status_detail::workdirSideHidden(index.value().get(), *entry)) {
             const char* path = wtDelta->new_file.path;
             const char* origPath = wtDelta->old_file.path;
             if (entry->status & GIT_STATUS_WT_RENAMED) {
-              unstaged.push_back(fileChange(path, 'R', origPath));
+              unstagedEntries.push_back({path, 'R', origPath, -1});
             } else if (entry->status & GIT_STATUS_WT_DELETED) {
-              unstaged.push_back(fileChange(path, 'D', nullptr));
+              unstagedEntries.push_back({path, 'D', nullptr, -1});
             } else if (entry->status & GIT_STATUS_WT_TYPECHANGE) {
-              unstaged.push_back(fileChange(path, 'T', nullptr));
+              unstagedEntries.push_back({path, 'T', nullptr, -1});
             } else if (entry->status & GIT_STATUS_WT_MODIFIED) {
-              unstaged.push_back(fileChange(path, 'M', nullptr));
+              int recheck = -1;
+              if (context.cliAvailable && status_detail::needsCleanRecheck(raw, *entry)) {
+                recheck = static_cast<int>(rechecks.size());
+                rechecks.push_back({path, wtDelta->old_file.id});
+              }
+              unstagedEntries.push_back({path, 'M', nullptr, recheck});
             }
           }
+        }
+
+        // libgit2 hashed the raw bytes of filtered files; git compares their
+        // cleaned bytes, which often still match the index after a touch, a
+        // checkout or a racy timestamp.
+        std::vector<bool> changed;
+        if (!rechecks.empty()) {
+          changed = status_detail::confirmCleanChanges(repo.value(), rechecks, token);
+        }
+        rpc::Json unstaged = rpc::Json::array();
+        for (const auto& item : unstagedEntries) {
+          if (item.recheck >= 0 && !changed[static_cast<size_t>(item.recheck)]) continue;
+          unstaged.push_back(fileChange(item.path, item.status, item.origPath));
         }
 
         rpc::Json result = {{"branch", std::move(branch)},

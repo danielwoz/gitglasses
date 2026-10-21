@@ -19,6 +19,9 @@ function cleanPath(path: string): string {
   return p;
 }
 
+/** An organization's legacy Azure DevOps host, e.g. contoso.visualstudio.com. */
+const VISUALSTUDIO_ORG_HOST = /^([a-z0-9][a-z0-9-]*)\.visualstudio\.com$/;
+
 function splitOwnerName(host: string, path: string): ParsedRemote | undefined {
   // Azure DevOps https form: org/project/_git/repo
   const gitMarker = path.indexOf('/_git/');
@@ -28,11 +31,22 @@ function splitOwnerName(host: string, path: string): ParsedRemote | undefined {
     if (!owner || !name || name.includes('/')) {
       return undefined;
     }
+    // org.visualstudio.com/[DefaultCollection/]project is the same
+    // organization dev.azure.com/org/project serves, so it gets that form.
+    const legacyOrg = host === 'vs-ssh.visualstudio.com' ? null : VISUALSTUDIO_ORG_HOST.exec(host);
+    if (legacyOrg) {
+      const project = owner.replace(/^DefaultCollection\//i, '');
+      if (project === '' || project.includes('/')) {
+        return undefined;
+      }
+      return { host: 'dev.azure.com', owner: `${legacyOrg[1]}/${project}`, name };
+    }
     return { host, owner, name };
   }
 
-  // Azure DevOps ssh form: v3/org/project/repo on *vs-ssh.visualstudio.com
-  if (host.endsWith('vs-ssh.visualstudio.com')) {
+  // Azure DevOps ssh form: v3/org/project/repo on ssh.dev.azure.com or
+  // *vs-ssh.visualstudio.com
+  if (host === 'ssh.dev.azure.com' || host.endsWith('vs-ssh.visualstudio.com')) {
     const segments = path.split('/').filter(Boolean);
     if (segments[0] === 'v3' && segments.length === 4) {
       return {

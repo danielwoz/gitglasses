@@ -15,10 +15,6 @@ export interface PlanEntry {
   message: string;
 }
 
-export function sha7(sha: string): string {
-  return sha.slice(0, 7);
-}
-
 /** Initial plan from rebase/preview entries (oldest first): everything picked. */
 export function planFromPreview(
   entries: readonly { sha: string; summary: string }[],

@@ -8,9 +8,13 @@
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "exec/cli_detect.h"
+#include "util/temp_file.h"
 
 namespace gg::testing {
 
@@ -55,6 +59,31 @@ class ScopedEnv {
   std::optional<std::string> previous_;
 };
 
+// Creates a fresh, empty directory in the system temp directory and returns
+// its path. The name carries a random component, so test processes running
+// concurrently (ctest -j, or several checkouts on one machine) never share a
+// directory.
+inline std::filesystem::path makeTempDir(const std::string& prefix) {
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    std::filesystem::path dir = util::randomTempPath(prefix, "");
+    // create_directory reports false for an existing path, so a name another
+    // process already holds is never reused.
+    if (std::filesystem::create_directory(dir)) return dir;
+  }
+  throw std::runtime_error("could not create a unique temp directory for " + prefix);
+}
+
+// Turns the engine's Restricted Mode on for the current scope. Declared before
+// a session, so the session's context is built in the mode and the mode is
+// cleared only after the session has shut down.
+class ScopedRestrictedMode {
+ public:
+  ScopedRestrictedMode() { exec::setRestrictedMode(true); }
+  ~ScopedRestrictedMode() { exec::setRestrictedMode(false); }
+  ScopedRestrictedMode(const ScopedRestrictedMode&) = delete;
+  ScopedRestrictedMode& operator=(const ScopedRestrictedMode&) = delete;
+};
+
 // Platform null device for discarding command output.
 inline const char* nullDevice() {
 #ifdef _WIN32
@@ -86,11 +115,7 @@ inline void runGit(const std::filesystem::path& dir, const std::string& command)
 // probes that may fail (e.g. rev-parse of a missing ref) return "".
 inline std::string gitCapture(const std::filesystem::path& dir, const std::string& args,
                               bool quiet = false) {
-  static int captures = 0;
-  const std::filesystem::path outFile =
-      std::filesystem::temp_directory_path() /
-      ("gg-capture-" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) + "-" +
-       std::to_string(captures++) + ".txt");
+  const std::filesystem::path outFile = util::randomTempPath("gg-capture-", ".txt");
   std::string command =
       "git -C \"" + dir.string() + "\" " + args + " > \"" + outFile.string() + "\"";
   if (quiet) command += std::string(" 2>") + nullDevice();
@@ -127,10 +152,7 @@ inline std::vector<std::string> gitLines(const std::filesystem::path& dir,
 class FixtureRepo {
  public:
   FixtureRepo() {
-    root_ = std::filesystem::temp_directory_path() /
-            ("gg-fixture-" + std::to_string(::testing::UnitTest::GetInstance()->random_seed()) +
-             "-" + std::to_string(counter()++));
-    std::filesystem::create_directories(root_);
+    root_ = makeTempDir("gg-fixture-");
     // Hermetic against host/system git config (e.g. Git for Windows ships
     // system-level core.autocrlf=true, which would change checked-out bytes
     // and blob hashes).
@@ -194,11 +216,6 @@ class FixtureRepo {
   }
 
  private:
-  static int& counter() {
-    static int value = 0;
-    return value;
-  }
-
   std::filesystem::path root_;
 };
 

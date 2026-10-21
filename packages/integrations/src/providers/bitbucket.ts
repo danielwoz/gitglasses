@@ -1,8 +1,10 @@
-import { defaultFetch, type FetchLike } from '../http.js';
+import { governedFetch } from '../rateLimiter.js';
+import type { FetchLike } from '../http.js';
 import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  PullRequestHead,
   PullRequestQueryOptions,
 } from '../hostingProvider.js';
 import type {
@@ -15,7 +17,16 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { base64Encode, throwForStatus } from './shared.js';
+import {
+  CachedIdentity,
+  FANOUT_CONCURRENCY,
+  ISSUE_TTL_MS,
+  mapPooled,
+  mergeByRole,
+  p,
+  ProviderClient,
+} from './client.js';
+import { assertKnownOptions, base64Encode, escapeBbqlString, sameRepoPath } from './shared.js';
 
 export interface BitbucketProviderOptions {
   /** Provider id used in RepoDescriptors. Default "bitbucket". */
@@ -42,7 +53,11 @@ interface BitbucketPullRequest {
   draft?: boolean;
   author?: BitbucketAccount;
   links?: { html?: { href?: string } };
-  source?: { branch?: { name?: string }; commit?: { hash?: string } };
+  source?: {
+    branch?: { name?: string };
+    commit?: { hash?: string };
+    repository?: { full_name?: string };
+  };
   destination?: {
     branch?: { name?: string };
     repository?: { full_name?: string };
@@ -50,6 +65,8 @@ interface BitbucketPullRequest {
   created_on: string;
   updated_on: string;
 }
+
+const OPTION_KEYS = ['id', 'apiBaseUrl', 'fetchFn'] as const;
 
 function mapState(state: BitbucketPullRequest['state']): PullRequestState {
   switch (state) {
@@ -89,6 +106,8 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
   if (!account) {
     return { id: 'unknown', username: 'unknown' };
   }
+  // `nickname` is the Cloud API's current handle field and `username` its
+  // predecessor; an account carrying neither has only `display_name`.
   const username = account.nickname ?? account.username ?? account.display_name ?? 'unknown';
   return {
     id: account.uuid ?? account.account_id ?? username,
@@ -98,8 +117,10 @@ function mapAccount(account: BitbucketAccount | undefined): Account {
   };
 }
 
-/** getMyPullRequests fetches per-PR statuses for at most this many results. */
-const CHECKS_STATUS_PR_CAP = 10;
+/** True for an Atlassian account email, which Bitbucket API tokens pair with. */
+function isAccountEmail(username: string | undefined): boolean {
+  return username !== undefined && username.includes('@');
+}
 
 /**
  * Bitbucket Cloud hosting provider (api.bitbucket.org/2.0).
@@ -112,11 +133,10 @@ const CHECKS_STATUS_PR_CAP = 10;
  * reviewers.uuid = <own uuid> is then merged in with viewerRole "reviewer".
  * Without a repo context all results carry viewerRole "author".
  *
- * checksStatus comes from the per-PR `/statuses` endpoint at one extra
- * request per PR; to bound the fan-out only the first CHECKS_STATUS_PR_CAP
- * (10) results are enriched (first page of statuses only) and the rest stay
- * "none". The Cloud API exposes no mergeability signal at all (hence no
- * "mergeability" capability flag).
+ * checksStatus comes from the per-PR `/statuses` endpoint (first page only):
+ * one extra request per result, at most FANOUT_CONCURRENCY in flight. The
+ * Cloud API exposes no mergeability signal at all (hence no "mergeability"
+ * capability flag).
  */
 export class BitbucketProvider implements HostingProvider {
   readonly id: string;
@@ -126,15 +146,26 @@ export class BitbucketProvider implements HostingProvider {
     'prForBranch',
   ]);
 
-  private readonly apiBaseUrl: string;
-  private readonly fetchFn: FetchLike;
-  private cachedUser?: BitbucketAccount;
-  private cachedUserToken?: string;
+  private readonly client: ProviderClient;
+  private readonly identity = new CachedIdentity<BitbucketAccount>();
 
   constructor(options: BitbucketProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'BitbucketProvider');
     this.id = options.id ?? 'bitbucket';
-    this.apiBaseUrl = (options.apiBaseUrl ?? 'https://api.bitbucket.org/2.0').replace(/\/+$/, '');
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    this.client = new ProviderClient({
+      name: 'Bitbucket',
+      baseUrl: options.apiBaseUrl ?? 'https://api.bitbucket.org/2.0',
+      baseUrlLabel: 'Bitbucket apiBaseUrl',
+      credentialHost: this.host,
+      headers: { accept: 'application/json' },
+      // An API token or app password authenticates as a named account (the
+      // Atlassian email or the Bitbucket username); access tokens do not.
+      authorize: (auth) =>
+        auth.username
+          ? `Basic ${base64Encode(`${auth.username}:${auth.token}`)}`
+          : `Bearer ${auth.token}`,
+      fetchFn: options.fetchFn ?? governedFetch,
+    });
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -151,43 +182,54 @@ export class BitbucketProvider implements HostingProvider {
   ): Promise<PullRequest[]> {
     const me = await this.username(auth);
     const limit = opts?.limit ?? 50;
-    const json = (await this.get(
+    const json = await this.client.getJson<{ values?: BitbucketPullRequest[] }>(
       auth,
-      `/pullrequests/${encodeURIComponent(me)}?state=OPEN&pagelen=${limit}`
-    )) as { values?: BitbucketPullRequest[] } | undefined;
-    const merged = new Map<number, PullRequest>();
-    for (const pr of json?.values ?? []) {
-      merged.set(pr.id, this.mapPullRequest(pr, 'author'));
-    }
-    // The reviewer query is repo-scoped, so review requests are only visible
-    // when the caller supplies a repo context.
-    if (opts?.repo) {
-      for (const pr of await this.reviewRequestedPullRequests(auth, opts.repo)) {
-        if (!merged.has(pr.id)) {
-          merged.set(pr.id, this.mapPullRequest(pr, 'reviewer'));
-        }
-      }
-    }
-    const prs = [...merged.values()].slice(0, limit);
+      p`/pullrequests/${me}?state=OPEN&pagelen=${limit}`
+    );
+    const reviewing = opts?.repo ? await this.reviewRequestedPullRequests(auth, opts.repo) : [];
+    const prs = mergeByRole(
+      (json?.values ?? []).map((pr) => this.mapPullRequest(pr, 'author')),
+      reviewing.map((pr) => this.mapPullRequest(pr, 'reviewer')),
+      (pr) => pr.number,
+      limit
+    );
     return this.withChecksStatus(auth, prs);
   }
 
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
-    const q = encodeURIComponent(`source.branch.name = "${branch}" AND state = "OPEN"`);
-    const json = (await this.get(
+    // The branch name alone matches pull requests from every fork, so the
+    // source repository is part of the query and checked on each result.
+    // Branch names come from the repository, so a quote in one is escaped
+    // rather than closing the BBQL literal it sits in.
+    const source = head ?? repo;
+    const fullName = `${source.owner}/${source.name}`;
+    const q =
+      `source.branch.name = "${escapeBbqlString(branch)}" AND state = "OPEN" AND ` +
+      `source.repository.full_name = "${escapeBbqlString(fullName)}"`;
+    const json = await this.client.getJson<{ values?: BitbucketPullRequest[] }>(
       auth,
-      `/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
-    )) as { values?: BitbucketPullRequest[] } | undefined;
-    const pr = json?.values?.[0];
+      p`/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
+    );
+    const pr = json?.values?.find((candidate) => {
+      const name = candidate.source?.repository?.full_name ?? '';
+      const slash = name.indexOf('/');
+      return (
+        slash > 0 &&
+        sameRepoPath({ owner: name.slice(0, slash), name: name.slice(slash + 1) }, source)
+      );
+    });
     if (!pr) {
       return undefined;
     }
-    const viewer =
-      auth.username ?? this.cachedUser?.username ?? this.cachedUser?.nickname;
+    const cached = this.identity.peek(auth.token);
+    const viewer = isAccountEmail(auth.username)
+      ? (cached?.username ?? cached?.nickname)
+      : (auth.username ?? cached?.username ?? cached?.nickname);
     const role: ViewerRole =
       viewer !== undefined && mapAccount(pr.author).username === viewer ? 'author' : 'none';
     return this.mapPullRequest(pr, role);
@@ -202,10 +244,12 @@ export class BitbucketProvider implements HostingProvider {
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const repoPath = `/repositories/${repo.owner}/${repo.name}`;
-    const issue = (await this.get(auth, `${repoPath}/issues/${number}`)) as
-      | Record<string, unknown>
-      | undefined;
+    const repoPath = p`/repositories/${repo.owner}/${repo.name}`;
+    const issue = await this.client.getJsonCached<Record<string, unknown>>(
+      auth,
+      p`${repoPath}/issues/${number}`,
+      ISSUE_TTL_MS
+    );
     if (issue !== undefined) {
       const assignee = issue.assignee as BitbucketAccount | null | undefined;
       const links = issue.links as { html?: { href?: string } } | undefined;
@@ -220,9 +264,11 @@ export class BitbucketProvider implements HostingProvider {
       };
     }
     // The issue tracker may be disabled for the repo; fall back to PRs.
-    const pr = (await this.get(auth, `${repoPath}/pullrequests/${number}`)) as
-      | BitbucketPullRequest
-      | undefined;
+    const pr = await this.client.getJsonCached<BitbucketPullRequest>(
+      auth,
+      p`${repoPath}/pullrequests/${number}`,
+      ISSUE_TTL_MS
+    );
     return pr ? this.mapPullRequest(pr, 'none') : undefined;
   }
 
@@ -235,32 +281,26 @@ export class BitbucketProvider implements HostingProvider {
     if (!uuid) {
       return [];
     }
-    const q = encodeURIComponent(`state="OPEN" AND reviewers.uuid="${uuid}"`);
-    const json = (await this.get(
+    const q = `state="OPEN" AND reviewers.uuid="${escapeBbqlString(uuid)}"`;
+    const json = await this.client.getJson<{ values?: BitbucketPullRequest[] }>(
       auth,
-      `/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
-    )) as { values?: BitbucketPullRequest[] } | undefined;
+      p`/repositories/${repo.owner}/${repo.name}/pullrequests?q=${q}`
+    );
     return json?.values ?? [];
   }
 
   /**
-   * Fills checksStatus from the per-PR statuses endpoint (first page only)
-   * for at most the first CHECKS_STATUS_PR_CAP PRs; later PRs keep "none" to
-   * bound the request fan-out.
+   * Fills checksStatus from the per-PR statuses endpoint (first page only).
+   * One request per PR, at most FANOUT_CONCURRENCY in flight.
    */
   private async withChecksStatus(auth: AuthContext, prs: PullRequest[]): Promise<PullRequest[]> {
-    return Promise.all(
-      prs.map(async (pr, index) => {
-        if (index >= CHECKS_STATUS_PR_CAP) {
-          return pr;
-        }
-        const json = (await this.get(
-          auth,
-          `/repositories/${pr.repo.owner}/${pr.repo.name}/pullrequests/${pr.number}/statuses`
-        )) as { values?: BitbucketCommitStatus[] } | undefined;
-        return { ...pr, checksStatus: deriveChecksStatus(json?.values ?? []) };
-      })
-    );
+    return mapPooled(prs, FANOUT_CONCURRENCY, async (pr) => {
+      const json = await this.client.getJson<{ values?: BitbucketCommitStatus[] }>(
+        auth,
+        p`/repositories/${pr.repo.owner}/${pr.repo.name}/pullrequests/${pr.number}/statuses`
+      );
+      return { ...pr, checksStatus: deriveChecksStatus(json?.values ?? []) };
+    });
   }
 
   private mapPullRequest(pr: BitbucketPullRequest, viewerRole: ViewerRole): PullRequest {
@@ -292,12 +332,17 @@ export class BitbucketProvider implements HostingProvider {
     };
   }
 
+  /**
+   * The account `/pullrequests/{selected_user}` is asked about: the username
+   * an app password was paired with, or the profile's uuid when the account
+   * is identified by its Atlassian email (API tokens) or not at all.
+   */
   private async username(auth: AuthContext): Promise<string> {
-    if (auth.username) {
+    if (auth.username && !isAccountEmail(auth.username)) {
       return auth.username;
     }
     const user = await this.user(auth);
-    const username = user.username ?? user.nickname;
+    const username = user.uuid ?? user.username ?? user.nickname;
     if (!username) {
       throw new Error('Bitbucket /user returned no username');
     }
@@ -306,35 +351,12 @@ export class BitbucketProvider implements HostingProvider {
 
   /** Own account profile from /2.0/user, cached per token. */
   private async user(auth: AuthContext): Promise<BitbucketAccount> {
-    if (this.cachedUser !== undefined && this.cachedUserToken === auth.token) {
-      return this.cachedUser;
-    }
-    const user = (await this.get(auth, '/user')) as BitbucketAccount | undefined;
-    if (!user) {
-      throw new Error('Bitbucket /user returned no profile');
-    }
-    this.cachedUser = user;
-    this.cachedUserToken = auth.token;
-    return user;
-  }
-
-  /** REST GET; returns undefined on 404. */
-  private async get(auth: AuthContext, path: string): Promise<unknown | undefined> {
-    const authorization = auth.username
-      ? `Basic ${base64Encode(`${auth.username}:${auth.token}`)}`
-      : `Bearer ${auth.token}`;
-    const response = await this.fetchFn(`${this.apiBaseUrl}${path}`, {
-      method: 'GET',
-      headers: {
-        authorization,
-        accept: 'application/json',
-        'user-agent': 'gitglasses',
-      },
+    return this.identity.get(auth.token, async () => {
+      const user = await this.client.getJson<BitbucketAccount>(auth, p`/user`);
+      if (!user) {
+        throw new Error('Bitbucket /user returned no profile');
+      }
+      return user;
     });
-    if (response.status === 404) {
-      return undefined;
-    }
-    throwForStatus('Bitbucket', response);
-    return response.json();
   }
 }

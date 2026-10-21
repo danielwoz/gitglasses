@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { CommitSummaryInfo } from '@gitglasses/protocol';
-import { ActiveRepo, ViewBase, ViewNode, firstWorkspaceRepo, messageNode } from './viewBase';
+import { ActiveRepo, ViewBase, ViewNode, activeWorkspaceRepo, messageNode } from './viewBase';
 import { commitNode } from './nodes';
 import { isFullOrAbbreviatedSha } from './viewLogic';
 
@@ -63,7 +63,7 @@ export class SearchViewProvider extends ViewBase {
   ): Promise<void> {
     let repo: ActiveRepo | undefined;
     try {
-      repo = await firstWorkspaceRepo(this.repos);
+      repo = await activeWorkspaceRepo(this.repos);
     } catch {
       repo = undefined;
     }

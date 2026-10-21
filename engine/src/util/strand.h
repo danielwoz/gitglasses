@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spdlog/spdlog.h>
+
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -38,7 +40,15 @@ class Strand {
         task = std::move(queue_.front());
         queue_.pop_front();
       }
-      task();
+      // draining_ stays true if an exception unwinds out of drain(), wedging
+      // the strand, so every task runs inside the catch.
+      try {
+        task();
+      } catch (const std::exception& e) {
+        spdlog::error("strand task threw: {}", e.what());
+      } catch (...) {
+        spdlog::error("strand task threw a non-std exception");
+      }
     }
   }
 

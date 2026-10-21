@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
-import { EngineClient } from './engineClient';
+import { EngineClient } from '@gitglasses/rpc';
 import { RepositoryService } from '../model/repositoryService';
 
 const DEBOUNCE_MS = 150;
 
 // Pushes unsaved buffer contents to the engine's overlay store so blame
-// reflects what the user sees. Full-content push, debounced; incremental
-// sync can replace it behind the same interface later.
+// reflects what the user sees. Each push carries the full content, debounced.
 export class DocumentSync implements vscode.Disposable {
   private timers = new Map<string, NodeJS.Timeout>();
   private dirtyDocs = new Set<string>();
@@ -32,24 +31,31 @@ export class DocumentSync implements vscode.Disposable {
 
   private onChanged(document: vscode.TextDocument): void {
     if (document.uri.scheme !== 'file' || !document.isDirty) return;
-    const located = this.repos.locate(document.uri);
-    if (!located) return;
-
     const key = document.uri.toString();
     clearTimeout(this.timers.get(key));
     this.timers.set(
       key,
       setTimeout(() => {
         this.timers.delete(key);
-        this.dirtyDocs.add(key);
-        this.engine.notify('doc/didChange', {
-          repoId: located.repoId,
-          path: located.relativePath,
-          contents: document.getText(),
-          version: document.version,
-        });
+        void this.push(document, key).catch(() => undefined);
       }, DEBOUNCE_MS),
     );
+  }
+
+  // The repository is looked up when the overlay is sent, asking the engine
+  // if the file's directory is new to it, so an edit in a submodule or nested
+  // clone reaches that repository rather than the enclosing one.
+  private async push(document: vscode.TextDocument, key: string): Promise<void> {
+    const located = await this.repos.locateOrDiscover(document.uri);
+    // Saved or closed while the lookup ran: the disk is current again.
+    if (!located || document.isClosed || !document.isDirty) return;
+    this.dirtyDocs.add(key);
+    this.engine.notify('doc/didChange', {
+      repoId: located.repoId,
+      path: located.relativePath,
+      contents: document.getText(),
+      version: document.version,
+    });
   }
 
   private onClosed(document: vscode.TextDocument): void {

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { credentialSpec } from './integrationSettings';
 
 // Per-provider credential management. GitHub.com goes through VS Code's
 // built-in GitHub authentication provider; everything else (enterprise hosts,
@@ -13,8 +14,11 @@ export interface AuthInfo {
 export interface GetAuthOptions {
   /** Prompt the user (sign-in flow / token input) when nothing is stored. */
   interactive?: boolean;
-  /** Also collect a username alongside the token (e.g. Jira's account email). */
-  needsUsername?: boolean;
+  /**
+   * GitHub.com scopes needed beyond "repo", e.g. "gist" to share a patch.
+   * The session is then one granted for all of them.
+   */
+  extraScopes?: readonly string[];
 }
 
 const SECRET_PREFIX = 'gitglasses:auth:';
@@ -57,7 +61,7 @@ export class AuthManager implements vscode.Disposable {
       try {
         const session = await vscode.authentication.getSession(
           'github',
-          ['repo'],
+          ['repo', ...(options.extraScopes ?? [])],
           options.interactive ? { createIfNone: true } : { silent: true },
         );
         return session
@@ -69,25 +73,36 @@ export class AuthManager implements vscode.Disposable {
       }
     }
 
+    const spec = credentialSpec(providerId, host);
     let token = await this.secrets.get(tokenKey(providerId, host));
+    // An empty stored username records that the token stands alone, so the
+    // optional prompt is not asked again.
     let username = await this.secrets.get(usernameKey(providerId, host));
-    if (!token && options.interactive) {
-      token = await vscode.window.showInputBox({
-        prompt: `Personal access token for ${providerId} (${host})`,
-        password: true,
-        ignoreFocusOut: true,
-      });
-      if (!token) return undefined;
+    const missingUsername =
+      spec.usernamePrompt !== undefined &&
+      (username === undefined || (spec.usernameRequired === true && username === ''));
+    if ((!token || missingUsername) && options.interactive) {
+      if (!token) {
+        token = await vscode.window.showInputBox({
+          prompt: spec.tokenPrompt,
+          password: true,
+          ignoreFocusOut: true,
+        });
+        if (!token) return undefined;
+      }
+      if (missingUsername) {
+        username = await vscode.window.showInputBox({
+          prompt: spec.usernamePrompt,
+          ignoreFocusOut: true,
+        });
+        if (username === undefined) return undefined;
+        username = username.trim();
+        if (username === '' && spec.usernameRequired) return undefined;
+        await this.secrets.store(usernameKey(providerId, host), username);
+      }
       await this.secrets.store(tokenKey(providerId, host), token);
     }
-    if (token && !username && options.needsUsername && options.interactive) {
-      username = await vscode.window.showInputBox({
-        prompt: `Account username/email for ${providerId} (${host})`,
-        ignoreFocusOut: true,
-      });
-      if (username) await this.secrets.store(usernameKey(providerId, host), username);
-    }
-    return token ? { token, username: username ?? undefined } : undefined;
+    return token ? { token, username: username || undefined } : undefined;
   }
 
   /** True when a credential is already stored/available without prompting. */

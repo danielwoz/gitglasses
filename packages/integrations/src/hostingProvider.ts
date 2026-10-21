@@ -10,8 +10,7 @@ export type HostingCapability =
   | 'suggestions'
   | 'gists'
   | 'avatars'
-  | 'autolinks'
-  | 'createPR';
+  | 'autolinks';
 
 /** Credentials for a provider call. Tokens come from the host app's secret storage. */
 export interface AuthContext {
@@ -21,6 +20,20 @@ export interface AuthContext {
    * e.g. the Jira account email or the Bitbucket username for basic auth.
    */
   username?: string;
+  /**
+   * Host the credential was issued for, e.g. "github.com" or
+   * "gitlab.corp.example". When set, a provider serving any other host
+   * refuses to send it (CredentialScopeError) instead of making the request.
+   */
+  host?: string;
+}
+
+/** Repository a pull request's head branch lives in. */
+export interface PullRequestHead {
+  /** Owner path of the head repository, e.g. a fork owner's login. */
+  owner: string;
+  /** Name of the head repository. */
+  name: string;
 }
 
 export interface PullRequestQueryOptions {
@@ -52,11 +65,17 @@ export interface HostingProvider {
   /** Open pull requests involving the authenticated user (author, reviewer, assignee, mention). */
   getMyPullRequests(auth: AuthContext, opts?: PullRequestQueryOptions): Promise<PullRequest[]>;
 
-  /** The open pull request whose head is `branch` in `repo`, if any. */
+  /**
+   * The open pull request in `repo` whose head is `branch` in the `head`
+   * repository, if any. `head` defaults to `repo` itself, so without it only
+   * same-repository pull requests match: a fork's pull request from a branch
+   * that happens to share the name never does.
+   */
   getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined>;
 
   /** Resolve a reference like "#123" or "123" to an issue or pull request. */

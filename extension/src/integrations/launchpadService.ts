@@ -14,6 +14,7 @@ import {
   type SnoozeMap,
 } from './launchpadLogic';
 import type { IntegrationService } from './integrationService';
+import { toAuthContext } from './providerSetup';
 
 const SNOOZE_STORAGE_KEY = 'gitglasses.launchpad.snoozes';
 const FRESH_MS = 60_000;
@@ -56,7 +57,7 @@ export class LaunchpadService {
         if (force) this.cache.delete(entry.host);
         this.viewerByHost.set(entry.host, entry.auth.username ?? '');
         const { value } = await this.cache.getOrFetch(entry.host, FRESH_MS, STALE_MS, () =>
-          entry.provider.getMyPullRequests({ token: entry.auth.token }, { limit: 50 }),
+          entry.provider.getMyPullRequests(toAuthContext(entry.auth, entry.host), { limit: 50 }),
         );
         return { host: entry.host, items: value };
       }),

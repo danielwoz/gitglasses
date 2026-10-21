@@ -1,4 +1,5 @@
 #include "util/task_pool.h"
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 
@@ -86,7 +87,15 @@ void TaskPool::workerLoop() {
       task = std::move(queue.front());
       queue.pop_front();
     }
-    task();
+    // Worker threads are the outermost frame: an exception escaping here
+    // reaches the thread entry point and terminates the process.
+    try {
+      task();
+    } catch (const std::exception& e) {
+      spdlog::error("pool task threw: {}", e.what());
+    } catch (...) {
+      spdlog::error("pool task threw a non-std exception");
+    }
   }
 }
 #endif  // !GG_SINGLE_THREADED

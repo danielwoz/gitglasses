@@ -5,9 +5,11 @@
 
 #include "exec/git_process.h"
 
+#include "exec/cli_detect.h"
 #include "exec/win_unicode.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
 #include <string_view>
 #include <utility>
@@ -124,10 +126,39 @@ struct HandleCloser {
   HANDLE release() { return std::exchange(handle, nullptr); }
 };
 
+// A process-thread attribute list naming the only handles a child inherits.
+// Without it, CreateProcessW with bInheritHandles=TRUE hands the child every
+// inheritable handle in the engine, including the pipe write ends of other
+// requests' children spawned concurrently, whose readers then wait for this
+// child and anything it leaves running before they see EOF.
+class InheritedHandleList {
+ public:
+  bool init(HANDLE* handles, size_t count) {
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    storage_.resize(size);
+    auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage_.data());
+    if (!InitializeProcThreadAttributeList(list, 1, 0, &size)) return false;
+    list_ = list;
+    return UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+                                     count * sizeof(HANDLE), nullptr, nullptr) != 0;
+  }
+  ~InheritedHandleList() {
+    if (list_) DeleteProcThreadAttributeList(list_);
+  }
+  LPPROC_THREAD_ATTRIBUTE_LIST get() const { return list_; }
+
+ private:
+  std::vector<unsigned char> storage_;
+  LPPROC_THREAD_ATTRIBUTE_LIST list_ = nullptr;
+};
+
 }  // namespace
 
 Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::string> args,
                                      const SpawnOpts& opts) {
+  if (restrictedMode()) return Error{ErrorCode::Restricted, kRestrictedModeMessage};
+
   std::vector<std::string> fullArgs;
   fullArgs.reserve(args.size() + 3);
   fullArgs.push_back("git");
@@ -136,12 +167,7 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   for (auto& a : args) fullArgs.push_back(std::move(a));
   std::wstring commandLine = buildCommandLine(fullArgs);
 
-  // Scrubbed additions applied on top of the inherited environment (see the
-  // POSIX implementation); caller entries come last so they win.
-  std::vector<std::string> overrides = {"GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0",
-                                        "LC_ALL=C"};
-  overrides.insert(overrides.end(), opts.extraEnv.begin(), opts.extraEnv.end());
-  std::vector<wchar_t> environment = buildEnvironmentBlock(overrides);
+  std::vector<wchar_t> environment = buildEnvironmentBlock(childEnvOverrides(opts));
 
   SECURITY_ATTRIBUTES inheritable{};
   inheritable.nLength = sizeof(inheritable);
@@ -152,8 +178,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
       !CreatePipe(&stderrRead.handle, &stderrWrite.handle, &inheritable, 0)) {
     return Error{ErrorCode::Internal, "CreatePipe() failed"};
   }
-  // Only the child-side ends may be inherited; an inherited read end would
-  // keep the pipe open after the child exits and EOF would never arrive.
+  // Only the child-side ends may be inherited; an inherited read end keeps the
+  // pipe open after the child exits, so EOF never arrives.
   SetHandleInformation(stdoutRead.handle, HANDLE_FLAG_INHERIT, 0);
   SetHandleInformation(stderrRead.handle, HANDLE_FLAG_INHERIT, 0);
   stdinNul.handle = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -173,20 +199,31 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   SetInformationJobObject(job.handle, JobObjectExtendedLimitInformation, &limits,
                           sizeof(limits));
 
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  startup.dwFlags = STARTF_USESTDHANDLES;
-  startup.hStdInput = stdinNul.handle;
-  startup.hStdOutput = stdoutWrite.handle;
-  startup.hStdError = stderrWrite.handle;
+  // The three child-side handles stay inheritable, as the list requires, and
+  // are the only ones the child receives.
+  HANDLE inherited[] = {stdinNul.handle, stdoutWrite.handle, stderrWrite.handle};
+  InheritedHandleList handleList;
+  if (!handleList.init(inherited, sizeof(inherited) / sizeof(inherited[0]))) {
+    return Error{ErrorCode::Internal,
+                 "cannot build the inherited handle list: error " + std::to_string(GetLastError())};
+  }
+
+  STARTUPINFOEXW startup{};
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = stdinNul.handle;
+  startup.StartupInfo.hStdOutput = stdoutWrite.handle;
+  startup.StartupInfo.hStdError = stderrWrite.handle;
+  startup.lpAttributeList = handleList.get();
 
   PROCESS_INFORMATION info{};
   // lpApplicationName stays null so CreateProcessW resolves git.exe through
   // the standard search order (PATH included). Suspended start lets the
   // process join the job before it can spawn children of its own.
   if (!CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE,
-                      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-                      environment.data(), nullptr, &startup, &info)) {
+                      CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW |
+                          EXTENDED_STARTUPINFO_PRESENT,
+                      environment.data(), nullptr, &startup.StartupInfo, &info)) {
     return Error{ErrorCode::Internal,
                  "failed to spawn git: CreateProcessW error " + std::to_string(GetLastError())};
   }
@@ -199,6 +236,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   process.job_ = job.release();
   process.stdoutHandle_ = stdoutRead.release();
   process.stderrHandle_ = stderrRead.release();
+  process.timeout_ = opts.timeout;
+  process.deadline_ = std::chrono::steady_clock::now() + opts.timeout;
   return process;
 }
 
@@ -212,7 +251,10 @@ GitProcess::GitProcess(GitProcess&& other) noexcept
       eof_(other.eof_),
       stderr_(std::move(other.stderr_)),
       reaped_(other.reaped_),
-      exitCode_(other.exitCode_) {
+      exitCode_(other.exitCode_),
+      timeout_(other.timeout_),
+      deadline_(other.deadline_),
+      timedOut_(other.timedOut_) {
   other.process_ = nullptr;
   other.job_ = nullptr;
   other.stdoutHandle_ = nullptr;
@@ -273,6 +315,10 @@ bool GitProcess::fillBuffer(const CancelToken& token) {
       killGroup();
       throw CancelledError();
     }
+    if (expired()) {
+      eof_ = true;
+      return false;
+    }
     const size_t before = buffer_.size();
     const bool open = readAvailable(stdoutHandle_, buffer_);
     if (buffer_.size() > before) return true;
@@ -325,6 +371,17 @@ int GitProcess::wait(const CancelToken& token) {
       WaitForSingleObject(process_, INFINITE);
       reaped_ = true;
       throw CancelledError();
+    }
+    // expired() has already terminated the job, so this wait returns at once
+    // and the timeout is reported through timedOut().
+    if (expired()) {
+      WaitForSingleObject(process_, INFINITE);
+      readAvailable(stderrHandle_, stderr_);
+      DWORD code = 0;
+      GetExitCodeProcess(process_, &code);
+      exitCode_ = static_cast<int>(code);
+      reaped_ = true;
+      return exitCode_;
     }
     drainStderr(/*blocking=*/false);
     if (WaitForSingleObject(process_, kPollIntervalMs) == WAIT_OBJECT_0) {

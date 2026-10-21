@@ -8,9 +8,11 @@ import { encodeRevisionUri } from './revisionContentProvider';
 export class GitGlassesQuickDiffProvider implements vscode.QuickDiffProvider {
   constructor(private readonly repos: RepositoryService) {}
 
-  provideOriginalResource(uri: vscode.Uri): vscode.Uri | undefined {
+  // Asks the engine when the file's directory is new to it: before that, a
+  // file in a submodule or nested clone would match the enclosing repository.
+  async provideOriginalResource(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
     if (uri.scheme !== 'file') return undefined;
-    const located = this.repos.locate(uri);
+    const located = await this.repos.locateOrDiscover(uri);
     if (!located) return undefined;
     return encodeRevisionUri(located.repoId, located.relativePath, 'HEAD');
   }

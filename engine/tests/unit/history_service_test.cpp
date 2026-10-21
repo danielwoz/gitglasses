@@ -186,7 +186,11 @@ TEST(HistoryService, LogCommitsHonorsRefAndOversizedLimit) {
       req(11, "log/commits", {{"repoId", repoId}, {"ref", "no-such-ref"}, {"limit", 10}}));
   EXPECT_EQ(badRef["error"]["code"], -32001);
 
-  Json badLimit = session.request(req(12, "log/commits", {{"repoId", repoId}}));
+  // An omitted limit falls back to the default page size.
+  Json noLimit = session.request(req(12, "log/commits", {{"repoId", repoId}}));
+  EXPECT_FALSE(noLimit["result"]["commits"].empty());
+
+  Json badLimit = session.request(req(13, "log/commits", {{"repoId", repoId}, {"limit", 0}}));
   EXPECT_EQ(badLimit["error"]["code"], -32602);
 }
 
@@ -533,10 +537,7 @@ TEST(HistoryService, UnbornHeadRepoAnswersEmptyEverywhere) {
   struct UnbornRepo {
     std::filesystem::path root;
     UnbornRepo() {
-      root = std::filesystem::temp_directory_path() /
-             ("gg-unborn-" +
-              std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
-      std::filesystem::create_directories(root);
+      root = gg::testing::makeTempDir("gg-unborn-");
       gg::testing::runGit(root, "git init -q -b main");
     }
     ~UnbornRepo() {

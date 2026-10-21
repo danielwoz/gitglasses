@@ -1,10 +1,14 @@
-import { AuthError, ProviderError, RateLimitError } from '../errors.js';
-import { defaultFetch, type FetchLike, type HttpResponseLike } from '../http.js';
+import { governedFetch } from '../rateLimiter.js';
+import { ProviderError } from '../errors.js';
+import type { FetchLike } from '../http.js';
 import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
+  IssueProvider,
+  IssueQueryOptions,
   PrComments,
+  PullRequestHead,
   PullRequestQueryOptions,
   ReviewSuggestionInput,
   ReviewSuggestions,
@@ -27,15 +31,29 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
+import { ISSUE_TTL_MS, p, ProviderClient } from './client.js';
+import {
+  assertKnownOptions,
+  assertPlainHost,
+  isGistRawOrigin,
+  isSameOriginAs,
+  slugify,
+} from './shared.js';
 
 export interface GitHubProviderOptions {
   /** Provider id used in RepoDescriptors. Default "github". */
   id?: string;
   /** Host this provider serves. Default "github.com". */
   host?: string;
-  /** REST API base URL. Default "https://api.github.com". */
+  /**
+   * REST API base URL. Default "https://api.github.com" for github.com and
+   * "https://<host>/api/v3" for any other host.
+   */
   apiBaseUrl?: string;
-  /** GraphQL endpoint URL. Default "https://api.github.com/graphql". */
+  /**
+   * GraphQL endpoint URL. Default "<apiBaseUrl>/graphql" for github.com and
+   * "https://<host>/api/graphql" for any other host.
+   */
   graphqlUrl?: string;
   /** HTTP transport; defaults to the global fetch. Tests inject a stub here. */
   fetchFn?: FetchLike;
@@ -72,12 +90,38 @@ interface GraphQlPullRequestNode {
   assignees: { nodes: Array<{ login: string }> };
 }
 
-interface GraphQlSearchResponse {
-  data?: {
-    viewer?: { login: string };
-    search?: { nodes: Array<GraphQlPullRequestNode | null> };
-  };
-  errors?: Array<{ message: string }>;
+interface GraphQlSearchData {
+  viewer?: { login: string };
+  search?: { nodes: Array<GraphQlPullRequestNode | null> };
+}
+
+interface GraphQlBranchPullRequestNode extends GraphQlPullRequestNode {
+  headRepositoryOwner: { login: string } | null;
+}
+
+interface GraphQlNumberData {
+  viewer?: { login: string };
+  repository?: { pullRequest?: GraphQlBranchPullRequestNode | null } | null;
+}
+
+/** The parts of a REST pull request list item a branch lookup reads. */
+interface RestPullHead {
+  number?: number;
+  head?: { ref?: string; repo?: { owner?: { login?: string } } | null } | null;
+}
+
+interface RestAssignedIssue {
+  id?: number;
+  node_id?: string;
+  number?: number;
+  title?: string;
+  html_url?: string;
+  state?: string;
+  updated_at?: string;
+  pull_request?: unknown;
+  assignee?: { login?: string; avatar_url?: string } | null;
+  repository?: { name?: string; full_name?: string; owner?: { login?: string } };
+  repository_url?: string;
 }
 
 const PR_FRAGMENT = `
@@ -100,6 +144,20 @@ const PR_FRAGMENT = `
   reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
   assignees(first: 10) { nodes { login } }
 `;
+
+/** One pull request by number, with its head repository's owner. */
+const NUMBER_QUERY = `
+query ($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      ${PR_FRAGMENT}
+      headRepositoryOwner { login }
+    }
+  }
+}`;
+
+const OPTION_KEYS = ['id', 'host', 'apiBaseUrl', 'graphqlUrl', 'fetchFn'] as const;
 
 const SEARCH_QUERY = `
 query ($searchQuery: String!, $first: Int!) {
@@ -178,10 +236,13 @@ function mapAccount(account: GraphQlAccount | null): Account {
 
 /**
  * GitHub hosting provider backed by the real api.github.com GraphQL/REST APIs.
- * Also serves GitHub Enterprise via createGitHubEnterpriseProvider, which
- * points the same class at an enterprise host's API endpoints.
+ * Any host other than github.com is treated as GitHub Enterprise Server and
+ * served from that host's own API endpoints. Also an issue provider for the
+ * issues assigned to the authenticated user.
  */
-export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSuggestions, PrComments {
+export class GitHubProvider
+  implements HostingProvider, IssueProvider, SnippetHost, ReviewSuggestions, PrComments
+{
   readonly id: string;
   readonly host: string;
   readonly capabilities: ReadonlySet<HostingCapability> = new Set<HostingCapability>([
@@ -190,21 +251,40 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
     'checks',
     'reviews',
     'mergeability',
-    'createPR',
     'gists',
     'suggestions',
   ]);
 
-  private readonly apiBaseUrl: string;
-  private readonly graphqlUrl: string;
-  private readonly fetchFn: FetchLike;
+  private readonly client: ProviderClient;
 
   constructor(options: GitHubProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'GitHubProvider');
     this.id = options.id ?? 'github';
-    this.host = options.host ?? 'github.com';
-    this.apiBaseUrl = options.apiBaseUrl ?? 'https://api.github.com';
-    this.graphqlUrl = options.graphqlUrl ?? `${this.apiBaseUrl}/graphql`;
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    // The host reaches a base URL that carries the token, so it must be a bare
+    // hostname. It is lowercased to match the hosts parseRemoteUrl returns.
+    this.host = (
+      options.host === undefined ? 'github.com' : assertPlainHost(options.host, 'GitHub host')
+    ).toLowerCase();
+    // An enterprise host serves its own API; defaulting it to api.github.com
+    // would send that instance's token to github.com.
+    const enterprise = this.host !== 'github.com';
+    const apiBaseUrl =
+      options.apiBaseUrl ?? (enterprise ? `https://${this.host}/api/v3` : 'https://api.github.com');
+    const graphqlUrl =
+      options.graphqlUrl ??
+      (enterprise && options.apiBaseUrl === undefined
+        ? `https://${this.host}/api/graphql`
+        : `${apiBaseUrl}/graphql`);
+    this.client = new ProviderClient({
+      name: 'GitHub',
+      baseUrl: apiBaseUrl,
+      baseUrlLabel: 'GitHub apiBaseUrl',
+      credentialHost: this.host,
+      graphqlUrl,
+      headers: { accept: 'application/vnd.github+json', 'content-type': 'application/json' },
+      authorize: (auth) => `Bearer ${auth.token}`,
+      fetchFn: options.fetchFn ?? governedFetch,
+    });
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -219,7 +299,7 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
     auth: AuthContext,
     opts?: PullRequestQueryOptions
   ): Promise<PullRequest[]> {
-    const data = await this.graphql(auth, SEARCH_QUERY, {
+    const data = await this.client.graphql<GraphQlSearchData>(auth, SEARCH_QUERY, {
       searchQuery: 'is:pr involves:@me state:open',
       first: opts?.limit ?? 50,
     });
@@ -233,17 +313,88 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
-    const data = await this.graphql(auth, SEARCH_QUERY, {
-      searchQuery: `is:pr state:open head:${branch} repo:${repo.owner}/${repo.name}`,
-      first: 1,
-    });
-    const viewer = data.viewer?.login ?? '';
-    const node = (data.search?.nodes ?? []).find(
-      (n): n is GraphQlPullRequestNode => n !== null && 'number' in n
+    // A fork owner can have only one fork in a repository's network, so the
+    // head repository's owner identifies it. REST filters on "owner:branch"
+    // server-side; GraphQL's headRefName matches the branch in every fork, so
+    // other forks' same-named branches could crowd this one out of a page.
+    const headOwner = (head ?? repo).owner.toLowerCase();
+    const isHead = (owner: string | undefined, ref: string | undefined): boolean =>
+      ref === branch && owner?.toLowerCase() === headOwner;
+    const headFilter = `${headOwner}:${branch}`;
+    const pulls = await this.client.getJson<RestPullHead[]>(
+      auth,
+      p`/repos/${repo.owner}/${repo.name}/pulls?state=open&head=${headFilter}&per_page=10`
     );
-    return node ? this.mapPullRequest(node, viewer) : undefined;
+    // A deleted head repository has no owner and never matches.
+    const match = (pulls ?? []).find((pull) =>
+      isHead(pull.head?.repo?.owner?.login, pull.head?.ref)
+    );
+    if (match?.number === undefined) {
+      return undefined;
+    }
+    const data = await this.client.graphql<GraphQlNumberData>(auth, NUMBER_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      number: match.number,
+    });
+    const node = data.repository?.pullRequest;
+    // Checked again on the full record, which may be newer than the list.
+    const stillHead = node && isHead(node.headRepositoryOwner?.login, node.headRefName);
+    if (!node || !stillHead || node.state !== 'OPEN') {
+      return undefined;
+    }
+    return this.mapPullRequest(node, data.viewer?.login ?? '');
+  }
+
+  /** Open issues assigned to the authenticated user, across repositories. */
+  async getMyIssues(auth: AuthContext, opts?: IssueQueryOptions): Promise<Issue[]> {
+    // The endpoint pages at 100 and counts pull requests against the page.
+    const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 100);
+    const json = await this.client.getJson<RestAssignedIssue[]>(
+      auth,
+      p`/issues?filter=assigned&state=open&sort=updated&per_page=${limit}`
+    );
+    const issues: Issue[] = [];
+    for (const item of json ?? []) {
+      if (item.pull_request !== undefined) {
+        continue;
+      }
+      const path = repoOfAssignedIssue(item);
+      if (path) {
+        const repo: RepoDescriptor = { provider: this.id, host: this.host, ...path };
+        issues.push(this.mapRestIssue(item as Record<string, unknown>, repo));
+      }
+    }
+    return issues;
+  }
+
+  /** Resolves an "owner/name#123" key to its issue; pull requests resolve to undefined. */
+  async getIssue(auth: AuthContext, key: string): Promise<Issue | undefined> {
+    const match = /^(.+)\/([^/#]+)#(\d+)$/.exec(key.trim());
+    if (!match) {
+      return undefined;
+    }
+    const repo: RepoDescriptor = {
+      provider: this.id,
+      host: this.host,
+      owner: match[1],
+      name: match[2],
+    };
+    const found = await this.getIssueOrPr(auth, repo, match[3]);
+    return found !== undefined && !('headSha' in found) ? found : undefined;
+  }
+
+  /** "<number>-<slug>", the shape GitHub's own "Create a branch" uses. */
+  suggestBranchName(issue: Issue): string {
+    const number = /#(\d+)$/.exec(issue.key)?.[1];
+    const slug = slugify(issue.title, 40);
+    if (number === undefined) {
+      return slug;
+    }
+    return slug ? `${number}-${slug}` : number;
   }
 
   async getIssueOrPr(
@@ -255,33 +406,36 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const issue = await this.rest(
+    const issue = await this.client.getJsonCached<Record<string, unknown>>(
       auth,
-      `/repos/${repo.owner}/${repo.name}/issues/${number}`
+      p`/repos/${repo.owner}/${repo.name}/issues/${number}`,
+      ISSUE_TTL_MS
     );
     if (issue === undefined) {
       return undefined;
     }
-    const issueJson = issue as Record<string, unknown>;
-    if (issueJson.pull_request) {
-      const pull = await this.rest(
+    if (issue.pull_request) {
+      const pull = await this.client.getJsonCached<Record<string, unknown>>(
         auth,
-        `/repos/${repo.owner}/${repo.name}/pulls/${number}`
+        p`/repos/${repo.owner}/${repo.name}/pulls/${number}`,
+        ISSUE_TTL_MS
       );
-      return pull === undefined
-        ? undefined
-        : this.mapRestPullRequest(pull as Record<string, unknown>, repo);
+      return pull === undefined ? undefined : this.mapRestPullRequest(pull, repo);
     }
-    return this.mapRestIssue(issueJson, repo);
+    return this.mapRestIssue(issue, repo);
   }
 
   /** Creates a gist (secret by default) holding a single file. */
   async createSnippet(auth: AuthContext, options: SnippetCreateOptions): Promise<SnippetRef> {
-    const json = (await this.restPost(auth, '/gists', {
-      description: options.description ?? '',
-      public: options.secret === false,
-      files: { [options.filename]: { content: options.content } },
-    })) as { id?: unknown; html_url?: unknown };
+    const json = await this.client.postJson<{ id?: unknown; html_url?: unknown }>(
+      auth,
+      p`/gists`,
+      {
+        description: options.description ?? '',
+        public: options.secret === false,
+        files: { [options.filename]: { content: options.content } },
+      }
+    );
     return { id: String(json.id ?? ''), url: String(json.html_url ?? '') };
   }
 
@@ -291,25 +445,24 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
     if (!id) {
       throw new ProviderError(`Not a recognizable gist id or URL: ${idOrUrl}`);
     }
-    const json = await this.rest(auth, `/gists/${id}`);
+    const json = await this.client.getJson<{
+      files?: Record<string, { content?: string; truncated?: boolean; raw_url?: string }>;
+    }>(auth, p`/gists/${id}`);
     if (json === undefined) {
       throw new ProviderError(`Gist ${id} not found`, 404);
     }
-    const files =
-      (json as { files?: Record<string, { content?: string; truncated?: boolean; raw_url?: string }> })
-        .files ?? {};
-    const entries = Object.entries(files);
+    const entries = Object.entries(json.files ?? {});
     const file = entries.find(([name]) => name.endsWith('.ggpatch'))?.[1] ?? entries[0]?.[1];
     if (!file) {
       throw new ProviderError(`Gist ${id} has no files`);
     }
     if (file.truncated && file.raw_url) {
-      const response = await this.fetchFn(file.raw_url, {
-        method: 'GET',
-        headers: this.headers(auth),
-      });
-      this.throwForStatus(response);
-      return response.text();
+      // Gist raw content is public: fetched uncredentialed, and only from the
+      // API origin or gist.githubusercontent.com.
+      if (!isSameOriginAs(file.raw_url, this.client.baseUrl) && !isGistRawOrigin(file.raw_url)) {
+        throw new ProviderError(`Gist ${id} points its content at an unexpected host`);
+      }
+      return this.client.getPublicText(file.raw_url);
     }
     return file.content ?? '';
   }
@@ -317,9 +470,8 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
   /**
    * Posts a diff-anchored review comment with a ```suggestion block via
    * REST POST /repos/{o}/{r}/pulls/{n}/comments (line/start_line, side RIGHT).
-   * REST is chosen over the GraphQL addPullRequestReviewThread flow because a
-   * single call yields an immediately visible comment — no pending review to
-   * create and submit. A 422 means the lines are not part of the PR head diff.
+   * One call, and the comment is visible immediately: there is no pending
+   * review to submit. A 422 means the lines are not part of the PR head diff.
    */
   async createReviewSuggestion(
     auth: AuthContext,
@@ -337,11 +489,11 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
       body.start_line = input.startLine;
       body.start_side = 'RIGHT';
     }
-    const json = (await this.restPost(
+    const json = await this.client.postJson<{ html_url?: unknown }>(
       auth,
-      `/repos/${pr.repo.owner}/${pr.repo.name}/pulls/${pr.number}/comments`,
+      p`/repos/${pr.repo.owner}/${pr.repo.name}/pulls/${pr.number}/comments`,
       body
-    )) as { html_url?: unknown };
+    );
     return { url: json.html_url ? String(json.html_url) : pr.url };
   }
 
@@ -356,11 +508,11 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
     pr: { repo: RepoDescriptor; number: number },
     body: string
   ): Promise<{ url: string }> {
-    const json = (await this.restPost(
+    const json = await this.client.postJson<{ html_url?: unknown }>(
       auth,
-      `/repos/${pr.repo.owner}/${pr.repo.name}/issues/${pr.number}/comments`,
+      p`/repos/${pr.repo.owner}/${pr.repo.name}/issues/${pr.number}/comments`,
       { body }
-    )) as { html_url?: unknown };
+    );
     return {
       url: json.html_url
         ? String(json.html_url)
@@ -474,105 +626,17 @@ export class GitHubProvider implements HostingProvider, SnippetHost, ReviewSugge
       reviewRequestedFromViewer: false,
     };
   }
+}
 
-  private async graphql(
-    auth: AuthContext,
-    query: string,
-    variables: Record<string, unknown>
-  ): Promise<NonNullable<GraphQlSearchResponse['data']>> {
-    const response = await this.fetchFn(this.graphqlUrl, {
-      method: 'POST',
-      headers: this.headers(auth),
-      body: JSON.stringify({ query, variables }),
-    });
-    this.throwForStatus(response);
-    const json = (await response.json()) as GraphQlSearchResponse;
-    if (json.errors && json.errors.length > 0) {
-      throw new ProviderError(`GitHub GraphQL error: ${json.errors[0].message}`);
-    }
-    if (!json.data) {
-      throw new ProviderError('GitHub GraphQL response had no data');
-    }
-    return json.data;
-  }
-
-  /** REST GET; returns undefined on 404. */
-  private async rest(auth: AuthContext, path: string): Promise<unknown | undefined> {
-    const response = await this.fetchFn(`${this.apiBaseUrl}${path}`, {
-      method: 'GET',
-      headers: this.headers(auth),
-    });
-    if (response.status === 404) {
-      return undefined;
-    }
-    this.throwForStatus(response);
-    return response.json();
-  }
-
-  /** REST POST with a JSON body; throws typed errors on failure. */
-  private async restPost(
-    auth: AuthContext,
-    path: string,
-    body: Record<string, unknown>
-  ): Promise<unknown> {
-    const response = await this.fetchFn(`${this.apiBaseUrl}${path}`, {
-      method: 'POST',
-      headers: this.headers(auth),
-      body: JSON.stringify(body),
-    });
-    this.throwForStatus(response);
-    return response.json();
-  }
-
-  private headers(auth: AuthContext): Record<string, string> {
-    return {
-      authorization: `Bearer ${auth.token}`,
-      accept: 'application/vnd.github+json',
-      'content-type': 'application/json',
-      'user-agent': 'gitglasses',
-    };
-  }
-
-  private throwForStatus(response: HttpResponseLike): void {
-    if (response.ok) {
-      return;
-    }
-    if (response.status === 401) {
-      throw new AuthError('GitHub authentication failed (401): check the token and its scopes');
-    }
-    if (response.status === 403 || response.status === 429) {
-      const remaining = response.headers.get('x-ratelimit-remaining');
-      const retryAfter = response.headers.get('retry-after');
-      if (remaining === '0' || retryAfter !== null || response.status === 429) {
-        throw new RateLimitError(
-          'GitHub rate limit exceeded',
-          this.resetTime(response),
-          response.status
-        );
-      }
-      throw new ProviderError('GitHub request forbidden (403)', 403);
-    }
-    throw new ProviderError(`GitHub request failed with status ${response.status}`, response.status);
-  }
-
-  private resetTime(response: HttpResponseLike): Date | undefined {
-    const reset = response.headers.get('x-ratelimit-reset');
-    if (reset !== null && Number.isFinite(Number(reset))) {
-      return new Date(Number(reset) * 1000);
-    }
-    const retryAfter = response.headers.get('retry-after');
-    if (retryAfter !== null) {
-      const seconds = Number(retryAfter);
-      if (Number.isFinite(seconds)) {
-        return new Date(Date.now() + seconds * 1000);
-      }
-      const dateMs = Date.parse(retryAfter);
-      if (!Number.isNaN(dateMs)) {
-        return new Date(dateMs);
-      }
-    }
+/** Owner and name of the repository an /issues result belongs to. */
+function repoOfAssignedIssue(item: RestAssignedIssue): { owner: string; name: string } | undefined {
+  const fullName =
+    item.repository?.full_name ?? /\/repos\/([^/]+\/[^/]+)$/.exec(item.repository_url ?? '')?.[1];
+  const slash = fullName?.indexOf('/') ?? -1;
+  if (fullName === undefined || slash <= 0) {
     return undefined;
   }
+  return { owner: fullName.slice(0, slash), name: fullName.slice(slash + 1) };
 }
 
 /**
@@ -583,6 +647,9 @@ export function createGitHubEnterpriseProvider(
   host: string,
   fetchFn?: FetchLike
 ): GitHubProvider {
+  // The host is interpolated into both API base URLs, which then carry the
+  // user's token, so it must be a bare hostname.
+  assertPlainHost(host, 'GitHub Enterprise host');
   return new GitHubProvider({
     id: 'github-enterprise',
     host,

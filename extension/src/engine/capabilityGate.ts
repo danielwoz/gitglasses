@@ -1,12 +1,17 @@
 // Capability-based feature gating. Pure logic (no vscode imports) so the
-// method matrix and the watch-fallback change detection are unit-testable and
-// reusable by the future web entry.
+// method matrix and the watch-fallback change detection are unit-testable.
 
-import { EngineCapabilities } from '@gitglasses/protocol';
+import { EngineCapabilities, RESTRICTED_MODE_METHODS } from '@gitglasses/protocol';
 
 /** User-facing explanation for gitCli-gated features. */
 export const CLI_UNAVAILABLE_MESSAGE =
   'Requires the git CLI — not available in this engine build';
+
+/** User-facing explanation for features Restricted Mode turns off. */
+export const RESTRICTED_MESSAGE =
+  'Not available in Restricted Mode — trust this folder to let GitGlasses run git';
+
+const RESTRICTED_MODE_SERVED: ReadonlySet<string> = new Set(RESTRICTED_MODE_METHODS);
 
 // Method families the engine can only serve by shelling out to git.
 const CLI_METHOD_PREFIXES = ['mutate/', 'rebase/', 'patch/'];
@@ -26,16 +31,23 @@ export function requiresGitCli(method: string): boolean {
   return CLI_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix));
 }
 
-/** Whether the engine can serve `method`. Unknown capabilities (before the
- *  initialize handshake) mean "allow" — the engine's -32003 answer is the
+/** Whether the engine can serve `method`. A Restricted Mode engine serves
+ *  only RESTRICTED_MODE_METHODS. Unknown capabilities (before the initialize
+ *  handshake) mean "allow" — the engine's -32003 or -32004 answer is the
  *  backstop. */
 export function isMethodAvailable(
   caps: EngineCapabilities | undefined,
   method: string,
 ): boolean {
-  if (!requiresGitCli(method)) return true;
   if (caps === undefined) return true;
+  if (caps.restricted === true) return RESTRICTED_MODE_SERVED.has(method);
+  if (!requiresGitCli(method)) return true;
   return caps.gitCli !== false;
+}
+
+/** Why isMethodAvailable() said no, for the user. */
+export function unavailableMessage(caps: EngineCapabilities | undefined): string {
+  return caps?.restricted === true ? RESTRICTED_MESSAGE : CLI_UNAVAILABLE_MESSAGE;
 }
 
 /** HEAD-oid change detection for the watch:false fallback poller. Records the

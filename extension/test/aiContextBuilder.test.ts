@@ -10,7 +10,7 @@ import {
 
 describe('categorizeFile', () => {
   it('classifies source, config, and docs paths', () => {
-    expect(categorizeFile('src/engine/engineClient.ts')).toBe('source');
+    expect(categorizeFile('src/model/blameModel.ts')).toBe('source');
     expect(categorizeFile('lib/native/blame.cc')).toBe('source');
     expect(categorizeFile('tsconfig.json')).toBe('config');
     expect(categorizeFile('.eslintrc')).toBe('config');

@@ -7,10 +7,16 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <system_error>
+#include <thread>
 #include <vector>
 
 #include "test_fixtures.h"
 #include "test_session.h"
+#include "util/result.h"
 
 namespace gg {
 namespace {
@@ -44,31 +50,26 @@ TEST(Server, ExitsCleanlyOnStdinClose) {
   EXPECT_FALSE(messages.empty());
 }
 
+// repo/list and repo/state are concurrent reads, so they are sent only once
+// repo/discover has answered — as a client must, since the id it returns is
+// what they address.
 TEST(Server, DiscoverListAndState) {
   gg::testing::FixtureRepo fixture;
 
-  auto messages = runSession({
-      initRequest(1),
-      {{"jsonrpc", "2.0"},
-       {"id", 2},
-       {"method", "repo/discover"},
-       {"params", {{"path", fixture.root().string()}}}},
-      {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/list"}},
-      {{"jsonrpc", "2.0"},
-       {"id", 4},
-       {"method", "repo/state"},
-       {"params", {{"repoId", "r1"}}}},
-      {{"jsonrpc", "2.0"}, {"id", 5}, {"method", "shutdown"}},
-  });
-
-  Json discover = responseFor(messages, 2);
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", fixture.root().string()}}}});
   EXPECT_EQ(discover["result"]["repoId"], "r1");
   EXPECT_EQ(discover["result"]["bare"], false);
 
-  Json list = responseFor(messages, 3);
+  Json list = session.request({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/list"}});
   EXPECT_EQ(list["result"]["repos"].size(), 1u);
 
-  Json state = responseFor(messages, 4);
+  Json state = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 4}, {"method", "repo/state"}, {"params", {{"repoId", "r1"}}}});
   EXPECT_EQ(state["result"]["head"]["branch"], "main");
   EXPECT_EQ(state["result"]["head"]["oid"].get<std::string>().size(), 40u);
   EXPECT_EQ(state["result"]["head"]["unborn"], false);
@@ -146,6 +147,43 @@ TEST(Server, BlameFileStreamsHunksAndRespectsOverlay) {
   EXPECT_FALSE(closed["result"]["commits"].contains(uncommitted));
 }
 
+TEST(Server, CloseReleasesTheRepoAndItsWatch) {
+  gg::testing::FixtureRepo fixture;
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", fixture.root().string()}}}});
+  const std::string repoId = discover["result"]["repoId"];
+
+  Json closed = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/close"}, {"params", {{"repoId", repoId}}}});
+  ASSERT_TRUE(closed.contains("result")) << closed.dump();
+
+  Json list = session.request({{"jsonrpc", "2.0"}, {"id", 4}, {"method", "repo/list"}});
+  EXPECT_EQ(list["result"]["repos"].size(), 0u);
+
+  // The id is gone, so requests addressing it fail rather than resurrect it.
+  Json state = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 5}, {"method", "repo/state"}, {"params", {{"repoId", repoId}}}});
+  ASSERT_TRUE(state.contains("error")) << state.dump();
+  EXPECT_EQ(state["error"]["code"], static_cast<int>(ErrorCode::RepoNotFound));
+
+  // Closing twice is an error, not a crash.
+  Json again = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 6}, {"method", "repo/close"}, {"params", {{"repoId", repoId}}}});
+  EXPECT_TRUE(again.contains("error")) << again.dump();
+
+  // The path can be registered again afterwards.
+  Json rediscover = session.request({{"jsonrpc", "2.0"},
+                                     {"id", 7},
+                                     {"method", "repo/discover"},
+                                     {"params", {{"path", fixture.root().string()}}}});
+  EXPECT_TRUE(rediscover.contains("result")) << rediscover.dump();
+}
+
 TEST(Server, WatcherPushesRepoDidChange) {
 #ifdef GG_SINGLE_THREADED
   GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
@@ -176,6 +214,82 @@ TEST(Server, WatcherPushesRepoDidChange) {
     }
   }
   EXPECT_TRUE(sawRelevantCategory) << note.dump();
+#endif
+}
+
+// A repository registered with watch:false is only listed: nothing is pushed
+// for it until a later repo/discover without the flag starts the watch.
+TEST(Server, DiscoverWithoutWatchDefersTheWatch) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json listed =
+      session.request({{"jsonrpc", "2.0"},
+                       {"id", 2},
+                       {"method", "repo/discover"},
+                       {"params", {{"path", fixture.root().string()}, {"watch", false}}}});
+  ASSERT_TRUE(listed.contains("result")) << listed.dump();
+  const std::string repoId = listed["result"]["repoId"];
+
+  fixture.run("git branch made-while-listed");
+  // Longer than the watcher's debounce and the polling fallback's sweep, so
+  // a watch would have pushed by now; the next response collects anything
+  // pushed before it.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  Json list = session.request(
+      {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "repo/list"}, {"params", Json::object()}});
+  ASSERT_TRUE(list.contains("result")) << list.dump();
+  for (const auto& note : session.notifications) {
+    EXPECT_NE(note.value("method", ""), "repo/didChange") << note.dump();
+  }
+
+  Json watched = session.request({{"jsonrpc", "2.0"},
+                                  {"id", 4},
+                                  {"method", "repo/discover"},
+                                  {"params", {{"path", fixture.root().string()}}}});
+  ASSERT_TRUE(watched.contains("result")) << watched.dump();
+  EXPECT_EQ(watched["result"]["repoId"], repoId);
+
+  fixture.run("git branch made-while-watched");
+  Json note = session.readNotificationUntil("repo/didChange", 5000);
+  ASSERT_EQ(note.value("method", ""), "repo/didChange");
+  EXPECT_EQ(note["params"]["repoId"], repoId);
+#endif
+}
+
+// A repository opened from a linked worktree keeps its branches in the common
+// dir shared with the main checkout; a branch made there must still be pushed.
+TEST(Server, WatcherPushesSharedRefChangesForALinkedWorktree) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "single-threaded build: the watcher is never started (capability watch:false)";
+#else
+  gg::testing::FixtureRepo fixture;
+  const std::filesystem::path linked =
+      fixture.root().parent_path() / (fixture.root().filename().string() + "-linked");
+  fixture.run("git worktree add -q -b linked \"" + linked.string() + "\"");
+
+  InteractiveSession session;
+  session.request(initRequest(1));
+  Json discover = session.request({{"jsonrpc", "2.0"},
+                                   {"id", 2},
+                                   {"method", "repo/discover"},
+                                   {"params", {{"path", linked.string()}}}});
+  ASSERT_TRUE(discover.contains("result")) << discover.dump();
+  const std::string repoId = discover["result"]["repoId"];
+
+  fixture.run("git branch made-in-main");
+
+  Json note = session.readNotificationUntil("repo/didChange", 5000);
+  std::error_code ec;
+  std::filesystem::remove_all(linked, ec);
+  ASSERT_EQ(note.value("method", ""), "repo/didChange") << "no repo/didChange for the worktree";
+  EXPECT_EQ(note["params"]["repoId"], repoId);
+  const auto& changed = note["params"]["changed"];
+  EXPECT_NE(std::find(changed.begin(), changed.end(), "refs"), changed.end()) << note.dump();
 #endif
 }
 

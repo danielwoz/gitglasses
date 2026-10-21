@@ -1,10 +1,12 @@
+import { governedFetch } from '../rateLimiter.js';
 import { ProviderError } from '../errors.js';
-import { defaultFetch, type FetchLike } from '../http.js';
+import type { FetchLike } from '../http.js';
 import type {
   AuthContext,
   HostingCapability,
   HostingProvider,
   PrComments,
+  PullRequestHead,
   PullRequestQueryOptions,
   ReviewSuggestionInput,
   ReviewSuggestions,
@@ -27,7 +29,17 @@ import type {
   ViewerRole,
 } from '../models.js';
 import { parseRemoteUrl } from '../remoteMatcher.js';
-import { hostOfUrl, throwForStatus } from './shared.js';
+import {
+  AVATAR_TTL_MS,
+  CachedIdentity,
+  FANOUT_CONCURRENCY,
+  ISSUE_TTL_MS,
+  mapPooled,
+  mergeByRole,
+  p,
+  ProviderClient,
+} from './client.js';
+import { assertKnownOptions, credentialHostOfUrl, sameRepoPath } from './shared.js';
 
 export interface GitLabProviderOptions {
   /** Provider id used in RepoDescriptors. Default "gitlab". */
@@ -49,6 +61,8 @@ interface GitLabMergeRequest {
   id: number;
   iid: number;
   project_id: number;
+  source_project_id?: number;
+  target_project_id?: number;
   title: string;
   web_url: string;
   state: string;
@@ -67,6 +81,8 @@ interface GitLabMergeRequest {
   head_pipeline?: { status?: string } | null;
   references?: { full?: string };
 }
+
+const OPTION_KEYS = ['id', 'baseUrl', 'fetchFn'] as const;
 
 interface GitLabApprovals {
   approved?: boolean;
@@ -122,6 +138,14 @@ function mapChecksStatus(pipelineStatus: string | undefined): ChecksStatus {
   }
 }
 
+/**
+ * Project identifier for a path: GitLab takes the full "group/project" path
+ * as one URL-encoded segment.
+ */
+function projectPath(repo: RepoDescriptor): string {
+  return `${repo.owner}/${repo.name}`;
+}
+
 function mapAccount(user: GitLabUser): Account {
   return {
     id: String(user.id),
@@ -151,15 +175,25 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
   ]);
 
   private readonly baseUrl: string;
-  private readonly fetchFn: FetchLike;
-  private cachedUsername?: string;
-  private cachedUsernameToken?: string;
+  private readonly client: ProviderClient;
+  private readonly identity = new CachedIdentity<string>();
 
   constructor(options: GitLabProviderOptions = {}) {
+    assertKnownOptions(options, OPTION_KEYS, 'GitLabProvider');
     this.id = options.id ?? 'gitlab';
-    this.baseUrl = (options.baseUrl ?? 'https://gitlab.com').replace(/\/+$/, '');
-    this.host = hostOfUrl(this.baseUrl);
-    this.fetchFn = options.fetchFn ?? defaultFetch;
+    const baseUrl = options.baseUrl ?? 'https://gitlab.com';
+    this.client = new ProviderClient({
+      name: 'GitLab',
+      baseUrl,
+      baseUrlLabel: 'GitLab baseUrl',
+      credentialHost: credentialHostOfUrl(baseUrl),
+      prefix: '/api/v4',
+      headers: { accept: 'application/json' },
+      authorize: (auth) => `Bearer ${auth.token}`,
+      fetchFn: options.fetchFn ?? governedFetch,
+    });
+    this.baseUrl = this.client.baseUrl;
+    this.host = this.client.host;
   }
 
   matchesRemote(remoteUrl: string): RepoDescriptor | undefined {
@@ -176,45 +210,63 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
   ): Promise<PullRequest[]> {
     const me = await this.username(auth);
     const limit = opts?.limit ?? 50;
-    const query = `scope=all&state=opened&per_page=${limit}`;
     const [reviewing, authored] = await Promise.all([
-      this.get(auth, `/merge_requests?${query}&reviewer_username=${encodeURIComponent(me)}`),
-      this.get(auth, `/merge_requests?${query}&author_username=${encodeURIComponent(me)}`),
+      this.mergeRequestsFor(auth, 'reviewer_username', me, limit),
+      this.mergeRequestsFor(auth, 'author_username', me, limit),
     ]);
-    const reviewerIds = new Set(
-      ((reviewing ?? []) as GitLabMergeRequest[]).map((mr) => mr.id)
+    const reviewerIds = new Set(reviewing.map((mr) => mr.id));
+    const mrs = mergeByRole(authored, reviewing, (mr) => mr.id, limit);
+    // Approvals cost one request per merge request; at most
+    // FANOUT_CONCURRENCY are in flight at once.
+    return mapPooled(mrs, FANOUT_CONCURRENCY, (mr) =>
+      this.enrichAndMap(auth, mr, me, reviewerIds.has(mr.id), true)
     );
-    const merged = new Map<number, GitLabMergeRequest>();
-    for (const mr of [
-      ...((authored ?? []) as GitLabMergeRequest[]),
-      ...((reviewing ?? []) as GitLabMergeRequest[]),
-    ]) {
-      if (!merged.has(mr.id)) {
-        merged.set(mr.id, mr);
-      }
-    }
-    const mrs = [...merged.values()].slice(0, limit);
-    return Promise.all(
-      mrs.map((mr) => this.enrichAndMap(auth, mr, me, reviewerIds.has(mr.id)))
+  }
+
+  /** Open merge requests where `field` (author or reviewer) names the user. */
+  private async mergeRequestsFor(
+    auth: AuthContext,
+    field: 'author_username' | 'reviewer_username',
+    username: string,
+    limit: number
+  ): Promise<GitLabMergeRequest[]> {
+    const mrs = await this.client.getJson<GitLabMergeRequest[]>(
+      auth,
+      p`/merge_requests?scope=all&state=opened&per_page=${limit}&${field}=${username}`
     );
+    return mrs ?? [];
   }
 
   async getPullRequestForBranch(
     auth: AuthContext,
     repo: RepoDescriptor,
-    branch: string
+    branch: string,
+    head?: PullRequestHead
   ): Promise<PullRequest | undefined> {
-    const project = encodeURIComponent(`${repo.owner}/${repo.name}`);
-    const list = (await this.get(
+    const list = await this.client.getJson<GitLabMergeRequest[]>(
       auth,
-      `/projects/${project}/merge_requests?state=opened&source_branch=${encodeURIComponent(branch)}`
-    )) as GitLabMergeRequest[] | undefined;
-    const mr = list?.[0];
+      p`/projects/${projectPath(repo)}/merge_requests?state=opened&source_branch=${branch}`
+    );
+    if (!list || list.length === 0) {
+      return undefined;
+    }
+    // source_branch matches merge requests from every fork; only the one
+    // whose source project is the head repository is this branch's.
+    const forked = head !== undefined && !sameRepoPath(head, repo);
+    const forkId = forked ? await this.projectId(auth, `${head.owner}/${head.name}`) : undefined;
+    if (forked && forkId === undefined) {
+      return undefined;
+    }
+    const mr = list.find(
+      (candidate) =>
+        candidate.source_project_id ===
+        (forked ? forkId : (candidate.target_project_id ?? candidate.project_id))
+    );
     if (!mr) {
       return undefined;
     }
     const me = await this.username(auth);
-    return this.enrichAndMap(auth, mr, me, false);
+    return this.enrichAndMap(auth, mr, me, false, true);
   }
 
   async getIssueOrPr(
@@ -226,10 +278,11 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     if (!Number.isInteger(number) || number <= 0) {
       return undefined;
     }
-    const project = encodeURIComponent(`${repo.owner}/${repo.name}`);
-    const json = (await this.get(auth, `/projects/${project}/issues/${number}`)) as
-      | Record<string, unknown>
-      | undefined;
+    const json = await this.client.getJsonCached<Record<string, unknown>>(
+      auth,
+      p`/projects/${projectPath(repo)}/issues/${number}`,
+      ISSUE_TTL_MS
+    );
     if (json === undefined) {
       return undefined;
     }
@@ -246,10 +299,13 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     };
   }
 
+  /** Avatar for a commit author email, reused for AVATAR_TTL_MS per email. */
   async getAvatarUrl(auth: AuthContext, email: string): Promise<string | undefined> {
-    const json = (await this.get(auth, `/avatar?email=${encodeURIComponent(email)}`)) as
-      | { avatar_url?: string }
-      | undefined;
+    const json = await this.client.getJsonCached<{ avatar_url?: string }>(
+      auth,
+      p`/avatar?email=${email}`,
+      AVATAR_TTL_MS
+    );
     return json?.avatar_url ?? undefined;
   }
 
@@ -276,12 +332,16 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
    * gist) — pass visibility "internal" or "public" to share the link.
    */
   async createSnippet(auth: AuthContext, options: SnippetCreateOptions): Promise<SnippetRef> {
-    const json = (await this.post(auth, '/snippets', {
-      title: options.description ?? options.filename,
-      description: options.description,
-      visibility: options.visibility ?? 'private',
-      files: [{ file_path: options.filename, content: options.content }],
-    })) as { id?: unknown; web_url?: unknown };
+    const json = await this.client.postJson<{ id?: unknown; web_url?: unknown }>(
+      auth,
+      p`/snippets`,
+      {
+        title: options.description ?? options.filename,
+        description: options.description,
+        visibility: options.visibility ?? 'private',
+        files: [{ file_path: options.filename, content: options.content }],
+      }
+    );
     return { id: String(json.id ?? ''), url: String(json.web_url ?? '') };
   }
 
@@ -291,12 +351,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     if (!id) {
       throw new ProviderError(`Not a recognizable GitLab snippet id or URL: ${idOrUrl}`);
     }
-    const response = await this.fetchFn(`${this.baseUrl}/api/v4/snippets/${id}/raw`, {
-      method: 'GET',
-      headers: this.headers(auth),
-    });
-    throwForStatus('GitLab', response);
-    return response.text();
+    return this.client.getText(auth, p`/snippets/${id}/raw`);
   }
 
   /**
@@ -311,17 +366,17 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     pr: PullRequest,
     input: ReviewSuggestionInput
   ): Promise<{ url: string }> {
-    const project = encodeURIComponent(`${pr.repo.owner}/${pr.repo.name}`);
-    const mr = (await this.get(auth, `/projects/${project}/merge_requests/${pr.number}`)) as
-      | { diff_refs?: { base_sha?: string; start_sha?: string; head_sha?: string } }
-      | undefined;
+    const mrPath = p`/projects/${projectPath(pr.repo)}/merge_requests/${pr.number}`;
+    const mr = await this.client.getJson<{
+      diff_refs?: { base_sha?: string; start_sha?: string; head_sha?: string };
+    }>(auth, mrPath);
     const diffRefs = mr?.diff_refs;
     if (!diffRefs?.base_sha || !diffRefs.start_sha || !diffRefs.head_sha) {
       throw new ProviderError(`GitLab merge request !${pr.number} has no diff refs`);
     }
-    const json = (await this.post(
+    const json = await this.client.postJson<{ notes?: Array<{ id?: unknown }> }>(
       auth,
-      `/projects/${project}/merge_requests/${pr.number}/discussions`,
+      p`${mrPath}/discussions`,
       {
         body: input.body,
         position: {
@@ -334,7 +389,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
           new_line: input.endLine,
         },
       }
-    )) as { notes?: Array<{ id?: unknown }> };
+    );
     const noteId = json.notes?.[0]?.id;
     return { url: noteId !== undefined ? `${pr.url}#note_${String(noteId)}` : pr.url };
   }
@@ -349,26 +404,32 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     pr: { repo: RepoDescriptor; number: number },
     body: string
   ): Promise<{ url: string }> {
-    const project = encodeURIComponent(`${pr.repo.owner}/${pr.repo.name}`);
-    const json = (await this.post(
+    const json = await this.client.postJson<{ id?: unknown }>(
       auth,
-      `/projects/${project}/merge_requests/${pr.number}/notes`,
+      p`/projects/${projectPath(pr.repo)}/merge_requests/${pr.number}/notes`,
       { body }
-    )) as { id?: unknown };
+    );
     const mrUrl = `${this.baseUrl}/${pr.repo.owner}/${pr.repo.name}/-/merge_requests/${pr.number}`;
     return { url: json.id !== undefined ? `${mrUrl}#note_${String(json.id)}` : mrUrl };
   }
 
+  /**
+   * Maps a merge request, asking for its approvals when `withApprovals` is
+   * set. Without them reviewDecision stays undefined.
+   */
   private async enrichAndMap(
     auth: AuthContext,
     mr: GitLabMergeRequest,
     me: string,
-    fromReviewerQuery: boolean
+    fromReviewerQuery: boolean,
+    withApprovals: boolean
   ): Promise<PullRequest> {
-    const approvals = (await this.get(
-      auth,
-      `/projects/${mr.project_id}/merge_requests/${mr.iid}/approvals`
-    )) as GitLabApprovals | undefined;
+    const approvals = withApprovals
+      ? await this.client.getJson<GitLabApprovals>(
+          auth,
+          p`/projects/${mr.project_id}/merge_requests/${mr.iid}/approvals`
+        )
+      : undefined;
     const approved =
       approvals !== undefined &&
       (approvals.approved === true || (approvals.approved_by?.length ?? 0) > 0);
@@ -398,7 +459,7 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
       repo: this.repoFromMr(mr),
       createdAt: mr.created_at,
       updatedAt: mr.updated_at,
-      reviewDecision: approved ? 'approved' : 'review_required',
+      reviewDecision: withApprovals ? (approved ? 'approved' : 'review_required') : undefined,
       checksStatus: mapChecksStatus(mr.head_pipeline?.status),
       mergeable: mapMergeable(mr),
       viewerRole,
@@ -419,52 +480,19 @@ export class GitLabProvider implements HostingProvider, SnippetHost, ReviewSugge
     };
   }
 
+  /** Numeric id of the project at `path`, or undefined when it is not visible. */
+  private async projectId(auth: AuthContext, path: string): Promise<number | undefined> {
+    const project = await this.client.getJson<{ id?: number }>(auth, p`/projects/${path}`);
+    return typeof project?.id === 'number' ? project.id : undefined;
+  }
+
   private async username(auth: AuthContext): Promise<string> {
-    if (this.cachedUsername !== undefined && this.cachedUsernameToken === auth.token) {
-      return this.cachedUsername;
-    }
-    const user = (await this.get(auth, '/user')) as GitLabUser | undefined;
-    if (!user) {
-      throw new Error('GitLab /user returned no profile');
-    }
-    this.cachedUsername = user.username;
-    this.cachedUsernameToken = auth.token;
-    return user.username;
-  }
-
-  /** REST GET against /api/v4; returns undefined on 404. */
-  private async get(auth: AuthContext, path: string): Promise<unknown | undefined> {
-    const response = await this.fetchFn(`${this.baseUrl}/api/v4${path}`, {
-      method: 'GET',
-      headers: this.headers(auth),
+    return this.identity.get(auth.token, async () => {
+      const user = await this.client.getJson<GitLabUser>(auth, p`/user`);
+      if (!user) {
+        throw new Error('GitLab /user returned no profile');
+      }
+      return user.username;
     });
-    if (response.status === 404) {
-      return undefined;
-    }
-    throwForStatus('GitLab', response);
-    return response.json();
-  }
-
-  /** REST POST against /api/v4 with a JSON body; throws typed errors on failure. */
-  private async post(
-    auth: AuthContext,
-    path: string,
-    body: Record<string, unknown>
-  ): Promise<unknown> {
-    const response = await this.fetchFn(`${this.baseUrl}/api/v4${path}`, {
-      method: 'POST',
-      headers: { ...this.headers(auth), 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    throwForStatus('GitLab', response);
-    return response.json();
-  }
-
-  private headers(auth: AuthContext): Record<string, string> {
-    return {
-      authorization: `Bearer ${auth.token}`,
-      accept: 'application/json',
-      'user-agent': 'gitglasses',
-    };
   }
 }

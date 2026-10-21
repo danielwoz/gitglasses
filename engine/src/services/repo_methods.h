@@ -5,7 +5,8 @@
 
 namespace gg::services {
 
-// repo/discover, repo/list, repo/state + doc overlay notifications.
+// repo/discover, repo/close, repo/list, repo/state + doc overlay
+// notifications.
 void registerRepoMethods(rpc::Dispatcher& dispatcher, ServiceContext& context);
 
 }  // namespace gg::services

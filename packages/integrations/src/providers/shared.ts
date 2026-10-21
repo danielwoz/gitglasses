@@ -2,6 +2,7 @@
 
 import { AuthError, ProviderError, RateLimitError } from '../errors.js';
 import type { HttpResponseLike } from '../http.js';
+import { readRateLimitSignals } from '../rateLimitHeaders.js';
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
@@ -38,38 +39,11 @@ export function base64Encode(input: string): string {
   return out;
 }
 
-function epochDate(value: string): Date | undefined {
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return undefined;
-  }
-  // Values above ~5000 AD in seconds are treated as millisecond timestamps.
-  return new Date(n > 1e11 ? n : n * 1000);
-}
-
 /** Rate-limit reset time from the common header spellings, when present. */
 export function rateLimitResetTime(response: HttpResponseLike): Date | undefined {
-  for (const header of ['x-ratelimit-reset', 'ratelimit-reset', 'x-ratelimit-requests-reset']) {
-    const value = response.headers.get(header);
-    if (value !== null) {
-      const date = epochDate(value);
-      if (date) {
-        return date;
-      }
-    }
-  }
-  const retryAfter = response.headers.get('retry-after');
-  if (retryAfter !== null) {
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds)) {
-      return new Date(Date.now() + seconds * 1000);
-    }
-    const dateMs = Date.parse(retryAfter);
-    if (!Number.isNaN(dateMs)) {
-      return new Date(dateMs);
-    }
-  }
-  return undefined;
+  const { resetAt, retryAfterUntil } = readRateLimitSignals(response.headers, Date.now());
+  const at = resetAt ?? retryAfterUntil;
+  return at === undefined ? undefined : new Date(at);
 }
 
 /**
@@ -128,4 +102,155 @@ export function slugify(text: string, maxLength = 40): string {
 export function hostOfUrl(baseUrl: string): string {
   const match = /^[a-z][a-z0-9+.-]*:\/\/([^/:]+)/i.exec(baseUrl);
   return (match?.[1] ?? baseUrl).toLowerCase();
+}
+
+/**
+ * Host and port of a base URL, as URL.host reports them: the host that
+ * credentials sent to the URL belong to. Falls back to hostOfUrl for a value
+ * that does not parse, leaving the base-URL validation to reject it.
+ */
+export function credentialHostOfUrl(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return hostOfUrl(baseUrl);
+  }
+}
+
+/** True when both URLs share scheme, host and port. */
+export function isSameOriginAs(candidate: string, reference: string): boolean {
+  try {
+    const a = new URL(candidate);
+    const b = new URL(reference);
+    return a.protocol === b.protocol && a.host === b.host;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True for the origin github.com serves raw gist content from. A gist file's
+ * raw_url names this host rather than the API's, so callers vetting a raw_url
+ * accept it alongside their own origin.
+ */
+export function isGistRawOrigin(candidate: string): boolean {
+  try {
+    const url = new URL(candidate);
+    return url.protocol === 'https:' && url.host === 'gist.githubusercontent.com';
+  } catch {
+    return false;
+  }
+}
+
+/** Escapes a value for use inside a double-quoted BBQL string literal. */
+export function escapeBbqlString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * A bare hostname (no scheme, userinfo, path or whitespace), optionally with a
+ * port. Config values that end up in a credentialed base URL go through this:
+ * a value like "api.example.com@attacker.example" reads as the real host but
+ * resolves elsewhere.
+ */
+export function assertPlainHost(value: string, what: string): string {
+  // RegExp.test stringifies its argument, so without the type check an
+  // undefined value would be tested as the plain hostname "undefined".
+  if (
+    typeof value !== 'string' ||
+    !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(value)
+  ) {
+    throw new Error(`${what} must be a plain hostname, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/**
+ * A credential's host in the form URL.host reports it: lowercased, with an
+ * explicit default https port dropped. Throws for anything but a plain host.
+ */
+export function normalizeCredentialHost(value: string): string {
+  return new URL(`https://${assertPlainHost(value, 'Credential host')}`).host;
+}
+
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * True when a credential issued for `credentialHost` may be sent to `url`:
+ * the URL is https (http only on loopback), carries no userinfo, and its host
+ * is the credential's host or that host's `api.` subdomain, which is where
+ * github.com, bitbucket.org and linear.app serve their APIs.
+ */
+export function credentialAllowsUrl(url: string, credentialHost: string): boolean {
+  let parsed: URL;
+  let host: string;
+  try {
+    parsed = new URL(url);
+    host = normalizeCredentialHost(credentialHost);
+  } catch {
+    return false;
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    return false;
+  }
+  const secure =
+    parsed.protocol === 'https:' ||
+    (parsed.protocol === 'http:' && LOOPBACK_HOSTNAMES.has(parsed.hostname));
+  return secure && (parsed.host === host || parsed.host === `api.${host}`);
+}
+
+/**
+ * Rejects option keys a provider does not read. A host or base URL passed
+ * under a name the provider ignores would otherwise fall back to the public
+ * default and send the credential there.
+ */
+export function assertKnownOptions(options: object, known: readonly string[], what: string): void {
+  for (const key of Object.keys(options)) {
+    if (!known.includes(key)) {
+      throw new Error(`${what} does not take a "${key}" option (it takes ${known.join(', ')})`);
+    }
+  }
+}
+
+/**
+ * A base URL that carries credentials: https, or http on loopback for a local
+ * test instance. Plaintext elsewhere puts the token on the wire in the clear.
+ */
+export function assertSecureBaseUrl(baseUrl: string, what: string): string {
+  const isHttps = /^https:\/\//i.test(baseUrl);
+  const isLoopbackHttp = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(baseUrl);
+  if (!isHttps && !isLoopbackHttp) {
+    throw new Error(
+      `${what} must use https (loopback may use http), got ${JSON.stringify(baseUrl)}`
+    );
+  }
+  return baseUrl;
+}
+
+/**
+ * A short non-reversible fingerprint of a token, so a long-lived cache keys
+ * its entries per account without holding the secret itself.
+ */
+export function tokenFingerprint(token: string): string {
+  // FNV-1a, 32-bit: non-cryptographic, and only ever asked "is this the same
+  // token"; the digest never leaves the process.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < token.length; i++) {
+    hash ^= token.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+/** Owner and name of a repository, as a pull request lookup compares them. */
+export interface RepoPath {
+  owner: string;
+  name: string;
+}
+
+/** True when two repository paths name the same repository (case-insensitive). */
+export function sameRepoPath(a: RepoPath, b: RepoPath): boolean {
+  return (
+    a.owner.toLowerCase() === b.owner.toLowerCase() && a.name.toLowerCase() === b.name.toLowerCase()
+  );
 }

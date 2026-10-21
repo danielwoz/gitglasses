@@ -1,9 +1,19 @@
+# Everything is excluded unless listed here. vsce lets any `!` pattern win
+# over any exclusion, so source maps and the icon's SVG source stay out by
+# not being matched at all.
 **
 !dist/extension.js
-!dist/web/**
-!dist/webviews/**
+!dist/web/*.js
+!dist/web/*.mjs
+!dist/web/*.wasm
+!dist/webviews/*.js
+!dist/webviews/*.css
 !bin/**
-!media/**
+!media/gitglasses.svg
+!media/icon.png
+!media/walkthrough/**
 !package.json
 !README.md
+!CHANGELOG.md
 !LICENSE
+!NOTICE

@@ -5,6 +5,16 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./sha": {
+      "types": "./dist/sha.d.ts",
+      "default": "./dist/sha.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && tsx scripts/emit-schema.ts",
     "test": "vitest run"

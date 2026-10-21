@@ -37,6 +37,8 @@ account). These are the honest gaps, with the reasons and our alternatives.
   Ollama.
 
 ## Integrations
+- What each forge and tracker supports, and what is not supported yet, is in
+  [integrations.md](integrations.md).
 - GitKraken brokers OAuth for many providers; we use VS Code's built-in
   GitHub/Microsoft auth where possible and PATs elsewhere (more setup, more
   privacy — tokens never leave the machine).

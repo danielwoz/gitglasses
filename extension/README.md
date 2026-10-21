@@ -17,7 +17,8 @@ leave your machine.
   Tags, File & Line History, Contributors, Search & Compare, Worktrees
 - **Visual File History**: bubble-chart timeline of a file's evolution
 - **Launchpad**: your PRs across GitHub, GitLab, Bitbucket, Azure DevOps,
-  triaged by actionability; **Start Work** from Jira/Linear/GitHub issues
+  triaged by actionability; **Start Work** from Jira Cloud, Linear or GitHub
+  issues
 - **Open Patches**: share WIP/stashes/commits as portable patch envelopes
   (file, Gist, or Snippet), applied 3-way on any machine
 - **PR suggestions** from your editor selection

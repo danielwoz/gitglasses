@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WEB_FEATURES, webFeaturesByStatus } from '../src/web/webFeatures';
 
-// The manifest is the conscious record of what runs on the web. If a change
-// moves a feature across the line, this test forces the move to be explicit.
 describe('web feature manifest', () => {
   it('includes the read pipeline outright', () => {
     expect(webFeaturesByStatus('included')).toEqual([
@@ -11,6 +9,7 @@ describe('web feature manifest', () => {
       'documentOverlaySync',
       'engineWasmTransport',
       'graphWebview',
+      'onboardingWalkthrough',
       'repoGroups',
       'revisionContentProvider',
       'searchView',
@@ -22,7 +21,9 @@ describe('web feature manifest', () => {
   it('keeps node-only and mutating features off the web', () => {
     expect(webFeaturesByStatus('excluded')).toEqual([
       'engineWatch',
+      'hunkStaging',
       'integrationsRemoteDetection',
+      'openOnRemote',
       'patches',
       'processEngine',
       'stageMutations',
@@ -40,5 +41,13 @@ describe('web feature manifest', () => {
     expect(WEB_FEATURES.stageMutations.status).toBe('excluded'); // read-only v1
     expect(WEB_FEATURES.engineWatch.status).toBe('excluded'); // bridge synthesizes
     expect(WEB_FEATURES.processEngine.status).toBe('excluded'); // no spawn on web
+  });
+
+  // package.json contributes these unconditionally — the editor context menu
+  // and the walkthrough both reference them — so the web host stubs them.
+  it('excludes remote and staging commands but still contributes them', () => {
+    expect(WEB_FEATURES.openOnRemote.status).toBe('excluded');
+    expect(WEB_FEATURES.hunkStaging.status).toBe('excluded');
+    expect(WEB_FEATURES.onboardingWalkthrough.status).toBe('included');
   });
 });

@@ -1,0 +1,41 @@
+<!-- GitGlasses listing icon: the activity-bar glasses over a branch-and-merge
+     commit graph. Source of icon.png (256x256 PNG; the Marketplace does not
+     accept SVG icons). Drawn for this project; licensed MIT alongside the
+     rest of the repository. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262d3f"/>
+      <stop offset="1" stop-color="#131720"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7dd3fc" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#7dd3fc" stop-opacity="0.06"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#background)"/>
+  <g transform="translate(12.8 18.4) scale(9.6)">
+    <g fill="none" stroke-linecap="round">
+      <path d="M2.4 18.2 H21.6" stroke="#f5a524" stroke-width="0.85"/>
+      <path d="M5.2 18.2 C 7.4 18.2 7.4 14.5 9.6 14.5 H14.4 C 16.6 14.5 16.6 18.2 18.8 18.2" stroke="#2dd4bf" stroke-width="0.85"/>
+    </g>
+    <g stroke="#131720" stroke-width="0.35">
+      <circle cx="12" cy="18.2" r="1.05" fill="#f5a524"/>
+      <circle cx="2.4" cy="18.2" r="1.05" fill="#f5a524"/>
+      <circle cx="21.6" cy="18.2" r="1.05" fill="#f5a524"/>
+      <circle cx="9.6" cy="14.5" r="1.05" fill="#2dd4bf"/>
+      <circle cx="14.4" cy="14.5" r="1.05" fill="#2dd4bf"/>
+    </g>
+  </g>
+  <g transform="translate(12.8 -34) scale(9.6)">
+    <circle cx="7" cy="14.5" r="4.1" fill="url(#glass)"/>
+    <circle cx="17" cy="14.5" r="4.1" fill="url(#glass)"/>
+    <g fill="none" stroke="#e8edf5" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="7" cy="14.5" r="4.1"/>
+      <circle cx="17" cy="14.5" r="4.1"/>
+      <path d="M11.1 14 C 11.4 12.9 12.6 12.9 12.9 14"/>
+      <path d="M2.9 14 L 1.6 9.4"/>
+      <path d="M21.1 14 L 22.4 9.4"/>
+    </g>
+  </g>
+</svg>

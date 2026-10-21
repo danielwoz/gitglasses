@@ -1,7 +1,6 @@
 {
   "name": "gitglasses",
-  "version-string": "0.1.0",
-  "builtin-baseline": "82b6bc886d7b0f8342e34babc2e0b8943f79b0e1",
+  "builtin-baseline": "9ff1bd435a9e0591a223033766f6de6260c080ad",
   "dependencies": [
     {
       "name": "libgit2",

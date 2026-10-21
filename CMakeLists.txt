@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(gitglasses VERSION 0.1.0 LANGUAGES C CXX)
+# extension/package.json is the single source of the release version: the
+# engine reports it from --version and initialize, and the release workflow
+# checks the tag against it. Editing the manifest re-runs the configure step.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/extension/package.json" GG_EXTENSION_MANIFEST)
+string(JSON GG_VERSION GET "${GG_EXTENSION_MANIFEST}" version)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS extension/package.json)
+
+project(gitglasses VERSION ${GG_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,6 +21,9 @@ option(GG_SINGLE_THREADED "Run all tasks inline on the caller (no worker threads
 # only dynamic dependency is glibc (whose floor is set by building in a
 # glibc-2.28 container, matching VS Code's own minimum).
 option(GG_STATIC_RUNTIME "Statically link libstdc++ and libgcc (Linux)" OFF)
+# Alpine builds link the engine fully statically against musl, so it has no
+# runtime dependencies at all and runs on any Linux of the same architecture.
+option(GG_FULLY_STATIC "Link the engine executable fully statically (Linux)" OFF)
 
 # Wasm has no worker pool, watcher threads, or child processes.
 if(EMSCRIPTEN)

@@ -59,11 +59,44 @@ export function hoverText(hovers: readonly vscode.Hover[] | undefined): string {
     .join('\n');
 }
 
-// Polls the blame hover on the fixture's clean committed file until it names
-// the fixture author or a commit sha. A successful hover also proves the
-// extension has discovered the fixture repo with the engine (repoId r1 in a
-// single-repo workspace, since the engine hands out sequential ids).
-export async function waitForBlameHover(uri: vscode.Uri): Promise<string> {
+/** Where the extension places a file: its repository and repo-relative path. */
+export interface Located {
+  repoId: string;
+  /** The repository root in the spelling of the located path. */
+  rootPath: string;
+  relativePath: string;
+}
+
+/** A repository the views can act on. */
+export interface ListedRepo {
+  repoId: string;
+  rootPath: string;
+  name: string;
+}
+
+// Polls the extension's own resolution of a file to a repository, the first
+// stage every file feature depends on.
+export async function waitForLocate(uri: vscode.Uri): Promise<Located> {
+  return poll(
+    async () => vscode.commands.executeCommand<Located | undefined>('_gitglasses.locate', uri),
+    `the extension never placed ${uri.fsPath} in a repository (see the GitGlasses log)`,
+  );
+}
+
+/** The repositories the views can act on. */
+export async function listRepositories(): Promise<ListedRepo[]> {
+  return (await vscode.commands.executeCommand<ListedRepo[]>('_gitglasses.repositories')) ?? [];
+}
+
+// Polls the blame hover on a committed file until it names `author` or a
+// commit sha. Resolution to a repository is awaited first, so a failure says
+// whether locating the file or blaming it stalled.
+export async function waitForBlameHover(
+  uri: vscode.Uri,
+  author: string = FIXTURE.authorName,
+): Promise<string> {
+  const located = await waitForLocate(uri);
+  const where = `${located.relativePath} in ${located.repoId} at ${located.rootPath}`;
   return poll(async () => {
     const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
       'vscode.executeHoverProvider',
@@ -71,7 +104,7 @@ export async function waitForBlameHover(uri: vscode.Uri): Promise<string> {
       new vscode.Position(0, 0),
     );
     const text = hoverText(hovers);
-    if (text.includes(FIXTURE.authorName) || SHA_RE.test(text)) return text;
+    if (text.includes(author) || SHA_RE.test(text)) return text;
     return undefined;
-  }, `no blame hover for ${uri.fsPath}; the engine never answered blame`);
+  }, `no blame hover for ${uri.fsPath} (${where}); the engine never answered blame`);
 }

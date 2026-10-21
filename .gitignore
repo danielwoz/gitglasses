@@ -2,6 +2,7 @@ build/
 out/
 node_modules/
 dist/
+dist-npm/
 dist-e2e/
 .vscode-test/
 *.vsix
@@ -11,3 +12,13 @@ vcpkg_installed/
 .turbo/
 *.log
 .DS_Store
+
+# Downloaded VS Code Web build; test:web fetches it on demand.
+extension/.vscode-test-web/
+
+# Personal CMake preset overrides.
+CMakeUserPresets.json
+
+# Staged into the extension only while package-vsix.mjs runs.
+extension/LICENSE
+extension/NOTICE

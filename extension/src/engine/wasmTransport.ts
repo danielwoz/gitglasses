@@ -10,7 +10,7 @@
 // factory again and gets a fresh module (the wasm engine has no persistent
 // state outside the module, so a reload is a full engine restart).
 
-import { EngineTransport } from './engineTransport';
+import type { EngineTransport } from '@gitglasses/rpc';
 
 /** In-memory filesystem surface of the Emscripten module. */
 export interface WasmFs {

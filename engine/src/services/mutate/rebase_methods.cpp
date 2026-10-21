@@ -8,6 +8,7 @@
 
 #include "exec/sequence_editor.h"
 #include "services/mutate/mutate_common.h"
+#include "services/params.h"
 #include "util/temp_file.h"
 
 namespace gg::services {
@@ -17,7 +18,7 @@ namespace {
 using mutate_detail::GitOutput;
 using mutate_detail::openRepo;
 using mutate_detail::rebaseInProgress;
-using mutate_detail::requireString;
+using mutate_detail::requirePositional;
 using mutate_detail::runGitOrThrow;
 using mutate_detail::runGitWithEnv;
 
@@ -110,7 +111,10 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string upstream = requireString(params, "upstream");
+        // Concatenated into a `git log` argument, so a leading '-' would
+        // survive as an option ("--output=x" -> "--output=x..HEAD").
+        const std::string upstream =
+            requirePositional(requireString(params, "upstream"), "upstream");
         auto repo = openRepo(context, params);
         auto output = runGitOrThrow(
             repo, {"log", "--reverse", "--format=%H%x1f%s", upstream + "..HEAD"}, token,
@@ -123,14 +127,16 @@ void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
         }
         return {{"entries", std::move(entries)}};
       },
-      rpc::Mode::Serial);
+      rpc::Mode::Concurrent);
 
   dispatcher.method(
       "rebase/start",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
-        const std::string upstream = requireString(params, "upstream");
+        // Reaches `git rebase -i <upstream>` as a positional.
+        const std::string upstream =
+            requirePositional(requireString(params, "upstream"), "upstream");
         validatePlan(params);
         auto repo = openRepo(context, params);
         requireWorktree(repo);

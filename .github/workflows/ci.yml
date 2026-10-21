@@ -4,52 +4,89 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets another workflow, such as a release, require these checks.
+  workflow_call:
 
-env:
-  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-  VCPKG_INSTALLED_DIR: ~/.cache/gitglasses/vcpkg_installed
+permissions:
+  contents: read
 
+# A new push to a pull request supersedes the checks still running for the
+# previous one. Every other run has a group of its own, so pushes to main
+# neither wait for nor cancel one another: each commit of main gets its
+# checks and its engine artifacts, which `pnpm fetch-engine` and the release
+# workflow look up by commit. A calling workflow's name (github.workflow is
+# the caller's) keeps its run apart from the pull request's own.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Each platform's release engine is built and tested once, then shared with
+# the jobs that need it as an artifact named after the engine source key
+# (node scripts/fetch-engine.mjs --print-key). The builds of main stay
+# available for a month, which is what `pnpm fetch-engine` downloads for
+# TypeScript-only work.
 jobs:
+  # ESLint, the formatting of what the change touches (Prettier for TypeScript
+  # and JavaScript, clang-format for the changed C++ lines), and the tests of
+  # the repository scripts.
+  lint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The format check compares against the merge base.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install clang-format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/clang-format"
+          "$RUNNER_TEMP/clang-format/bin/pip" install --quiet \
+            "clang-format==$(node scripts/check-format.mjs --clang-format-version)"
+          echo "$RUNNER_TEMP/clang-format/bin" >> "$GITHUB_PATH"
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      # The type-aware rules read the workspace packages' declarations.
+      - name: Build packages
+        run: pnpm build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Check the formatting of the changed files
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: node scripts/check-format.mjs --base "$BASE" --committed
+
+      - name: Test the repository scripts
+        run: pnpm test:scripts
+
   engine:
+    name: engine (${{ matrix.preset }})
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            preset: debug
-          - os: ubuntu-22.04
-            preset: asan
-          - os: ubuntu-22.04
-            preset: tsan
+          - preset: debug
+          - preset: asan
+          - preset: tsan
             cc: clang
             cxx: clang++
-          - os: ubuntu-22.04
-            preset: release
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Install dependencies
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          triplet: x64-linux
 
       - name: Configure
         env:
@@ -61,147 +98,129 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} --parallel 4 --timeout 300
+
+  engine-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: ./.github/actions/setup-vcpkg
+        with:
+          triplet: x64-linux
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Test
+        run: ctest --preset release --parallel 4 --timeout 300
+
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-engine-linux-x64-${{ steps.key.outputs.key }}
+          path: build/release/engine/gitglasses-engine
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   engine-windows:
     runs-on: windows-2022
+    timeout-minutes: 60
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
-      # VsDevCmd exports its own VCPKG_ROOT (VS-bundled vcpkg); re-point ours.
-      - name: Restore VCPKG_ROOT
-        shell: bash
-        run: echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
-      - name: Bootstrap vcpkg
-        shell: bash
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-windows-${{ hashFiles('vcpkg.json') }}
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          triplet: x64-windows-static
 
       - name: Configure
-        shell: bash
-        run: |
-          cmake --preset release \
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static \
-            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed"
+        run: cmake --preset windows-release
 
       - name: Build
-        shell: bash
-        run: cmake --build --preset release
+        run: cmake --build --preset windows-release
 
       - name: Test
-        shell: bash
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          ctest --preset release
+        run: ctest --preset windows-release --parallel 4 --timeout 300
+
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      # Only the executable: the build directory also holds the linker's
+      # import library and debug symbols under similar names.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-engine-win32-x64-${{ steps.key.outputs.key }}
+          path: build/release/engine/gitglasses-engine.exe
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   engine-macos:
     runs-on: macos-14
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-macos-${{ hashFiles('vcpkg.json', 'ci/triplets/arm64-osx-gg.cmake') }}
-
-      - name: Install dependencies
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet arm64-osx-gg \
-            --overlay-triplets=ci/triplets \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
+          triplet: arm64-osx-gg
 
       - name: Configure
-        run: |
-          cmake --preset release \
-            -DVCPKG_TARGET_TRIPLET=arm64-osx-gg \
-            -DVCPKG_OVERLAY_TRIPLETS=ci/triplets \
-            -DVCPKG_INSTALLED_DIR="$HOME/.cache/gitglasses/vcpkg_installed" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+        run: cmake --preset macos-release
 
       - name: Build
-        run: cmake --build --preset release
+        run: cmake --build --preset macos-release
 
       - name: Test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          ctest --preset release
+        run: ctest --preset macos-release --parallel 4 --timeout 300
+
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-engine-darwin-arm64-${{ steps.key.outputs.key }}
+          path: build/release/engine/gitglasses-engine
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   engine-wasm:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    outputs:
+      key: ${{ steps.key.outputs.key }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
           version: 6.0.3
 
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Cache vcpkg wasm packages
-        uses: actions/cache@v4
+      # The wasm build needs only libgit2 and nlohmann-json; pcre2 and zlib
+      # arrive transitively.
+      - uses: ./.github/actions/setup-vcpkg
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_wasm
-            ~/.cache/vcpkg/archives
-          key: vcpkg-wasm-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'ci/triplets/wasm32-emscripten-gg.cmake') }}
-
-      # Classic-mode install (run outside the manifest dir): the wasm build
-      # needs only libgit2 and nlohmann-json; pcre2/zlib arrive transitively.
-      - name: Install wasm dependencies
-        run: |
-          # Neutral cwd: classic-mode install; vcpkg finds the repo manifest
-          # from any cwd inside the checkout and then rejects package args.
-          cd "$RUNNER_TEMP"
-          "$VCPKG_ROOT/vcpkg" install 'libgit2[core,pcre2]' nlohmann-json \
-            --triplet wasm32-emscripten-gg \
-            --overlay-triplets="$GITHUB_WORKSPACE/ci/triplets" \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_wasm"
+          triplet: wasm32-emscripten-gg
+          install-dir: vcpkg_wasm
+          packages: libgit2[core,pcre2] nlohmann-json
 
       - name: Configure
         run: cmake --preset wasm
@@ -212,37 +231,82 @@ jobs:
       - name: Wasm protocol harness
         run: node engine/wasm-test/run.mjs
 
+      - name: Engine source key
+        id: key
+        run: echo "key=$(node scripts/fetch-engine.mjs --print-key)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-engine-wasm-${{ steps.key.outputs.key }}
+          path: build/wasm/engine/gitglasses-engine-wasm.*
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
+
   extension:
+    needs: engine-linux
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
       # The TS integration tests exercise the real engine binary.
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-      - name: Build engine
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
-          cmake --preset release && cmake --build --preset release
+          name: ci-engine-linux-x64-${{ needs.engine-linux.outputs.key }}
+          path: build/release/engine
+      - name: Make the engine executable
+        run: chmod +x build/release/engine/gitglasses-engine
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      # The build re-emits protocol.schema.json into the working tree, so the
+      # drift test that regenerates and compares would pass even against a
+      # stale committed artifact. This is what actually catches the drift.
+      - name: Check the committed protocol schema is current
+        run: git diff --exit-code -- packages/protocol/protocol.schema.json
+
+      - name: Typecheck extension
+        working-directory: extension
+        run: npx tsc -p tsconfig.json
+
+      - name: Test
+        run: pnpm test
+
+  # The extension is path-sensitive in ways only Windows exposes: the engine
+  # reports repo roots with forward slashes on every platform while VS Code's
+  # uri.fsPath uses backslashes, so a comparison that works on Linux can match
+  # nothing here and leave every path-dependent feature silently inert. Runs
+  # the unit suite and the real-VS-Code e2e suite on Windows for that reason.
+  extension-windows:
+    needs: engine-windows
+    runs-on: windows-2022
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # The unit suite's engine-client tests and the whole e2e suite drive the
+      # real binary.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ci-engine-win32-x64-${{ needs.engine-windows.outputs.key }}
+          path: build/release/engine
 
       - name: Install workspace
         run: pnpm install --frozen-lockfile
@@ -255,42 +319,42 @@ jobs:
         run: npx tsc -p tsconfig.json
 
       - name: Test
-        run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          pnpm test
+        run: pnpm test
+
+      # No xvfb wrapper: the runner has a desktop session, and headless.cjs
+      # passes straight through to node when a display is present.
+      - name: E2E test
+        run: pnpm --filter gitglasses run test:e2e
+
+      # VS Code's logs from the run: the GitGlasses output channel (engine
+      # stderr included) and the extension host log.
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-logs-${{ runner.os }}
+          path: extension/.vscode-test/logs
+          if-no-files-found: ignore
 
   extension-e2e:
+    needs: engine-linux
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
       # The e2e suite launches real VS Code against the real engine binary.
-      - name: Bootstrap vcpkg
-        run: |
-          BASELINE=$(grep -oE '"builtin-baseline": *"[0-9a-f]+"' vcpkg.json | grep -oE '[0-9a-f]{40}')
-          git init -q "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch -q --depth 1 origin "$BASELINE"
-          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: |
-            ~/.cache/gitglasses/vcpkg_installed
-            ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-      - name: Build engine
-        run: |
-          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux \
-            --x-install-root="$HOME/.cache/gitglasses/vcpkg_installed"
-          cmake --preset release && cmake --build --preset release
+          name: ci-engine-linux-x64-${{ needs.engine-linux.outputs.key }}
+          path: build/release/engine
+      - name: Make the engine executable
+        run: chmod +x build/release/engine/gitglasses-engine
 
       - name: Install workspace
         run: pnpm install --frozen-lockfile
@@ -299,7 +363,58 @@ jobs:
         run: pnpm build
 
       - name: E2E test
+        run: xvfb-run -a pnpm --filter gitglasses run test:e2e
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-logs-${{ runner.os }}
+          path: extension/.vscode-test/logs
+          if-no-files-found: ignore
+
+  # The web extension (vscode.dev, github.dev) bundles the wasm engine; without
+  # it the build skips dist/web entirely. Runs the smoke suite in headless
+  # Chromium against a real fixture repository mirrored into MEMFS.
+  extension-web:
+    needs: engine-wasm
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ci-engine-wasm-${{ needs.engine-wasm.outputs.key }}
+          path: build/wasm/engine
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Check the web bundle was built
         run: |
-          git config --global user.name CI
-          git config --global user.email ci@example.invalid
-          xvfb-run -a pnpm --filter gitglasses run test:e2e
+          test -f extension/dist/web/extension.js || {
+            echo "::error::pnpm build did not produce extension/dist/web/extension.js"
+            exit 1
+          }
+
+      # The suite needs the Chromium build of the playwright that
+      # @vscode/test-web depends on, so install through that copy's own CLI
+      # (playwright is not a direct dependency, and `npx playwright` may run
+      # a different version).
+      - name: Install Chromium
+        working-directory: extension
+        run: |
+          playwright=$(node -p "require('path').join(require('path').dirname(require('module').createRequire(require.resolve('@vscode/test-web/package.json')).resolve('playwright/package.json')), 'cli.js')")
+          node "$playwright" install --with-deps chromium
+
+      - name: Web smoke test
+        run: pnpm --filter gitglasses run test:web

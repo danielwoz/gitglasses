@@ -182,20 +182,176 @@ describe('GitHubProvider.getMyPullRequests', () => {
 });
 
 describe('GitHubProvider.getPullRequestForBranch', () => {
-  it('searches by head and repo and returns the mapped PR', async () => {
-    const { fetchFn, requests } = stubFetch(() => jsonResponse(searchResponse([prNode()])));
+  interface OpenPull {
+    number: number;
+    /** Owner of the head repository; null once that repository is deleted. */
+    headOwner: string | null;
+    branch: string;
+  }
+
+  /**
+   * Answers like api.github.com for acme/widgets: the REST list applies its
+   * "owner:branch" head filter on the server, GraphQL's headRefName matches
+   * every fork's branch and pages, and a pull request reads back by number.
+   */
+  function fakeServer(pulls: OpenPull[], changed: Record<string, unknown> = {}) {
+    const node = (pull: OpenPull) =>
+      prNode({
+        number: pull.number,
+        headRefName: pull.branch,
+        headRepositoryOwner: pull.headOwner === null ? null : { login: pull.headOwner },
+        ...changed,
+      });
+    return stubFetch((url, init) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/repos/acme/widgets/pulls') {
+        const [owner, branch] = (parsed.searchParams.get('head') ?? '').split(/:(.*)/);
+        return jsonResponse(
+          pulls
+            .filter((pull) => pull.headOwner?.toLowerCase() === owner.toLowerCase())
+            .filter((pull) => pull.branch === branch)
+            .map((pull) => ({
+              number: pull.number,
+              head: {
+                ref: pull.branch,
+                repo: pull.headOwner === null ? null : { owner: { login: pull.headOwner } },
+              },
+            }))
+        );
+      }
+      const { variables } = JSON.parse(init?.body ?? '{}');
+      if (variables.number !== undefined) {
+        const pull = pulls.find((candidate) => candidate.number === variables.number);
+        return jsonResponse({
+          data: { viewer: { login: 'alice' }, repository: { pullRequest: pull ? node(pull) : null } },
+        });
+      }
+      const nodes = pulls
+        .filter((pull) => pull.branch === variables.branch)
+        .slice(0, variables.first)
+        .map(node);
+      return jsonResponse({
+        data: { viewer: { login: 'alice' }, repository: { pullRequests: { nodes } } },
+      });
+    });
+  }
+
+  it("asks for the head owner's branch, then reads that pull request", async () => {
+    const { fetchFn, requests } = fakeServer([{ number: 42, headOwner: 'acme', branch: 'fix/flux' }]);
     const provider = new GitHubProvider({ fetchFn });
     const pr = await provider.getPullRequestForBranch(auth, repo, 'fix/flux');
-    const body = JSON.parse(requests[0].init?.body ?? '{}');
-    expect(body.variables.searchQuery).toBe('is:pr state:open head:fix/flux repo:acme/widgets');
+    expect(requests[0].url).toBe(
+      'https://api.github.com/repos/acme/widgets/pulls?state=open&head=acme%3Afix%2Fflux&per_page=10'
+    );
+    const body = JSON.parse(requests[1].init?.body ?? '{}');
+    expect(body.variables).toEqual({ owner: 'acme', name: 'widgets', number: 42 });
+    expect(body.query).toContain('headRepositoryOwner');
     expect(pr?.number).toBe(42);
+    expect(pr?.checksStatus).toBe('passing');
+  });
+
+  it("never matches a stranger's fork with a same-named branch", async () => {
+    // A maintainer on "main" must not get a contributor's "main" back.
+    const { fetchFn } = fakeServer([{ number: 7, headOwner: 'mallory', branch: 'main' }]);
+    const provider = new GitHubProvider({ fetchFn });
+    expect(await provider.getPullRequestForBranch(auth, repo, 'main')).toBeUndefined();
+  });
+
+  it("finds the head fork's pull request among many forks' same-named branches", async () => {
+    const strangers = Array.from({ length: 60 }, (_, i) => ({
+      number: 100 + i,
+      headOwner: `contributor${i}`,
+      branch: 'main',
+    }));
+    const { fetchFn } = fakeServer([...strangers, { number: 9, headOwner: 'Alice', branch: 'main' }]);
+    const provider = new GitHubProvider({ fetchFn });
+    const pr = await provider.getPullRequestForBranch(auth, repo, 'main', {
+      owner: 'alice',
+      name: 'widgets',
+    });
+    expect(pr?.number).toBe(9);
+  });
+
+  it('ignores a listed pull request whose head is not the one asked for', async () => {
+    const { fetchFn, requests } = stubFetch(() =>
+      jsonResponse([
+        { number: 7, head: { ref: 'main', repo: { owner: { login: 'mallory' } } } },
+        { number: 8, head: { ref: 'main', repo: null } },
+        { number: 9, head: { ref: 'other', repo: { owner: { login: 'acme' } } } },
+      ])
+    );
+    const provider = new GitHubProvider({ fetchFn });
+    expect(await provider.getPullRequestForBranch(auth, repo, 'main')).toBeUndefined();
+    expect(requests).toHaveLength(1);
+  });
+
+  it('drops a pull request that closed or changed head after it was listed', async () => {
+    const pulls = [{ number: 42, headOwner: 'acme', branch: 'fix/flux' }];
+    const provider = (changed: Record<string, unknown>) =>
+      new GitHubProvider({ fetchFn: fakeServer(pulls, changed).fetchFn });
+    expect(await provider({ state: 'CLOSED' }).getPullRequestForBranch(auth, repo, 'fix/flux'))
+      .toBeUndefined();
+    const moved = { headRepositoryOwner: { login: 'mallory' } };
+    expect(await provider(moved).getPullRequestForBranch(auth, repo, 'fix/flux')).toBeUndefined();
   });
 
   it('returns undefined when no PR matches the branch', async () => {
-    const { fetchFn } = stubFetch(() => jsonResponse(searchResponse([])));
+    const { fetchFn, requests } = fakeServer([]);
     const provider = new GitHubProvider({ fetchFn });
     const pr = await provider.getPullRequestForBranch(auth, repo, 'no-such-branch');
     expect(pr).toBeUndefined();
+    expect(requests).toHaveLength(1);
+  });
+});
+
+describe('GitHubProvider as an issue provider', () => {
+  function restIssue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 7,
+      node_id: 'I_7',
+      number: 7,
+      title: 'Widget crashes on start',
+      html_url: 'https://github.com/acme/widgets/issues/7',
+      state: 'open',
+      assignee: { login: 'alice' },
+      updated_at: '2026-07-03T00:00:00Z',
+      repository: { name: 'widgets', full_name: 'acme/widgets', owner: { login: 'acme' } },
+      ...overrides,
+    };
+  }
+
+  it('lists open issues assigned to the user, leaving out pull requests', async () => {
+    const { fetchFn, requests } = stubFetch(() =>
+      jsonResponse([restIssue(), restIssue({ number: 8, pull_request: {} })])
+    );
+    const provider = new GitHubProvider({ fetchFn });
+    const issues = await provider.getMyIssues(auth, { limit: 25 });
+    expect(requests[0].url).toBe(
+      'https://api.github.com/issues?filter=assigned&state=open&sort=updated&per_page=25'
+    );
+    expect(issues.map((issue) => issue.key)).toEqual(['acme/widgets#7']);
+    expect(issues[0].title).toBe('Widget crashes on start');
+  });
+
+  it('suggests a "<number>-<slug>" branch name', () => {
+    const provider = new GitHubProvider();
+    const name = provider.suggestBranchName({
+      id: 'I_7',
+      key: 'acme/widgets#7',
+      title: 'Widget crashes on start',
+      url: '',
+      state: 'open',
+      updatedAt: '',
+    });
+    expect(name).toBe('7-widget-crashes-on-start');
+  });
+
+  it('resolves an owner/name#number key', async () => {
+    const { fetchFn, requests } = stubFetch(() => jsonResponse(restIssue()));
+    const provider = new GitHubProvider({ fetchFn });
+    const issue = await provider.getIssue(auth, 'acme/widgets#7');
+    expect(requests[0].url).toBe('https://api.github.com/repos/acme/widgets/issues/7');
+    expect(issue?.key).toBe('acme/widgets#7');
   });
 });
 
