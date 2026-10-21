@@ -337,7 +337,7 @@ TEST(PollingWatch, ReportsRefsInNewDirectoriesDeletionsAndPacking) {
   timing.idle = 50ms;
   timing.fullSweep = std::chrono::hours(1);
   WatchManager manager(collector.callback(), WatchManager::Backend::kPolling, timing);
-  manager.watch("r1", (fixture.root() / ".git").string());
+  watchSettled(manager, "r1", (fixture.root() / ".git").string());
 
   fixture.run("git branch feature/deep/topic");
   ASSERT_TRUE(collector.waitFor({"refs"}, 0).has_value()) << "branch in a new directory";
