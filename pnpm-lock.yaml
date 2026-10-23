@@ -92,8 +92,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/rpc
       '@types/node':
-        specifier: ^22.10.0
-        version: 22.20.1
+        specifier: ^20.0.0
+        version: 20.19.43
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
@@ -102,7 +102,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.20.1)(supports-color@8.1.1)
+        version: 2.1.9(@types/node@20.19.43)(supports-color@8.1.1)
 
   packages/integrations:
     devDependencies:
@@ -136,14 +136,14 @@ importers:
         version: link:../protocol
     devDependencies:
       '@types/node':
-        specifier: ^22.10.0
-        version: 22.20.1
+        specifier: ^20.0.0
+        version: 20.19.43
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
       vitest:
         specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.20.1)(supports-color@8.1.1)
+        version: 2.1.9(@types/node@20.19.43)(supports-color@8.1.1)
 
   scripts:
     devDependencies:
@@ -4330,6 +4330,7 @@ snapshots:
   '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
+    optional: true
 
   '@types/normalize-package-data@2.4.4': {}
 
