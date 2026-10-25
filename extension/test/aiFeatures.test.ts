@@ -173,16 +173,25 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });
 }
 
+/** An empty repository with a fixture identity. Newer git starts background
+ *  maintenance after a commit, which writes into .git while a test removes
+ *  the repository, so it is turned off. */
+function initRepo(root: string): void {
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'config', 'commit.gpgsign', 'false');
+  git(root, 'config', 'user.name', 'Fixture');
+  git(root, 'config', 'user.email', 'fixture@example.invalid');
+  git(root, 'config', 'maintenance.auto', 'false');
+  git(root, 'config', 'gc.auto', '0');
+}
+
 const LONG_FILE = Array.from({ length: 600 }, (_, i) => `const line${i} = ${i};`).join('\n') + '\n';
 
 /** A repository whose last commit changes one line near the end of each of
  *  three long files, under a subject written to smuggle in an image. */
 function makeRepo(): string {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'gg-ai-features-')));
-  git(root, 'init', '-q', '-b', 'main');
-  git(root, 'config', 'commit.gpgsign', 'false');
-  git(root, 'config', 'user.name', 'Fixture');
-  git(root, 'config', 'user.email', 'fixture@example.invalid');
+  initRepo(root);
   for (const name of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(path.join(root, name), LONG_FILE);
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'base');
@@ -346,10 +355,7 @@ describe('Explain Commit', () => {
   it('reads only the files that fit from a very large commit', async () => {
     const big = realpathSync(mkdtempSync(path.join(tmpdir(), 'gg-ai-big-')));
     try {
-      git(big, 'init', '-q', '-b', 'main');
-      git(big, 'config', 'commit.gpgsign', 'false');
-      git(big, 'config', 'user.name', 'Fixture');
-      git(big, 'config', 'user.email', 'fixture@example.invalid');
+      initRepo(big);
       for (let i = 0; i < 400; i++)
         writeFileSync(path.join(big, `m${i}.js`), `export const a${i} = ${i};\n`);
       git(big, 'add', '-A');
@@ -377,10 +383,7 @@ describe('Generate Commit Message', () => {
 
   beforeEach(() => {
     work = realpathSync(mkdtempSync(path.join(tmpdir(), 'gg-ai-message-')));
-    git(work, 'init', '-q', '-b', 'main');
-    git(work, 'config', 'commit.gpgsign', 'false');
-    git(work, 'config', 'user.name', 'Fixture');
-    git(work, 'config', 'user.email', 'fixture@example.invalid');
+    initRepo(work);
     writeFileSync(path.join(work, 'greet.txt'), 'hello\n');
     git(work, 'add', '-A');
     git(work, 'commit', '-q', '-m', 'base');
