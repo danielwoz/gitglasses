@@ -247,10 +247,12 @@ without git. The copied configuration also names this workspace's folders,
 since many desktop apps share none with their servers.
 
 *Limits:* registration in the editor needs VS Code 1.101 or newer, or Cursor;
-older releases and other editors use the commands. The configuration the
-commands write points into the installed extension, so run the command again
-after GitGlasses updates. `gitglasses.mcp.enabled` turns the registration
-off. The server also runs on its own, without the extension;
+older releases and other editors use the commands. The server needs Node.js
+20 or newer: the editor's own Node, or `node` on `PATH` where the editor's is
+older or turned off. The configuration the commands write points into the
+installed extension, so run the command again after GitGlasses updates.
+`gitglasses.mcp.enabled` turns the registration off. The server also runs on
+its own, without the extension;
 [its README](https://github.com/danielwoz/gitglasses/blob/main/mcp-server/README.md)
 covers that and the trust model.
 

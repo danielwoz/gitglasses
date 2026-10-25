@@ -6,6 +6,7 @@
 
 import {
   MCP_SERVER_NAME,
+  MIN_NODE_MAJOR,
   allowedRootsFor,
   buildLaunch,
   detectMcpHost,
@@ -163,7 +164,7 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
     runtimeMissing = runtime === undefined;
     if (!runtime) {
       host.log(
-        "MCP server: neither the editor's own Node (ELECTRON_RUN_AS_NODE) nor node 18 or newer on PATH can run it",
+        `MCP server: neither the editor's own Node (ELECTRON_RUN_AS_NODE) nor node on PATH can run it; it needs Node ${MIN_NODE_MAJOR} or newer`,
       );
       return undefined;
     }
@@ -183,7 +184,11 @@ export function registerMcpServer(host: McpRegistrationHost): McpRegistration {
       return { state: 'unavailable', host: editor, reason: 'this build has no bundled server' };
     }
     if (runtimeMissing) {
-      return { state: 'unavailable', host: editor, reason: 'no Node.js runtime to start it with' };
+      return {
+        state: 'unavailable',
+        host: editor,
+        reason: `no Node.js ${MIN_NODE_MAJOR} or newer to start it with`,
+      };
     }
     if (registrationFailed) {
       return { state: 'unavailable', host: editor, reason: 'the editor refused the registration' };

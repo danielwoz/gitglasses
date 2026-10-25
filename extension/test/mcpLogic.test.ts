@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   CodexConfigConflict,
+  MIN_NODE_MAJOR,
   allowedRootsFor,
   buildLaunch,
   claudeAddJsonArgs,
@@ -9,7 +11,6 @@ import {
   detectMcpHost,
   findOnPath,
   isAlreadyExistsOutput,
-  isNodeVersionOutput,
   isSupportedNodeVersion,
   launchGitRoots,
   launchReadRoots,
@@ -177,18 +178,28 @@ describe('detectMcpHost', () => {
 });
 
 describe('Node runtime checks', () => {
-  it("tells Node's --version from an editor's", () => {
-    expect(isNodeVersionOutput('v22.20.0\n')).toBe(true);
-    // An editor that ignores ELECTRON_RUN_AS_NODE prints its own version.
-    expect(isNodeVersionOutput('1.105.0\nabcdef\nx64\n')).toBe(false);
-    expect(isNodeVersionOutput('')).toBe(false);
+  it('accepts Node 20 and newer', () => {
+    expect(isSupportedNodeVersion('v20.0.0')).toBe(true);
+    // VS Code 1.90's own Node.
+    expect(isSupportedNodeVersion('v20.9.0\n')).toBe(true);
+    expect(isSupportedNodeVersion('v24.1.0\n')).toBe(true);
+    expect(isSupportedNodeVersion('v18.20.8')).toBe(false);
+    expect(isSupportedNodeVersion('v18.0.0')).toBe(false);
+    expect(isSupportedNodeVersion('v16.20.2')).toBe(false);
   });
 
-  it('accepts Node 18 and newer', () => {
-    expect(isSupportedNodeVersion('v18.19.0')).toBe(true);
-    expect(isSupportedNodeVersion('v24.1.0\n')).toBe(true);
-    expect(isSupportedNodeVersion('v16.20.2')).toBe(false);
+  it("refuses output that is not Node's --version", () => {
+    // An editor that ignores ELECTRON_RUN_AS_NODE prints its own version.
+    expect(isSupportedNodeVersion('1.105.0\nabcdef\nx64\n')).toBe(false);
+    expect(isSupportedNodeVersion('')).toBe(false);
     expect(isSupportedNodeVersion('node')).toBe(false);
+    expect(isSupportedNodeVersion('v22')).toBe(false);
+  });
+
+  it('asks for the Node the bundled server is built for', () => {
+    const build = readFileSync(path.join(__dirname, '..', 'esbuild.mjs'), 'utf8');
+    const target = /const mcpConfig = \{[^}]*?\btarget: '([^']+)'/.exec(build)?.[1];
+    expect(target).toBe(`node${MIN_NODE_MAJOR}`);
   });
 });
 

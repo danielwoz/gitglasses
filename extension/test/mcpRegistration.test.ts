@@ -175,8 +175,12 @@ describe('VS Code registration', () => {
     first.state.runtime = undefined;
     const registration = registerMcpServer(first.host);
     expect(await noRuntime.registered[0].provider.provideMcpServerDefinitions()).toEqual([]);
-    expect(registration.status()).toMatchObject({ state: 'unavailable', host: 'vscode' });
-    expect(first.state.logs.join('\n')).toContain('node 18 or newer on PATH');
+    expect(registration.status()).toEqual({
+      state: 'unavailable',
+      host: 'vscode',
+      reason: 'no Node.js 20 or newer to start it with',
+    });
+    expect(first.state.logs.join('\n')).toContain('it needs Node 20 or newer');
 
     const noScript = vscodeApi();
     const second = setup(noScript.api, { cliPath: undefined });
@@ -438,9 +442,11 @@ describe('Home view status', () => {
     );
     expect(mcpStatusSummary({ state: 'noHost' }, []).description).toBe('add it to your agent');
     expect(
-      mcpStatusSummary({ state: 'unavailable', reason: 'no Node.js runtime to start it with' }, [])
-        .detail,
-    ).toBe('Not available: no Node.js runtime to start it with');
+      mcpStatusSummary(
+        { state: 'unavailable', reason: 'no Node.js 20 or newer to start it with' },
+        [],
+      ).detail,
+    ).toBe('Not available: no Node.js 20 or newer to start it with');
   });
 });
 
@@ -482,8 +488,35 @@ describe('resolveNodeRuntime', () => {
     ).toEqual({ command: '/usr/bin/node', electron: false });
   });
 
+  it("passes over an editor's own Node that is older than the server needs", async () => {
+    // Electron 28, which some forks of VS Code still embed.
+    const { run, calls } = runner({
+      '/opt/editor/code': 'v18.18.2\n',
+      '/usr/bin/node': 'v22.12.0',
+    });
+    expect(
+      await resolveNodeRuntime({
+        ...base,
+        execPath: '/opt/editor/code',
+        electron: true,
+        run,
+        isFile: (candidate) => candidate === '/usr/bin/node',
+      }),
+    ).toEqual({ command: '/usr/bin/node', electron: false });
+    expect(calls.map((call) => call.command)).toEqual(['/opt/editor/code', '/usr/bin/node']);
+    expect(
+      await resolveNodeRuntime({
+        ...base,
+        execPath: '/opt/editor/code',
+        electron: true,
+        run,
+        isFile: () => false,
+      }),
+    ).toBeUndefined();
+  });
+
   it('finds no runtime when node on PATH is too old or missing', async () => {
-    const { run } = runner({ '/usr/bin/node': 'v16.20.0' });
+    const { run } = runner({ '/usr/bin/node': 'v18.20.8' });
     expect(
       await resolveNodeRuntime({
         ...base,
@@ -511,9 +544,26 @@ describe('resolveNodeRuntime', () => {
         ...base,
         execPath: '/srv/vscode-server/node',
         electron: false,
+        nodeVersion: 'v20.9.0',
         run,
       }),
     ).toEqual({ command: '/srv/vscode-server/node', electron: false });
     expect(calls).toEqual([]);
+  });
+
+  it("looks on PATH when a remote extension host's own Node is too old", async () => {
+    const { run, calls } = runner({ '/usr/bin/node': 'v22.12.0' });
+    const remote = {
+      ...base,
+      execPath: '/srv/server/node',
+      electron: false,
+      nodeVersion: 'v18.19.1',
+      run,
+    };
+    expect(
+      await resolveNodeRuntime({ ...remote, isFile: (candidate) => candidate === '/usr/bin/node' }),
+    ).toEqual({ command: '/usr/bin/node', electron: false });
+    expect(calls.map((call) => call.command)).toEqual(['/usr/bin/node']);
+    expect(await resolveNodeRuntime({ ...remote, isFile: () => false })).toBeUndefined();
   });
 });
