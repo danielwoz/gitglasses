@@ -8,6 +8,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Typings follow the oldest runtime the code supports, so they move by hand
+    # with it: @types/vscode with engines.vscode (vsce refuses a newer one),
+    # @types/node with the Node of that VS Code (1.90 runs Node 20).
+    ignore:
+      - dependency-name: '@types/vscode'
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       development-dependencies:
         dependency-type: development

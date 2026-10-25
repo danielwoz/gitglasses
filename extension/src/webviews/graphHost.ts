@@ -21,12 +21,15 @@ import {
   loadWipView,
   openAllChanges,
   openFileDiff,
+  provenanceMark,
 } from '../commitDetails/commitViews';
+import type { ProvenanceService } from '../provenance/provenanceService';
 import type {
   DetailsTarget,
   DetailsView,
   GraphViewState,
   HostToWebviewMessage,
+  ProvenanceMark,
   WebviewToHostMessage,
 } from '../../webviews-src/graph/ipc';
 import { renderWebviewHtml } from './webviewHtml';
@@ -63,6 +66,9 @@ export interface GraphHostDeps {
   onDidReload: vscode.Event<void>;
   openRebase(upstream: string): void | Promise<void>;
   log(line: string): void;
+  /** What commits declare about who wrote them, for the badge, the filter
+   *  and the details pane. */
+  provenance?: ProvenanceService;
 }
 
 export class GraphWebviewHost implements vscode.Disposable {
@@ -162,6 +168,13 @@ export class GraphWebviewHost implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('gitglasses.graph.maxLanes')) void this.postSettings();
       }),
+      ...(this.deps.provenance
+        ? [
+            this.deps.provenance.onDidChangeEnabled(() => {
+              void this.postSettings().then(() => this.postProvenance([...this.kinds.keys()]));
+            }),
+          ]
+        : []),
       this.deps.engine.onDidChangeCapabilities(() => {
         void this.postSettings();
         if (!this.repo) {
@@ -262,6 +275,7 @@ export class GraphWebviewHost implements vscode.Disposable {
       maxLanes: this.maxLanes(),
       filter: this.filter,
       restore: this.restorable,
+      provenance: this.deps.provenance?.enabled() === true,
     });
     await Promise.all([this.fetchFirstPage(generation), this.postBranches()]);
   }
@@ -297,6 +311,7 @@ export class GraphWebviewHost implements vscode.Disposable {
       type: 'settings',
       maxLanes: this.maxLanes(),
       canMutate: this.canMutate(),
+      provenance: this.deps.provenance?.enabled() === true,
     });
   }
 
@@ -427,6 +442,25 @@ export class GraphWebviewHost implements vscode.Disposable {
 
   private remember(rows: readonly GraphRow[]): void {
     for (const row of rows) this.kinds.set(row.sha, row.kind);
+    void this.postProvenance(rows.map((row) => row.sha));
+  }
+
+  /** Sends what the commits among `shas` declare about who wrote them. */
+  private async postProvenance(shas: readonly string[]): Promise<void> {
+    const provenance = this.deps.provenance;
+    const repo = this.repo;
+    if (!provenance?.enabled() || !repo) return;
+    const commits = shas.filter((sha) => this.kinds.get(sha) === 'commit');
+    if (commits.length === 0) return;
+    try {
+      const found = await provenance.lookup(repo.repoId, commits);
+      if (repo !== this.repo) return;
+      const marks: Record<string, ProvenanceMark | null> = {};
+      for (const sha of commits) marks[sha] = provenanceMark(found.get(sha)) ?? null;
+      await this.post({ type: 'provenance', marks });
+    } catch (error) {
+      this.deps.log(`commit graph: reading declared provenance failed: ${errorMessage(error)}`);
+    }
   }
 
   private async fetchFirstPage(generation: number): Promise<void> {
@@ -595,7 +629,7 @@ export class GraphWebviewHost implements vscode.Disposable {
         return loadCompareView(engine, repoId, target.base, target.head);
       case 'commit': {
         if (this.kinds.get(target.sha) !== 'stash')
-          return loadCommitView(engine, repoId, target.sha);
+          return loadCommitView(engine, repoId, target.sha, undefined, this.deps.provenance);
         const { entries } = await engine.request('stash/list', { repoId });
         const index = entries.find((entry) => entry.sha === target.sha)?.index;
         return loadCommitView(engine, repoId, target.sha, index);

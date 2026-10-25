@@ -165,6 +165,27 @@ export const FileHistoryEntry = Type.Object(
   strict,
 );
 
+/** One commit in the history of a line range: a FileHistoryEntry whose
+ *  counts and path come from the diff `git log -L` shows for the range, plus
+ *  that diff when the request asks for it. */
+export const LineHistoryEntry = Type.Object(
+  {
+    ...FileHistoryEntry.properties,
+    patch: Type.Optional(
+      Type.String({
+        description:
+          "The commit's diff of the followed range, as `git log -L` prints it (diff --git, ---/+++ headers, hunks), newline-terminated. Present when the request sets `patch`.",
+      }),
+    ),
+    patchTruncated: Type.Optional(
+      Type.Literal(true, {
+        description: '`patch` was cut at a line boundary because the diff exceeded 256 KiB.',
+      }),
+    ),
+  },
+  strict,
+);
+
 export const FileChangeStatus = Type.Union([
   Type.Literal('M'),
   Type.Literal('A'),
@@ -287,6 +308,81 @@ export const CommitDetails = Type.Object(
     truncated: Type.Boolean({
       description: 'More files changed than `files` lists.',
     }),
+  },
+  strict,
+);
+
+/** One statement of who wrote a commit, as the commit's own metadata or a
+ *  git-ai note makes it. Declared, never inferred from the code. */
+export const ProvenanceDeclaration = Type.Object(
+  {
+    source: Type.Union([Type.Literal('notes'), Type.Literal('trailer'), Type.Literal('identity')], {
+      description:
+        "Where it was read, in priority order: 'notes' a git-ai authorship log in refs/notes/ai or a remote's copy of it under refs/notes/ai-remote/, 'trailer' a message trailer (Co-authored-by, Assisted-by or Generated-by naming an AI, an agent's session link), 'identity' an author or committer that is a known agent identity.",
+    }),
+    kind: Type.Union([Type.Literal('agent'), Type.Literal('human')], {
+      description: "'human' only for the known humans a git-ai note names.",
+    }),
+    name: Type.String({
+      description:
+        "The agent's display name ('Claude', 'GitHub Copilot', or the tool as the declaration names it), or the human's identity.",
+    }),
+    model: Type.Optional(Type.String({ description: 'The model, when the declaration names one.' })),
+    via: Type.String({
+      description:
+        "What carried it: the trailer key as written, 'author' or 'committer', or the notes ref.",
+    }),
+    value: Type.String({
+      description:
+        'The declaration as written: the trailer value, the "Name <email>" identity, or the session id the note names.',
+    }),
+    url: Type.Optional(
+      Type.String({
+        description:
+          'An http(s) link to the agent session. Clients render it as a link and never fetch it.',
+      }),
+    ),
+  },
+  strict,
+);
+
+/** What one commit declares about who wrote it. */
+export const CommitProvenance = Type.Object(
+  {
+    declared: Type.Union([Type.Literal('agent'), Type.Literal('human'), Type.Literal('unknown')], {
+      description:
+        "'agent' when any declaration names an AI agent, 'human' when the only declarations are known humans in a git-ai note, 'unknown' when the commit declares nothing.",
+    }),
+    declarations: Type.Array(ProvenanceDeclaration, {
+      description:
+        "Highest priority source first: the note's, then the trailers' in message order, then the author's and committer's. At most 16.",
+    }),
+    note: Type.Optional(
+      Type.Object(
+        {
+          read: Type.Boolean({
+            description:
+              'The note is a git-ai authorship log this engine reads (authorship/3.x). False for another schema version, a malformed or oversized note, or one whose content is missing; nothing is then taken from it.',
+          }),
+          ref: Type.String({
+            description:
+              "The notes ref the note was read from: refs/notes/ai, or a remote's copy such as refs/notes/ai-remote/origin when only that has one.",
+          }),
+          schemaVersion: Type.Optional(Type.String()),
+          missing: Type.Optional(
+            Type.Boolean({
+              description:
+                "True when the note's content is not in the object database, as in a partial clone. The engine does not remember this, so asking again once the content is fetched reads the note.",
+            }),
+          ),
+        },
+        {
+          ...strict,
+          description:
+            "Present when refs/notes/ai, or a remote's copy of it, attaches a note to the commit.",
+        },
+      ),
+    ),
   },
   strict,
 );
@@ -494,6 +590,128 @@ export const PatchFileChange = Type.Object(
       Type.Literal(true, {
         description: 'The patch creates the file executable or sets its executable bit.',
       }),
+    ),
+  },
+  strict,
+);
+
+/** One worktree as worktree/list reports it. */
+export const WorktreeEntry = Type.Object(
+  {
+    path: Type.String(),
+    branch: Type.Optional(Type.String()),
+    /** Empty for a bare worktree, which has no checked-out commit. */
+    sha: Type.String(),
+    bare: Type.Boolean(),
+    locked: Type.Boolean(),
+    prunable: Type.Boolean({
+      description:
+        "`git worktree prune` would drop the entry: the worktree's directory or its .git file is gone and the entry is not locked.",
+    }),
+    missing: Type.Boolean({
+      description:
+        "The worktree's directory does not exist. git keeps a locked entry even then (a worktree on removable media, say), so this can be true while prunable is false.",
+    }),
+    current: Type.Boolean({
+      description: 'The worktree this repoId was opened from.',
+    }),
+  },
+  strict,
+);
+
+/** Why a worktree/status merge check has no answer. */
+export const MergeSkipReason = Type.Union(
+  [
+    /** Restricted Mode: the engine runs no git. */
+    Type.Literal('restricted'),
+    /** This engine build has no git CLI. */
+    Type.Literal('noGitCli'),
+    /** The git on PATH is older than 2.38, or its version is unreadable. */
+    Type.Literal('gitVersion'),
+    /** A partial clone with a git older than 2.45, which would fetch missing
+     *  objects from the network to answer. */
+    Type.Literal('partialClone'),
+    /** git ran and failed (unrelated histories, a missing object); the
+     *  engine log has git's message. */
+    Type.Literal('failed'),
+  ],
+  { description: 'Why mergesCleanly is null.' },
+);
+
+/** What worktree/status reports about one worktree. */
+export const WorktreeStatus = Type.Object(
+  {
+    /** The path the request named. */
+    path: Type.String(),
+    dirty: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description:
+          'Paths with uncommitted changes (staged, unstaged, untracked or conflicted), each counted once. Absent for a bare repository.',
+      }),
+    ),
+    lastActivity: Type.Optional(
+      Type.Integer({
+        description:
+          'Seconds since the Unix epoch of the newest of the index file\'s modification and the latest HEAD reflog entry: when someone last staged, committed, checked out or reset in the worktree. Absent when neither exists.',
+      }),
+    ),
+    upstream: Type.Optional(
+      Type.Object(
+        {
+          /** Short name, e.g. origin/feature. */
+          ref: Type.String(),
+          /** Commits on the worktree's branch the upstream lacks. */
+          ahead: Count,
+          /** Commits on the upstream the branch lacks. */
+          behind: Count,
+        },
+        strict,
+      ),
+    ),
+    base: Type.Optional(
+      Type.Object(
+        {
+          /** The revision compared against, as requested or chosen. */
+          ref: Type.String(),
+          sha: Sha,
+          /** Commits on the worktree's HEAD that the base lacks. */
+          ahead: Count,
+          /** Commits on the base that the worktree's HEAD lacks. */
+          behind: Count,
+          mergeBase: Type.Optional(Sha),
+          mergesCleanly: Type.Union([Type.Boolean(), Type.Null()], {
+            description:
+              "Whether merging the worktree's HEAD into the base would apply without conflicts, as `git merge-tree --write-tree` decides it (nothing is checked out and the repository is left unchanged). True without running git when there is nothing to merge or the merge is a fast-forward; null when the check could not run (see mergeSkipped). Uncommitted changes are not part of it.",
+          }),
+          mergeSkipped: Type.Optional(MergeSkipReason),
+          conflicts: Type.Optional(
+            Type.Array(Type.String(), {
+              maxItems: 50,
+              description: 'Paths the merge would conflict in, at most 50. Only when mergesCleanly is false.',
+            }),
+          ),
+        },
+        strict,
+      ),
+    ),
+    agent: Type.Optional(
+      Type.Object(
+        {
+          /** Claude Code, Cursor, Codex, Copilot, VS Code agent, Aider, Gemini,
+           *  Jules, or a name an Assisted-by / Generated-by trailer gives. */
+          name: Type.String(),
+          evidence: Type.Union([
+            /** Where the agent creates its worktrees. */
+            Type.Literal('path'),
+            /** The branch name the agent creates. */
+            Type.Literal('branch'),
+            /** A trailer on a commit ahead of the base. */
+            Type.Literal('trailer'),
+          ]),
+        },
+        { ...strict, description: 'The coding agent that appears to work in this worktree.' },
+      ),
     ),
   },
   strict,

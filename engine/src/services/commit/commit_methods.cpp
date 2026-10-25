@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -12,6 +14,9 @@
 #include "core/git2.h"
 #include "core/git2_json.h"
 #include "exec/git_process.h"
+#include "services/commit/provenance.h"
+#include "services/notes/git_ai_note.h"
+#include "services/notes/notes_store.h"
 #include "services/params.h"
 #include "services/status/diff_common.h"
 
@@ -93,6 +98,72 @@ Result<rpc::Json> refsJson(const core::Repo& repo, const std::string& sha) {
   return out;
 }
 
+// The message's trailers as (key, value) pairs.
+std::vector<std::pair<std::string, std::string>> trailerPairs(const char* message) {
+  TrailerArray trailers;
+  std::vector<std::pair<std::string, std::string>> out;
+  if (git_message_trailers(&trailers.array, message ? message : "") != 0) return out;
+  for (std::size_t i = 0; i < trailers.array.count; ++i) {
+    const git_message_trailer& trailer = trailers.array.trailers[i];
+    out.emplace_back(trailer.key ? trailer.key : "", trailer.value ? trailer.value : "");
+  }
+  return out;
+}
+
+// What one commit declares about its provenance, as commit/provenance
+// reports it. `sources` are the git-ai notes refs that exist, in priority
+// order (notes::notesSources): the first that holds a readable note for the
+// commit is used, and failing that the first that holds one at all.
+rpc::Json commitProvenance(const core::Repo& repo, ServiceContext& context,
+                           const std::string& repoId,
+                           const std::vector<notes::NotesRefTip>& sources, git_commit* commit,
+                           const std::string& sha) {
+  rpc::Json entry = rpc::Json::object();
+  std::vector<provenance::Declaration> fromNotes;
+  std::optional<std::pair<notes::Note, std::string>> found;
+  for (const notes::NotesRefTip& source : sources) {
+    notes::Note note =
+        notes::readNote(repo, context.notesCache, repoId, source.ref, source.tip, sha);
+    if (note.state == notes::NoteState::Absent) continue;
+    const bool present = note.state == notes::NoteState::Present;
+    if (present || !found) found.emplace(std::move(note), source.ref);
+    if (present) break;
+  }
+  if (found) {
+    const auto& [note, ref] = *found;
+    notes::GitAiNote parsed;
+    if (note.state == notes::NoteState::Present) parsed = notes::parseGitAiNote(note.text);
+    rpc::Json summary = {{"read", parsed.status == notes::GitAiNoteStatus::Read}, {"ref", ref}};
+    if (!parsed.schemaVersion.empty())
+      summary["schemaVersion"] = parsed.schemaVersion.substr(0, 64);
+    if (note.state == notes::NoteState::Unreadable) summary["missing"] = true;
+    entry["note"] = std::move(summary);
+    fromNotes = provenance::noteDeclarations(parsed, ref);
+  }
+  const git_signature* author = git_commit_author(commit);
+  const git_signature* committer = git_commit_committer(commit);
+  std::vector<provenance::Declaration> fromIdentities;
+  for (const auto& [signature, role] :
+       {std::pair{author, provenance::kAuthor}, std::pair{committer, provenance::kCommitter}}) {
+    if (!signature) continue;
+    for (auto& declaration :
+         provenance::identityDeclarations(signature->name ? signature->name : "",
+                                          signature->email ? signature->email : "", role)) {
+      fromIdentities.push_back(std::move(declaration));
+    }
+  }
+  const auto declarations =
+      provenance::combine(std::move(fromNotes),
+                          provenance::trailerDeclarations(trailerPairs(git_commit_message(commit))),
+                          std::move(fromIdentities));
+  entry["declared"] = provenance::declaredKind(declarations);
+  rpc::Json list = rpc::Json::array();
+  for (const auto& declaration : declarations)
+    list.push_back(provenance::declarationJson(declaration));
+  entry["declarations"] = std::move(list);
+  return entry;
+}
+
 }  // namespace
 
 void registerCommitMethods(rpc::Dispatcher& dispatcher, ServiceContext& context) {
@@ -162,6 +233,42 @@ void registerCommitMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
                 {"files", std::move(files)},
                 {"stats", {{"files", total}, {"additions", additions}, {"deletions", deletions}}},
                 {"truncated", total > changes.value().size()}};
+      },
+      rpc::Mode::Concurrent);
+
+  // What each commit in `shas` declares about who wrote it: a git-ai note in
+  // refs/notes/ai (or, failing that, in a remote's copy under
+  // refs/notes/ai-remote/), its trailers, and an author or committer that is
+  // a known agent identity. Commits the repository does not have are left
+  // out.
+  dispatcher.method(
+      "commit/provenance",
+      [&context](const rpc::Json& params, const CancelToken& token,
+                 const rpc::NotifyFn&) -> rpc::Json {
+        const std::vector<std::string> shas =
+            notes::requireCommitShas(params, "shas", kMaxProvenanceShas);
+        const std::string repoId = params.value("repoId", "");
+        auto repo = context.registry.open(repoId);
+        if (!repo) throw rpc::HandlerError{{repo.error()}};
+
+        const std::vector<notes::NotesRefTip> sources =
+            notes::notesSources(repo.value(), std::string(notes::kGitAiNotesRef));
+
+        rpc::Json commits = rpc::Json::object();
+        std::set<std::string> done;
+        for (const std::string& sha : shas) {
+          token.throwIfCancelled();
+          if (!done.insert(sha).second) continue;
+          git_oid oid;
+          git_commit* raw = nullptr;
+          if (git_oid_fromstr(&oid, sha.c_str()) != 0 ||
+              git_commit_lookup(&raw, repo.value().raw(), &oid) != 0) {
+            continue;
+          }
+          core::CommitPtr commit(raw);
+          commits[sha] = commitProvenance(repo.value(), context, repoId, sources, raw, sha);
+        }
+        return {{"commits", std::move(commits)}};
       },
       rpc::Mode::Concurrent);
 }

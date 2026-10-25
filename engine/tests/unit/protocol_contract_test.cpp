@@ -374,15 +374,62 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
                  {{"repoId", repoId}, {"path", "src/main.txt"}, {"limit", 10}});
   checkedRequest(session, 10, "history/line",
                  {{"repoId", repoId}, {"path", "src/main.txt"}, {"startLine", 1}, {"endLine", 2}});
+  Json lineHistory = checkedRequest(session, 90, "history/line",
+                                    {{"repoId", repoId},
+                                     {"path", "src/main.txt"},
+                                     {"startLine", 1},
+                                     {"endLine", 1},
+                                     {"rev", "HEAD"},
+                                     {"limit", 5},
+                                     {"patch", true}});
+  ASSERT_FALSE(lineHistory.value("entries", Json::array()).empty());
+  EXPECT_TRUE(lineHistory["entries"][0].contains("patch"));
   checkedRequest(session, 11, "diff/commit",
                  {{"repoId", repoId}, {"sha", log["commits"][0]["sha"]}});
   checkedRequest(session, 12, "diff/refs",
                  {{"repoId", repoId}, {"base", "feature"}, {"head", "main"}});
+  Json compared = checkedRequest(session, 12, "log/compare",
+                                 {{"repoId", repoId}, {"base", "feature"}, {"head", "main"}});
+  EXPECT_TRUE(compared.contains("mergeBase"));
   Json hunks =
       checkedRequest(session, 13, "diff/fileHunks", {{"repoId", repoId}, {"path", "src/main.txt"}});
   EXPECT_FALSE(hunks.value("hunks", Json::array()).empty());
   checkedRequest(session, 14, "stash/list", {{"repoId", repoId}});
   checkedRequest(session, 15, "worktree/list", {{"repoId", repoId}});
+  {
+    // Two linked worktrees whose commits conflict, so every part of
+    // worktree/status is filled in, conflicts included.
+    const std::string prefix = fixture.root().string() + "-contract-";
+    struct Cleanup {
+      std::string prefix;
+      ~Cleanup() {
+        std::error_code ec;
+        std::filesystem::remove_all(prefix + "wt", ec);
+        std::filesystem::remove_all(prefix + "base", ec);
+      }
+    } cleanup{prefix};
+    for (const std::string name : {"wt", "base"}) {
+      const std::filesystem::path dir = prefix + name;
+      fixture.run("git worktree add -q -b contract-" + name + " \"" + dir.string() + "\" HEAD");
+      {
+        std::ofstream out(dir / "src" / "main.txt", std::ios::binary);
+        out << "one\n" << name << "\n";
+      }
+      gg::testing::runGit(dir, "git commit -q -am " + name);
+    }
+    Json worktrees = checkedRequest(session, 15, "worktree/list", {{"repoId", repoId}});
+    EXPECT_EQ(worktrees.value("worktrees", Json::array()).size(), 3u);
+    Json status =
+        checkedRequest(session, 15, "worktree/status",
+                       {{"repoId", repoId}, {"path", prefix + "wt"}, {"base", "contract-base"}});
+    // The merge check, and with it the conflict list, needs git 2.38.
+    if (gg::testing::gitAtLeast(fixture.root(), 2, 38)) {
+      EXPECT_EQ(status["base"].value("conflicts", Json::array()), Json::array({"src/main.txt"}))
+          << status.dump();
+    }
+    checkedRequest(session, 15, "worktree/status",
+                   {{"repoId", repoId}, {"path", fixture.root().string()}});
+  }
   checkedRequest(session, 16, "remote/list", {{"repoId", repoId}});
   checkedRequest(session, 17, "repo/list", Json::object());
   checkedRequest(session, 18, "rebase/preview", {{"repoId", repoId}, {"upstream", "feature"}});
@@ -411,6 +458,21 @@ TEST(ProtocolContract, EngineResponsesMatchSchemas) {
   EXPECT_FALSE(details.value("files", Json::array()).empty());
   checkedRequest(session, 23, "commit/details",
                  {{"repoId", repoId}, {"sha", log["commits"].back()["sha"]}});
+
+  const std::string newest = log["commits"][0]["sha"];
+  fixture.writeFile(
+      ".git/GG_CONTRACT_NOTE",
+      "src/main.txt\n  abcd1234abcd1234 1-2\n---\n"
+      "{\"schema_version\": \"authorship/3.0.0\", \"prompts\": {\"abcd1234abcd1234\": "
+      "{\"agent_id\": {\"tool\": \"claude\", \"id\": \"c1\", \"model\": \"m\"}, "
+      "\"messages_url\": \"https://example.invalid/c1\"}}}\n");
+  fixture.run("git notes --ref=ai add -F .git/GG_CONTRACT_NOTE " + newest);
+  Json provenance =
+      checkedRequest(session, 24, "commit/provenance", {{"repoId", repoId}, {"shas", {newest}}});
+  EXPECT_EQ(provenance["commits"][newest].value("declared", ""), "agent");
+  Json notes = checkedRequest(session, 24, "notes/read",
+                              {{"repoId", repoId}, {"shas", {newest}}, {"ref", "refs/notes/ai"}});
+  EXPECT_TRUE(notes.value("exists", false));
 
   checkedRequest(session, 24, "tag/create",
                  {{"repoId", repoId}, {"name", "v2.0"}, {"message", "annotated"}});
@@ -567,6 +629,16 @@ TEST(ProtocolContract, EngineRejectsParamsTheSchemaForbids) {
   reject("search/commits", {{"repoId", repoId}, {"streamId", ""}}, "empty streamId");
   reject("diff/commit", {{"repoId", repoId}, {"sha", ""}}, "empty sha");
   reject("commit/details", {{"repoId", repoId}, {"sha", ""}}, "empty commit/details sha");
+
+  // Provenance and notes take full commit shas, and notes refs only.
+  reject("commit/provenance", {{"repoId", repoId}, {"shas", Json::array()}}, "empty shas");
+  reject("commit/provenance", {{"repoId", repoId}, {"shas", {"HEAD"}}}, "revision for a sha");
+  reject("notes/read", {{"repoId", repoId}, {"shas", {"abc123"}}}, "abbreviated sha");
+  reject("notes/read",
+         {{"repoId", repoId}, {"shas", {std::string(40, 'a')}}, {"ref", "refs/heads/main"}},
+         "ref outside refs/notes");
+  reject("notes/addFetchRefspec", {{"repoId", repoId}, {"remote", "--upload-pack=x"}},
+         "option-like remote");
 
   // Required members the engine will not guess.
   reject("stash/apply", {{"repoId", repoId}, {"index", 0}}, "missing pop");

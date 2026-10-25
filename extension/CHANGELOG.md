@@ -5,6 +5,92 @@ All notable changes to GitGlasses are listed here. The format follows
 even minor version (0.2.x) are stable; odd minor versions (0.3.x) ship on the
 pre-release channel.
 
+## [0.4.0]
+
+### Agents over MCP
+
+- The MCP server now ships inside GitGlasses. VS Code 1.101 and newer and
+  Cursor hand it to their agents with no setup, running on the editor's own
+  Node with the bundled engine. In a trusted workspace git may run in the
+  workspace's folders; in Restricted Mode it runs nowhere. Turn it off with
+  `gitglasses.mcp.enabled`.
+- **Add MCP Server to Claude Code**, **Add MCP Server to Codex** (shows the
+  change to `~/.codex/config.toml` before writing it, and keeps a symlinked
+  config a link) and **Copy MCP Server Config** cover other agents. The Home
+  view shows where the server is registered.
+- New tools: `git_compare` (a branch against another, measured from their
+  merge base), `git_worktrees`, `git_provenance` and `git_line_story`.
+- `git_log_search` finds commits by code change (`git log -S`/`-G`), path and
+  date; `git_file_history` can follow a range of lines; `create_patch` takes
+  any revision after `commit:`; `list_my_prs` also covers GitLab, Bitbucket
+  and Azure DevOps.
+- The server takes `--read <dir>` for clients that share no folders. In a
+  partial clone read without git, line counts the clone can't know are shown
+  as unknown instead of +0 -0.
+- Releases also pack per-platform engine packages (`@gitglasses/engine-*`),
+  so `gitglasses-mcp` from npm needs no `GITGLASSES_ENGINE`.
+
+### Line Story
+
+- **Why this line?**, the first link in the blame hover and also in the
+  editor's context menu, opens a Line Story beside the editor: the line's
+  blame, its commit in full, the pull request that merged it (state, merge
+  date, review and comment counts, the start of its description), the issues
+  they name, and the line's earlier versions, each with its diff.
+- Pull requests come from GitHub, GitHub Enterprise Server and GitLab once
+  connected. Without a connection the panel links the pull request the
+  commit message names; for forges that can't look pull requests up by commit
+  it says so. In Restricted Mode it shows the blame and the commit.
+- Show Line History for Selection shows each commit's real +/− counts for the
+  selected lines and follows renames.
+
+### Declared AI provenance
+
+- Commits that declare an AI agent took part show an **AI** badge in the
+  Commit Graph, a line in the blame hover, a Provenance row in Commit Details
+  and a mark in the Commits and File History views. A graph filter dims all
+  but agent-declared commits, or all but the rest.
+- Only declarations are read: git-ai notes, `Co-authored-by` trailers naming
+  a known agent, `Assisted-by` and `Generated-by` trailers that name an AI,
+  session-link trailers, and known agent identities as author or committer.
+  Nothing is inferred from the code. `gitglasses.provenance.enabled` hides it
+  everywhere.
+- **Fetch git-ai Notes with Every Fetch…** brings a remote's notes into
+  `refs/notes/ai-remote/<remote>`, so your own `refs/notes/ai` is never
+  overwritten.
+
+### Worktrees
+
+- Each worktree shows its uncommitted changes, commits ahead of and behind a
+  base branch, whether it would merge cleanly (`git merge-tree`, git 2.38 or
+  later, without touching any checkout) and the coding tool working in it.
+  Statuses follow git activity, refresh every minute while the view is open
+  and when you return to the window.
+- New actions: **Compare with Base** opens everything a worktree changed,
+  uncommitted and untracked work included, in one diff; **Remove Worktree and
+  Branch…** lists what goes, including commits that would be lost, in one
+  confirmation; **Choose Base for Worktrees…** picks the branch to compare
+  with.
+- The Worktrees view works in Restricted Mode, reading worktrees through
+  libgit2 the way git does, with the merge check skipped.
+
+### Fixed
+
+- Compare with Working Tree in the Branches view shows untracked and newly
+  added files as added instead of failing to load them.
+- Launchpad: your own pull requests with changes requested appear under
+  Changes Requested on connections stored with only a token, such as GitHub
+  Enterprise and Bitbucket Data Center.
+- Commit Graph details and Commit Details show each trailer once, in the
+  trailers list; the blame hover puts each trailer on its own line.
+- Visual File History shortens long author names with an ellipsis and shows
+  the full name on hover.
+
+### Other
+
+- **Select Repository** takes a repository's root path as its argument, so a
+  keybinding can switch straight to one.
+
 ## [0.3.0]
 
 ### Commit Graph

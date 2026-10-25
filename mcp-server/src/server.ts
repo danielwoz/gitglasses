@@ -17,13 +17,7 @@ import type {
   RepoInfo,
 } from '@gitglasses/protocol';
 import { ErrorCodes, patchEnvelopeError } from '@gitglasses/protocol';
-import {
-  GitHubProvider,
-  createGitHubEnterpriseProvider,
-  groupItems,
-  type FetchLike,
-  type HostingProvider,
-} from '@gitglasses/integrations';
+import type { FetchLike } from '@gitglasses/integrations';
 import type { EngineClient } from '@gitglasses/rpc';
 import {
   binaryPathsInPatch,
@@ -35,7 +29,7 @@ import {
   formatDiff,
   formatGraph,
   formatHistory,
-  formatLaunchpad,
+  formatLineHistory,
   formatPatchEnvelope,
   formatRefs,
   formatStatus,
@@ -44,34 +38,30 @@ import {
   truncateText,
   type DiffFileEntry,
 } from './format.js';
+import {
+  COMPARE_DESCRIPTION,
+  compareInputSchema,
+  compareRevisions,
+  type CompareArgs,
+} from './tools/compare.js';
+import {
+  HOST_SETTINGS,
+  configuredGitHubHost,
+  configuredHosts,
+  fetchMyPullRequests,
+  formatHostResults,
+} from './tools/myPrs.js';
 import { SERVER_VERSION } from './version.js';
+import { collectProvenance, formatProvenance } from './tools/provenance.js';
+import { collectWorktrees, formatWorktrees } from './tools/worktrees.js';
+import {
+  gitHubProviders,
+  gitLineStory,
+  registerLineStoryTool,
+  type LineStoryArgs,
+} from './tools/lineStory.js';
 
-/**
- * A bare hostname, optionally with a port: letters, digits, hyphens and dots.
- *
- * Anything that could redirect an authenticated request elsewhere is rejected:
- * userinfo ("api.github.com@attacker.example" reads as GitHub but resolves to
- * the attacker), a scheme, a path, or whitespace.
- */
-export function isPlainHostname(value: string): boolean {
-  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i.test(
-    value,
-  );
-}
-
-/**
- * The GitHub host this server talks to, from operator configuration only.
- * The host pairs with the token, so both come from the environment and
- * neither is something a caller can name.
- */
-export function configuredGitHubHost(env: Record<string, string | undefined>): string | undefined {
-  const host = env.GITGLASSES_GITHUB_HOST?.trim();
-  if (!host || host === 'github.com') return undefined;
-  if (!isPlainHostname(host)) {
-    throw new Error(`GITGLASSES_GITHUB_HOST is not a plain hostname: ${JSON.stringify(host)}`);
-  }
-  return host;
-}
+export { configuredGitHubHost, isPlainHostname } from './tools/myPrs.js';
 
 /**
  * The working directory as the workspace root of a client that offers no MCP
@@ -96,13 +86,17 @@ export const ALLOW_ANY = '*';
  * delimited) followed by the directories passed with --allow. The server reads
  * repositories inside these directories and runs git in them with each
  * repository's own configuration. "*" admits every path.
+ *
+ * Each --allow value is one directory taken exactly as given, neither split
+ * nor trimmed, so a directory whose name holds the separator or ends in a
+ * space names that directory and no other.
  */
 export function parseAllowedRoots(
   raw: string | undefined,
   extra: readonly string[] = [],
 ): string[] {
-  return [...(raw ?? '').split(path.delimiter), ...extra]
-    .map((entry) => entry.trim())
+  const listed = (raw ?? '').split(path.delimiter).map((entry) => entry.trim());
+  return [...listed, ...extra]
     .filter((entry) => entry !== '')
     .map((entry) => (entry === ALLOW_ANY ? ALLOW_ANY : canonicalPath(entry)));
 }
@@ -145,6 +139,9 @@ export function isWithinAllowedRoots(target: string, roots: readonly string[]): 
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
   });
 }
+
+/** Most commits one git_file_history call lists. */
+export const MAX_HISTORY_ENTRIES = 500;
 
 /** Blame hunks returned when the caller does not ask for a specific count. */
 export const DEFAULT_BLAME_HUNKS = 200;
@@ -206,6 +203,11 @@ export interface ToolContext {
   /** Directories passed with --allow; merged with GITGLASSES_ALLOWED_ROOTS. */
   allow?: readonly string[];
   /**
+   * Directories passed with --read: served like the client's roots, by the
+   * engine that runs no git, for clients that share no folders.
+   */
+  read?: readonly string[];
+  /**
    * The client's MCP roots as local directories, or undefined when the client
    * offers none. createServer supplies this from the MCP session.
    */
@@ -223,7 +225,9 @@ interface ServedRepo extends RepoInfo {
 
 /** What a tool's refusal in Restricted Mode needs explained. */
 const NEEDS_GIT: Record<string, string> = {
-  git_file_history: 'following a file through renames',
+  git_file_history: 'following a file or its lines through history',
+  git_log_search: 'searching code changes, paths and dates',
+  git_compare: 'rendering the diff',
   create_patch: 'creating a patch',
   apply_patch: 'applying a patch',
   git_commit_show: 'rendering the diff',
@@ -241,15 +245,22 @@ export function createToolHandlers(context: ToolContext) {
   const MAX_REPO_IDS = 64;
 
   const allowedRoots = parseAllowedRoots(env.GITGLASSES_ALLOWED_ROOTS, context.allow);
+  // Like --allow values, each --read value is one directory, taken whole.
+  const readRoots = (context.read ?? [])
+    .filter((entry) => entry !== '')
+    .map((entry) => canonicalPath(entry));
+  const lineStoryProviders = gitHubProviders(context.fetchFn);
 
   /**
-   * The directories served without the operator naming them: the client's
-   * MCP roots, or this process's working directory when the client offers
-   * none (see workingDirectoryRoot). An allow list replaces them entirely.
+   * The directories served without git: those passed with --read, and the
+   * client's MCP roots, or this process's working directory when the client
+   * offers none (see workingDirectoryRoot). An allow list replaces the
+   * client's roots and the working directory, not --read.
    */
   async function workspaceRoots(): Promise<readonly string[]> {
-    if (allowedRoots.length > 0 || !context.restrictedClient) return [];
-    return (await context.clientRoots?.()) ?? workingDirectoryRoot();
+    if (!context.restrictedClient) return [];
+    if (allowedRoots.length > 0) return readRoots;
+    return [...readRoots, ...((await context.clientRoots?.()) ?? workingDirectoryRoot())];
   }
 
   /**
@@ -264,17 +275,20 @@ export function createToolHandlers(context: ToolContext) {
   }
 
   async function outsideRootsError(target: string, repoRoot?: string): Promise<ToolError> {
+    const readable = await workspaceRoots();
     const where =
       allowedRoots.length > 0 || !context.restrictedClient
-        ? `the directories this server was started with (${allowedRoots.join(', ') || 'none'})`
-        : `the client's workspace roots (${(await workspaceRoots()).join(', ') || 'none'})`;
+        ? `the directories this server was started with (${[...allowedRoots, ...readable].join(', ') || 'none'})`
+        : readRoots.length > 0
+          ? `the directories this server was started with and the client's workspace roots (${readable.join(', ')})`
+          : `the client's workspace roots (${readable.join(', ') || 'none'})`;
     const subject =
       repoRoot === undefined
         ? `${target} is outside ${where}`
         : `${target} belongs to the repository at ${repoRoot}, which extends outside ${where}`;
     return new ToolError(
-      `${subject}. Start the server with --allow <dir> or set GITGLASSES_ALLOWED_ROOTS ` +
-        'to read repositories elsewhere.',
+      `${subject}. Start the server with --read <dir> to read repositories elsewhere ` +
+        'without git, or with --allow <dir> or GITGLASSES_ALLOWED_ROOTS to let git run there too.',
     );
   }
 
@@ -349,9 +363,45 @@ export function createToolHandlers(context: ToolContext) {
     return (
       `${tool} needs git for ${purpose}, and this server runs git only in repositories ` +
       'inside the directories it was started with (--allow or GITGLASSES_ALLOWED_ROOTS). ' +
-      `${repoPath} is served from the client's workspace roots without running git, because ` +
-      "git would run programs that the repository's own configuration names."
+      `${repoPath} is read without running git (it is in the client's workspace roots or a ` +
+      "--read directory), because git would run programs that the repository's own " +
+      'configuration names.'
     );
+  }
+
+  /** git_file_history for a range of lines: the commits that changed them. */
+  async function lineHistory(args: {
+    repoPath: string;
+    file: string;
+    cursor?: string;
+    limit: number;
+    startLine?: number;
+    endLine?: number;
+  }): Promise<string> {
+    if (args.startLine === undefined) throw new ToolError('"endLine" needs "startLine"');
+    const startLine = args.startLine;
+    const endLine = args.endLine ?? startLine;
+    if (endLine < startLine) throw new ToolError('"endLine" must not be before "startLine"');
+    if (args.cursor !== undefined) {
+      throw new ToolError(
+        '"cursor" pages the history of a whole file; for a range of lines raise "limit" instead',
+      );
+    }
+    const repo = await repoFor(args.repoPath);
+    const { entries } = await repo.client.request('history/line', {
+      repoId: repo.repoId,
+      path: args.file,
+      startLine,
+      endLine,
+    });
+    const shown = entries.slice(0, args.limit);
+    let rendered = formatLineHistory(args.file, startLine, endLine, shown);
+    if (entries.length > shown.length) {
+      rendered +=
+        `\n\n(${entries.length - shown.length} older commits also changed these lines; ` +
+        `raise "limit" (max ${MAX_HISTORY_ENTRIES}) to list them)`;
+    }
+    return orEmptyRepository(repo, args.repoPath, rendered, entries.length === 0);
   }
 
   /**
@@ -517,18 +567,60 @@ export function createToolHandlers(context: ToolContext) {
       }
     },
 
+    async git_provenance(args: {
+      repoPath: string;
+      file: string;
+      startLine?: number;
+      endLine?: number;
+      maxChars?: number;
+    }): Promise<string> {
+      if (args.endLine !== undefined && args.endLine < (args.startLine ?? 1)) {
+        throw new ToolError(
+          `endLine (${args.endLine}) is before startLine (${args.startLine ?? 1})`,
+        );
+      }
+      const repo = await repoFor(args.repoPath);
+      const report = await collectProvenance(repo.client, repo.repoId, args);
+      const limit = resultChars(args.maxChars);
+      return orEmptyRepository(
+        repo,
+        args.repoPath,
+        truncateText(
+          formatProvenance(report),
+          limit,
+          charLimitHint(limit, 'pass startLine and endLine for a smaller range'),
+        ),
+        report.hunks.length === 0,
+      );
+    },
+
     async git_log_search(args: {
       repoPath: string;
       text?: string;
       author?: string;
       sha?: string;
+      content?: string;
+      regex?: boolean;
+      path?: string;
+      since?: string;
+      until?: string;
       cursor?: string;
       limit: number;
     }): Promise<string> {
+      if (args.regex && args.content === undefined) {
+        throw new ToolError('regex applies to "content"; pass the expression as "content"');
+      }
       const repo = await repoFor(args.repoPath);
       const { client, repoId } = repo;
+      // Code changes, paths and dates are git log's to answer; message text,
+      // author and sha are read straight from the repository.
+      const needsLog =
+        args.content !== undefined ||
+        args.path !== undefined ||
+        args.since !== undefined ||
+        args.until !== undefined;
       const hasQuery =
-        args.text !== undefined || args.author !== undefined || args.sha !== undefined;
+        needsLog || args.text !== undefined || args.author !== undefined || args.sha !== undefined;
       if (!hasQuery) {
         const page = await client.request('log/commits', {
           repoId,
@@ -543,7 +635,12 @@ export function createToolHandlers(context: ToolContext) {
       }
       if (args.cursor !== undefined) {
         throw new ToolError(
-          'cursor only pages the unfiltered log; with text, author or sha, raise "limit" (max 500) or narrow the query',
+          'cursor only pages the unfiltered log; with filters, raise "limit" (max 500) or narrow the query',
+        );
+      }
+      if (needsLog && args.sha !== undefined) {
+        throw new ToolError(
+          'sha cannot be combined with content, path, since or until; call git_commit_show for one commit',
         );
       }
       const streamId = randomUUID();
@@ -552,17 +649,33 @@ export function createToolHandlers(context: ToolContext) {
         if (params.streamId === streamId) matches.push(...params.matches);
       });
       try {
-        const result = await client.request('search/commits', {
-          repoId,
-          streamId,
-          limit: args.limit,
-          query: { text: args.text, author: args.author, sha: args.sha },
-        });
+        const result = needsLog
+          ? await client.request('search/log', {
+              repoId,
+              streamId,
+              limit: args.limit,
+              query: {
+                text: args.text,
+                author: args.author,
+                content: args.content,
+                contentMode:
+                  args.content === undefined ? undefined : args.regex ? 'regex' : 'string',
+                path: args.path,
+                since: args.since,
+                until: args.until,
+              },
+            })
+          : await client.request('search/commits', {
+              repoId,
+              streamId,
+              limit: args.limit,
+              query: { text: args.text, author: args.author, sha: args.sha },
+            });
         const rendered = formatCommits(matches);
         // The engine caps `total` at `limit`, so the count of matches beyond
         // the limit is not available to report.
         if (result.truncated) {
-          return `${rendered}\n\n(showing the first ${matches.length} matches; more exist — raise "limit" (max 500) or add author/sha filters)`;
+          return `${rendered}\n\n(showing the first ${matches.length} matches; more exist — raise "limit" (max 500) or add filters)`;
         }
         return orEmptyRepository(repo, args.repoPath, rendered, matches.length === 0);
       } finally {
@@ -575,7 +688,12 @@ export function createToolHandlers(context: ToolContext) {
       file: string;
       cursor?: string;
       limit: number;
+      startLine?: number;
+      endLine?: number;
     }): Promise<string> {
+      if (args.startLine !== undefined || args.endLine !== undefined) {
+        return lineHistory(args);
+      }
       const repo = await repoFor(args.repoPath);
       const result = await repo.client.request('history/file', {
         repoId: repo.repoId,
@@ -771,6 +889,19 @@ export function createToolHandlers(context: ToolContext) {
       );
     },
 
+    async git_compare(args: CompareArgs): Promise<string> {
+      const { client, repoId } = await repoFor(args.repoPath);
+      const limit = resultChars(args.maxChars);
+      return compareRevisions(args, {
+        client,
+        repoId,
+        maxChars: limit,
+        truncationHint: (narrow) => charLimitHint(limit, narrow),
+        diffUnavailable: (error) =>
+          isRestrictedRefusal(error) ? restrictedMessage('git_compare', args.repoPath) : undefined,
+      });
+    },
+
     async create_patch(args: {
       repoPath: string;
       source: string;
@@ -785,7 +916,7 @@ export function createToolHandlers(context: ToolContext) {
         limit,
         `a truncated patch cannot be applied; ${charLimitHint(
           limit,
-          "narrow the source to a single commit with 'commit:<sha>'",
+          "narrow the source to a single commit with 'commit:<revision>'",
         )}`,
       );
     },
@@ -830,22 +961,60 @@ export function createToolHandlers(context: ToolContext) {
       return lines.join('\n');
     },
 
-    // Takes no arguments: the provider is GitHub, and the token and host both
-    // come from the environment (see configuredGitHubHost).
+    async git_worktrees(args: {
+      repoPath: string;
+      base?: string;
+      maxChars?: number;
+    }): Promise<string> {
+      const repo = await repoFor(args.repoPath);
+      // Linked worktrees can live anywhere; each is read only where the
+      // repository itself may be.
+      const access = await accessFor(repo.rootPath);
+      const mayRead = async (worktreePath: string) => (await accessFor(worktreePath)) === access;
+      const limit = resultChars(args.maxChars);
+      return truncateText(
+        formatWorktrees(await collectWorktrees(repo, args.base, mayRead)),
+        limit,
+        charLimitHint(limit, 'the repository has this many worktrees'),
+      );
+    },
+
+    // Takes no arguments: the hosts and their tokens all come from the
+    // environment (see configuredHosts).
     async list_my_prs(_args?: Record<string, never>): Promise<string> {
-      const token = env.GITHUB_TOKEN ?? env.GITGLASSES_GITHUB_TOKEN;
-      if (!token) {
+      const hosts = configuredHosts(env, context.fetchFn);
+      if (hosts.length === 0) {
         throw new ToolError(
-          'No GitHub token; set GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN in the server environment',
+          `No hosting service is configured; set ${HOST_SETTINGS} in the server environment`,
         );
       }
-      const host = configuredGitHubHost(env);
-      const provider: HostingProvider = host
-        ? createGitHubEnterpriseProvider(host, context.fetchFn)
-        : new GitHubProvider({ fetchFn: context.fetchFn });
-      const prs = await provider.getMyPullRequests({ token });
-      const viewer = prs.find((pr) => pr.viewerRole === 'author')?.author.username ?? '';
-      return formatLaunchpad(groupItems(prs, viewer));
+      const results = await fetchMyPullRequests(hosts);
+      const failures = results.filter((result) => 'error' in result);
+      if (failures.length === results.length) {
+        throw new ToolError(
+          failures
+            .map((failure) =>
+              results.length > 1 ? `${failure.label}: ${failure.error}` : failure.error,
+            )
+            .join('; '),
+        );
+      }
+      return formatHostResults(results);
+    },
+
+    async git_line_story(args: LineStoryArgs): Promise<string> {
+      return gitLineStory(
+        {
+          repo: async (target) => {
+            const repo = await repoFor(target);
+            return { ...repo, restricted: repo.client !== context.client };
+          },
+          env,
+          githubHost: () => configuredGitHubHost(env),
+          gitHubProvider: lineStoryProviders,
+        },
+        args,
+      );
     },
   };
 
@@ -886,8 +1055,8 @@ const repoPath = z
   .string()
   .describe(
     "Absolute path to (or inside) the git repository. Only repositories inside the client's " +
-      'workspace roots, or inside the directories the server was started with (--allow, ' +
-      'GITGLASSES_ALLOWED_ROOTS), are served; other paths are rejected.',
+      'workspace roots, or inside the directories the server was started with (--read, ' +
+      '--allow, GITGLASSES_ALLOWED_ROOTS), are served; other paths are rejected.',
   );
 
 const maxChars = z
@@ -899,6 +1068,14 @@ const maxChars = z
   .describe(
     `Maximum characters to return before truncation (default ${DEFAULT_RESULT_CHARS}, max ${MAX_RESULT_CHARS})`,
   );
+
+const isoDate = z
+  .string()
+  .regex(
+    /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})?)?$/,
+    'expected YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SS with an optional Z or UTC offset',
+  )
+  .optional();
 
 const cursor = z
   .string()
@@ -986,11 +1163,47 @@ export function createServer(context: ToolContext): McpServer {
   );
 
   server.registerTool(
+    'git_provenance',
+    {
+      description:
+        'Who declared they wrote a range of a file: blames the range, then reports for each ' +
+        "hunk's commit what it declares about AI authorship and where: a git-ai note in " +
+        "refs/notes/ai or a remote's copy, trailers such as Co-authored-by or Assisted-by, " +
+        'or an author or committer that is a known agent identity, with any session link ' +
+        'the commit names. ' +
+        'Commit-level and declared only: nothing is inferred from the code, and a commit ' +
+        'that declares nothing is reported as unknown.',
+      inputSchema: {
+        repoPath,
+        file: z.string().describe('File path relative to the repository root'),
+        startLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based first line of the range (default 1)'),
+        endLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based last line of the range, inclusive (default: the end of the file)'),
+        maxChars,
+      },
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_provenance),
+  );
+
+  server.registerTool(
     'git_log_search',
     {
       description:
-        'Search commits by message text, author or sha; without filters, list recent commits newest first. ' +
-        'Filters are combined with AND.',
+        "Search the current branch's commits by message text, author, sha, code change " +
+        '(content, like git log -S/-G), path or date; without filters, list recent commits ' +
+        'newest first. Filters are combined with AND. content, path, since and until run git, ' +
+        'so they work only in repositories inside the directories the server was started ' +
+        'with (--allow).',
       inputSchema: {
         repoPath,
         text: z.string().optional().describe('Case-insensitive substring of the commit message'),
@@ -999,6 +1212,30 @@ export function createServer(context: ToolContext): McpServer {
           .optional()
           .describe('Case-insensitive substring of the author name or email'),
         sha: z.string().optional().describe('Commit sha, or a prefix of one'),
+        content: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Code a commit added or removed: commits that change how often this exact string ' +
+              'occurs (git log -S), or with regex:true, commits whose added or removed lines ' +
+              'match this extended regular expression (git log -G). Use it to find when a ' +
+              'function, setting or message was introduced or removed.',
+          ),
+        regex: z
+          .boolean()
+          .optional()
+          .describe('Treat "content" as an extended regular expression (default false)'),
+        path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Only commits that touch this path, relative to the repository root (a git ' +
+              'pathspec: a file, a directory or a glob such as "src/*.ts")',
+          ),
+        since: isoDate.describe('Only commits committed on or after this date (YYYY-MM-DD)'),
+        until: isoDate.describe('Only commits committed before this date (YYYY-MM-DD)'),
         cursor: cursor.describe(
           'Opaque cursor from a previous unfiltered call\'s "(more commits ...)" footer. ' +
             'Filtered searches cannot be paged; raise "limit" instead.',
@@ -1014,13 +1251,27 @@ export function createServer(context: ToolContext): McpServer {
     'git_file_history',
     {
       description:
-        'Commit history of a file, following renames, newest first. Runs git, so it works only ' +
-        'in repositories inside the directories the server was started with (--allow).',
+        'Commit history of a file, following renames, newest first. With startLine (and ' +
+        'endLine), only the commits that changed those lines, followed through moves and ' +
+        'renames (git log -L): when and why a function or block changed. Runs git, so it ' +
+        'works only in repositories inside the directories the server was started with (--allow).',
       inputSchema: {
         repoPath,
         file: z.string().describe('File path relative to the repository root'),
         cursor,
-        limit: z.number().int().min(1).max(500).default(20),
+        limit: z.number().int().min(1).max(MAX_HISTORY_ENTRIES).default(20),
+        startLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based first line of a range to follow instead of the whole file'),
+        endLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based last line of the range (default startLine)'),
       },
       annotations: readOnly,
     },
@@ -1095,6 +1346,16 @@ export function createServer(context: ToolContext): McpServer {
   );
 
   server.registerTool(
+    'git_compare',
+    {
+      description: COMPARE_DESCRIPTION,
+      inputSchema: compareInputSchema({ repoPath, maxChars }),
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_compare),
+  );
+
+  server.registerTool(
     'git_graph_summary',
     {
       description: 'Text rendering of the commit graph: lane-indented sha, summary and refs.',
@@ -1121,13 +1382,44 @@ export function createServer(context: ToolContext): McpServer {
   );
 
   server.registerTool(
+    'git_worktrees',
+    {
+      description:
+        'Every worktree of the repository with its status: branch, uncommitted path count, ' +
+        'commits ahead/behind a base branch and its upstream, whether it would merge cleanly ' +
+        'into the base (git merge-tree, nothing checked out or changed), last activity, and ' +
+        'the coding agent it appears to belong to. Use it to check on agents working in ' +
+        'parallel worktrees. The merge check needs git, so outside the directories the server ' +
+        'was started with (--allow) it is reported as not checked.',
+      inputSchema: {
+        repoPath,
+        base: z
+          .string()
+          .regex(/^[^-]/, 'base may not begin with "-"')
+          .optional()
+          .describe(
+            'Branch or revision to compare with (default: the branch checked out in the main worktree)',
+          ),
+        maxChars,
+      },
+      annotations: readOnly,
+    },
+    asToolResult(handlers.git_worktrees),
+  );
+
+  server.registerTool(
     'create_patch',
     {
       description:
-        "Create a shareable gitglasses patch from 'wip', 'stash:<n>' or 'commit:<sha>': envelope metadata lines followed by the raw patch. Runs git, so it works only in repositories inside the directories the server was started with (--allow).",
+        "Create a shareable gitglasses patch from 'wip', 'stash:<n>' or 'commit:<revision>': envelope metadata lines followed by the raw patch. Runs git, so it works only in repositories inside the directories the server was started with (--allow).",
       inputSchema: {
         repoPath,
-        source: z.string().describe("Patch source: 'wip', 'stash:<n>' or 'commit:<sha>'"),
+        source: z
+          .string()
+          .describe(
+            "Patch source: 'wip', 'stash:<n>' or 'commit:<revision>', where the revision is a " +
+              'sha, HEAD, HEAD~2, a branch or a tag',
+          ),
         maxChars,
       },
       annotations: readOnly,
@@ -1157,12 +1449,17 @@ export function createServer(context: ToolContext): McpServer {
     'list_my_prs',
     {
       description:
-        'Open GitHub pull requests involving you, grouped into launchpad buckets (blocked, needs-your-review, ...). Takes no arguments: the token comes from GITHUB_TOKEN or GITGLASSES_GITHUB_TOKEN and the GitHub Enterprise host from GITGLASSES_GITHUB_HOST.',
+        'Open pull requests involving you on each hosting service the server environment has a ' +
+        'token for (GitHub, GitLab, Bitbucket, Azure DevOps), grouped into launchpad buckets ' +
+        '(blocked, needs-your-review, ...). Takes no arguments: hosts and tokens come only from ' +
+        'the environment.',
       inputSchema: {},
       annotations: readOnly,
     },
     asToolResult(handlers.list_my_prs),
   );
+
+  registerLineStoryTool(server, asToolResult(handlers.git_line_story), { repoPath, maxChars });
 
   return server;
 }

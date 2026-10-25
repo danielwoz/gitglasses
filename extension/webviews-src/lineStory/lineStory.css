@@ -1,0 +1,229 @@
+/* Line Story panel. Colors come from VS Code theme variables only; the commit
+   section brings the commit details view's own styles. */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+button {
+  font: inherit;
+}
+
+#line-story {
+  max-width: 1100px;
+  padding: 8px 16px 24px;
+}
+
+.story-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.story-title {
+  flex: 1;
+  min-width: 0;
+  margin: 8px 0;
+  font-size: 1.3em;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.story-line {
+  display: flex;
+  gap: 12px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  overflow-x: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, inherit);
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
+  border-left: 3px solid var(--vscode-focusBorder);
+}
+
+.story-line-number {
+  color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground));
+  user-select: none;
+}
+
+.story-section {
+  margin-top: 14px;
+  border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  padding-top: 6px;
+}
+
+.story-heading {
+  margin: 4px 0 6px;
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+
+.story-facts {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.story-notice {
+  margin: 4px 0;
+  color: var(--vscode-descriptionForeground);
+}
+
+.story-error {
+  padding: 16px 0;
+  color: var(--vscode-errorForeground);
+}
+
+.story-muted {
+  color: var(--vscode-descriptionForeground);
+}
+
+.story-link {
+  font: inherit;
+  color: var(--vscode-textLink-foreground);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.story-link:hover {
+  text-decoration: underline;
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+}
+
+.story-button {
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.story-button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.story-button-small {
+  padding: 0 6px;
+  font-size: 0.92em;
+}
+
+.story-link:focus-visible,
+.story-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+/* The commit details view sits inside the story rather than filling a pane. */
+.story-commit .details-header {
+  position: static;
+  padding: 0 0 6px;
+  border-bottom: none;
+}
+
+.story-commit .details-body {
+  padding: 0;
+}
+
+.story-pr {
+  margin: 4px 0 10px;
+}
+
+.story-pr-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.story-chip {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  padding: 0 7px;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.story-chip-merged {
+  color: var(--vscode-charts-purple);
+}
+
+.story-chip-open {
+  color: var(--vscode-charts-green);
+}
+
+.story-chip-closed,
+.story-chip-draft {
+  color: var(--vscode-descriptionForeground);
+}
+
+.story-excerpt {
+  margin: 6px 0;
+  padding: 4px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-widget-border));
+  background: var(--vscode-textBlockQuote-background, transparent);
+}
+
+.story-issues {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+
+.story-versions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.story-version {
+  margin: 0 0 10px;
+}
+
+.story-version-head {
+  line-height: 1.6;
+}
+
+.story-diff {
+  margin: 2px 0 0;
+  padding: 4px 0;
+  overflow-x: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, inherit);
+  background: var(--vscode-textCodeBlock-background, transparent);
+}
+
+.story-diff > span {
+  display: inline-block;
+  min-width: 100%;
+  padding: 0 8px;
+  box-sizing: border-box;
+}
+
+.story-diff-hunk,
+.story-diff-note {
+  color: var(--vscode-descriptionForeground);
+}
+
+.story-diff-add {
+  background: var(--vscode-diffEditor-insertedLineBackground, var(--vscode-diffEditor-insertedTextBackground));
+}
+
+.story-diff-del {
+  background: var(--vscode-diffEditor-removedLineBackground, var(--vscode-diffEditor-removedTextBackground));
+}

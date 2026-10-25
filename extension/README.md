@@ -29,9 +29,10 @@ public ones.
 - **Fast on large repositories.** A native engine reads the repository in
   process and streams results, and runs apart from the editor, so a problem
   in it never takes the editor down.
-- **Ready for agents.** `gitglasses-mcp` gives MCP clients (Claude Code,
-  Cursor, VS Code agent mode and others) the same blame, history, graph,
-  search and diffs, read-only unless you allow more.
+- **Ready for agents.** The extension's MCP server gives the agents in VS
+  Code and Cursor the same blame, history, branch comparisons, search and
+  diffs with no setup, and one command adds it to Claude Code, Codex or any
+  other agent. It is read-only unless you allow more.
 - **Safe in untrusted folders.** In Restricted Mode GitGlasses runs no git at
   all, so nothing a repository configures can run; reading history still
   works.
@@ -78,11 +79,42 @@ and moved-line detection. The status bar item steps aside when VS Code's own
 blame item is showing, so a line is never described twice. Inline and status
 bar text, date style and delay are configurable (see [Settings](#settings)).
 
+**Why this line?**, the first link in the hover (also in the editor's context
+menu and the Command Palette), opens a Line Story beside the editor: the
+line's blame, its commit in full, the pull request that merged it with its
+state, merge date, comment counts and the start of its description, the
+issues they name, and the line's earlier versions, each with its diff.
+Pull requests come from GitHub, GitHub Enterprise Server or GitLab once that
+integration is connected; until then the story offers to connect and still
+links the pull request the commit message names. Earlier versions come from
+`git log -L`. In Restricted Mode, where GitGlasses runs no git and asks no
+forge, the story is the blame and the commit.
+
 *Limits:* without git (or in Restricted Mode) blame comes from the engine's
 built-in reader instead of `git blame`. Files tracked with Git LFS show where
 their content last changed instead of line blame, since git only stores a
 pointer for them. Blame pauses while a file has more than 8 MB of unsaved
 changes.
+
+### Declared AI provenance
+
+Commits that declare an AI agent took part carry an **AI** badge in the
+Commit Graph, a line in the blame hover such as *AI-assisted (declared via
+Co-authored-by: Claude Opus 4.7) · session link*, a **Provenance** row in
+Commit Details, and a sparkle in the Commits and File History views. A graph
+filter dims everything but agent-declared commits, or everything but the
+rest. GitGlasses reads only what commits declare: git-ai notes in
+`refs/notes/ai`, `Co-authored-by`, `Assisted-by` and `Generated-by` trailers,
+and authors or committers that are known agent identities (Claude, Cursor,
+GitHub Copilot, Codex, Devin, Jules, Aider, Amp). It never infers authorship
+from the code, and a commit that declares nothing is unknown, not human.
+Turn it off everywhere with `gitglasses.provenance.enabled`.
+
+*Limits:* provenance is per commit, not per line. git does not fetch notes by
+default; **Fetch git-ai Notes with Every Fetch…** adds a refspec to the remote
+after you confirm. Fetched notes go to `refs/notes/ai-remote/<remote>`, as
+git-ai names it, so your own `refs/notes/ai` is never overwritten; GitGlasses
+reads both. Session links are shown, never fetched.
 
 ### File and line history
 
@@ -130,6 +162,20 @@ and pull from the Home view and **GitGlasses: Git Commands…** too, keep
 several branches checked out at once with worktrees, and stage or unstage
 single hunks from the editor.
 
+The Worktrees view shows each worktree's state at a glance, which helps when
+several coding agents work in parallel worktrees: uncommitted changes,
+commits ahead of and behind a base branch, whether it would merge cleanly
+into the base (checked with `git merge-tree`, git 2.38 or later, without
+touching any checkout), its last activity, and the agent it appears to belong
+to (Claude Code, Cursor, Codex, Copilot and VS Code agent sessions, going by
+where the worktree lives, its branch name or the trailers on its commits).
+**Compare with Base** opens everything a worktree changed since it left the
+base, uncommitted work included, and **Remove Worktree and Branch…** deletes
+both after one confirmation that lists what goes. The base is the branch
+checked out in the main worktree unless you pick another with **Choose Base
+for Worktrees…**. Statuses are read again on git activity in any worktree,
+every minute while the view is open and when you come back to the window.
+
 *Limits:* everything that changes the repository needs git and a trusted
 workspace, and none of it is available on the web.
 
@@ -172,16 +218,41 @@ read. AI output is shown without loading any images or HTML it contains.
 
 ### Agents over MCP
 
-`gitglasses-mcp` is an MCP server that gives agents eleven tools over the same
-engine: blame, commit search, file history, commit details, diffs, refs, a
-text rendering of the graph, status, patches and your pull requests. Every
-tool except `apply_patch` is marked read-only, and by default the server
-reads only the folders your client shares with it, without running git.
+GitGlasses ships an MCP server that gives AI agents tools over the same
+engine: blame, commit search by message, author, code change, path or
+date, file history, commit details, branch comparisons from the merge base,
+diffs, refs, a text rendering of the graph, status, worktrees, patches, your
+pull requests, the declared AI provenance of a file's lines and the story
+of a line. Every tool
+except `apply_patch` is marked read-only.
 
-*Limits:* the extension does not start the server; you register it with your
-MCP client and point it at the engine the extension installed. From 0.3,
-releases also publish it to npm as `gitglasses-mcp`. Setup is in
-[the server's README](https://github.com/danielwoz/gitglasses/blob/main/mcp-server/README.md).
+- **In VS Code 1.101 or newer and in Cursor** the server is registered with
+  the editor's agents (Copilot agent mode, Cursor's agent) as soon as a folder
+  is open; there is nothing to set up. It runs on the editor's own Node with
+  the bundled engine. In a trusted workspace git may run in the workspace's
+  folders; in Restricted Mode it runs nowhere.
+- **Claude Code**: **GitGlasses: Add MCP Server to Claude Code** adds it to
+  your Claude Code configuration with `claude mcp add-json`, or shows the
+  JSON when the `claude` CLI is not on `PATH`.
+- **Codex**: **GitGlasses: Add MCP Server to Codex** shows the change to
+  `~/.codex/config.toml` as a diff and writes it when you confirm.
+- **Anything else** (Claude Desktop, Windsurf, Kiro, Theia AI):
+  **GitGlasses: Copy MCP Server Config** copies the configuration with
+  absolute paths.
+
+The Home view's **MCP Server** section shows where the server is registered
+and offers the same commands. Each command asks whether the agent may run git
+in this workspace; by default it may not, and the agent's own project is read
+without git. The copied configuration also names this workspace's folders,
+since many desktop apps share none with their servers.
+
+*Limits:* registration in the editor needs VS Code 1.101 or newer, or Cursor;
+older releases and other editors use the commands. The configuration the
+commands write points into the installed extension, so run the command again
+after GitGlasses updates. `gitglasses.mcp.enabled` turns the registration
+off. The server also runs on its own, without the extension;
+[its README](https://github.com/danielwoz/gitglasses/blob/main/mcp-server/README.md)
+covers that and the trust model.
 
 ### Open Patches
 
@@ -248,8 +319,14 @@ everything that can reach the network, and when:
   that model's extension does.
 - **Open on Remote** opens a link in your browser; **Copy Remote URL** only
   copies it.
-- **The MCP server** is a separate program that runs only when your MCP client
-  starts it.
+- **The MCP server** runs only when an agent starts it, on your machine, and
+  reads repositories through the same engine, so the partial clone exception
+  above applies to it too: where it may run git, a tool that needs contents
+  the clone lacks (blame, file history, the changes of a commit or a branch
+  comparison) has git download them from your own remote. Read without git,
+  it reports those line counts as unknown instead. Otherwise it contacts no
+  service unless an agent calls `list_my_prs` with a hosting service's token
+  in its environment.
 
 In Restricted Mode no git runs at all, so nothing a repository configures
 (hooks, filters, credential helpers, ssh commands) can either.
@@ -265,9 +342,10 @@ In Restricted Mode no git runs at all, so nothing a repository configures
 | vscode.dev | WebAssembly engine, read-only |
 
 The editor picks the right package. Outside the browser, features that run
-git need `git` on `PATH`; 2.34 or newer is recommended (the version is not
-checked). Without git, blame, the graph, commit details and message search
-still work.
+git need `git` on `PATH`; 2.34 or newer is recommended. The Worktrees view's
+merge check needs 2.38 or newer (2.45 in a partial clone), which GitGlasses
+checks and otherwise skips. Without git, blame, the graph, commit details and
+message search still work.
 
 ## Troubleshooting
 
@@ -309,9 +387,11 @@ Every setting, generated from the extension manifest:
 | `gitglasses.graph.pageSize` | `200` | Rows loaded per page in the Commit Graph and Visual File History |
 | `gitglasses.graph.maxLanes` | `20` | Most branch lanes the Commit Graph draws side by side. Lanes past it fold into one column marked +N, so commit messages stay readable on merge-heavy repositories. The graph also never takes more than 40% of the panel's width. |
 | `gitglasses.codeLens.enabled` | `true` | Show git blame CodeLens above files and top-level symbols |
+| `gitglasses.provenance.enabled` | `true` | Show the AI provenance commits declare: an `AI` badge and a filter in the Commit Graph, a line in the blame hover and in Commit Details, and a mark in the Commits and File History views. Only declarations are read: git-ai notes in `refs/notes/ai`, `Co-authored-by`, `Assisted-by` and `Generated-by` trailers, and authors or committers that are known agent identities. Nothing is inferred from the code. Turn off to hide provenance everywhere. |
 | `gitglasses.engine.path` | `""` | Path to gitglasses-engine (defaults to the bundled binary) |
 | `gitglasses.web.maxRepoBytes` | `209715200` | Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB) |
 | `gitglasses.engine.logLevel` | `"warn"` | Engine log level (logs go to the GitGlasses output channel) One of `trace`, `debug`, `info`, `warn`, `error`. |
+| `gitglasses.mcp.enabled` | `true` | Register GitGlasses' MCP server with the editor's AI agents (VS Code 1.101 or newer, and Cursor), so they can read this workspace's blame, history, branch comparisons, status and diffs with no setup. Git runs only in the workspace's folders, and nowhere in an untrusted workspace. The **Add MCP Server** commands configure other agents. |
 | `gitglasses.integrations.hosts` | `[]` | Git hosting instances beyond github.com, gitlab.com and bitbucket.org, e.g. [{ "domain": "github.example.com", "provider": "github-enterprise" }]. Azure DevOps takes dev.azure.com plus an organization. |
 | `gitglasses.integrations.issues` | `[]` | Issue tracker integrations, e.g. [{ "provider": "jira", "host": "mycompany.atlassian.net" }] |
 | `gitglasses.ai.provider` | `"none"` | Where GitGlasses AI requests go. Until a provider is chosen, the first AI command offers the ones this editor can use; change it any time with **GitGlasses: Choose AI Provider…**. Saving an API key with **GitGlasses: Set AI API Key…** switches to that provider. One of `none`, `vscode-lm`, `anthropic`, `openai`, `gemini`, `ollama`. |
@@ -351,6 +431,7 @@ in Restricted Mode.
 | GitGlasses: Open Changes with HEAD | `gitglasses.diffWithHead` |  |
 | GitGlasses: Open File at Revision | `gitglasses.openFileAtRevision` |  |
 | GitGlasses: Show Line History for Selection | `gitglasses.showLineHistory` | trusted workspace |
+| GitGlasses: Why This Line? | `gitglasses.showLineStory` |  |
 | GitGlasses: Show Commit Graph | `gitglasses.showGraph` |  |
 | GitGlasses: Show Visual File History | `gitglasses.showFileHistory` | trusted workspace |
 
@@ -367,6 +448,7 @@ in Restricted Mode.
 | GitGlasses: Git Commands… | `gitglasses.gitCommands` | trusted workspace |
 | GitGlasses: Interactive Rebase… | `gitglasses.interactiveRebase` | trusted workspace |
 | GitGlasses: Add Worktree… | `gitglasses.worktrees.add` | trusted workspace |
+| GitGlasses: Choose Base for Worktrees… | `gitglasses.worktrees.chooseBase` |  |
 | GitGlasses: Stage Selected Hunk(s) | `gitglasses.stageSelectedHunks` | trusted workspace |
 | GitGlasses: Unstage Selected Hunk(s) | `gitglasses.unstageSelectedHunks` | trusted workspace |
 | GitGlasses: Create Tag… | `gitglasses.tag.create` | trusted workspace |
@@ -421,9 +503,13 @@ in Restricted Mode.
 | GitGlasses: Import Repo Group… | `gitglasses.groups.import` |  |
 | GitGlasses: Continue Merge, Rebase, Cherry-pick or Revert | `gitglasses.continueOperation` | trusted workspace |
 | GitGlasses: Abort Merge, Rebase, Cherry-pick or Revert | `gitglasses.abortOperation` | trusted workspace |
+| GitGlasses: Add MCP Server to Claude Code | `gitglasses.mcp.addToClaudeCode` |  |
+| GitGlasses: Add MCP Server to Codex | `gitglasses.mcp.addToCodex` |  |
+| GitGlasses: Copy MCP Server Config | `gitglasses.mcp.copyConfig` |  |
 | GitGlasses: Get Started | `gitglasses.openWalkthrough` |  |
 | GitGlasses: Select Repository… | `gitglasses.selectRepository` |  |
 | GitGlasses: Coming from Git Graph? | `gitglasses.comingFromGitGraph` |  |
+| GitGlasses: Fetch git-ai Notes with Every Fetch… | `gitglasses.provenance.fetchNotes` | trusted workspace |
 <!-- commands:end -->
 
 ## Contributing and license

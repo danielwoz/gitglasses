@@ -8,7 +8,7 @@ name: Release
 #
 # Running the workflow by hand (Actions > Release > Run workflow) is a dry
 # run on the chosen branch: it builds, packages and smoke-tests everything,
-# packs the npm package, and publishes nothing. See docs/releasing.md.
+# packs the npm packages, and publishes nothing. See docs/releasing.md.
 
 on:
   push:
@@ -44,7 +44,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       # The tag, the extension, MCP server and root manifests, the engine's
@@ -81,7 +81,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: Wait for CI
@@ -265,12 +265,12 @@ jobs:
           fi
       # Exactly one file: an MSVC build directory also holds the import
       # library (gitglasses-engine.lib), .exp and .pdb next to the .exe.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: engine-${{ matrix.target }}
           path: ${{ env.ENGINE }}
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: symbols-${{ matrix.target }}
           path: |
@@ -326,12 +326,12 @@ jobs:
             echo "::error::the ${{ matrix.target }} engine reports $on_host / $on_alpine, expected $VERSION"
             exit 1
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: engine-${{ matrix.target }}
           path: ${{ env.ENGINE_DIR }}/gitglasses-engine
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: symbols-${{ matrix.target }}
           path: ${{ env.ENGINE_DIR }}/gitglasses-engine.debug
@@ -345,7 +345,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
@@ -379,7 +379,7 @@ jobs:
           cmake --build --preset wasm
       - name: Harness
         run: node engine/wasm-test/run.mjs
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: engine-wasm-artifacts
           path: build/wasm/engine/gitglasses-engine-wasm.*
@@ -409,15 +409,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ matrix.target != 'web' }}
         with:
           name: engine-${{ matrix.target }}
           path: engine-bin/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: engine-wasm-artifacts
           path: build/wasm/engine/
@@ -438,7 +438,7 @@ jobs:
           esac
           if [ "$PRERELEASE" = true ]; then args+=(--pre-release); fi
           node scripts/package-vsix.mjs "${args[@]}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vsix-${{ matrix.target }}
           path: dist/*.vsix
@@ -475,10 +475,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vsix-${{ matrix.target }}
           path: dist/
@@ -502,32 +502,44 @@ jobs:
             exit 1
           fi
 
+  # gitglasses-mcp and one @gitglasses/engine-* package per engine build,
+  # which gitglasses-mcp names as optional dependencies so npm installs the
+  # engine for its platform (see scripts/lib/mcp-package.mjs).
   package-mcp:
     name: package (gitglasses-mcp)
-    needs: version
+    needs: [version, engine, engine-alpine]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+      # Each into engines/engine-<target>/, where pack-mcp.mjs looks.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: engine-*
+          path: engines/
       # The tarball carries the npm README (mcp-server/npm-readme.md) in place
-      # of the repository README, which describes running from a clone.
+      # of the repository README, which describes running from a clone. Every
+      # engine must be there and be an executable for its target.
       - name: Build and pack
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter "gitglasses-mcp..." build
-          node scripts/pack-mcp.mjs --out dist-npm
-      # Installs the tarball into an empty directory as npx would, checks its
-      # files and README, and runs it.
+          node scripts/pack-mcp.mjs --out dist-npm --engines engines --all-engines
+      # Installs the tarballs into an empty directory as npx would, checks
+      # their files and README, and runs the server, which must find the
+      # linux-x64 engine package by itself and read a repository with it.
       - name: Verify the package
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: node scripts/verify-mcp-package.mjs "dist-npm/gitglasses-mcp-$VERSION.tgz" --version "$VERSION"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        run: |
+          node scripts/verify-mcp-package.mjs "dist-npm/gitglasses-mcp-$VERSION.tgz" --version "$VERSION" \
+            --engine-package "dist-npm/gitglasses-engine-linux-x64-$VERSION.tgz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-package
           path: dist-npm/*.tgz
@@ -548,15 +560,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: vsix-*
           merge-multiple: true
           path: release/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: symbols-*
           path: symbols/
@@ -575,7 +587,7 @@ jobs:
         if: github.event_name == 'push'
         with:
           subject-path: release/*.vsix
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: |
@@ -601,11 +613,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: pnpm install --frozen-lockfile --filter @gitglasses/release-scripts
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: vsix-*
           merge-multiple: true
@@ -653,11 +665,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: pnpm install --frozen-lockfile --filter @gitglasses/release-scripts
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: vsix-*
           merge-multiple: true
@@ -685,7 +697,7 @@ jobs:
           pnpm exec ovsx publish "${auth[@]}" "${flags[@]}" --packagePath ../dist/*.vsix
 
   publish-npm:
-    name: publish (npm gitglasses-mcp)
+    name: publish (npm gitglasses-mcp and engines)
     if: github.event_name == 'push'
     needs: [version, ci, package-mcp, release-assets]
     runs-on: ubuntu-24.04
@@ -696,19 +708,22 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
       - run: npm install -g npm@11.20.0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-package
           path: dist-npm/
       # npm trusted publishing (OIDC) once configured for this workflow on
-      # npmjs.com and NPM_TRUSTED_PUBLISHING is true; until then NPM_TOKEN.
-      # Either way the package carries a provenance attestation.
+      # npmjs.com for every package and NPM_TRUSTED_PUBLISHING is true; until
+      # then NPM_TOKEN. Either way each package carries a provenance
+      # attestation. The engine packages go first, so gitglasses-mcp never
+      # names an optional dependency that is not there yet; a version already
+      # on npm is skipped, so a re-run finishes a partial publish.
       - name: Publish
         env:
           TRUSTED: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
@@ -719,13 +734,21 @@ jobs:
             echo "::error::No npm credential in the release environment. Set the NPM_TOKEN secret for the first publish, then configure trusted publishing and the NPM_TRUSTED_PUBLISHING variable (docs/releasing.md)."
             exit 1
           fi
-          if [ "$(npm view "gitglasses-mcp@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
-            echo "gitglasses-mcp@$VERSION is already on npm"
-            exit 0
-          fi
           tag=latest
           if [ "$PRERELEASE" = true ]; then tag=next; fi
-          npm publish "dist-npm/gitglasses-mcp-$VERSION.tgz" --provenance --access public --tag "$tag"
+          publish() {
+            local tarball=$1 name
+            name=$(tar -xzOf "$tarball" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')
+            if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+              echo "$name@$VERSION is already on npm"
+              return 0
+            fi
+            npm publish "$tarball" --provenance --access public --tag "$tag"
+          }
+          for tarball in dist-npm/gitglasses-engine-*-"$VERSION".tgz; do
+            publish "$tarball"
+          done
+          publish "dist-npm/gitglasses-mcp-$VERSION.tgz"
 
   # Created only after both extension registries have every package. A
   # re-run uploads any missing assets to the existing release.
@@ -737,7 +760,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: assets/

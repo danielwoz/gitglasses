@@ -571,6 +571,150 @@
         }
       }
     },
+    "log/compare": {
+      "description": "Compares two revisions as `git log base..head` and `git rev-list --left-right --count base...head` do: their merge base, how many commits head has that base lacks (ahead) and base has that head lacks (behind), and up to `limit` of head's own commits, newest first. Diffing from `mergeBase` (diff/refs, patch/create's range) shows what head changed since the two diverged. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "base",
+          "head"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "base": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision compared against, such as main or origin/main.",
+            "type": "string"
+          },
+          "head": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision compared, such as HEAD or a feature branch.",
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base",
+          "head",
+          "ahead",
+          "behind",
+          "commits"
+        ],
+        "properties": {
+          "base": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "head": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "mergeBase": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "ahead": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "behind": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "parents",
+                "author",
+                "committer",
+                "summary"
+              ],
+              "properties": {
+                "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
+                  "type": "string"
+                },
+                "parents": {
+                  "type": "array",
+                  "items": {
+                    "pattern": "^[0-9a-f]{40}$",
+                    "description": "Full 40-character lowercase hex object id.",
+                    "type": "string"
+                  }
+                },
+                "author": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "committer": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "email",
+                    "time"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "commit/details": {
       "description": "One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most 2000 files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
       "params": {
@@ -834,6 +978,284 @@
         }
       }
     },
+    "commit/provenance": {
+      "description": "What each commit declares about who wrote it: a git-ai authorship log in refs/notes/ai (or, when that has none for the commit, in a remote's copy under refs/notes/ai-remote/), its trailers (Co-authored-by, Assisted-by or Generated-by naming an AI, and the session links agents add) and an author or committer that is a known agent identity. Declared only: nothing is inferred from the code, and a commit that declares nothing is 'unknown'. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "shas"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "shas": {
+            "minItems": 1,
+            "maxItems": 1000,
+            "description": "Full commit shas, at most 1000.",
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commits"
+        ],
+        "properties": {
+          "commits": {
+            "description": "Keyed by sha. Shas that name no commit in the repository are left out.",
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "declared",
+                  "declarations"
+                ],
+                "properties": {
+                  "declared": {
+                    "description": "'agent' when any declaration names an AI agent, 'human' when the only declarations are known humans in a git-ai note, 'unknown' when the commit declares nothing.",
+                    "anyOf": [
+                      {
+                        "const": "agent",
+                        "type": "string"
+                      },
+                      {
+                        "const": "human",
+                        "type": "string"
+                      },
+                      {
+                        "const": "unknown",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "declarations": {
+                    "description": "Highest priority source first: the note's, then the trailers' in message order, then the author's and committer's. At most 16.",
+                    "type": "array",
+                    "items": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "source",
+                        "kind",
+                        "name",
+                        "via",
+                        "value"
+                      ],
+                      "properties": {
+                        "source": {
+                          "description": "Where it was read, in priority order: 'notes' a git-ai authorship log in refs/notes/ai or a remote's copy of it under refs/notes/ai-remote/, 'trailer' a message trailer (Co-authored-by, Assisted-by or Generated-by naming an AI, an agent's session link), 'identity' an author or committer that is a known agent identity.",
+                          "anyOf": [
+                            {
+                              "const": "notes",
+                              "type": "string"
+                            },
+                            {
+                              "const": "trailer",
+                              "type": "string"
+                            },
+                            {
+                              "const": "identity",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "kind": {
+                          "description": "'human' only for the known humans a git-ai note names.",
+                          "anyOf": [
+                            {
+                              "const": "agent",
+                              "type": "string"
+                            },
+                            {
+                              "const": "human",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "description": "The agent's display name ('Claude', 'GitHub Copilot', or the tool as the declaration names it), or the human's identity.",
+                          "type": "string"
+                        },
+                        "model": {
+                          "description": "The model, when the declaration names one.",
+                          "type": "string"
+                        },
+                        "via": {
+                          "description": "What carried it: the trailer key as written, 'author' or 'committer', or the notes ref.",
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "The declaration as written: the trailer value, the \"Name <email>\" identity, or the session id the note names.",
+                          "type": "string"
+                        },
+                        "url": {
+                          "description": "An http(s) link to the agent session. Clients render it as a link and never fetch it.",
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "note": {
+                    "additionalProperties": false,
+                    "description": "Present when refs/notes/ai, or a remote's copy of it, attaches a note to the commit.",
+                    "type": "object",
+                    "required": [
+                      "read",
+                      "ref"
+                    ],
+                    "properties": {
+                      "read": {
+                        "description": "The note is a git-ai authorship log this engine reads (authorship/3.x). False for another schema version, a malformed or oversized note, or one whose content is missing; nothing is then taken from it.",
+                        "type": "boolean"
+                      },
+                      "ref": {
+                        "description": "The notes ref the note was read from: refs/notes/ai, or a remote's copy such as refs/notes/ai-remote/origin when only that has one.",
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "type": "string"
+                      },
+                      "missing": {
+                        "description": "True when the note's content is not in the object database, as in a partial clone. The engine does not remember this, so asking again once the content is fetched reads the note.",
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notes/read": {
+      "description": "The notes a notes ref attaches to commits, read with libgit2 (git_note_read) and cached per commit, so Restricted Mode and engines without the git CLI serve it too. A note longer than 131072 bytes, or one whose content is missing from a partial clone, is listed in `omitted` instead.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "shas"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "shas": {
+            "minItems": 1,
+            "maxItems": 64,
+            "description": "Full commit shas, at most 64.",
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          },
+          "ref": {
+            "minLength": 1,
+            "pattern": "^refs/notes/.+",
+            "description": "Notes ref to read, a full ref name. Omitted means refs/notes/ai.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ref",
+          "exists",
+          "notes",
+          "omitted"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "exists": {
+            "description": "The notes ref exists in the repository.",
+            "type": "boolean"
+          },
+          "notes": {
+            "description": "Note text keyed by sha; commits without a note are left out.",
+            "type": "object",
+            "patternProperties": {
+              "^(.*)$": {
+                "type": "string"
+              }
+            }
+          },
+          "omitted": {
+            "description": "Commits whose note exists but is too long or could not be read.",
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "notes/addFetchRefspec": {
+      "description": "Adds `+<ref>:<ref>-remote/<remote>` to remote.<remote>.fetch (`git config --add`), so later fetches from the remote bring its notes along; git does not fetch notes by default. The notes land in that ref of their own (refs/notes/ai-remote/origin for refs/notes/ai, the name git-ai uses), never in <ref> itself, so notes written locally for commits not yet pushed are kept; commit/provenance reads both. Characters of the remote's name other than letters, digits, '-' and '_' become '_'. Changes nothing when one of the remote's fetch refspecs already brings the ref into itself or into such a copy.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "remote"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote whose fetches should bring the notes.",
+            "type": "string"
+          },
+          "ref": {
+            "minLength": 1,
+            "pattern": "^refs/notes/.+",
+            "description": "Notes ref to read, a full ref name. Omitted means refs/notes/ai.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "added",
+          "trackingRef"
+        ],
+        "properties": {
+          "added": {
+            "description": "False when the remote already fetched the ref.",
+            "type": "boolean"
+          },
+          "trackingRef": {
+            "description": "The ref the remote's notes are fetched into.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "history/file": {
       "description": "File history following renames, newest first.",
       "params": {
@@ -935,7 +1357,7 @@
       }
     },
     "history/line": {
-      "description": "History of a line range (1-based, inclusive).",
+      "description": "History of a line range (1-based, inclusive), newest first, following the range through earlier versions and renames like `git log -L`. Each entry's additions, deletions and path describe the range's diff in that commit.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -951,7 +1373,7 @@
           },
           "path": {
             "minLength": 1,
-            "description": "Path relative to the repository root.",
+            "description": "Path relative to the repository root, in `rev` when given.",
             "type": "string"
           },
           "startLine": {
@@ -961,6 +1383,22 @@
           "endLine": {
             "minimum": 1,
             "type": "integer"
+          },
+          "rev": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision whose version of `path` the line numbers refer to, and where the walk starts. Omitted means HEAD.",
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "description": "Most entries to return, newest first. Omitted returns every one.",
+            "type": "integer"
+          },
+          "patch": {
+            "description": "Include each commit's diff of the range as `patch`. Default false.",
+            "type": "boolean"
           }
         }
       },
@@ -1023,6 +1461,15 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "patch": {
+                  "description": "The commit's diff of the followed range, as `git log -L` prints it (diff --git, ---/+++ headers, hunks), newline-terminated. Present when the request sets `patch`.",
+                  "type": "string"
+                },
+                "patchTruncated": {
+                  "description": "`patch` was cut at a line boundary because the diff exceeded 256 KiB.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -2913,7 +3360,7 @@
       }
     },
     "worktree/list": {
-      "description": "Worktrees attached to the repository.",
+      "description": "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory. The web (wasm) engine, whose files hold only the mirrored workspace, refuses it with -32003.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2942,7 +3389,10 @@
                 "path",
                 "sha",
                 "bare",
-                "locked"
+                "locked",
+                "prunable",
+                "missing",
+                "current"
               ],
               "properties": {
                 "path": {
@@ -2959,7 +3409,197 @@
                 },
                 "locked": {
                   "type": "boolean"
+                },
+                "prunable": {
+                  "description": "`git worktree prune` would drop the entry: the worktree's directory or its .git file is gone and the entry is not locked.",
+                  "type": "boolean"
+                },
+                "missing": {
+                  "description": "The worktree's directory does not exist. git keeps a locked entry even then (a worktree on removable media, say), so this can be true while prunable is false.",
+                  "type": "boolean"
+                },
+                "current": {
+                  "description": "The worktree this repoId was opened from.",
+                  "type": "boolean"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "worktree/status": {
+      "description": "Status of one worktree, for a view or an agent to see at a glance: uncommitted paths, last activity, ahead/behind its upstream and a base revision, whether it would merge cleanly into the base, and the coding agent it appears to belong to. Reads through libgit2; the merge check alone runs git (2.38 or later), and is null where git may not run. Call it per worktree, lazily: it costs a working-tree scan.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "path"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "path": {
+            "minLength": 1,
+            "description": "A worktree directory worktree/list reported.",
+            "type": "string"
+          },
+          "base": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to compare against. Omitted means the branch checked out in the main worktree (or the HEAD branch of a bare repository); with that HEAD detached, no base is compared.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "dirty": {
+            "minimum": 0,
+            "description": "Paths with uncommitted changes (staged, unstaged, untracked or conflicted), each counted once. Absent for a bare repository.",
+            "type": "integer"
+          },
+          "lastActivity": {
+            "description": "Seconds since the Unix epoch of the newest of the index file's modification and the latest HEAD reflog entry: when someone last staged, committed, checked out or reset in the worktree. Absent when neither exists.",
+            "type": "integer"
+          },
+          "upstream": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "ref",
+              "ahead",
+              "behind"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "ahead": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "behind": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            }
+          },
+          "base": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "ref",
+              "sha",
+              "ahead",
+              "behind",
+              "mergesCleanly"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "sha": {
+                "pattern": "^[0-9a-f]{40}$",
+                "description": "Full 40-character lowercase hex object id.",
+                "type": "string"
+              },
+              "ahead": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "behind": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mergeBase": {
+                "pattern": "^[0-9a-f]{40}$",
+                "description": "Full 40-character lowercase hex object id.",
+                "type": "string"
+              },
+              "mergesCleanly": {
+                "description": "Whether merging the worktree's HEAD into the base would apply without conflicts, as `git merge-tree --write-tree` decides it (nothing is checked out and the repository is left unchanged). True without running git when there is nothing to merge or the merge is a fast-forward; null when the check could not run (see mergeSkipped). Uncommitted changes are not part of it.",
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mergeSkipped": {
+                "description": "Why mergesCleanly is null.",
+                "anyOf": [
+                  {
+                    "const": "restricted",
+                    "type": "string"
+                  },
+                  {
+                    "const": "noGitCli",
+                    "type": "string"
+                  },
+                  {
+                    "const": "gitVersion",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partialClone",
+                    "type": "string"
+                  },
+                  {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                ]
+              },
+              "conflicts": {
+                "maxItems": 50,
+                "description": "Paths the merge would conflict in, at most 50. Only when mergesCleanly is false.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "agent": {
+            "additionalProperties": false,
+            "description": "The coding agent that appears to work in this worktree.",
+            "type": "object",
+            "required": [
+              "name",
+              "evidence"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "evidence": {
+                "anyOf": [
+                  {
+                    "const": "path",
+                    "type": "string"
+                  },
+                  {
+                    "const": "branch",
+                    "type": "string"
+                  },
+                  {
+                    "const": "trailer",
+                    "type": "string"
+                  }
+                ]
               }
             }
           }
@@ -4470,6 +5110,7 @@
     "repo/state",
     "blame/file",
     "log/commits",
+    "log/compare",
     "search/commits",
     "rev/fileAtRev",
     "refs/list",
@@ -4481,6 +5122,10 @@
     "diff/refs",
     "diff/fileHunks",
     "remote/list",
-    "commit/details"
+    "commit/details",
+    "worktree/list",
+    "worktree/status",
+    "notes/read",
+    "commit/provenance"
   ]
 }

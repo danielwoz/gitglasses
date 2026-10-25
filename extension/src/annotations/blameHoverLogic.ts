@@ -4,11 +4,12 @@
 // vscode imports, so it stays unit-testable.
 
 import type { BlameCommit, BlameHunk } from '@gitglasses/protocol';
-import type { RepoDescriptor } from '@gitglasses/integrations';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { codeSpan, escapeMarkdown, markdownLinkDestination } from '../system/markdown';
 import { relativeTime } from '../system/dates';
+import { bodyLines, trailerBlock, type Trailer } from '../system/trailers';
 import { formatDateTime, originalLineOf } from './blameFormat';
+import { LINE_STORY_COMMAND, type LineStoryArgs } from '../lineStory/lineStoryLogic';
 
 export const OPEN_CHANGES_COMMAND = 'gitglasses.blame.openChanges';
 export const PREVIOUS_REVISION_COMMAND = 'gitglasses.blame.previousRevision';
@@ -20,6 +21,7 @@ export const DIFF_WITH_HEAD_COMMAND = 'gitglasses.diffWithHead';
 /** Commands the hover's links may run; MarkdownString trusts exactly these. */
 export const BLAME_HOVER_COMMANDS: readonly string[] = [
   SHOW_COMMIT_DETAILS_COMMAND,
+  LINE_STORY_COMMAND,
   OPEN_CHANGES_COMMAND,
   PREVIOUS_REVISION_COMMAND,
   COPY_SHA_COMMAND,
@@ -94,83 +96,7 @@ export function previousRevisionArgs(
 
 // --- Pull requests ----------------------------------------------------------
 
-type MessagePart = 'subject' | 'body';
-
-const GITHUB_PULL_REQUESTS: [RegExp, MessagePart][] = [
-  // Merge commits: "Merge pull request #12 from owner/branch".
-  [/^Merge pull request #(\d+) from /, 'subject'],
-  // Squash merges: "Subject (#12)".
-  [/\(#(\d+)\)\s*$/, 'subject'],
-];
-
-/** What each forge writes into the commits its pull requests produce. A
- *  pattern applies only to its own forge: "#12" names an issue on GitLab,
- *  for one. */
-const PULL_REQUEST_MESSAGES: Record<string, [RegExp, MessagePart][]> = {
-  github: GITHUB_PULL_REQUESTS,
-  'github-enterprise': GITHUB_PULL_REQUESTS,
-  // "See merge request group/project!12" closes a merge commit's message.
-  gitlab: [[/^See merge request \S+!(\d+)\s*$/m, 'body']],
-  // "Merged in branch (pull request #12)".
-  bitbucket: [[/\(pull request #(\d+)\)/, 'subject']],
-  // "Pull request #12: Title", or "Merge pull request #12 in PROJ/repo from …".
-  bitbucketDC: [
-    [/^Pull request #(\d+): /, 'subject'],
-    [/^Merge pull request #(\d+) in /, 'subject'],
-  ],
-  // "Merged PR 12: Title".
-  azuredevops: [[/^Merged PR (\d+):/, 'subject']],
-};
-
-/** The pull request number a commit message names, in the words the forge
- *  hosting the repository (`providerId`) writes itself. */
-export function pullRequestNumber(
-  providerId: string,
-  subject: string,
-  body: string,
-): number | undefined {
-  for (const [pattern, part] of PULL_REQUEST_MESSAGES[providerId] ?? []) {
-    const match = pattern.exec(part === 'subject' ? subject : body);
-    if (match) {
-      const value = Number(match[1]);
-      if (Number.isSafeInteger(value) && value > 0) return value;
-    }
-  }
-  return undefined;
-}
-
-function encodePath(value: string): string {
-  return value
-    .split('/')
-    .filter((segment) => segment !== '')
-    .map(encodeURIComponent)
-    .join('/');
-}
-
-/** Web URL of pull request `number` on the forge hosting `repo`. */
-export function pullRequestUrl(
-  providerId: string,
-  repo: RepoDescriptor,
-  number: number,
-): string | undefined {
-  const owner = encodePath(repo.owner);
-  const name = encodePath(repo.name);
-  switch (providerId) {
-    case 'github':
-    case 'github-enterprise':
-      return `https://${repo.host}/${owner}/${name}/pull/${number}`;
-    case 'gitlab':
-      return `https://${repo.host}/${owner}/${name}/-/merge_requests/${number}`;
-    case 'bitbucket':
-      return `https://${repo.host}/${owner}/${name}/pull-requests/${number}`;
-    case 'bitbucketDC':
-      return `https://${repo.host}/projects/${owner}/repos/${name}/pull-requests/${number}`;
-    case 'azuredevops':
-      return `https://${repo.host}/${owner}/_git/${name}/pullrequest/${number}`;
-    default:
-      return undefined;
-  }
-}
+export { pullRequestNumber, pullRequestUrl } from '@gitglasses/integrations';
 
 // --- Message body -----------------------------------------------------------
 
@@ -179,6 +105,9 @@ export interface MessageBlock {
   text: string;
   /** A list item ("- x", "* x", "1. x"), kept on a line of its own. */
   listItem: boolean;
+  /** A line of the closing trailer paragraph ("Signed-off-by: …"), kept on
+   *  a line of its own. */
+  trailer?: boolean;
 }
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
@@ -186,19 +115,31 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
 /**
  * The message body split into paragraphs and list items, at most `maxLines`
  * lines of it. Wrapped lines of one paragraph are joined, the way git's own
- * tools reflow them.
+ * tools reflow them. The lines of the paragraph `trailers` were parsed from
+ * stay one per block.
  */
 export function messageBlocks(
   body: string,
   maxLines: number = MAX_BODY_LINES,
+  trailers: readonly Trailer[] = [],
 ): { blocks: MessageBlock[]; truncated: boolean } {
-  const lines = body.replace(/\r\n?/g, '\n').split('\n');
+  const lines = bodyLines(body);
   const truncated = lines.length > maxLines;
+  const { start, end } = trailerBlock(body, trailers) ?? { start: 0, end: 0 };
   const blocks: MessageBlock[] = [];
   let current: MessageBlock | undefined;
-  for (const line of lines.slice(0, maxLines)) {
-    if (line.trim() === '') {
-      current = undefined;
+  for (const [index, line] of lines.slice(0, maxLines).entries()) {
+    // Text after the trailer paragraph starts a paragraph of its own.
+    if (line.trim() === '' || index === end) current = undefined;
+    if (line.trim() === '') continue;
+    if (index >= start && index < end) {
+      // A line starting with a space continues the trailer before it.
+      if (current && line.startsWith(' ')) {
+        current.text += ` ${line.trim()}`;
+      } else {
+        current = { text: line.trim(), listItem: false, trailer: true };
+        blocks.push(current);
+      }
       continue;
     }
     if (LIST_ITEM.test(line)) {
@@ -216,12 +157,21 @@ export function messageBlocks(
   return { blocks, truncated };
 }
 
-/** Rendered blocks joined: list items on consecutive lines, paragraphs
- *  apart. */
-export function joinBlocks(rendered: { markdown: string; listItem: boolean }[]): string {
+/** Rendered blocks joined: list items on consecutive lines, trailers on
+ *  consecutive lines, paragraphs apart. */
+export function joinBlocks(
+  rendered: { markdown: string; listItem: boolean; trailer?: boolean }[],
+): string {
   let out = '';
   rendered.forEach((block, i) => {
-    if (i > 0) out += block.listItem && rendered[i - 1].listItem ? '  \n' : '\n\n';
+    if (i > 0) {
+      const previous = rendered[i - 1];
+      const sameRun =
+        (block.listItem && previous.listItem) ||
+        (block.trailer === true && previous.trailer === true);
+      // Two trailing spaces end a line without ending the paragraph.
+      out += sameRun ? '  \n' : '\n\n';
+    }
     out += block.markdown;
   });
   return out;
@@ -244,6 +194,10 @@ export interface CommitHoverInput {
   pullRequest?: { number: number; url: string };
   /** The forge's web routes are known, so Open on Remote has somewhere to go. */
   remote: boolean;
+  /** The commit's declared provenance as markdown, already escaped. */
+  provenance?: string;
+  /** The hovered document, as a URI string; offers "Why this line?". */
+  documentUri?: string;
   nowUnixSeconds?: number;
   locale?: string;
 }
@@ -275,8 +229,20 @@ export function renderCommitHover(input: CommitHoverInput): string {
   }
   if (hunk.path !== target.path) facts.push(`was ${codeSpan(hunk.path)}`);
   parts.push(facts.join(' · '));
+  if (input.provenance) parts.push(input.provenance);
 
   const links: string[] = [];
+  if (input.documentUri) {
+    const args: LineStoryArgs = { uri: input.documentUri, line: input.line };
+    links.push(
+      commandLink(
+        '$(question) Why this line?',
+        LINE_STORY_COMMAND,
+        args,
+        "The line's commit, pull request, linked issues and earlier versions",
+      ),
+    );
+  }
   if (target.repoPath !== '') {
     links.push(
       commandLink(

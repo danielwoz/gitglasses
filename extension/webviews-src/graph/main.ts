@@ -48,6 +48,7 @@ import {
   readThemeColors,
 } from './renderer';
 import { GraphStore } from './store';
+import { GraphProvenance } from './provenance';
 
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -63,6 +64,8 @@ document.body.innerHTML = `
     <button id="repo-name" class="toolbar-button" title="Select Repository"></button>
     <button id="filter-button" class="toolbar-button" aria-haspopup="true" aria-expanded="false"
       title="Show only some branches">All Branches ▾</button>
+    <select id="provenance-filter" class="toolbar-select" aria-label="Dim commits by declared AI provenance"
+      title="Dim the commits that do not match, by what each commit declares about AI authorship (git-ai notes, trailers, agent identities). Nothing is inferred from the code. Setting: gitglasses.provenance.enabled"></select>
     <div id="find-box" role="search">
       <input id="find-input" type="text" spellcheck="false" aria-label="Find commits"
         placeholder="Find by message, author, SHA or ref (Ctrl+F)">
@@ -129,6 +132,10 @@ const header = {
 
 const store = new GraphStore();
 const renderer = new GraphRenderer(canvas);
+const provenance = new GraphProvenance(byId<HTMLSelectElement>('provenance-filter'), () => {
+  saveState();
+  render();
+});
 let theme = readThemeColors(getComputedStyle(document.body));
 
 /** Everything that came with the latest reset. */
@@ -180,6 +187,7 @@ function saveState(): void {
       detailsOpen: details.open,
       detailsShare: details.share,
       query: find.query || undefined,
+      provenanceFilter: provenance.filter === 'all' ? undefined : provenance.filter,
     };
     vscode.setState(state);
   }, 300);
@@ -215,6 +223,7 @@ function paint(): void {
     matches: find.matchSet,
     currentMatch: find.current,
     headSha,
+    provenance: provenance.renderState(),
   });
   paintHeader();
   paintA11y();
@@ -246,6 +255,8 @@ function rowLabel(row: GraphRow): string {
   const refs = row.refs.map((ref) => ref.name).join(', ');
   const parts = [row.summary, row.author.name, rowDate(row), shortSha(row.sha)];
   if (refs) parts.push(refs);
+  const declared = provenance.describe(row);
+  if (declared) parts.push(declared);
   if (row.kind === 'stash') parts.unshift('Stash');
   return parts.join(', ');
 }
@@ -980,9 +991,11 @@ scroller.addEventListener('mousemove', (event) => {
   if (index !== hoverIndex) {
     hoverIndex = index;
     const row = store.rows[index];
+    const declared = row ? provenance.describe(row) : undefined;
     scroller.title =
       row && row.kind !== 'wip'
-        ? `${row.summary}\n${row.author.name} · ${rowDate(row)} · ${shortSha(row.sha)}`
+        ? `${row.summary}\n${row.author.name} · ${rowDate(row)} · ${shortSha(row.sha)}` +
+          (declared ? `\n${declared}` : '')
         : '';
     render();
   }
@@ -1195,6 +1208,8 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
       view.maxLanes = message.maxLanes;
       view.filter = message.filter;
       view.restoring = message.restore === true && pendingRestore !== undefined;
+      provenance.marks.clear();
+      provenance.setEnabled(message.provenance === true);
       restorePagesLeft = 1 + RESTORE_EXTRA_PAGES;
       view.loaded = false;
       repoNameEl.textContent = message.repoName;
@@ -1243,9 +1258,22 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
     case 'wipChanged':
       if (details.key === 'wip') updateDetails(true);
       break;
-    case 'settings':
+    case 'settings': {
       view.maxLanes = message.maxLanes;
       view.canMutate = message.canMutate;
+      const shown = provenance.enabled;
+      provenance.setEnabled(message.provenance === true);
+      if (provenance.enabled !== shown) {
+        // Details already shown carry provenance, or lack it.
+        details.cache.clear();
+        details.key = '';
+        updateDetails();
+      }
+      render();
+      break;
+    }
+    case 'provenance':
+      provenance.merge(message.marks);
       render();
       break;
     case 'error':
@@ -1280,6 +1308,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 });
 
 if (saved?.detailsShare) details.share = saved.detailsShare;
+provenance.setFilter(saved?.provenanceFilter);
 showLoading(true);
 scroller.focus();
 post({ type: 'ready', state: saved });

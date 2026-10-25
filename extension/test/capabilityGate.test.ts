@@ -73,6 +73,7 @@ const PURE_METHODS = [
   'stage/files',
   'stage/hunks',
   'worktree/list',
+  'worktree/status',
   'remote/list',
 ];
 
@@ -117,7 +118,7 @@ describe('isMethodAvailable in Restricted Mode', () => {
   const restricted: EngineCapabilities = { ...caps(false), restricted: true };
 
   it('refuses every method that needs git or changes the repository', () => {
-    for (const method of [...CLI_METHODS, 'stage/files', 'stage/hunks', 'worktree/list']) {
+    for (const method of [...CLI_METHODS, 'stage/files', 'stage/hunks']) {
       expect(isMethodAvailable(restricted, method), method).toBe(false);
     }
   });
@@ -133,6 +134,8 @@ describe('isMethodAvailable in Restricted Mode', () => {
       'rev/fileAtRev',
       'refs/list',
       'commit/details',
+      'worktree/list',
+      'worktree/status',
     ]) {
       expect(isMethodAvailable(restricted, method), method).toBe(true);
     }

@@ -2,12 +2,17 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "exec/cli_detect.h"
 #include "services/mutate/mutate_common.h"
 #include "services/params.h"
+#include "services/worktree/worktree_status.h"
 
 namespace gg::services {
 
@@ -29,20 +34,26 @@ bool lineHasPrefix(const std::string& line, const std::string& prefix) {
 }
 
 // Parses `git worktree list --porcelain`: one attribute block per worktree,
-// blocks separated by blank lines.
-rpc::Json parseWorktreePorcelain(const std::vector<std::string>& lines) {
+// blocks separated by blank lines. `current` marks the worktree `repo` serves.
+rpc::Json parseWorktreePorcelain(const std::vector<std::string>& lines, const core::Repo& repo) {
   rpc::Json worktrees = rpc::Json::array();
   std::string path, branch, sha;
-  bool bare = false, locked = false, open = false;
+  bool bare = false, locked = false, prunable = false, open = false;
   const auto flush = [&] {
     if (!open) return;
-    rpc::Json entry = {{"path", path}, {"sha", sha}, {"bare", bare}, {"locked", locked}};
+    rpc::Json entry = {{"path", path},
+                       {"sha", sha},
+                       {"bare", bare},
+                       {"locked", locked},
+                       {"prunable", prunable},
+                       {"missing", !bare && worktree::isMissingDirectory(path)},
+                       {"current", worktree::isRepoDirectory(repo, path)}};
     if (!branch.empty()) entry["branch"] = branch;
     worktrees.push_back(std::move(entry));
     path.clear();
     branch.clear();
     sha.clear();
-    bare = locked = open = false;
+    bare = locked = prunable = open = false;
   };
   for (const auto& line : lines) {
     if (line.empty()) {
@@ -61,11 +72,38 @@ rpc::Json parseWorktreePorcelain(const std::vector<std::string>& lines) {
       bare = true;
     } else if (line == "locked" || lineHasPrefix(line, "locked ")) {
       locked = true;
+    } else if (line == "prunable" || lineHasPrefix(line, "prunable ")) {
+      prunable = true;
     }
     // "detached" and unknown attributes carry no protocol field.
   }
   flush();
   return worktrees;
+}
+
+// The git on PATH, asked once per dispatcher the first time a merge check
+// needs it rather than at startup.
+class LazyGitVersion {
+ public:
+  std::optional<exec::GitVersion> get() {
+    std::call_once(once_, [this] { version_ = exec::probeGitVersion(); });
+    return version_;
+  }
+
+ private:
+  std::once_flag once_;
+  std::optional<exec::GitVersion> version_;
+};
+
+// The wasm engine reads only the workspace mirrored into its own file
+// system, and linked worktrees live outside it: listing them would report
+// every one as missing. The worktree reads are refused there instead.
+void requireHostFileSystem() {
+#ifdef GG_WASM
+  throw rpc::HandlerError{{ErrorCode::MethodNotSupported,
+                           "worktrees are not available in the web engine: linked worktrees lie "
+                           "outside the mirrored workspace"}};
+#endif
 }
 
 }  // namespace
@@ -117,15 +155,35 @@ void registerStashWorktreeMethods(rpc::Dispatcher& dispatcher, ServiceContext& c
       },
       rpc::Mode::Serial);
 
+  // git's own listing when it may run; libgit2's otherwise (Restricted Mode,
+  // builds without the CLI), which reads the same administrative files.
   dispatcher.method(
       "worktree/list",
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
-        requireGitCli(context);
+        requireHostFileSystem();
         auto repo = openRepo(context, params);
+        if (!context.cliAvailable) return {{"worktrees", worktree::listWithLibgit2(repo)}};
         auto output =
             runGitOrThrow(repo, {"worktree", "list", "--porcelain"}, token, "git worktree list");
-        return {{"worktrees", parseWorktreePorcelain(output.lines)}};
+        return {{"worktrees", parseWorktreePorcelain(output.lines, repo)}};
+      },
+      rpc::Mode::Concurrent);
+
+  auto gitVersion = std::make_shared<LazyGitVersion>();
+  dispatcher.method(
+      "worktree/status",
+      [&context, gitVersion](const rpc::Json& params, const CancelToken& token,
+                             const rpc::NotifyFn&) -> rpc::Json {
+        requireHostFileSystem();
+        worktree::StatusRequest request;
+        request.path = requireString(params, "path");
+        request.base = requirePositional(optionalString(params, "base"), "base");
+        request.cliAvailable = context.cliAvailable;
+        request.restricted = context.restricted;
+        auto repo = openRepo(context, params);
+        if (context.cliAvailable) request.gitVersion = gitVersion->get();
+        return worktree::status(repo, request, token);
       },
       rpc::Mode::Concurrent);
 

@@ -8,12 +8,14 @@ import {
   BlameCommit,
   BlameOptions,
   CommitDetails,
+  CommitProvenance,
   CommitSummaryInfo,
   DiffHunk,
   FileChange,
   FileHistoryEntry,
   GraphRow,
   HeadState,
+  LineHistoryEntry,
   PatchEnvelope,
   PatchFileChange,
   RebaseEntry,
@@ -21,6 +23,8 @@ import {
   SequencerOperation,
   SequencerState,
   Sha,
+  WorktreeEntry,
+  WorktreeStatus,
   strict,
 } from './models.js';
 
@@ -63,6 +67,24 @@ export const MAX_FILE_BYTES = 16 * 1024 * 1024;
 /** Most files commit/details lists; a commit that changes more sets
  *  `truncated`. */
 export const COMMIT_DETAILS_MAX_FILES = 2000;
+
+/** Most commits one commit/provenance request may ask about. */
+export const COMMIT_PROVENANCE_MAX_SHAS = 1000;
+
+/** Most commits one notes/read request may ask about. */
+export const NOTES_READ_MAX_SHAS = 64;
+
+/** Longest note notes/read returns, in bytes. */
+export const NOTES_READ_MAX_BYTES = 128 * 1024;
+
+/** A full ref name under refs/notes/. */
+const NotesRef = Type.Optional(
+  Type.String({
+    minLength: 1,
+    pattern: '^refs/notes/.+',
+    description: 'Notes ref to read, a full ref name. Omitted means refs/notes/ai.',
+  }),
+);
 
 const Limit = Type.Optional(
   Type.Integer({
@@ -297,6 +319,34 @@ export const RequestSchemas = {
       strict,
     ),
   },
+  'log/compare': {
+    description:
+      "Compares two revisions as `git log base..head` and `git rev-list --left-right --count base...head` do: their merge base, how many commits head has that base lacks (ahead) and base has that head lacks (behind), and up to `limit` of head's own commits, newest first. Diffing from `mergeBase` (diff/refs, patch/create's range) shows what head changed since the two diverged. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        base: positional('Revision compared against, such as main or origin/main.'),
+        head: positional('Revision compared, such as HEAD or a feature branch.'),
+        limit: Limit,
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        /** The commits `base` and `head` resolved to. */
+        base: Sha,
+        head: Sha,
+        /** The best common ancestor; absent when the histories are unrelated. */
+        mergeBase: Type.Optional(Sha),
+        ahead: Type.Integer({ minimum: 0 }),
+        behind: Type.Integer({ minimum: 0 }),
+        /** Head's own commits in topological order, newest first; `ahead`
+         *  counts all of them. */
+        commits: Type.Array(CommitSummaryInfo),
+      },
+      strict,
+    ),
+  },
   'commit/details': {
     description: `One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most ${COMMIT_DETAILS_MAX_FILES} files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.`,
     params: Type.Object(
@@ -309,6 +359,80 @@ export const RequestSchemas = {
       strict,
     ),
     result: CommitDetails,
+  },
+  'commit/provenance': {
+    description:
+      "What each commit declares about who wrote it: a git-ai authorship log in refs/notes/ai (or, when that has none for the commit, in a remote's copy under refs/notes/ai-remote/), its trailers (Co-authored-by, Assisted-by or Generated-by naming an AI, and the session links agents add) and an author or committer that is a known agent identity. Declared only: nothing is inferred from the code, and a commit that declares nothing is 'unknown'. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        shas: Type.Array(Sha, {
+          minItems: 1,
+          maxItems: COMMIT_PROVENANCE_MAX_SHAS,
+          description: `Full commit shas, at most ${COMMIT_PROVENANCE_MAX_SHAS}.`,
+        }),
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        commits: Type.Record(Type.String(), CommitProvenance, {
+          description: 'Keyed by sha. Shas that name no commit in the repository are left out.',
+        }),
+      },
+      strict,
+    ),
+  },
+  'notes/read': {
+    description: `The notes a notes ref attaches to commits, read with libgit2 (git_note_read) and cached per commit, so Restricted Mode and engines without the git CLI serve it too. A note longer than ${NOTES_READ_MAX_BYTES} bytes, or one whose content is missing from a partial clone, is listed in \`omitted\` instead.`,
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        shas: Type.Array(Sha, {
+          minItems: 1,
+          maxItems: NOTES_READ_MAX_SHAS,
+          description: `Full commit shas, at most ${NOTES_READ_MAX_SHAS}.`,
+        }),
+        ref: NotesRef,
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        ref: Type.String(),
+        exists: Type.Boolean({ description: 'The notes ref exists in the repository.' }),
+        notes: Type.Record(Type.String(), Type.String(), {
+          description: 'Note text keyed by sha; commits without a note are left out.',
+        }),
+        omitted: Type.Array(Sha, {
+          description: 'Commits whose note exists but is too long or could not be read.',
+        }),
+      },
+      strict,
+    ),
+  },
+  'notes/addFetchRefspec': {
+    description:
+      "Adds `+<ref>:<ref>-remote/<remote>` to remote.<remote>.fetch (`git config --add`), so later fetches from the remote bring its notes along; git does not fetch notes by default. The notes land in that ref of their own (refs/notes/ai-remote/origin for refs/notes/ai, the name git-ai uses), never in <ref> itself, so notes written locally for commits not yet pushed are kept; commit/provenance reads both. Characters of the remote's name other than letters, digits, '-' and '_' become '_'. Changes nothing when one of the remote's fetch refspecs already brings the ref into itself or into such a copy.",
+    params: Type.Object(
+      {
+        repoId: Type.String(),
+        remote: positional('Remote whose fetches should bring the notes.'),
+        ref: NotesRef,
+      },
+      strict,
+    ),
+    result: Type.Object(
+      {
+        added: Type.Boolean({
+          description: 'False when the remote already fetched the ref.',
+        }),
+        trackingRef: Type.String({
+          description: "The ref the remote's notes are fetched into.",
+        }),
+      },
+      strict,
+    ),
   },
   'history/file': {
     description: 'File history following renames, newest first.',
@@ -331,19 +455,35 @@ export const RequestSchemas = {
     ),
   },
   'history/line': {
-    description: 'History of a line range (1-based, inclusive).',
+    description:
+      "History of a line range (1-based, inclusive), newest first, following the range through earlier versions and renames like `git log -L`. Each entry's additions, deletions and path describe the range's diff in that commit.",
     params: Type.Object(
       {
         repoId: Type.String(),
-        path: Path('Path relative to the repository root.'),
+        path: Path('Path relative to the repository root, in `rev` when given.'),
         startLine: Type.Integer({ minimum: 1 }),
         /** The engine additionally requires endLine >= startLine, which this
          * schema cannot express. */
         endLine: Type.Integer({ minimum: 1 }),
+        rev: optionalPositional(
+          'Revision whose version of `path` the line numbers refer to, and where the walk starts. Omitted means HEAD.',
+        ),
+        limit: Type.Optional(
+          Type.Integer({
+            minimum: 1,
+            maximum: MAX_LIMIT,
+            description: 'Most entries to return, newest first. Omitted returns every one.',
+          }),
+        ),
+        patch: Type.Optional(
+          Type.Boolean({
+            description: "Include each commit's diff of the range as `patch`. Default false.",
+          }),
+        ),
       },
       strict,
     ),
-    result: Type.Object({ entries: Type.Array(FileHistoryEntry) }, strict),
+    result: Type.Object({ entries: Type.Array(LineHistoryEntry) }, strict),
   },
   'search/commits': {
     description:
@@ -916,26 +1056,25 @@ export const RequestSchemas = {
     result: EmptyObject,
   },
   'worktree/list': {
-    description: 'Worktrees attached to the repository.',
+    description:
+      "Worktrees attached to the repository: the main worktree (or the bare repository) first, then the linked ones by path. Read by git when it may run, otherwise through libgit2, which like git takes a linked worktree's HEAD from its administrative directory. The web (wasm) engine, whose files hold only the mirrored workspace, refuses it with -32003.",
     params: Type.Object({ repoId: Type.String() }, strict),
-    result: Type.Object(
+    result: Type.Object({ worktrees: Type.Array(WorktreeEntry) }, strict),
+  },
+  'worktree/status': {
+    description:
+      "Status of one worktree, for a view or an agent to see at a glance: uncommitted paths, last activity, ahead/behind its upstream and a base revision, whether it would merge cleanly into the base, and the coding agent it appears to belong to. Reads through libgit2; the merge check alone runs git (2.38 or later), and is null where git may not run. Call it per worktree, lazily: it costs a working-tree scan.",
+    params: Type.Object(
       {
-        worktrees: Type.Array(
-          Type.Object(
-            {
-              path: Type.String(),
-              branch: Type.Optional(Type.String()),
-              /** Empty for a bare worktree, which has no checked-out commit. */
-              sha: Type.String(),
-              bare: Type.Boolean(),
-              locked: Type.Boolean(),
-            },
-            strict,
-          ),
+        repoId: Type.String(),
+        path: Path('A worktree directory worktree/list reported.'),
+        base: optionalPositional(
+          'Revision to compare against. Omitted means the branch checked out in the main worktree (or the HEAD branch of a bare repository); with that HEAD detached, no base is compared.',
         ),
       },
       strict,
     ),
+    result: WorktreeStatus,
   },
   'worktree/add': {
     description: 'Adds a worktree checked out at a revision.',
@@ -1251,6 +1390,7 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'repo/state',
   'blame/file',
   'log/commits',
+  'log/compare',
   'search/commits',
   'rev/fileAtRev',
   'refs/list',
@@ -1263,4 +1403,8 @@ export const RESTRICTED_MODE_METHODS: readonly (keyof typeof RequestSchemas)[] =
   'diff/fileHunks',
   'remote/list',
   'commit/details',
+  'worktree/list',
+  'worktree/status',
+  'notes/read',
+  'commit/provenance',
 ];

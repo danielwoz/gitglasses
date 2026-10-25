@@ -228,6 +228,87 @@ describe('allow list: the operator names the directories, and git runs there', (
   });
 });
 
+// Clients such as desktop apps start the server from / or the home directory
+// and share no folders; --read names what they may read, still without git.
+describe('read list: the operator names directories read without git', () => {
+  it('serves a --read directory through the restricted engine when the client has no roots', async () => {
+    const trusted = fakeEngine('trusted');
+    const restricted = fakeEngine('restricted');
+    const handlers = createToolHandlers({
+      client: trusted as never,
+      restrictedClient: restricted as never,
+      read: [workspace],
+      clientRoots: async () => undefined,
+      env: {},
+    });
+    await handlers.git_status({ repoPath: path.join(workspace, 'sub') });
+    await expect(handlers.git_status({ repoPath: sibling })).rejects.toThrow(
+      /outside the directories this server was started with and the client's workspace roots/,
+    );
+    await expect(
+      handlers.git_file_history({ repoPath: workspace, file: 'a.txt', limit: 20 }),
+    ).rejects.toThrow(/git_file_history needs git .*a --read directory/);
+    expect(servedBy(trusted, restricted)).toEqual(['restricted', 'restricted']);
+  });
+
+  it("adds to the client's roots rather than replacing them", async () => {
+    const restricted = fakeEngine('restricted');
+    const handlers = createToolHandlers({
+      client: fakeEngine('trusted') as never,
+      restrictedClient: restricted as never,
+      read: [workspace],
+      clientRoots: async () => [sibling],
+      env: {},
+    });
+    await handlers.git_status({ repoPath: workspace });
+    await handlers.git_status({ repoPath: sibling });
+    expect(servedBy(restricted)).toEqual(['restricted', 'restricted']);
+  });
+
+  it('stays read-only beside an allow list, which still replaces the client roots', async () => {
+    const trusted = fakeEngine('trusted');
+    const restricted = fakeEngine('restricted');
+    const handlers = createToolHandlers({
+      client: trusted as never,
+      restrictedClient: restricted as never,
+      allow: [sibling],
+      read: [workspace],
+      clientRoots: async () => [base],
+      env: {},
+    });
+    await handlers.git_status({ repoPath: sibling });
+    await handlers.git_status({ repoPath: workspace });
+    await expect(handlers.git_status({ repoPath: base })).rejects.toThrow(/outside/);
+    expect(servedBy(trusted)).toEqual(['trusted']);
+    expect(servedBy(restricted)).toEqual(['restricted']);
+  });
+
+  it('takes each directory whole, and "*" as a name rather than every path', async () => {
+    const restricted = fakeEngine('restricted');
+    const handlers = createToolHandlers({
+      client: fakeEngine('trusted') as never,
+      restrictedClient: restricted as never,
+      read: ['*', `${workspace}${path.delimiter}${sibling}`],
+      clientRoots: async () => undefined,
+      env: {},
+    });
+    await expect(handlers.git_status({ repoPath: sibling })).rejects.toThrow(/outside/);
+    await expect(handlers.git_status({ repoPath: workspace })).rejects.toThrow(/outside/);
+    expect(restricted.requests).toEqual([]);
+  });
+
+  it('serves nothing without a restricted engine to read with', async () => {
+    const trusted = fakeEngine('trusted');
+    const handlers = createToolHandlers({
+      client: trusted as never,
+      read: [workspace],
+      env: {},
+    });
+    await expect(handlers.git_status({ repoPath: workspace })).rejects.toThrow(/outside/);
+    expect(trusted.requests).toEqual([]);
+  });
+});
+
 // The roots come from the MCP session itself: roots/list after initialize,
 // and again after every notifications/roots/list_changed.
 describe('client roots over MCP', () => {

@@ -70,6 +70,8 @@ const revList = git(repoA, ['rev-list', '--topo-order', 'HEAD']).trim().split('\
 // Dirty state: one unstaged modification, one untracked file.
 writeFileSync(join(repoA, 'lib.txt'), 'lib v2\n');
 writeFileSync(join(repoA, 'untracked.txt'), 'loose\n');
+// A linked worktree, which lives outside anything mounted into the engine.
+git(repoA, ['worktree', 'add', '-q', '--detach', join(scratch, 'repoA-linked'), 'side']);
 
 // Repo B: independent second repository (multi-repo state).
 const repoB = join(scratch, 'repoB');
@@ -286,6 +288,17 @@ check('mutate/commit is rejected without a git CLI', () => {
   const response = rpc('mutate/commit', { repoId, message: 'nope' });
   assert.ok(response.error, `expected error, got ${JSON.stringify(response)}`);
   assert.equal(response.error.code, -32003);
+});
+
+check('worktree reads are refused: linked worktrees lie outside the mounted files', () => {
+  for (const [method, params] of [
+    ['worktree/list', { repoId }],
+    ['worktree/status', { repoId, path: '/repo' }],
+  ]) {
+    const response = rpc(method, params);
+    assert.ok(response.error, `expected error from ${method}, got ${JSON.stringify(response)}`);
+    assert.equal(response.error.code, -32003);
+  }
 });
 
 check('second repo works independently (multi-repo state)', () => {

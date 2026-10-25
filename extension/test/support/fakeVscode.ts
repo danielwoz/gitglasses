@@ -195,6 +195,19 @@ export class ThemeIcon {
   constructor(readonly id: string) {}
 }
 
+/** Markdown as a hover or tooltip holds it; `value` is what VS Code renders. */
+export class MarkdownString {
+  supportThemeIcons = false;
+  isTrusted: boolean | { enabledCommands: readonly string[] } = false;
+
+  constructor(public value = '') {}
+
+  appendMarkdown(value: string): this {
+    this.value += value;
+    return this;
+  }
+}
+
 export class TreeItem {
   description?: string;
   tooltip?: string;

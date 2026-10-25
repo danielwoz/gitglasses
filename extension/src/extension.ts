@@ -36,6 +36,8 @@ import { registerPatchCommands } from './patches/patchCommands';
 import { AskpassService, integrationCredential } from './auth/askpassService';
 import { createEngineHealth } from './engine/engineHealth';
 import { configureSync, registerSyncCommands } from './sync/syncCommands';
+import { HomeViewProvider } from './home/homeView';
+import { startMcpService } from './mcp/mcpService';
 
 function resolveEngineBinary(context: vscode.ExtensionContext): string | undefined {
   const configured = vscode.workspace
@@ -150,6 +152,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   configureSync({ log, showLog, askpass });
   context.subscriptions.push(askpass, ...registerSyncCommands(engine, repos));
+
+  // The bundled MCP server, registered with the editor's agents.
+  const homeView = core.views['gitglasses.views.home'];
+  context.subscriptions.push(
+    ...startMcpService(context, {
+      enginePath,
+      log,
+      setHomeSection: (section) => {
+        if (homeView instanceof HomeViewProvider) homeView.setExtraSections(section);
+      },
+    }),
+  );
 
   // The engine binary and its log level are fixed when the engine process is
   // set up, so a change takes a window reload.

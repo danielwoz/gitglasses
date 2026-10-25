@@ -177,11 +177,13 @@ function createFixtureWorkspace(enginePath: string, scratch: string): string {
 // A repository that names a command everywhere git looks for one: a
 // core.fsmonitor command, a clean/smudge filter and a textconv driver applied
 // to every path, and hooks around commits and checkouts. Each command drops a
-// file into `markers` when it runs. The commits are made before any of it is
-// planted, so building the fixture runs none of them.
-function createPlantedWorkspace(): { root: string; markers: string } {
+// file into `markers` when it runs. The commits, and a linked worktree one
+// commit ahead, are made before any of it is planted, so building the fixture
+// runs none of them.
+function createPlantedWorkspace(): { root: string; markers: string; side: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-untrusted-'));
   const markers = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-markers-'));
+  const side = fs.mkdtempSync(path.join(os.tmpdir(), 'gitglasses-e2e-side-'));
 
   git(root, 'init');
   git(root, 'config', 'core.autocrlf', 'false');
@@ -190,6 +192,10 @@ function createPlantedWorkspace(): { root: string; markers: string } {
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileCommittedContents);
   git(root, 'add', '.');
   git(root, 'commit', '-m', 'add alpha and tracked');
+  git(root, 'worktree', 'add', '-q', '-b', 'side', path.join(side, 'side'), 'HEAD');
+  write(path.join(side, 'side'), 'side.txt', 'side\n');
+  git(path.join(side, 'side'), 'add', 'side.txt');
+  git(path.join(side, 'side'), 'commit', '-m', 'add side');
   write(root, FIXTURE.dirtyFile, FIXTURE.dirtyFileWorkingContents);
 
   // Forward slashes read the same to git's config parser and to sh on every
@@ -214,7 +220,7 @@ function createPlantedWorkspace(): { root: string; markers: string } {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `#!/bin/sh\ntouch ${marker(`hook-${hook}`)}\n`, { mode: 0o755 });
   }
-  return { root, markers };
+  return { root, markers, side };
 }
 
 // Opens the planted workspace with workspace trust on and the startup prompt
@@ -259,7 +265,7 @@ function runUntrusted(vscodeExecutablePath: string, enginePath: string): void {
       throw new Error(`Restricted Mode run failed: exit ${result.status ?? result.signal}`);
     }
   } finally {
-    for (const dir of [planted.root, planted.markers, profile]) {
+    for (const dir of [planted.root, planted.markers, planted.side, profile]) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }

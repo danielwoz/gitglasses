@@ -201,6 +201,125 @@ TEST(HistoryService, LogCommitsHonorsRefAndOversizedLimit) {
   EXPECT_EQ(badLimit["error"]["code"], -32602);
 }
 
+// main and a feature branch that diverged, with main merged into the feature
+// branch once along the way: the merged-in main commits belong to both sides.
+void buildDivergedBranches(FixtureRepo& fixture) {
+  commitTick(fixture, "base", 1);
+  fixture.run("git checkout -q -b feature");
+  commitTick(fixture, "feature one", 2);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "main one", 3);
+  fixture.run("git checkout -q feature");
+  fixture.runAt("@1700000240 +0000", "git merge -q --no-ff --no-edit main");
+  commitTick(fixture, "feature two", 5);
+  commitTick(fixture, "feature three", 6);
+  fixture.run("git checkout -q main");
+  commitTick(fixture, "main two", 7);
+  commitTick(fixture, "main three", 8);
+}
+
+TEST(HistoryService, LogCompareMatchesRevListAndMergeBase) {
+  FixtureRepo fixture;
+  buildDivergedBranches(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json compared = session.request(
+      req(10, "log/compare", {{"repoId", repoId}, {"base", "main"}, {"head", "feature"}}));
+  ASSERT_TRUE(compared.contains("result")) << compared.dump();
+  const Json& result = compared["result"];
+
+  EXPECT_EQ(result["base"], gitLines(fixture.root(), "rev-parse main")[0]);
+  EXPECT_EQ(result["head"], gitLines(fixture.root(), "rev-parse feature")[0]);
+  EXPECT_EQ(result["mergeBase"], gitLines(fixture.root(), "merge-base main feature")[0]);
+
+  // git rev-list --left-right --count main...feature prints "behind\tahead".
+  const std::string counts =
+      gitLines(fixture.root(), "rev-list --left-right --count main...feature")[0];
+  const auto tab = counts.find('\t');
+  EXPECT_EQ(result["behind"].get<std::int64_t>(), std::stoll(counts.substr(0, tab)));
+  EXPECT_EQ(result["ahead"].get<std::int64_t>(), std::stoll(counts.substr(tab + 1)));
+  EXPECT_EQ(result["ahead"], 4);
+  EXPECT_EQ(result["behind"], 2);
+
+  // The same commits git lists for main..feature, each before its parents.
+  auto expected = gitLines(fixture.root(), "rev-list main..feature");
+  std::vector<std::string> listed;
+  std::map<std::string, size_t> position;
+  for (const auto& commit : result["commits"]) {
+    position[commit["sha"].get<std::string>()] = listed.size();
+    listed.push_back(commit["sha"]);
+  }
+  std::sort(expected.begin(), expected.end());
+  auto sortedListed = listed;
+  std::sort(sortedListed.begin(), sortedListed.end());
+  EXPECT_EQ(sortedListed, expected);
+  for (const auto& commit : result["commits"]) {
+    for (const auto& parent : commit["parents"]) {
+      const auto found = position.find(parent.get<std::string>());
+      if (found == position.end()) continue;
+      EXPECT_LT(position.at(commit["sha"].get<std::string>()), found->second);
+    }
+  }
+  EXPECT_EQ(result["commits"][0]["summary"], "feature three");
+}
+
+TEST(HistoryService, LogCompareLimitsTheListButNotTheCounts) {
+  FixtureRepo fixture;
+  buildDivergedBranches(fixture);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json compared = session.request(
+      req(10, "log/compare",
+          {{"repoId", repoId}, {"base", "main"}, {"head", "feature"}, {"limit", 2}}));
+  ASSERT_TRUE(compared.contains("result")) << compared.dump();
+  EXPECT_EQ(compared["result"]["commits"].size(), 2u);
+  EXPECT_EQ(compared["result"]["ahead"], 4);
+
+  // Comparing a revision with itself, or with its own ancestor.
+  Json same = session.request(
+      req(11, "log/compare", {{"repoId", repoId}, {"base", "main"}, {"head", "main"}}));
+  EXPECT_EQ(same["result"]["ahead"], 0);
+  EXPECT_EQ(same["result"]["behind"], 0);
+  EXPECT_TRUE(same["result"]["commits"].empty());
+  EXPECT_EQ(same["result"]["mergeBase"], same["result"]["head"]);
+
+  Json ancestor = session.request(
+      req(12, "log/compare", {{"repoId", repoId}, {"base", "main~2"}, {"head", "main"}}));
+  EXPECT_EQ(ancestor["result"]["ahead"], 2);
+  EXPECT_EQ(ancestor["result"]["behind"], 0);
+  EXPECT_EQ(ancestor["result"]["mergeBase"], ancestor["result"]["base"]);
+}
+
+TEST(HistoryService, LogCompareReportsUnrelatedHistoriesAndUnknownRevisions) {
+  FixtureRepo fixture;
+  commitTick(fixture, "main one", 1);
+  fixture.run("git checkout -q --orphan other");
+  commitTick(fixture, "other root", 2);
+  commitTick(fixture, "other two", 3);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  Json unrelated = session.request(
+      req(10, "log/compare", {{"repoId", repoId}, {"base", "main"}, {"head", "other"}}));
+  ASSERT_TRUE(unrelated.contains("result")) << unrelated.dump();
+  EXPECT_FALSE(unrelated["result"].contains("mergeBase"));
+  EXPECT_EQ(unrelated["result"]["ahead"], 2);
+  EXPECT_EQ(unrelated["result"]["behind"], 2);
+
+  Json unknown = session.request(
+      req(11, "log/compare", {{"repoId", repoId}, {"base", "no-such-ref"}, {"head", "HEAD"}}));
+  EXPECT_EQ(unknown["error"]["code"], -32001);
+  EXPECT_NE(unknown["error"]["message"].get<std::string>().find("no-such-ref"), std::string::npos);
+
+  Json missing = session.request(req(12, "log/compare", {{"repoId", repoId}, {"base", "main"}}));
+  EXPECT_EQ(missing["error"]["code"], -32602);
+}
+
 // main: initial, base, a feature branch merged with --no-ff, then `after`
 // single-parent commits on top, so the newest commits form a first-parent run
 // that ends at the merge.
@@ -561,15 +680,20 @@ TEST(HistoryService, LineHistoryReportsCommitsTouchingRange) {
   ASSERT_EQ(entries.size(), expected.size());
   for (size_t i = 0; i < expected.size(); ++i) {
     EXPECT_EQ(entries[i]["sha"], expected[i]) << i;
-    EXPECT_EQ(entries[i]["additions"], 0);
-    EXPECT_EQ(entries[i]["deletions"], 0);
     EXPECT_EQ(entries[i]["path"], "lines.txt");
+    // The diff text is only sent when asked for.
+    EXPECT_FALSE(entries[i].contains("patch")) << i;
   }
   // The line-3-only edit must not appear.
   for (const auto& entry : entries) {
     EXPECT_NE(entry["summary"], "edit line three");
   }
   EXPECT_EQ(entries[0]["summary"], "edit line two");
+  // The counts are the range's: line two was replaced, then created.
+  EXPECT_EQ(entries[0]["additions"], 1);
+  EXPECT_EQ(entries[0]["deletions"], 1);
+  EXPECT_EQ(entries[1]["additions"], 1);
+  EXPECT_EQ(entries[1]["deletions"], 0);
 
   Json badRange = session.request(
       req(11, "history/line",
@@ -579,6 +703,83 @@ TEST(HistoryService, LineHistoryReportsCommitsTouchingRange) {
       req(12, "history/line",
           {{"repoId", repoId}, {"path", "lines.txt"}, {"startLine", 3}, {"endLine", 2}}));
   EXPECT_EQ(inverted["error"]["code"], -32602);
+}
+
+TEST(HistoryService, LineHistoryFromARevisionWithDiffsFollowsRenames) {
+  FixtureRepo fixture;
+  fixture.writeFile("old.txt", "a\nb\nc\n");
+  fixture.run("git add old.txt");
+  commitTick(fixture, "create", 1);
+  fixture.writeFile("old.txt", "a\nB\nc\n");
+  fixture.run("git add old.txt");
+  commitTick(fixture, "edit b", 2);
+  fixture.run("git mv old.txt new.txt");
+  commitTick(fixture, "rename", 3);
+  fixture.writeFile("new.txt", "a\nBB\nc\n");
+  fixture.run("git add new.txt");
+  commitTick(fixture, "edit again", 4);
+  fixture.writeFile("new.txt", "a\nBBB\nc\n");
+  fixture.run("git add new.txt");
+  commitTick(fixture, "edit once more", 5);
+  // Settings that would change the diff text the engine reads.
+  fixture.run("git config color.ui always");
+  fixture.run("git config diff.noprefix true");
+  const std::string editAgain = gitLines(fixture.root(), "rev-parse HEAD~1").at(0);
+
+  InteractiveSession session;
+  const std::string repoId = discoverRepo(session, fixture.root());
+
+  // From the commit before HEAD, so the newest edit is not part of it.
+  Json history = session.request(req(10, "history/line",
+                                     {{"repoId", repoId},
+                                      {"path", "new.txt"},
+                                      {"startLine", 2},
+                                      {"endLine", 2},
+                                      {"rev", editAgain},
+                                      {"patch", true}}));
+  ASSERT_TRUE(history.contains("result")) << history.dump();
+  const Json& entries = history["result"]["entries"];
+  ASSERT_EQ(entries.size(), 3u) << history.dump();
+  EXPECT_EQ(entries[0]["summary"], "edit again");
+  EXPECT_EQ(entries[0]["path"], "new.txt");
+  // git 2.56 and later also print each side's blob ids on an index line.
+  std::string patch = entries[0]["patch"];
+  const size_t index = patch.find("\nindex ");
+  if (index != std::string::npos) patch.erase(index + 1, patch.find('\n', index + 1) - index);
+  EXPECT_EQ(patch,
+            "diff --git a/new.txt b/new.txt\n--- a/new.txt\n+++ b/new.txt\n@@ -2,1 +2,1 @@\n"
+            "-B\n+BB\n");
+  EXPECT_EQ(entries[1]["summary"], "edit b");
+  EXPECT_EQ(entries[1]["path"], "old.txt");
+  EXPECT_EQ(entries[1]["additions"], 1);
+  EXPECT_EQ(entries[1]["deletions"], 1);
+  EXPECT_EQ(entries[2]["summary"], "create");
+  EXPECT_EQ(entries[2]["path"], "old.txt");
+  EXPECT_NE(entries[2]["patch"].get<std::string>().find("--- /dev/null\n"), std::string::npos);
+  EXPECT_FALSE(entries[0].contains("patchTruncated"));
+
+  Json limited = session.request(req(
+      11, "history/line",
+      {{"repoId", repoId}, {"path", "new.txt"}, {"startLine", 2}, {"endLine", 2}, {"limit", 2}}));
+  ASSERT_TRUE(limited.contains("result")) << limited.dump();
+  ASSERT_EQ(limited["result"]["entries"].size(), 2u);
+  EXPECT_EQ(limited["result"]["entries"][0]["summary"], "edit once more");
+  EXPECT_EQ(limited["result"]["entries"][1]["summary"], "edit again");
+
+  Json optionRev = session.request(req(12, "history/line",
+                                       {{"repoId", repoId},
+                                        {"path", "new.txt"},
+                                        {"startLine", 2},
+                                        {"endLine", 2},
+                                        {"rev", "--output=/tmp/x"}}));
+  EXPECT_EQ(optionRev["error"]["code"], -32602);
+  Json badPatch = session.request(req(13, "history/line",
+                                      {{"repoId", repoId},
+                                       {"path", "new.txt"},
+                                       {"startLine", 2},
+                                       {"endLine", 2},
+                                       {"patch", "yes"}}));
+  EXPECT_EQ(badPatch["error"]["code"], -32602);
 }
 
 TEST(HistoryService, SearchStreamsMatchesBeforeResultWithGrepParity) {

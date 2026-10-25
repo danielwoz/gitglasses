@@ -35,6 +35,7 @@ if(EMSCRIPTEN)
     src/services/blame/blame_service.cpp
     src/services/blame/blame_methods.cpp
     src/services/commit/commit_methods.cpp
+    src/services/commit/provenance.cpp
     src/services/graph/graph_methods.cpp
     src/services/history/history_methods.cpp
     src/services/mutate/git_errors.cpp
@@ -43,6 +44,9 @@ if(EMSCRIPTEN)
     src/services/mutate/rebase_methods.cpp
     src/services/mutate/ref_methods.cpp
     src/services/mutate/stash_worktree_methods.cpp
+    src/services/notes/git_ai_note.cpp
+    src/services/notes/notes_methods.cpp
+    src/services/notes/notes_store.cpp
     src/services/patch/patch_methods.cpp
     src/services/refs/refs_methods.cpp
     src/services/search/search_methods.cpp
@@ -50,6 +54,7 @@ if(EMSCRIPTEN)
     src/services/status/diff_methods.cpp
     src/services/status/stage_methods.cpp
     src/services/status/status_methods.cpp
+    src/services/worktree/worktree_status.cpp
     src/services/params.cpp
     src/services/repo_methods.cpp
     src/services/rev_methods.cpp
@@ -162,6 +167,7 @@ add_library(gg_services STATIC
   src/services/blame/blame_service.cpp
   src/services/blame/blame_methods.cpp
   src/services/commit/commit_methods.cpp
+  src/services/commit/provenance.cpp
   src/services/graph/graph_methods.cpp
   src/services/history/history_methods.cpp
   src/services/mutate/git_errors.cpp
@@ -170,6 +176,9 @@ add_library(gg_services STATIC
   src/services/mutate/rebase_methods.cpp
   src/services/mutate/ref_methods.cpp
   src/services/mutate/stash_worktree_methods.cpp
+  src/services/notes/git_ai_note.cpp
+  src/services/notes/notes_methods.cpp
+  src/services/notes/notes_store.cpp
   src/services/patch/patch_methods.cpp
   src/services/refs/refs_methods.cpp
   src/services/search/search_methods.cpp
@@ -177,6 +186,7 @@ add_library(gg_services STATIC
   src/services/status/diff_methods.cpp
   src/services/status/stage_methods.cpp
   src/services/status/status_methods.cpp
+  src/services/worktree/worktree_status.cpp
   src/services/params.cpp
   src/services/repo_methods.cpp
   src/services/rev_methods.cpp

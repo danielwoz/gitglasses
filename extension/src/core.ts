@@ -65,6 +65,9 @@ import { HomeViewProvider, registerHomeCommands } from './home/homeView';
 import { ModeController } from './modes/modeController';
 import { registerSuggestChange } from './reviews/suggestCommands';
 import { registerCommitDetails } from './commitDetails/commitDetails';
+import { ProvenanceService } from './provenance/provenanceService';
+import { registerProvenanceCommands } from './provenance/provenanceCommands';
+import { registerLineStory } from './lineStory/lineStory';
 import { WalkthroughOpener } from './home/walkthrough';
 import { registerGitGraphMigration } from './onboarding/gitGraphMigration';
 
@@ -174,9 +177,12 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const auth = new AuthManager(context.secrets);
   const integrations = new IntegrationService(auth);
   const documentBlame = new DocumentBlameService(blame, repos, docSync);
+  // What commits declare about who wrote them, shown wherever commits are.
+  const provenance = new ProvenanceService(engine, deps.log);
   const blameHover = new BlameHoverRenderer(engine, {
     autolink: (text, repoRoot) => integrations.autolinkText(text, repoRoot),
     hosting: (repoRoot) => integrations.getHostingFor(repoRoot),
+    provenance: (repoId, sha) => provenance.get(repoId, sha),
   });
   const lineBlame = new LineBlameController(documentBlame, blameHover);
   const fileAnnotations = new FileAnnotationsController(documentBlame, context.workspaceState);
@@ -206,19 +212,19 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
 
   // Sidebar views (activity bar container "gitglasses").
   const searchView = new SearchViewProvider(engine, repos);
-  const worktreesView = new WorktreesViewProvider(engine, repos);
+  const worktreesView = new WorktreesViewProvider(engine, repos, context.workspaceState);
   const branchesView = new BranchesViewProvider(engine, repos, refsModel);
   branchesView.setPrChipProvider(prChips);
   const homeView = new HomeViewProvider(engine, repos, launchpad, context.globalState);
   const views: Record<string, ViewBase> = {
     'gitglasses.views.home': homeView,
     'gitglasses.views.worktrees': worktreesView,
-    'gitglasses.views.commits': new CommitsViewProvider(engine, repos),
+    'gitglasses.views.commits': new CommitsViewProvider(engine, repos, provenance),
     'gitglasses.views.branches': branchesView,
     'gitglasses.views.remotes': new RemotesViewProvider(engine, repos, refsModel),
     'gitglasses.views.stashes': new StashesViewProvider(engine, repos),
     'gitglasses.views.tags': new TagsViewProvider(engine, repos, refsModel),
-    'gitglasses.views.fileHistory': new FileHistoryViewProvider(engine, repos),
+    'gitglasses.views.fileHistory': new FileHistoryViewProvider(engine, repos, provenance),
     'gitglasses.views.searchCompare': searchView,
     'gitglasses.views.contributors': new ContributorsViewProvider(engine, repos),
   };
@@ -298,6 +304,11 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     activeRepo,
     conflicts,
     engine.onDidChangeCapabilities(() => updateCapabilityContext()),
+    provenance,
+    provenance.onDidChangeEnabled(() =>
+      refreshViews(['gitglasses.views.commits', 'gitglasses.views.fileHistory']),
+    ),
+    ...registerProvenanceCommands(engine, repos, deps.log),
   ];
 
   // Quick diff comes from VS Code's Git extension where it runs; GitGlasses
@@ -404,7 +415,14 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     ...registerBlameCommands(),
     vscode.languages.registerCodeLensProvider(deps.documentSelector, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
-    ...registerCommitDetails(context, engine, repos, deps.log),
+    ...registerCommitDetails(context, engine, repos, deps.log, provenance),
+    ...registerLineStory({
+      context,
+      engine,
+      blame: documentBlame,
+      integrations,
+      log: deps.log,
+    }),
     vscode.commands.registerCommand('gitglasses.diffWithHead', async (arg?: unknown) => {
       const target = diffWithHeadTarget(arg);
       const located = target ? await locateFile(target) : await locateActiveFile();
@@ -549,13 +567,14 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       onDidReload: reloaded.event,
       openRebase: (upstream) => rebase.host.open(upstream),
       log: deps.log,
+      provenance,
     }),
     ...registerTimelineWebview(context, engine, repos),
     registerGitPalette(engine, repos, (upstream, repo) => rebase.host.open(upstream, repo), {
       listRepos: () => activeRepo.all(),
       activeEditorUri: () => deps.activeEditor()?.document.uri,
     }),
-    ...registerWorktreeCommands(engine, repos, worktreesView),
+    ...registerWorktreeCommands(engine, repos, worktreesView, deps.log),
   );
 
   return {

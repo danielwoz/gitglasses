@@ -19,6 +19,8 @@ add_executable(engine_tests
   unit/history_service_test.cpp
   unit/search_service_test.cpp
   unit/commit_service_test.cpp
+  unit/provenance_test.cpp
+  unit/provenance_service_test.cpp
   unit/rev_service_test.cpp
   unit/graph_service_test.cpp
   unit/status_service_test.cpp
@@ -38,6 +40,7 @@ add_executable(engine_tests
   unit/task_pool_test.cpp
   unit/git_errors_test.cpp
   unit/client_channel_test.cpp
+  unit/worktree_status_test.cpp
   ../src/server.cpp
 )
 target_include_directories(engine_tests PRIVATE ../src)

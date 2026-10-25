@@ -45,8 +45,8 @@ describe('tool registration', () => {
     }
   });
 
-  // The provider is GitHub and the host is operator-configured, so there is
-  // nothing for a caller to choose.
+  // The hosts and their tokens are operator-configured, so there is nothing
+  // for a caller to choose.
   it('list_my_prs takes no arguments', () => {
     const schema = tools.get('list_my_prs')!.inputSchema;
     expect(schema.required ?? []).toEqual([]);
@@ -56,7 +56,10 @@ describe('tool registration', () => {
   it('says where repoPath may point', () => {
     for (const tool of tools.values()) {
       const repoPath = tool.inputSchema.properties?.repoPath;
-      if (repoPath) expect(repoPath.description, tool.name).toContain('GITGLASSES_ALLOWED_ROOTS');
+      if (repoPath) {
+        expect(repoPath.description, tool.name).toContain('GITGLASSES_ALLOWED_ROOTS');
+        expect(repoPath.description, tool.name).toContain('--read');
+      }
     }
   });
 
@@ -70,6 +73,35 @@ describe('tool registration', () => {
     const description = tools.get('git_commit_show')!.inputSchema.properties?.sha?.description;
     expect(description).toContain('HEAD~3');
     expect(description).toContain('branch or tag');
+  });
+
+  // Every tool's schema rides along in the agent's context, so the list stays
+  // short: composite tools rather than one per git command.
+  it('keeps the tool list short', () => {
+    expect(tools.size).toBeLessThanOrEqual(15);
+  });
+
+  it('compares branches read-only, from a named base to HEAD by default', () => {
+    const compare = tools.get('git_compare')!;
+    expect(compare.annotations).toMatchObject({ readOnlyHint: true });
+    expect(compare.inputSchema.required).toEqual(['repoPath', 'base']);
+    expect(compare.description).toContain('merge base');
+    expect(compare.inputSchema.properties?.head?.description).toContain('default HEAD');
+  });
+
+  it('searches code changes, paths and dates through git_log_search', () => {
+    const properties = tools.get('git_log_search')!.inputSchema.properties ?? {};
+    expect(properties.content?.description).toContain('git log -S');
+    expect(properties.regex?.description).toContain('regular expression');
+    for (const name of ['path', 'since', 'until']) expect(properties[name], name).toBeDefined();
+  });
+
+  it('follows a range of lines through git_file_history rather than a tool of its own', () => {
+    const history = tools.get('git_file_history')!;
+    expect(history.description).toContain('git log -L');
+    expect(history.inputSchema.properties?.startLine?.description).toContain('range');
+    expect(history.inputSchema.properties?.endLine?.description).toContain('default startLine');
+    expect(history.inputSchema.required).toEqual(['repoPath', 'file']);
   });
 
   it('offers a cursor wherever the engine returns one', () => {

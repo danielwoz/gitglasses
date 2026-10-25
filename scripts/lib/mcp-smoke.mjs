@@ -1,16 +1,26 @@
 // Starts the gitglasses-mcp CLI the way an MCP client does (stdio,
-// newline-delimited JSON-RPC) and checks the handshake and the tool list.
+// newline-delimited JSON-RPC) and checks the handshake and the tool list,
+// optionally followed by one tool call.
 
 import { spawn } from 'node:child_process';
 
 const TIMEOUT_MS = 20000;
 
-/** Resolves with the server info and tool names; rejects on any failure. */
-export function smokeTestMcpServer(cliPath, { version, env = {} } = {}) {
+/**
+ * Resolves with the server info, the tool names and, when `call` names a tool
+ * ({ name, arguments }), the text it returned; rejects on any failure,
+ * including a tool result marked as an error. `command` and `args` start the
+ * server in place of `node <cliPath>`, as an editor's own Node would.
+ */
+export function smokeTestMcpServer(
+  cliPath,
+  { version, env = {}, cwd, call, command = process.execPath, args = [] } = {},
+) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath], {
+    const child = spawn(command, [...args, cliPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
+      cwd,
     });
     const pending = new Map();
     let buffered = '';
@@ -71,7 +81,14 @@ export function smokeTestMcpServer(cliPath, { version, env = {} } = {}) {
       if (listed.error) throw new Error(`tools/list failed: ${JSON.stringify(listed.error)}`);
       const tools = listed.result.tools.map((tool) => tool.name);
       if (tools.length === 0) throw new Error('the server lists no tools');
-      finish(undefined, { serverInfo, tools });
+      let text;
+      if (call) {
+        const called = await request(3, 'tools/call', call);
+        if (called.error) throw new Error(`${call.name} failed: ${JSON.stringify(called.error)}`);
+        text = called.result.content.map((part) => part.text ?? '').join('\n');
+        if (called.result.isError) throw new Error(`${call.name} returned an error: ${text}`);
+      }
+      finish(undefined, { serverInfo, tools, text });
     })().catch((error) => finish(error));
   });
 }

