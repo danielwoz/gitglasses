@@ -5,10 +5,12 @@
 
 namespace gg::services {
 
-// rebase/preview, rebase/start, rebase/continue, rebase/abort. rebase/start
-// drives `git rebase -i` non-interactively by pointing GIT_SEQUENCE_EDITOR
-// and GIT_EDITOR back at this binary's --edit-sequence/--edit-message shim
-// modes, which rewrite the todo and messages from the client-supplied plan.
+// rebase/preview, rebase/start, rebase/continue, rebase/skip, rebase/abort.
+// rebase/start drives `git rebase -i` non-interactively by pointing
+// GIT_SEQUENCE_EDITOR and GIT_EDITOR back at this binary's
+// --edit-sequence/--edit-message shim modes, which rewrite the todo and
+// messages from the client-supplied plan; continue and skip keep applying
+// that plan's messages after a stop.
 void registerRebaseMethods(rpc::Dispatcher& dispatcher, ServiceContext& context);
 
 }  // namespace gg::services

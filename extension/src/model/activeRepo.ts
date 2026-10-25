@@ -245,6 +245,23 @@ export class ActiveRepoManager implements vscode.Disposable {
     this.changed.fire();
   }
 
+  /** Acts on the workspace repository rooted at `rootPath`, as spelt by the
+   *  engine or the workspace; says so when there is none. */
+  async select(rootPath: string): Promise<void> {
+    const repo = (await this.all()).find(
+      (entry) =>
+        sameRoot(entry.rootPath, rootPath) ||
+        (entry.workspacePath !== undefined && sameRoot(entry.workspacePath, rootPath)),
+    );
+    if (!repo) {
+      void vscode.window.showWarningMessage(
+        `GitGlasses: no repository in this workspace is rooted at ${rootPath}.`,
+      );
+      return;
+    }
+    await this.setActive(repo.rootPath);
+  }
+
   /** Quick pick of the workspace's repositories. */
   async pick(): Promise<void> {
     const all = await this.all();

@@ -13,13 +13,14 @@ import {
   EngineNotificationSchemas,
 } from './schema/notifications.js';
 import { RequestSchemas } from './schema/requests.js';
+import { EngineRequestSchemas } from './schema/engineRequests.js';
 
 export { PROTOCOL_VERSION } from './version.js';
 
 // The TypeBox schemas themselves, so consumers can validate at runtime.
 export { models };
 export { patchEnvelopeError, schemaError } from './validate.js';
-export { RESTRICTED_MODE_METHODS } from './schema/requests.js';
+export { COMMIT_DETAILS_MAX_FILES, RESTRICTED_MODE_METHODS } from './schema/requests.js';
 
 // Sha helpers also have their own lean entry point: @gitglasses/protocol/sha.
 export { SHORT_SHA_LENGTH, UNCOMMITTED_SHA, shortSha } from './sha.js';
@@ -43,11 +44,15 @@ export interface RpcNotification {
 export interface RpcError {
   code: number;
   message: string;
+  /** Structured detail; for GitError, a GitErrorData. */
+  data?: unknown;
 }
 
 export interface RpcResponse {
   jsonrpc: '2.0';
-  id: number | null;
+  /** Integer for answers to the client's requests; requests the engine sends
+   *  carry string ids. */
+  id: number | string | null;
   result?: unknown;
   error?: RpcError;
 }
@@ -83,7 +88,13 @@ export type HeadState = Static<typeof models.HeadState>;
 export type BlameSignature = Static<typeof models.BlameSignature>;
 export type BlameCommit = Static<typeof models.BlameCommit>;
 export type BlameHunk = Static<typeof models.BlameHunk>;
+export type BlameOptions = Static<typeof models.BlameOptions>;
+export type BlameMoveDetection = NonNullable<BlameOptions['moves']>;
 export type CommitSummaryInfo = Static<typeof models.CommitSummaryInfo>;
+export type CommitDetails = Static<typeof models.CommitDetails>;
+export type CommitFileChange = Static<typeof models.CommitFileChange>;
+export type CommitRef = Static<typeof models.CommitRef>;
+export type CommitTrailer = Static<typeof models.CommitTrailer>;
 export type FileHistoryEntry = Static<typeof models.FileHistoryEntry>;
 export type FileChange = Static<typeof models.FileChange>;
 export type GraphRef = Static<typeof models.GraphRef>;
@@ -91,7 +102,12 @@ export type GraphRow = Static<typeof models.GraphRow>;
 export type DiffHunk = Static<typeof models.DiffHunk>;
 export type RebaseEntry = Static<typeof models.RebaseEntry>;
 export type PatchEnvelope = Static<typeof models.PatchEnvelope>;
+export type PatchFileChange = Static<typeof models.PatchFileChange>;
 export type SequencerState = Static<typeof models.SequencerState>;
+export type SequencerOperation = Static<typeof models.SequencerOperation>;
+export type GitErrorKind = Static<typeof models.GitErrorKind>;
+export type GitErrorData = Static<typeof models.GitErrorData>;
+export type AskpassKind = Static<typeof models.AskpassKind>;
 
 // --- Method map (derived from src/schema/requests.ts) -----------------------
 
@@ -127,9 +143,11 @@ export interface Requests {
   'repo/close': { params: P<'repo/close'>; result: Empty };
   'blame/file': { params: P<'blame/file'>; result: R<'blame/file'> };
   'log/commits': { params: P<'log/commits'>; result: R<'log/commits'> };
+  'commit/details': { params: P<'commit/details'>; result: R<'commit/details'> };
   'history/file': { params: P<'history/file'>; result: R<'history/file'> };
   'history/line': { params: P<'history/line'>; result: R<'history/line'> };
   'search/commits': { params: P<'search/commits'>; result: R<'search/commits'> };
+  'search/log': { params: P<'search/log'>; result: R<'search/log'> };
   'rev/fileAtRev': { params: P<'rev/fileAtRev'>; result: R<'rev/fileAtRev'> };
   'refs/list': { params: P<'refs/list'>; result: R<'refs/list'> };
   'stash/list': { params: P<'stash/list'>; result: R<'stash/list'> };
@@ -138,6 +156,7 @@ export interface Requests {
 
   'status/summary': { params: P<'status/summary'>; result: R<'status/summary'> };
   'graph/rows': { params: P<'graph/rows'>; result: R<'graph/rows'> };
+  'graph/find': { params: P<'graph/find'>; result: R<'graph/find'> };
   'diff/commit': { params: P<'diff/commit'>; result: R<'diff/commit'> };
   'diff/refs': { params: P<'diff/refs'>; result: R<'diff/refs'> };
   'diff/fileHunks': { params: P<'diff/fileHunks'>; result: R<'diff/fileHunks'> };
@@ -152,8 +171,9 @@ export interface Requests {
   'mutate/revert': { params: P<'mutate/revert'>; result: R<'mutate/revert'> };
   'mutate/reset': { params: P<'mutate/reset'>; result: Empty };
   'mutate/fetch': { params: P<'mutate/fetch'>; result: Empty };
-  'mutate/pull': { params: P<'mutate/pull'>; result: Empty };
-  'mutate/push': { params: P<'mutate/push'>; result: Empty };
+  'mutate/pull': { params: P<'mutate/pull'>; result: R<'mutate/pull'> };
+  'mutate/push': { params: P<'mutate/push'>; result: R<'mutate/push'> };
+  'mutate/sequencer': { params: P<'mutate/sequencer'>; result: R<'mutate/sequencer'> };
   'stash/push': { params: P<'stash/push'>; result: Empty };
   'stash/apply': { params: P<'stash/apply'>; result: R<'stash/apply'> };
   'stash/drop': { params: P<'stash/drop'>; result: Empty };
@@ -163,7 +183,16 @@ export interface Requests {
   'rebase/preview': { params: P<'rebase/preview'>; result: R<'rebase/preview'> };
   'rebase/start': { params: P<'rebase/start'>; result: R<'rebase/start'> };
   'rebase/continue': { params: P<'rebase/continue'>; result: R<'rebase/continue'> };
+  'rebase/skip': { params: P<'rebase/skip'>; result: R<'rebase/skip'> };
   'rebase/abort': { params: P<'rebase/abort'>; result: Empty };
+  'branch/rename': { params: P<'branch/rename'>; result: Empty };
+  'branch/setUpstream': { params: P<'branch/setUpstream'>; result: Empty };
+  'branch/push': { params: P<'branch/push'>; result: R<'branch/push'> };
+  'tag/create': { params: P<'tag/create'>; result: Empty };
+  'tag/delete': { params: P<'tag/delete'>; result: Empty };
+  'tag/push': { params: P<'tag/push'>; result: Empty };
+  'remote/add': { params: P<'remote/add'>; result: Empty };
+  'remote/remove': { params: P<'remote/remove'>; result: Empty };
 
   // --- P4: remotes / open patches ------------------------------------------
 
@@ -200,8 +229,27 @@ export interface EngineNotifications {
   'repo/didChange': {
     params: Static<(typeof EngineNotificationSchemas)['repo/didChange']['params']>;
   };
+  'ui/askpassCancelled': {
+    params: Static<(typeof EngineNotificationSchemas)['ui/askpassCancelled']['params']>;
+  };
 }
 
 export type EngineNotificationMethod = keyof EngineNotifications;
 export type EngineNotificationParams<M extends EngineNotificationMethod> =
   EngineNotifications[M]['params'];
+
+// --- Engine-to-client requests (derived from src/schema/engineRequests.ts) ---
+
+export interface EngineRequests {
+  'ui/askpass': {
+    params: Static<(typeof EngineRequestSchemas)['ui/askpass']['params']>;
+    result: Static<(typeof EngineRequestSchemas)['ui/askpass']['result']>;
+  };
+}
+
+export type EngineRequestMethod = keyof EngineRequests;
+export type EngineRequestParams<M extends EngineRequestMethod> = EngineRequests[M]['params'];
+export type EngineRequestResult<M extends EngineRequestMethod> = EngineRequests[M]['result'];
+
+/** Client capabilities sent with initialize. */
+export type ClientCapabilities = NonNullable<P<'initialize'>['clientCapabilities']>;

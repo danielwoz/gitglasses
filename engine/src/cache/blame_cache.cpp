@@ -17,8 +17,9 @@ size_t BlameResult::byteSize() const {
   return bytes;
 }
 
-std::string BlameCache::makeKey(const std::string& commitOid, const std::string& blobOid) {
-  return commitOid + ":" + blobOid;
+std::string BlameCache::makeKey(const std::string& commitOid, const std::string& blobOid,
+                                const std::string& path) {
+  return commitOid + ":" + blobOid + '\0' + path;
 }
 
 std::shared_ptr<const BlameResult> BlameCache::get(const std::string& key) {

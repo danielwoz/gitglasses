@@ -39,10 +39,105 @@ header h1 {
   font-family: var(--vscode-editor-font-family, monospace);
 }
 
-#hint {
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 6px;
+}
+
+#hint {
+  flex: 1 1 auto;
   color: var(--vscode-descriptionForeground);
   font-size: 0.9em;
+}
+
+#editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#editor[hidden],
+#paused[hidden] {
+  display: none;
+}
+
+.notice {
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border-left: 3px solid var(--vscode-textLink-foreground);
+  background: var(--vscode-textBlockQuote-background);
+}
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--vscode-editorWarning-foreground);
+  background: var(--vscode-textBlockQuote-background);
+}
+
+.banner.error {
+  border-left-color: var(--vscode-editorError-foreground);
+}
+
+.banner pre,
+.git-output {
+  flex-basis: 100%;
+  margin: 4px 0;
+  max-height: 14em;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, inherit);
+}
+
+.git-output {
+  padding: 6px 8px;
+  background: var(--vscode-textCodeBlock-background);
+}
+
+#paused h2 {
+  margin: 4px 0 6px;
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+#paused .files {
+  margin: 6px 0 10px;
+  padding-left: 1.2em;
+}
+
+#paused .files li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+#paused .files a {
+  color: var(--vscode-textLink-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+#paused .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 #list {
@@ -67,6 +162,11 @@ header h1 {
 
 .row:last-child {
   border-bottom-color: transparent;
+}
+
+.row:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
 
 .row.dragging {
@@ -112,17 +212,22 @@ header h1 {
   white-space: nowrap;
 }
 
-.row.dropped .summary,
-.row.dropped .sha {
+.row.action-drop .summary,
+.row.action-drop .sha {
   text-decoration: line-through;
   opacity: 0.6;
+}
+
+.row.action-squash .summary,
+.row.action-fixup .summary {
+  padding-left: 1em;
+  color: var(--vscode-descriptionForeground);
 }
 
 .row textarea {
   grid-area: message;
   width: 100%;
   box-sizing: border-box;
-  min-height: 3em;
   resize: vertical;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
@@ -144,7 +249,10 @@ footer {
   gap: 8px;
 }
 
-footer button {
+footer button,
+#toolbar button,
+#paused button,
+.banner button {
   padding: 4px 14px;
   border: 1px solid var(--vscode-button-border, transparent);
   border-radius: 2px;
@@ -154,12 +262,15 @@ footer button {
   color: var(--vscode-button-secondaryForeground);
 }
 
-footer button.primary {
+footer button.primary,
+#paused button.primary {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
 }
 
-footer button:disabled {
+footer button:disabled,
+#toolbar button:disabled,
+#paused button:disabled {
   opacity: 0.5;
   cursor: default;
 }

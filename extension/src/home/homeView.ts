@@ -4,17 +4,36 @@ import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { RepositoryService } from '../model/repositoryService';
 import { ActiveRepo, ViewBase, ViewNode, messageNode, withRepo } from '../views/viewBase';
-import { commitNode } from '../views/nodes';
 import type { LaunchpadService } from '../integrations/launchpadService';
 import { BUCKET_LABELS } from '../integrations/launchpadLogic';
 import { setStatus } from '../commands/ui';
 import { relativeTime } from '../system/dates';
-import { BranchStatus, branchCardDescription, glimpsePrs, showGetStarted } from './homeLogic';
+import {
+  BranchAction,
+  BranchStatus,
+  HeadInfo,
+  branchActionLabel,
+  branchCardActions,
+  branchCardDescription,
+  branchCardTitle,
+  glimpsePrs,
+  showGetStarted,
+} from './homeLogic';
 import { conflictLabel } from '../model/conflictLogic';
 import { allowedDespiteConflicts } from '../commands/conflictGuard';
+import * as sync from '../sync/syncCommands';
 
 const REFRESH_DEBOUNCE_MS = 300;
-const RECENT_COMMITS = 5;
+
+/** The command and icon behind each branch card action. */
+const BRANCH_ACTIONS: Record<BranchAction, { command: string; icon: string }> = {
+  commit: { command: 'gitglasses.gitCommands', icon: 'check' },
+  push: { command: 'gitglasses.home.push', icon: 'arrow-up' },
+  publish: { command: 'gitglasses.home.push', icon: 'cloud-upload' },
+  pull: { command: 'gitglasses.home.pull', icon: 'arrow-down' },
+  switchBranch: { command: 'gitglasses.home.switchBranch', icon: 'arrow-swap' },
+  createBranch: { command: 'gitglasses.home.createBranch', icon: 'add' },
+};
 
 export const GET_STARTED_DISMISSED_KEY = 'gitglasses.home.getStartedDismissed';
 
@@ -82,7 +101,8 @@ function conflictsSection(repo: ActiveRepo, conflicted: readonly string[]): View
 }
 
 // Home: at-a-glance branch card with quick actions, a launchpad glimpse,
-// recent commits, and a dismissible get-started section.
+// and a dismissible get-started section. Recent commits are the Commits
+// view's job, right below.
 export class HomeViewProvider extends ViewBase {
   private refreshTimer: NodeJS.Timeout | undefined;
 
@@ -106,40 +126,48 @@ export class HomeViewProvider extends ViewBase {
   }
 
   protected async getRootNodes(repo: ActiveRepo): Promise<ViewNode[]> {
-    // The three sections read independent sources, so they are fetched
-    // together: the view renders one round trip after the repo resolves.
-    const [status, glimpse, recent] = await Promise.all([
+    // The sections read independent sources, so they are fetched together:
+    // the view renders one round trip after the repo resolves.
+    const [status, state, remotes, glimpse] = await Promise.all([
       this.engine.request('status/summary', { repoId: repo.repoId }),
+      this.engine.request('repo/state', { repoId: repo.repoId }),
+      this.engine.request('remote/list', { repoId: repo.repoId }),
       this.launchpadGlimpse(),
-      this.recentActivity(repo),
     ]);
-    const nodes: ViewNode[] = [this.branchCard(status)];
+    const nodes: ViewNode[] = [this.branchCard(status, state.head, remotes.remotes.length > 0)];
     if (status.conflicted.length > 0) nodes.push(conflictsSection(repo, status.conflicted));
     nodes.push(glimpse);
-    nodes.push(recent);
     if (showGetStarted(this.globalState.get<boolean>(GET_STARTED_DISMISSED_KEY))) {
       nodes.push(this.getStarted());
     }
     return nodes;
   }
 
-  private branchCard(status: BranchStatus): ViewNode {
-    const node = sectionNode(
-      status.branch || 'HEAD (detached)',
-      'git-branch',
-      [
-        actionNode('Commit…', 'check', 'gitglasses.gitCommands'),
-        actionNode('Push', 'arrow-up', 'gitglasses.home.push'),
-        actionNode('Pull', 'arrow-down', 'gitglasses.home.pull'),
-        actionNode('Switch Branch…', 'arrow-swap', 'gitglasses.home.switchBranch'),
-        actionNode('Create Branch…', 'add', 'gitglasses.home.createBranch'),
-      ],
-      branchCardDescription(status),
+  private branchCard(status: BranchStatus, head: HeadInfo, hasRemote: boolean): ViewNode {
+    const actions = branchCardActions(status, head, hasRemote).map((action) =>
+      actionNode(
+        branchActionLabel(action, status),
+        BRANCH_ACTIONS[action].icon,
+        BRANCH_ACTIONS[action].command,
+      ),
     );
+    const node = sectionNode(
+      branchCardTitle(status, head),
+      head.detached ? 'git-commit' : 'git-branch',
+      actions,
+      branchCardDescription(status, head),
+    );
+    const branchLine = head.unborn
+      ? `Branch: ${head.branch || '(unnamed)'}, no commits yet`
+      : head.detached
+        ? `HEAD detached at ${head.oid}`
+        : `Branch: ${status.branch}`;
+    const upstreamLines = head.unborn || head.detached
+      ? []
+      : [`Upstream: ${status.upstream ?? 'none'}`, `Ahead ${status.ahead} / behind ${status.behind}`];
     node.item.tooltip = [
-      `Branch: ${status.branch || '(detached)'}`,
-      `Upstream: ${status.upstream ?? 'none'}`,
-      `Ahead ${status.ahead} / behind ${status.behind}`,
+      branchLine,
+      ...upstreamLines,
       `${status.conflicted.length} conflicted, ${status.staged.length} staged, ` +
         `${status.unstaged.length} unstaged, ${status.untracked.length} untracked`,
     ].join('\n');
@@ -169,16 +197,6 @@ export class HomeViewProvider extends ViewBase {
     return sectionNode('Launchpad', 'rocket', children, description);
   }
 
-  private async recentActivity(repo: ActiveRepo): Promise<ViewNode> {
-    const { commits } = await this.engine.request('log/commits', {
-      repoId: repo.repoId,
-      limit: RECENT_COMMITS,
-    });
-    const children =
-      commits.length > 0 ? commits.map(commitNode) : [messageNode('No commits yet')];
-    return sectionNode('Recent Activity', 'history', children);
-  }
-
   private getStarted(): ViewNode {
     return sectionNode('Get Started', 'star', [
       actionNode('Show Commit Graph', 'git-branch', 'gitglasses.showGraph'),
@@ -204,40 +222,35 @@ export function registerHomeCommands(
 ): vscode.Disposable[] {
   // The shared repo action, plus the card refresh every home action ends with.
   // Actions git refuses mid-conflict confirm first; push is not one of them.
+  // A failure report's next step passes the repository the failed action
+  // ran on (`target`); otherwise the action runs on the active repository.
   const onRepo = (
     label: string,
     action: (repo: ActiveRepo) => Promise<void>,
-    options: { guardConflicts?: boolean } = {},
+    options: { guardConflicts?: boolean; target?: unknown } = {},
   ): Promise<void> =>
-    withRepo(repos, label, async (repo) => {
-      if (
-        options.guardConflicts &&
-        !(await allowedDespiteConflicts(engine, repo.repoId, label))
-      ) {
-        return;
-      }
-      await action(repo);
-      view.refresh();
-    });
+    withRepo(
+      repos,
+      label,
+      async (repo) => {
+        if (
+          options.guardConflicts &&
+          !(await allowedDespiteConflicts(engine, repo.repoId, label))
+        ) {
+          return;
+        }
+        await action(repo);
+        view.refresh();
+      },
+      sync.repoArgument(options.target),
+    );
 
   return [
-    vscode.commands.registerCommand('gitglasses.home.push', () =>
-      onRepo('push', async (repo) => {
-        const status = await engine.request('status/summary', { repoId: repo.repoId });
-        const setUpstream = !status.upstream;
-        await engine.request('mutate/push', { repoId: repo.repoId, setUpstream });
-        setStatus(`Pushed '${status.branch}'${setUpstream ? ' (set upstream)' : ''}`);
-      }),
+    vscode.commands.registerCommand('gitglasses.home.push', (target?: unknown) =>
+      onRepo('push', (repo) => sync.push(engine, repo), { target }),
     ),
-    vscode.commands.registerCommand('gitglasses.home.pull', () =>
-      onRepo(
-        'pull',
-        async (repo) => {
-          await engine.request('mutate/pull', { repoId: repo.repoId, autoStash: true });
-          setStatus('Pulled (auto-stash)');
-        },
-        { guardConflicts: true },
-      ),
+    vscode.commands.registerCommand('gitglasses.home.pull', (target?: unknown) =>
+      onRepo('pull', (repo) => sync.pull(engine, repo), { guardConflicts: true, target }),
     ),
     vscode.commands.registerCommand('gitglasses.home.switchBranch', () =>
       onRepo(

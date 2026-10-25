@@ -1,7 +1,7 @@
 // Drift guard: every golden message fixture in fixtures/ must validate
 // against its schema. Fixture files carry { method, kind, payload } where
-// kind is 'params' | 'result' for requests and 'notification' for one-way
-// messages.
+// kind is 'params' | 'result' for requests (client or engine) and
+// 'notification' for one-way messages.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ClientNotificationSchemas,
   EngineNotificationSchemas,
+  EngineRequestSchemas,
   RequestSchemas,
 } from '../src/schema/index.js';
 
@@ -33,7 +34,11 @@ function schemaFor(fixture: Fixture): TSchema | undefined {
     } as Record<string, { params: TSchema }>;
     return known[fixture.method]?.params;
   }
-  const requests = RequestSchemas as Record<string, { params: TSchema; result: TSchema }>;
+  // Requests in either direction: the client's and the engine's (ui/askpass).
+  const requests = { ...RequestSchemas, ...EngineRequestSchemas } as Record<
+    string,
+    { params: TSchema; result: TSchema }
+  >;
   return requests[fixture.method]?.[fixture.kind];
 }
 

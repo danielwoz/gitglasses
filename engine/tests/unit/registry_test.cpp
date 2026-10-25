@@ -56,6 +56,25 @@ TEST_F(RegistryTest, OpensHeadOfRegisteredRepo) {
   EXPECT_FALSE(head.value().unborn);
 }
 
+TEST_F(RegistryTest, UnbornHeadNamesTheBranchItWillCreate) {
+  const auto root = gg::testing::makeTempDir("gg-registry-unborn-");
+  gg::testing::runGit(root, "git init -q -b trunk");
+  auto info = registry.add(root.string());
+  ASSERT_TRUE(info.ok()) << info.error().message;
+
+  auto repo = registry.open(info.value().id);
+  ASSERT_TRUE(repo.ok());
+  auto head = repo.value().head();
+  ASSERT_TRUE(head.ok()) << head.error().message;
+  EXPECT_TRUE(head.value().unborn);
+  EXPECT_FALSE(head.value().detached);
+  EXPECT_EQ(head.value().branch, "trunk");
+  EXPECT_EQ(head.value().oid, "");
+
+  std::error_code ec;
+  std::filesystem::remove_all(root, ec);
+}
+
 TEST_F(RegistryTest, UnknownIdFails) {
   auto repo = registry.open("r999");
   ASSERT_FALSE(repo.ok());

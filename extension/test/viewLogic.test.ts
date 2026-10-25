@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateContributors,
   appendPage,
+  contributorShare,
+  contributorWindowLabel,
   clampPageSize,
   commitDescription,
   emptyPageState,
@@ -172,5 +174,18 @@ describe('clampPageSize', () => {
     expect(clampPageSize(undefined, 50, { min: 10, max: 1000 })).toBe(50);
     expect(clampPageSize('80', 50, { min: 10, max: 1000 })).toBe(50);
     expect(clampPageSize(Number.NaN, 50, { min: 10, max: 1000 })).toBe(50);
+  });
+});
+
+describe('contributor window', () => {
+  it('says the counts cover the latest commits until the whole history fits', () => {
+    expect(contributorWindowLabel(200, false)).toBe('Last 200 commits');
+    expect(contributorWindowLabel(37, true)).toBe('All 37 commits');
+    expect(contributorWindowLabel(1, true)).toBe('All 1 commit');
+  });
+
+  it('gives each contributor a share of that window, not a total', () => {
+    expect(contributorShare(89, 200, false)).toBe('89 commits in the last 200');
+    expect(contributorShare(1, 37, true)).toBe('1 commit of 37');
   });
 });

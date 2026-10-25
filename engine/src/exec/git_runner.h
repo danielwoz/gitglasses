@@ -31,6 +31,8 @@ using GitSink = std::function<void(std::string chunk)>;
 struct RunStatus {
   int exitCode = -1;
   std::string stderrText;
+  // The user dismissed a credential or passphrase prompt git raised.
+  bool promptDeclined = false;
 };
 
 // Runs `git <args>` in `cwd` and drains its stdout into `sink`. Spawn

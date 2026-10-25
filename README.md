@@ -1,59 +1,80 @@
 # GitGlasses
 
-An open-source, MIT-licensed git supercharger for VS Code — a compatible
-alternative to the full GitLens Pro feature set, powered by a native C++
-analysis engine.
+**The maintained, open git lens for VS Code and Open VSX: free on private
+repos, no account, available to your agents over MCP.**
 
-## Why
+![The Commit Graph, with a commit's message, files and stats below it](extension/media/screenshots/hero-graph.png)
 
-- **Fast.** All git analysis (blame, log topology, graph layout, diff, search)
-  runs in a native engine (`gitglasses-engine`) using libgit2 in-process, with
-  the `git` CLI as the compatibility oracle where it matters (credentials,
-  signing, interactive rebase).
-- **Open.** Every feature is MIT licensed. Features that GitLens Pro backs
-  with a proprietary cloud service are reimplemented against provider APIs
-  directly (GitHub, GitLab, Bitbucket, Azure DevOps, Jira, Linear) with your
-  tokens stored locally in VS Code SecretStorage. There is no server and we
-  never see your tokens or code.
-- **Offline-capable AI.** AI features are bring-your-own-key (Anthropic,
-  OpenAI, Gemini, VS Code language models) or fully offline via Ollama.
+GitGlasses is an MIT-licensed git extension for VS Code and the editors that
+install from [Open VSX](https://open-vsx.org): VSCodium, Cursor, Windsurf,
+Theia, code-server and Gitpod. It brings inline blame, a Commit Graph, file
+and line history, commit search by message, author, code change, file or
+date, an interactive rebase editor, worktrees, and a pull request inbox, all
+backed by a native engine. Every feature works on private repositories, with
+no account and no telemetry.
+
+| | |
+| --- | --- |
+| ![Inline blame and its hover](extension/media/screenshots/blame.png) | ![Searching commits by code change](extension/media/screenshots/search.png) |
+| ![Visual File History](extension/media/screenshots/history.png) | ![A generated commit message in Source Control](extension/media/screenshots/ai-commit-message.png) |
 
 ## Install
 
-From 0.2.0, every release is published to the
-[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gitglasses.gitglasses)
-for VS Code, and to [Open VSX](https://open-vsx.org/extension/gitglasses/gitglasses)
-for VSCodium, Cursor, Windsurf, Theia, code-server, Gitpod and other Open VSX
-hosts. Search for GitGlasses in the Extensions view, or:
+- **VS Code:** [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gitglasses.gitglasses),
+  or `code --install-extension gitglasses.gitglasses`.
+- **VSCodium, Cursor, Windsurf, Theia, code-server, Gitpod:**
+  [Open VSX](https://open-vsx.org/extension/gitglasses/gitglasses); search for
+  GitGlasses in the Extensions view.
+- **Offline:** each [GitHub release](https://github.com/danielwoz/gitglasses/releases)
+  carries every `.vsix` with a `SHA256SUMS` file and build provenance
+  attestations:
 
-```sh
-code --install-extension gitglasses.gitglasses
-```
+  ```sh
+  gh attestation verify gitglasses-linux-x64-<version>.vsix --repo danielwoz/gitglasses
+  code --install-extension gitglasses-linux-x64-<version>.vsix
+  ```
 
 The editor picks the package for its platform: Windows (x64, arm64), macOS
 (Intel, Apple silicon), Linux (x64, arm64; glibc 2.28 or newer) and Alpine
-Linux (x64, arm64) packages carry the native engine, and the `web` package
-runs a read-only WebAssembly engine on vscode.dev and github.dev. `git` 2.34
-or newer on `PATH` is needed outside the browser.
+Linux (x64, arm64) carry the native engine, and the `web` package runs a
+read-only WebAssembly engine on vscode.dev for local folders with a `.git`
+directory. Features that run git need `git` on `PATH`; 2.34 or newer is
+recommended.
 
-Each [GitHub release](https://github.com/danielwoz/gitglasses/releases) also
-carries every `.vsix` with a `SHA256SUMS` file and build provenance
-attestations, for offline installs:
+What the extension does, its settings and commands, and exactly when it uses
+the network are in [its README](extension/README.md); what changed in each
+release is in [the changelog](extension/CHANGELOG.md).
 
-```sh
-gh attestation verify gitglasses-linux-x64-0.2.0.vsix --repo danielwoz/gitglasses
-code --install-extension gitglasses-linux-x64-0.2.0.vsix
-```
+## Why GitGlasses
 
-What changed in each release is in [the changelog](extension/CHANGELOG.md).
+- **Nothing is held back:** no paid tier, no trial, no feature that stops at
+  a private repository.
+- **No account, no telemetry, no GitGlasses servers.** Integrations call your
+  forge with your own token, kept in the editor's secret storage; AI goes to
+  the provider you choose, after asking.
+- **On both stores**, from the same release, so VSCodium and Cursor users get
+  what VS Code users get.
+- **Native engine.** Blame, history, the graph and search come from a C++
+  engine that reads the repository in process with libgit2 and runs git
+  where git is the authority (credentials, signing, rebase), apart from the
+  editor so it cannot take the editor down.
+- **Safe in untrusted folders:** in Restricted Mode no git runs at all.
 
-## MCP server
+## For agents: the MCP server
 
-`gitglasses-mcp` (in `mcp-server/`) is a stdio MCP server that gives AI agents
-blame, history, the commit graph, status, diffs, patches and pull requests
-through the same engine. It is not on npm yet: build it from a clone and
-register `node mcp-server/dist/cli.js` with your client, as
-[its README](mcp-server/README.md) describes.
+`gitglasses-mcp` (in [`mcp-server/`](mcp-server/)) is a stdio
+[Model Context Protocol](https://modelcontextprotocol.io) server that gives
+AI agents the same engine: blame, commit search, file history, commit
+details, diffs, refs, a text rendering of the graph, status, patches and a
+pull request list, eleven tools in all. Every tool except `apply_patch` is
+marked read-only, and by default the server reads only the folders the
+client shares with it, without running git.
+
+Register it with Claude Code, Cursor, VS Code agent mode or any other MCP
+client, pointing it at the engine the extension installed. From 0.3,
+releases publish it to npm as `gitglasses-mcp`; before that, build it from a
+clone. [Its README](mcp-server/README.md) has the setup for each client and
+the trust model.
 
 ## Layout
 
@@ -64,7 +85,7 @@ register `node mcp-server/dist/cli.js` with your client, as
 | `extension/` | VS Code extension (thin TypeScript shim over the engine) |
 | `mcp-server/` | MCP server exposing the engine + integrations to AI tools |
 | `fixtures/` | Deterministic fixture-repo generators for tests |
-| `docs/` | Specs, parity gaps, clean-room policy |
+| `docs/` | Specs, known limitations, clean-room policy, integrations |
 
 ## Building
 

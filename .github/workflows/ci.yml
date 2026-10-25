@@ -336,10 +336,20 @@ jobs:
           path: extension/.vscode-test/logs
           if-no-files-found: ignore
 
+  # Runs the suite on the pinned VS Code and on the engines.vscode floor, so a
+  # contribution or API that needs a newer VS Code than the manifest promises
+  # fails here rather than for users.
   extension-e2e:
+    name: extension-e2e (VS Code ${{ matrix.vscode || 'pinned' }})
     needs: engine-linux
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        vscode: ['', '1.90.0']
+    env:
+      GITGLASSES_E2E_VSCODE: ${{ matrix.vscode }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
@@ -362,6 +372,13 @@ jobs:
       - name: Build packages
         run: pnpm build
 
+      # The VS Code download; runTests.ts names the pinned release.
+      - name: Cache VS Code
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: extension/.vscode-test/vscode-*
+          key: vscode-${{ runner.os }}-${{ matrix.vscode || hashFiles('extension/test-e2e/runTests.ts') }}
+
       - name: E2E test
         run: xvfb-run -a pnpm --filter gitglasses run test:e2e
 
@@ -369,7 +386,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: e2e-logs-${{ runner.os }}
+          name: e2e-logs-${{ runner.os }}-${{ matrix.vscode || 'pinned' }}
           path: extension/.vscode-test/logs
           if-no-files-found: ignore
 

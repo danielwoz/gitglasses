@@ -5,6 +5,7 @@
 
 #include "exec/git_process.h"
 
+#include "exec/askpass.h"
 #include "exec/cli_detect.h"
 #include "exec/win_unicode.h"
 
@@ -167,7 +168,11 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   for (auto& a : args) fullArgs.push_back(std::move(a));
   std::wstring commandLine = buildCommandLine(fullArgs);
 
-  std::vector<wchar_t> environment = buildEnvironmentBlock(childEnvOverrides(opts));
+  // Prompts git raises go to the client through the broker, for as long as
+  // this process lives.
+  std::shared_ptr<AskpassSession> askpass = openAskpassSession();
+  std::vector<wchar_t> environment = buildEnvironmentBlock(
+      childEnvOverrides(opts, askpass ? askpassEnvironment(*askpass) : std::vector<std::string>{}));
 
   SECURITY_ATTRIBUTES inheritable{};
   inheritable.nLength = sizeof(inheritable);
@@ -238,6 +243,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   process.stderrHandle_ = stderrRead.release();
   process.timeout_ = opts.timeout;
   process.deadline_ = std::chrono::steady_clock::now() + opts.timeout;
+  if (askpass) process.promptStats_ = askpassPromptStats(*askpass);
+  process.askpass_ = std::move(askpass);
   return process;
 }
 
@@ -254,7 +261,9 @@ GitProcess::GitProcess(GitProcess&& other) noexcept
       exitCode_(other.exitCode_),
       timeout_(other.timeout_),
       deadline_(other.deadline_),
-      timedOut_(other.timedOut_) {
+      timedOut_(other.timedOut_),
+      askpass_(std::move(other.askpass_)),
+      promptStats_(std::move(other.promptStats_)) {
   other.process_ = nullptr;
   other.job_ = nullptr;
   other.stdoutHandle_ = nullptr;

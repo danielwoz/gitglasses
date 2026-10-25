@@ -1,8 +1,10 @@
-# Parity gaps vs GitLens Pro
+# Known limitations
 
-GitGlasses reimplements GitLens Pro's feature surface without a proprietary
-cloud service. Most features are at full parity or better (no paywall, no
-account). These are the honest gaps, with the reasons and our alternatives.
+GitGlasses has no servers of its own: everything a hosted git tool would do
+in its cloud, GitGlasses does on your machine or directly against your
+forge's API with your own token. This page lists where that, or anything
+else, makes it behave differently from what you might expect, and the
+alternative where there is one.
 
 ## Launchpad
 - **No server push** — PR state refreshes by polling provider APIs (visible
@@ -32,16 +34,21 @@ account). These are the honest gaps, with the reasons and our alternatives.
   Team sharing = export the group file into a repo.
 
 ## AI
-- No zero-config hosted AI quota. Bring your own key (Anthropic, OpenAI,
-  Gemini), use VS Code language models (Copilot), or run fully offline with
-  Ollama.
+- No hosted AI quota. The first AI command offers what the editor can use: a
+  language model another extension provides (such as GitHub Copilot in VS
+  Code; Open VSX editors usually have none), a local Ollama model, or your
+  own Anthropic, OpenAI-compatible or Gemini key.
+- Hosted providers receive the diff, commit messages, file paths and author
+  names and emails of what you ask about, after a confirmation once per
+  workspace. Explain Commit sends at most about 6,000 tokens of diff.
 
 ## Integrations
 - What each forge and tracker supports, and what is not supported yet, is in
   [integrations.md](integrations.md).
-- GitKraken brokers OAuth for many providers; we use VS Code's built-in
-  GitHub/Microsoft auth where possible and PATs elsewhere (more setup, more
-  privacy — tokens never leave the machine).
+- There is no OAuth broker: GitHub uses the editor's built-in GitHub sign-in,
+  and other providers take a personal access token. That is more setup, but
+  each token is stored in the editor's secret storage and is only ever sent
+  to the provider it belongs to.
 - Bitbucket Data Center's older API lacks a mergeability signal — shown as
   "unknown".
 - Jira dev-panel branch linking requires a Jira Marketplace app; we create

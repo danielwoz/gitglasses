@@ -13,7 +13,7 @@
           {
             "fromLane": 0,
             "toLane": 0,
-            "kind": "line"
+            "kind": "lineOut"
           }
         ],
         "author": {
@@ -37,12 +37,17 @@
           {
             "fromLane": 0,
             "toLane": 0,
-            "kind": "line"
+            "kind": "lineIn"
           },
           {
-            "fromLane": 1,
+            "fromLane": 0,
             "toLane": 0,
-            "kind": "mergeIn"
+            "kind": "lineOut"
+          },
+          {
+            "fromLane": 0,
+            "toLane": 1,
+            "kind": "branchOut"
           }
         ],
         "author": {
@@ -77,7 +82,12 @@
           {
             "fromLane": 1,
             "toLane": 1,
-            "kind": "branchOut"
+            "kind": "lineIn"
+          },
+          {
+            "fromLane": 0,
+            "toLane": 0,
+            "kind": "line"
           }
         ],
         "author": {

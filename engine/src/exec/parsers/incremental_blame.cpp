@@ -43,6 +43,37 @@ std::string stripMailBrackets(std::string value) {
 
 }  // namespace
 
+std::string unquoteCPath(std::string_view text) {
+  if (text.size() < 2 || text.front() != '"' || text.back() != '"') return std::string(text);
+  const std::string_view body = text.substr(1, text.size() - 2);
+  std::string out;
+  out.reserve(body.size());
+  for (size_t i = 0; i < body.size(); ++i) {
+    const char c = body[i];
+    if (c != '\\' || i + 1 == body.size()) {
+      out.push_back(c);
+      continue;
+    }
+    const char next = body[++i];
+    // Single-letter escapes, as git's quote_c_style writes them.
+    constexpr std::string_view kLetters = "abtnvfr";
+    constexpr std::string_view kBytes = "\a\b\t\n\v\f\r";
+    if (const size_t k = kLetters.find(next); k != std::string_view::npos) {
+      out.push_back(kBytes[k]);
+    } else if (next >= '0' && next <= '3' && i + 2 < body.size() && body[i + 1] >= '0' &&
+               body[i + 1] <= '7' && body[i + 2] >= '0' && body[i + 2] <= '7') {
+      // Three octal digits name one byte of the path.
+      out.push_back(static_cast<char>(((next - '0') << 6) | ((body[i + 1] - '0') << 3) |
+                                      (body[i + 2] - '0')));
+      i += 2;
+    } else {
+      // \" and \\, and anything git does not emit, stand for themselves.
+      out.push_back(next);
+    }
+  }
+  return out;
+}
+
 void IncrementalBlameParser::feedLine(const std::string& line) {
   std::string sha;
   std::uint32_t orig = 0, res = 0, count = 0;
@@ -95,10 +126,10 @@ void IncrementalBlameParser::feedLine(const std::string& line) {
     const size_t shaEnd = value.find(' ');
     if (shaEnd != std::string::npos) {
       pending_->previousSha = value.substr(0, shaEnd);
-      pending_->previousPath = value.substr(shaEnd + 1);
+      pending_->previousPath = unquoteCPath(std::string_view(value).substr(shaEnd + 1));
     }
   } else if (key == "filename") {
-    pending_->path = value;
+    pending_->path = unquoteCPath(value);
     emitPending();  // filename terminates the hunk group
   }
 }

@@ -2,6 +2,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include "util/request_context.h"
+
 namespace gg::rpc {
 
 std::string dumpForWire(const Json& message) {
@@ -65,6 +67,28 @@ void Dispatcher::notification(const std::string& name, NotificationHandler handl
   notifications_[name] = {std::move(handler), mode};
 }
 
+void Dispatcher::setErrorData(ErrorDataFn errorData) { errorData_ = std::move(errorData); }
+
+void Dispatcher::onResponse(ResponseHandler handler) { responseHandler_ = std::move(handler); }
+
+void Dispatcher::cancelAll() {
+  std::lock_guard lock(inflightMutex_);
+  for (auto& [id, source] : inflight_) source.cancel();
+}
+
+bool Dispatcher::waitIdle(std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  std::unique_lock lock(inflightMutex_);
+  // Deferred parses register their request only once parsed, so the parse
+  // budget in use counts as work outstanding too. Its counter is not guarded
+  // by this mutex, hence the bounded waits.
+  for (;;) {
+    if (inflight_.empty() && deferredBytes_.load(std::memory_order_relaxed) == 0) return true;
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    idle_.wait_for(lock, std::chrono::milliseconds(20));
+  }
+}
+
 std::vector<std::string> Dispatcher::methodNames() const {
   std::vector<std::string> names;
   names.reserve(methods_.size());
@@ -99,32 +123,78 @@ void Dispatcher::dispatch(std::string payload) {
   if (size > kInlineParseLimit && reserveDeferred(size)) {
     notificationStrand_.post([this, size, payload = std::move(payload)] {
       // Releases the budget however route() leaves, so a burst cannot wedge
-      // deferral off permanently.
+      // deferral off permanently. The release pairs with the acquire below:
+      // a payload that sees the budget drained also sees everything this
+      // parse routed.
       struct Release {
         std::atomic<size_t>& counter;
         size_t size;
-        ~Release() { counter.fetch_sub(size, std::memory_order_relaxed); }
+        ~Release() { counter.fetch_sub(size, std::memory_order_release); }
       } release{deferredBytes_, size};
       route(payload);
     });
+    return;
+  }
+  if (deferredBytes_.load(std::memory_order_acquire) > 0) {
+    // A deferred parse ahead of this payload has not routed its message yet,
+    // and routing this one now would let it overtake: a blame request would
+    // read the editor buffer the doc/didChange ahead of it replaces. The
+    // payload is parsed here and routed behind the parse. Inline
+    // notifications still run at once, so a $/cancelRequest is never held up;
+    // one for a request still queued behind the parse is remembered for it.
+    auto message = parse(payload);
+    if (!message) return;
+    if (isInlineNotification(*message)) {
+      routeMessage(std::move(*message));
+      return;
+    }
+    notificationStrand_.post(
+        [this, message = std::move(*message)]() mutable { routeMessage(std::move(message)); });
     return;
   }
   route(payload);
 }
 
 void Dispatcher::route(const std::string& payload) {
+  if (auto message = parse(payload)) routeMessage(std::move(*message));
+}
+
+std::optional<Json> Dispatcher::parse(const std::string& payload) {
   if (exceedsDepthLimit(payload)) {
     sendError(nullptr, {ErrorCode::InvalidRequest, "message nesting too deep"});
-    return;
+    return std::nullopt;
   }
   Json message = Json::parse(payload, nullptr, /*allow_exceptions=*/false);
   if (message.is_discarded() || !message.is_object()) {
     sendError(nullptr, {ErrorCode::InvalidRequest, "malformed JSON"});
-    return;
+    return std::nullopt;
   }
+  return message;
+}
 
+bool Dispatcher::isInlineNotification(const Json& message) const {
+  const auto idIt = message.find("id");
+  if (idIt != message.end() && !idIt->is_null()) return false;
+  const auto methodIt = message.find("method");
+  if (methodIt == message.end() || !methodIt->is_string()) return false;
+  const auto it = notifications_.find(methodIt->get<std::string>());
+  return it != notifications_.end() && it->second.mode == NotificationMode::Inline;
+}
+
+void Dispatcher::routeMessage(Json message) {
   const auto methodIt = message.find("method");
   if (methodIt == message.end() || !methodIt->is_string()) {
+    // An answer to a request this process sent: it has an id and a result or
+    // an error, and no method.
+    if (methodIt == message.end() && message.contains("id") &&
+        (message.contains("result") || message.contains("error"))) {
+      if (responseHandler_) {
+        responseHandler_(message);
+      } else {
+        spdlog::debug("ignoring a response to no outstanding request");
+      }
+      return;
+    }
     sendError(message.value("id", Json()), {ErrorCode::InvalidRequest, "missing method"});
     return;
   }
@@ -180,8 +250,14 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
   }
 
   const MethodEntry& entry = it->second;
-  Strand* strand = entry.mode == Mode::Concurrent ? nullptr : &strandFor(entry.mode, params);
-  auto task = [this, id, numericId, handler = entry.handler, params = std::move(params)] {
+  const bool serial = entry.mode == Mode::Serial || entry.mode == Mode::SerialNetwork;
+  Strand* strand = serial ? &strandFor(entry.mode, params) : nullptr;
+  RequestContext context{numericId, methodName, ""};
+  if (const auto repoIt = params.find("repoId"); repoIt != params.end() && repoIt->is_string()) {
+    context.repoId = repoIt->get<std::string>();
+  }
+  auto task = [this, id, numericId, handler = entry.handler, params = std::move(params),
+               context = std::move(context)] {
     CancelToken token;
     {
       std::lock_guard lock(inflightMutex_);
@@ -197,31 +273,54 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
       send_({{"jsonrpc", "2.0"}, {"method", method}, {"params", notifyParams}});
     };
 
+    Json response;
     try {
+      const ScopedRequestContext scope(context);
       Json result = handler(params, token, notify);
       token.throwIfCancelled();
-      sendResult(id, result);
+      response = resultMessage(id, result);
     } catch (const CancelledError&) {
-      sendError(id, {ErrorCode::Cancelled, "request cancelled"});
+      response = errorMessage(id, {ErrorCode::Cancelled, "request cancelled"});
     } catch (const HandlerError& e) {
-      sendError(id, e.error);
+      Json data = e.data;
+      if (data.is_null() && errorData_) data = errorData_(e.error);
+      response = errorMessage(id, e.error, data);
     } catch (const Json::type_error& e) {
       // nlohmann's value()/get<>() throw this on a param of the wrong JSON
       // type, which is the caller's mistake, so it maps to InvalidParams.
-      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});
+      response =
+          errorMessage(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});
     } catch (const Json::out_of_range& e) {
-      sendError(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});
+      response =
+          errorMessage(id, {ErrorCode::InvalidParams, "invalid params: " + jsonExceptionDetail(e)});
     } catch (const std::exception& e) {
       spdlog::error("handler '{}' failed: {}", dumpForWire(id), e.what());
-      sendError(id, {ErrorCode::Internal, e.what()});
+      response = errorMessage(id, {ErrorCode::Internal, e.what()});
     }
 
-    std::lock_guard lock(inflightMutex_);
-    inflight_.erase(numericId);
+    // The entry goes before the client can see the answer: a client that
+    // reuses the id once it has its response starts a request of its own
+    // instead of joining this one's entry and losing it to this erase.
+    {
+      std::lock_guard lock(inflightMutex_);
+      inflight_.erase(numericId);
+    }
+    send_(response);
+    {
+      std::lock_guard lock(inflightMutex_);
+      if (inflight_.empty()) idle_.notify_all();
+    }
   };
 
   if (strand) {
     strand->post(std::move(task));
+  } else if (entry.mode == Mode::AfterNotifications) {
+    // Starts once the Queued notifications routed ahead of it have run. The
+    // handler itself runs on the pool, so a slow one never holds up the
+    // notification strand.
+    notificationStrand_.post([this, priority = entry.priority, task = std::move(task)]() mutable {
+      pool_.post(priority, std::move(task));
+    });
   } else {
     pool_.post(entry.priority, std::move(task));
   }
@@ -242,14 +341,18 @@ void Dispatcher::cancelRequest(const Json& params) {
   if (earlyCancelled_.size() < kMaxEarlyCancelled) earlyCancelled_.insert(id);
 }
 
-void Dispatcher::sendResult(const Json& id, const Json& result) {
-  send_({{"jsonrpc", "2.0"}, {"id", id}, {"result", result}});
+Json Dispatcher::resultMessage(const Json& id, const Json& result) {
+  return {{"jsonrpc", "2.0"}, {"id", id}, {"result", result}};
 }
 
-void Dispatcher::sendError(const Json& id, const Error& error) {
-  send_({{"jsonrpc", "2.0"},
-         {"id", id},
-         {"error", {{"code", static_cast<int>(error.code)}, {"message", error.message}}}});
+Json Dispatcher::errorMessage(const Json& id, const Error& error, const Json& data) {
+  Json body = {{"code", static_cast<int>(error.code)}, {"message", error.message}};
+  if (!data.is_null()) body["data"] = data;
+  return {{"jsonrpc", "2.0"}, {"id", id}, {"error", std::move(body)}};
+}
+
+void Dispatcher::sendError(const Json& id, const Error& error, const Json& data) {
+  send_(errorMessage(id, error, data));
 }
 
 size_t Dispatcher::inflight() const {

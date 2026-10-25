@@ -5,6 +5,8 @@
 import type { TSchema } from '@sinclair/typebox';
 
 import { PROTOCOL_VERSION } from '../version.js';
+import { EngineRequestSchemas } from './engineRequests.js';
+import { GitErrorData } from './models.js';
 import {
   ClientNotificationSchemas,
   EngineNotificationSchemas,
@@ -14,6 +16,7 @@ import { RESTRICTED_MODE_METHODS, RequestSchemas } from './requests.js';
 export * from './models.js';
 export { EmptyObject, RESTRICTED_MODE_METHODS, RequestSchemas } from './requests.js';
 export { ClientNotificationSchemas, EngineNotificationSchemas } from './notifications.js';
+export { EngineRequestSchemas } from './engineRequests.js';
 
 /** Drops TypeBox's symbol bookkeeping, leaving pure JSON Schema. */
 function toJson(schema: TSchema): unknown {
@@ -28,6 +31,10 @@ export interface SchemaArtifact {
     string,
     { direction: 'client' | 'engine'; description: string; params: unknown }
   >;
+  /** Requests the engine sends to the client, which answers them. */
+  engineRequests: Record<string, { description: string; params: unknown; result: unknown }>;
+  /** Shape of a GitError's error.data. */
+  errorData: unknown;
   /** Methods an engine in Restricted Mode serves; it refuses the rest. */
   restrictedModeMethods: string[];
 }
@@ -57,12 +64,22 @@ export function buildSchemaArtifact(): SchemaArtifact {
       params: toJson(schemas.params),
     };
   }
+  const engineRequests: SchemaArtifact['engineRequests'] = {};
+  for (const [method, schemas] of Object.entries(EngineRequestSchemas)) {
+    engineRequests[method] = {
+      description: schemas.description,
+      params: toJson(schemas.params),
+      result: toJson(schemas.result),
+    };
+  }
   return {
     $comment:
       'Generated from packages/protocol/src/schema by scripts/emit-schema.ts. Do not edit by hand; run `pnpm --filter @gitglasses/protocol build`.',
     protocolVersion: PROTOCOL_VERSION,
     methods,
     notifications,
+    engineRequests,
+    errorData: toJson(GitErrorData),
     restrictedModeMethods: [...RESTRICTED_MODE_METHODS],
   };
 }

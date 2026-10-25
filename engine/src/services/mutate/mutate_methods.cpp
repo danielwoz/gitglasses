@@ -1,11 +1,15 @@
 #include "services/mutate/mutate_methods.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "exec/git_process.h"
 
+#include "services/mutate/git_errors.h"
 #include "services/mutate/mutate_common.h"
 #include "services/params.h"
 
@@ -13,13 +17,100 @@ namespace gg::services {
 
 namespace {
 
+using mutate_detail::configString;
 using mutate_detail::headSha;
 using mutate_detail::openRepo;
+using mutate_detail::remoteNames;
+using mutate_detail::repoCwd;
 using mutate_detail::requirePositional;
 using mutate_detail::requirePositionals;
 using mutate_detail::runConflictAware;
 using mutate_detail::runGit;
 using mutate_detail::runGitOrThrow;
+using mutate_detail::runGitWithEnv;
+using mutate_detail::sequencerState;
+using mutate_detail::SequencerState;
+using mutate_detail::throwGitFailure;
+
+// The remote a branch is published to when the caller names none: the one
+// git's config names for pushing it (branch.<name>.pushRemote, then
+// remote.pushDefault), then the one it tracks (branch.<name>.remote), then
+// the repository's only remote. Several remotes and no such config is the
+// caller's choice to make, so that fails with data.kind 'noRemote' and the
+// remotes to choose from; a branch is never pushed to a remote it was not
+// meant for just because the remote is called origin.
+std::string publishRemote(const core::Repo& repo, const std::string& branch) {
+  for (const std::string& key :
+       {"branch." + branch + ".pushRemote", std::string("remote.pushDefault"),
+        "branch." + branch + ".remote"}) {
+    // "." names the repository itself (a branch tracking a local branch).
+    const std::string value = configString(repo, key);
+    if (!value.empty() && value != ".") return value;
+  }
+  const std::vector<std::string> remotes = remoteNames(repo);
+  if (remotes.size() == 1) return remotes.front();
+  std::string message = remotes.empty()
+                            ? "cannot publish '" + branch + "': the repository has no remote"
+                            : "cannot publish '" + branch +
+                                  "': choose a remote; several are configured and none "
+                                  "is set as the default for pushing";
+  throw rpc::HandlerError{{ErrorCode::GitError, std::move(message)},
+                          {{"kind", "noRemote"}, {"remotes", remotes}}};
+}
+
+// Records a pull strategy in the repository's own config, so later pulls use
+// it without asking.
+void rememberPullStrategy(const core::Repo& repo, const std::string& strategy,
+                          const CancelToken& token) {
+  const auto set = [&](const char* key, const char* value) {
+    runGitOrThrow(repo, {"config", "--local", key, value}, token, "git config");
+  };
+  if (strategy == "rebase") {
+    set("pull.rebase", "true");
+  } else if (strategy == "merge") {
+    set("pull.rebase", "false");
+    // pull.ff=only would refuse every merge the user just chose.
+    if (configString(repo, "pull.ff") == "only") set("pull.ff", "true");
+  } else {
+    set("pull.ff", "only");
+  }
+}
+
+// True when git reaches ssh remotes through PuTTY's plink or TortoisePlink,
+// which never run SSH_ASKPASS: whatever they need to ask fails, so the
+// failure says so instead of offering prompts that cannot appear.
+bool sshIsPlink(const core::Repo& repo) {
+  std::string variant = configString(repo, "ssh.variant");
+  std::transform(variant.begin(), variant.end(), variant.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (variant == "plink" || variant == "putty" || variant == "tortoiseplink") return true;
+  // The program git runs, in git's order of precedence.
+  std::string command;
+  if (const char* sshCommand = std::getenv("GIT_SSH_COMMAND"); sshCommand && *sshCommand) {
+    command = sshCommand;
+  } else if (command = configString(repo, "core.sshCommand"); command.empty()) {
+    if (const char* ssh = std::getenv("GIT_SSH"); ssh && *ssh) command = ssh;
+  }
+  std::transform(command.begin(), command.end(), command.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return command.find("plink") != std::string::npos;
+}
+
+// Runs a remote-facing git invocation, marking a failure that went through
+// plink with data.sshProgram 'plink'.
+template <typename Run>
+auto throughSsh(const core::Repo& repo, Run&& run) -> decltype(run()) {
+  try {
+    return run();
+  } catch (rpc::HandlerError& error) {
+    if (error.error.code == ErrorCode::GitError && sshIsPlink(repo)) {
+      if (error.data.is_null()) error.data = describeGitFailure(error.error.message);
+      if (error.data.is_null()) error.data = {{"kind", "auth"}};
+      error.data["sshProgram"] = "plink";
+    }
+    throw;
+  }
+}
 
 }  // namespace
 
@@ -171,7 +262,9 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           args.push_back("--");
           args.push_back(remote);
         }
-        runGitOrThrow(repo, std::move(args), token, "git fetch", exec::kNetworkGitTimeout);
+        throughSsh(repo, [&] {
+          return runGitOrThrow(repo, std::move(args), token, "git fetch", exec::kNetworkGitTimeout);
+        });
         return rpc::Json::object();
       },
       rpc::Mode::SerialNetwork);
@@ -181,11 +274,34 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
       [&context](const rpc::Json& params, const CancelToken& token,
                  const rpc::NotifyFn&) -> rpc::Json {
         requireGitCli(context);
+        const std::string strategy = optionalString(params, "strategy");
+        if (!strategy.empty() && strategy != "merge" && strategy != "rebase" &&
+            strategy != "ff-only") {
+          throw rpc::HandlerError{
+              {ErrorCode::InvalidParams, "'strategy' must be 'merge', 'rebase' or 'ff-only'"}};
+        }
+        const bool remember = params.value("remember", false);
+        if (remember && strategy.empty()) {
+          throw rpc::HandlerError{{ErrorCode::InvalidParams, "'remember' needs a 'strategy'"}};
+        }
         auto repo = openRepo(context, params);
+        if (remember) rememberPullStrategy(repo, strategy, token);
         std::vector<std::string> args = {"pull"};
+        if (strategy == "merge") {
+          // --ff rather than git's default lets a fast-forward through even
+          // where pull.ff=only would refuse the merge asked for.
+          args.push_back("--no-rebase");
+          args.push_back("--ff");
+        } else if (strategy == "rebase") {
+          args.push_back("--rebase");
+        } else if (strategy == "ff-only") {
+          args.push_back("--ff-only");
+        }
         if (params.value("autoStash", false)) args.push_back("--autostash");
-        runGitOrThrow(repo, std::move(args), token, "git pull", exec::kNetworkGitTimeout);
-        return rpc::Json::object();
+        return throughSsh(repo, [&] {
+          return runConflictAware(repo, std::move(args), token, "git pull",
+                                  exec::kNetworkGitTimeout);
+        });
       },
       rpc::Mode::SerialNetwork);
 
@@ -199,18 +315,83 @@ void registerMutateMethods(rpc::Dispatcher& dispatcher, ServiceContext& context)
           throw rpc::HandlerError{
               {ErrorCode::InvalidParams, "'force' must be 'with-lease' when present"}};
         }
+        const std::string remoteParam =
+            requirePositional(optionalString(params, "remote"), "remote");
         auto repo = openRepo(context, params);
         std::vector<std::string> args = {"push"};
-        if (params.value("setUpstream", false)) {
-          args.push_back("-u");
-          args.push_back("origin");
-          args.push_back("HEAD");
-        }
         if (force == "with-lease") args.push_back("--force-with-lease");
-        runGitOrThrow(repo, std::move(args), token, "git push", exec::kNetworkGitTimeout);
-        return rpc::Json::object();
+        rpc::Json result = rpc::Json::object();
+        if (params.value("setUpstream", false)) {
+          auto head = repo.head();
+          if (!head) throw rpc::HandlerError{{head.error()}};
+          if (head.value().detached || head.value().branch.empty()) {
+            throw rpc::HandlerError{
+                {ErrorCode::GitError, "cannot publish: HEAD is not on a branch"}};
+          }
+          const std::string remote = requirePositional(
+              remoteParam.empty() ? publishRemote(repo, head.value().branch) : remoteParam,
+              "remote");
+          args.push_back("-u");
+          args.push_back("--");
+          args.push_back(remote);
+          args.push_back("HEAD");
+          result["remote"] = remote;
+        }
+        throughSsh(repo, [&] {
+          return runGitOrThrow(repo, std::move(args), token, "git push", exec::kNetworkGitTimeout);
+        });
+        return result;
       },
       rpc::Mode::SerialNetwork);
+
+  dispatcher.method(
+      "mutate/sequencer",
+      [&context](const rpc::Json& params, const CancelToken& token,
+                 const rpc::NotifyFn&) -> rpc::Json {
+        requireGitCli(context);
+        const std::string action = requireString(params, "action");
+        if (action != "continue" && action != "skip" && action != "abort") {
+          throw rpc::HandlerError{
+              {ErrorCode::InvalidParams, "'action' must be 'continue', 'skip' or 'abort'"}};
+        }
+        auto repo = openRepo(context, params);
+        const SequencerState before = sequencerState(repo);
+        if (before.operation == "none") {
+          throw rpc::HandlerError{
+              {ErrorCode::GitError,
+               "no merge, rebase, cherry-pick or revert is in progress to " + action}};
+        }
+        const auto report = [&](bool completed, bool conflicts) -> rpc::Json {
+          return {
+              {"operation", before.operation}, {"completed", completed}, {"conflicts", conflicts}};
+        };
+        // Continuing over unresolved files would only fail; say so instead.
+        if (action == "continue" && before.conflicted) return report(false, true);
+
+        std::vector<std::string> args;
+        if (before.operation == "merge") {
+          if (action == "skip") {
+            throw rpc::HandlerError{
+                {ErrorCode::InvalidParams, "a merge cannot be skipped; continue or abort it"}};
+          }
+          // Continuing a merge is committing it, with the message git prepared.
+          args = action == "abort" ? std::vector<std::string>{"merge", "--abort"}
+                                   : std::vector<std::string>{"commit", "--no-edit"};
+        } else {
+          args = {before.operation, "--" + action};
+        }
+        const std::string what = "git " + args[0] + " " + args[1];
+        // GIT_EDITOR=true keeps the message git prepared for the resumed step;
+        // an editor must never block a headless engine.
+        auto output =
+            runGitWithEnv(repoCwd(repo), std::move(args), {{"GIT_EDITOR", "true"}}, token);
+        if (!output) throw rpc::HandlerError{{output.error()}};
+        const SequencerState after = sequencerState(repo);
+        if (after.conflicted) return report(false, true);
+        if (output.value().exitCode != 0) throwGitFailure(what, output.value(), after.operation);
+        return report(after.operation == "none", false);
+      },
+      rpc::Mode::Serial);
 }
 
 }  // namespace gg::services

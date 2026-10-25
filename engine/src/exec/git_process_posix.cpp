@@ -9,7 +9,9 @@
 
 #include <cerrno>
 #include <cstring>
+#include <thread>
 
+#include "exec/askpass.h"
 #include "exec/cli_detect.h"
 
 extern char** environ;
@@ -105,9 +107,13 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   for (auto& a : fullArgs) argv.push_back(a.data());
   argv.push_back(nullptr);
 
+  // Prompts git raises go to the client through the broker, for as long as
+  // this process lives.
+  std::shared_ptr<AskpassSession> askpass = openAskpassSession();
   // Each override replaces any inherited variable of the same name: with
   // duplicates in envp, which copy wins is unspecified.
-  const std::vector<std::string> overrides = childEnvOverrides(opts);
+  const std::vector<std::string> overrides =
+      childEnvOverrides(opts, askpass ? askpassEnvironment(*askpass) : std::vector<std::string>{});
   const auto nameLen = [](const std::string& entry) { return entry.find('='); };
   const auto sameName = [&nameLen](const std::string& a, const char* b) {
     const size_t n = nameLen(a);
@@ -157,6 +163,8 @@ Result<GitProcess> GitProcess::spawn(const std::string& cwd, std::vector<std::st
   process.stderrFd_ = errPipe[0];
   process.timeout_ = opts.timeout;
   process.deadline_ = std::chrono::steady_clock::now() + opts.timeout;
+  if (askpass) process.promptStats_ = askpassPromptStats(*askpass);
+  process.askpass_ = std::move(askpass);
   fcntl(process.stdoutFd_, F_SETFL, O_NONBLOCK);
   fcntl(process.stderrFd_, F_SETFL, O_NONBLOCK);
   return process;
@@ -174,7 +182,9 @@ GitProcess::GitProcess(GitProcess&& other) noexcept
       exitCode_(other.exitCode_),
       timeout_(other.timeout_),
       deadline_(other.deadline_),
-      timedOut_(other.timedOut_) {
+      timedOut_(other.timedOut_),
+      askpass_(std::move(other.askpass_)),
+      promptStats_(std::move(other.promptStats_)) {
   other.pid_ = -1;
   other.stdoutFd_ = -1;
   other.stderrFd_ = -1;
@@ -191,7 +201,22 @@ GitProcess::~GitProcess() {
 }
 
 void GitProcess::killGroup() {
-  if (pid_ != -1) kill(-pid_, SIGKILL);
+  if (pid_ == -1 || reaped_) return;
+  // git (and ssh, hooks) clean up on SIGTERM: lock files go, so the
+  // repository is left usable.
+  kill(-pid_, SIGTERM);
+  const auto giveUp = std::chrono::steady_clock::now() + kTerminateGrace;
+  while (std::chrono::steady_clock::now() < giveUp) {
+    // WNOWAIT leaves git unreaped, so its process group id cannot be reused
+    // before the SIGKILL below reaches whatever git left running.
+    siginfo_t info{};
+    if (waitid(P_PID, static_cast<id_t>(pid_), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+        info.si_pid == pid_) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  kill(-pid_, SIGKILL);
 }
 
 void GitProcess::drainStderr(bool blocking) {

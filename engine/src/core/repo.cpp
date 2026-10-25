@@ -1,5 +1,7 @@
 #include "core/repo.h"
 
+#include <string_view>
+
 namespace gg::core {
 
 Result<Repo> Repo::open(const std::string& path) {
@@ -31,6 +33,17 @@ Result<HeadState> Repo::head() const {
   HeadState state;
   if (git_repository_head_unborn(repo_.get()) == 1) {
     state.unborn = true;
+    // HEAD names a branch that does not exist yet; report its short name so
+    // a fresh `git init -b main` reads as "main", not as a detached HEAD.
+    git_reference* rawHead = nullptr;
+    if (git_reference_lookup(&rawHead, repo_.get(), "HEAD") == 0) {
+      ReferencePtr head(rawHead);
+      if (const char* target = git_reference_symbolic_target(rawHead)) {
+        constexpr std::string_view kHeads = "refs/heads/";
+        std::string_view name(target);
+        if (name.substr(0, kHeads.size()) == kHeads) state.branch = name.substr(kHeads.size());
+      }
+    }
     return state;
   }
   state.detached = git_repository_head_detached(repo_.get()) == 1;

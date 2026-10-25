@@ -8,17 +8,30 @@ import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
 import { shortSha } from '@gitglasses/protocol/sha';
 import { BlameModel, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES } from './model/blameModel';
-import { RepositoryService, repoName } from './model/repositoryService';
+import { LocatedFile, RepositoryService, repoName } from './model/repositoryService';
 import { ActiveRepoManager } from './model/activeRepo';
 import { RefsModel } from './model/refsModel';
 import { ConflictWatcher } from './model/conflictWatcher';
 import { LineBlameController } from './annotations/lineBlame';
 import { FileAnnotationsController } from './annotations/fileAnnotations';
-import { BlameHoverProvider } from './annotations/hoverProvider';
+import { BlameHoverProvider, BlameHoverRenderer } from './annotations/hoverProvider';
+import { BufferSync, DocumentBlameService } from './annotations/documentBlame';
+import { diffWithHeadTarget, registerBlameCommands } from './annotations/blameCommands';
 import { BlameCodeLensProvider } from './codelens/blameCodeLens';
-import { RevisionContentProvider, encodeRevisionUri } from './scm/revisionContentProvider';
-import { GitGlassesQuickDiffProvider } from './scm/quickDiffProvider';
-import { ViewBase, ViewNode, setActiveRepoResolver } from './views/viewBase';
+import {
+  RevisionContentProvider,
+  encodeRevisionUri,
+  setRevisionRootLookup,
+} from './scm/revisionContentProvider';
+import { hasBuiltinGit, registerQuickDiff } from './scm/quickDiffSources';
+import { registerScmGraphButton } from './scm/scmGraphButton';
+import {
+  ViewBase,
+  ViewNode,
+  ViewWithStates,
+  setActiveRepoResolver,
+  setViewLogger,
+} from './views/viewBase';
 import { CommitsViewProvider } from './views/commitsView';
 import {
   BranchesViewProvider,
@@ -35,8 +48,11 @@ import { ShaTerminalLinkProvider } from './terminal/linkProvider';
 import { RepoGroupsManager } from './groups/repoGroups';
 import { registerGraphWebview } from './webviews/graphHost';
 import { registerRebaseWebview } from './webviews/rebaseHost';
+import { registerRefCommands } from './views/refCommands';
+import { registerRebaseTodoEditor } from './webviews/rebaseTodoEditor';
 import { registerTimelineWebview } from './webviews/timelineHost';
 import { registerGitPalette } from './commands/gitPalette';
+import { registerKeyboardShortcuts } from './commands/keyboardShortcuts';
 import { WorktreesViewProvider, registerWorktreeCommands } from './views/worktreesView';
 import { AuthManager } from './integrations/auth';
 import { IntegrationService } from './integrations/integrationService';
@@ -48,6 +64,9 @@ import { registerAiFeatures } from './ai/features';
 import { HomeViewProvider, registerHomeCommands } from './home/homeView';
 import { ModeController } from './modes/modeController';
 import { registerSuggestChange } from './reviews/suggestCommands';
+import { registerCommitDetails } from './commitDetails/commitDetails';
+import { WalkthroughOpener } from './home/walkthrough';
+import { registerGitGraphMigration } from './onboarding/gitGraphMigration';
 
 /** Views whose contents follow HEAD and the ref graph. */
 export const HISTORY_VIEWS = [
@@ -96,8 +115,9 @@ export function createRestrictedNotifier(): () => void {
   };
 }
 
-/** The document sync each host builds; core only drives its resync. */
-export interface DocumentSyncLike {
+/** The document sync each host builds: blame pushes unsaved buffers through
+ *  it, and core resyncs it after an engine respawn. */
+export interface DocumentSyncLike extends BufferSync {
   resync(): void;
 }
 
@@ -140,20 +160,36 @@ export interface Core {
   handleEngineRestarted(): void;
 }
 
+/** `selector` widened to the revision documents (gitglasses: scheme) that
+ *  both hosts serve, which blame describes at their revision. */
+function revisionDocumentsToo(selector: vscode.DocumentSelector): vscode.DocumentSelector {
+  if (selector === '*') return selector;
+  return [...(Array.isArray(selector) ? selector : [selector]), { scheme: 'gitglasses' }];
+}
+
 export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Core {
   const { engine, repos, docSync } = deps;
 
   const blame = new BlameModel(engine, MAX_CACHE_BYTES, MAX_CACHE_ENTRIES, deps.log);
-  const lineBlame = new LineBlameController(blame, repos);
-  const fileAnnotations = new FileAnnotationsController(blame, repos, context.workspaceState);
-  const codeLens = new BlameCodeLensProvider(blame, repos);
-  const revisionContent = new RevisionContentProvider(engine);
-
-  const scm = vscode.scm.createSourceControl('gitglasses', 'GitGlasses');
-  scm.quickDiffProvider = new GitGlassesQuickDiffProvider(repos);
-
   const auth = new AuthManager(context.secrets);
   const integrations = new IntegrationService(auth);
+  const documentBlame = new DocumentBlameService(blame, repos, docSync);
+  const blameHover = new BlameHoverRenderer(engine, {
+    autolink: (text, repoRoot) => integrations.autolinkText(text, repoRoot),
+    hosting: (repoRoot) => integrations.getHostingFor(repoRoot),
+  });
+  const lineBlame = new LineBlameController(documentBlame, blameHover);
+  const fileAnnotations = new FileAnnotationsController(documentBlame, context.workspaceState);
+  const codeLens = new BlameCodeLensProvider(documentBlame);
+  // Revision documents record their repository's root, so one read after an
+  // engine restart (which hands out new repo ids) still finds it.
+  setRevisionRootLookup((repoId) => repos.rootOf(repoId));
+  const revisionContent = new RevisionContentProvider(
+    engine,
+    (root) => repos.repositories().find((repo) => repos.isRootOf(repo.repoId, root))?.repoId,
+  );
+  setViewLogger(deps.log);
+
   const launchpad = new LaunchpadService(integrations, context.globalState);
   const prChips = new PrChipProvider(integrations);
 
@@ -208,13 +244,19 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   const onHeadChanged = (repoId: string): void => {
     refreshViews(HISTORY_VIEWS);
     refreshAnnotations(repoId);
+    // Open "HEAD" documents (Open Changes with HEAD, quick diff) now name
+    // other content.
+    revisionContent.refreshMoved(repoId);
     conflicts.schedule();
   };
   const refreshAll = (): void => {
     refreshAnnotations();
     refreshViews();
+    revisionContent.refreshMoved();
     conflicts.schedule();
   };
+  // Fires once repositories are registered again after an engine respawn.
+  const reloaded = new vscode.EventEmitter<void>();
   const reload = async (): Promise<void> => {
     await repos.rediscoverAll();
     // Repo ids are fresh after a respawn, so the workspace repos are looked
@@ -222,12 +264,15 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     activeRepo.reset();
     docSync.resync();
     refreshAll();
+    revisionContent.refreshAll();
+    reloaded.fire();
   };
   const handleEngineRestarted = (): void => {
     void reload().catch((error) => deps.log(`reload after engine restart failed: ${error}`));
   };
 
   const repoGroups = new RepoGroupsManager(context, engine, repos);
+  const walkthrough = new WalkthroughOpener(deps.log);
 
   // Capability gating: expose gitCli as a when-clause context so mutation
   // commands grey out on engine builds without the git CLI. Unknown (before
@@ -242,10 +287,12 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
   updateCapabilityContext();
 
   const disposables: vscode.Disposable[] = [
+    documentBlame,
     lineBlame,
     fileAnnotations,
     codeLens,
-    scm,
+    documentBlame.onDidChangeSettings(() => refreshBlameConsumers()),
+    revisionContent,
     auth,
     integrations,
     activeRepo,
@@ -253,15 +300,32 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     engine.onDidChangeCapabilities(() => updateCapabilityContext()),
   ];
 
+  // Quick diff comes from VS Code's Git extension where it runs; GitGlasses
+  // registers its own only where that extension is absent (see
+  // QuickDiffSources for why it never adds a second source control).
+  const builtinGit = hasBuiltinGit();
+  disposables.push(
+    ...registerQuickDiff(
+      repos,
+      () => activeRepo.all(),
+      activeRepo.onDidChange,
+      (listener) => engine.onDidChangeCapabilities(listener),
+      deps.log,
+    ),
+  );
+
+  const stateHost = () => ({ hasBuiltinGit: builtinGit, trusted: vscode.workspace.isTrusted });
   const treeViews: vscode.TreeView<ViewNode>[] = [];
   for (const [viewId, provider] of Object.entries(views)) {
-    const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: provider });
+    const withStates = new ViewWithStates(viewId, provider, stateHost);
+    const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: withStates });
     treeViews.push(treeView);
-    disposables.push(provider, treeView);
+    disposables.push(provider, withStates, treeView);
   }
 
   // Which repository the views describe, shown next to each view's title. A
-  // single-repo workspace needs no such label.
+  // single-repo workspace needs no such label. The context keys let the
+  // command palette offer repository commands only where there is one.
   const updateRepoLabels = async (): Promise<void> => {
     const all = await activeRepo.all().catch(() => []);
     const active = all.length > 1 ? await activeRepo.resolve() : undefined;
@@ -272,6 +336,7 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       'gitglasses.multiRepoWorkspace',
       all.length > 1,
     );
+    void vscode.commands.executeCommand('setContext', 'gitglasses.hasRepository', all.length > 0);
   };
   void updateRepoLabels();
   disposables.push(
@@ -283,40 +348,77 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     engine.onDidChangeCapabilities(() => void updateRepoLabels()),
   );
 
+  // The file an editor command acts on, telling the user when it is not in
+  // a repository.
+  const locateFile = async (
+    uri: vscode.Uri,
+  ): Promise<(LocatedFile & { uri: vscode.Uri }) | undefined> => {
+    const located = await repos.locateOrDiscover(uri);
+    if (!located) {
+      void vscode.window.showInformationMessage(
+        'GitGlasses: this file is not inside a repository.',
+      );
+      return undefined;
+    }
+    return { ...located, uri };
+  };
+  // The active editor's file, telling the user when there is none.
+  const locateActiveFile = async (): Promise<
+    (LocatedFile & { uri: vscode.Uri; editor: vscode.TextEditor }) | undefined
+  > => {
+    const editor = deps.activeEditor();
+    if (!editor) {
+      void vscode.window.showInformationMessage('GitGlasses: open a file first.');
+      return undefined;
+    }
+    const located = await locateFile(editor.document.uri);
+    return located && { ...located, editor };
+  };
+
+  // Revision documents follow the refs and the index, which change without
+  // HEAD moving: a commit on the current branch moves a ref, staging
+  // rewrites the index.
+  disposables.push(
+    engine.onNotification('repo/didChange', (params) => {
+      if (!Array.isArray(params?.changed)) return;
+      const { changed } = params;
+      if (changed.includes('HEAD') || changed.includes('refs') || changed.includes('index')) {
+        revisionContent.refreshMoved(params.repoId);
+      }
+    }),
+  );
+
   disposables.push(
     vscode.window.registerTerminalLinkProvider(new ShaTerminalLinkProvider(engine, repos)),
     // Blame cached at version -1 describes the file on disk, which a save
-    // changes.
+    // changes; saving .mailmap and the like changes every file's.
     vscode.workspace.onDidSaveTextDocument((doc) => {
       const located = repos.locate(doc.uri);
-      if (located) blame.invalidate(located.repoId);
+      if (located) blame.invalidateSaved(located.repoId, located.relativePath);
       refreshBlameConsumers();
     }),
     vscode.languages.registerHoverProvider(
-      deps.documentSelector,
-      new BlameHoverProvider(blame, repos, (text, repoRoot) =>
-        integrations.autolinkText(text, repoRoot),
-      ),
+      revisionDocumentsToo(deps.documentSelector),
+      new BlameHoverProvider(documentBlame, blameHover),
     ),
+    ...registerBlameCommands(),
     vscode.languages.registerCodeLensProvider(deps.documentSelector, codeLens),
     vscode.workspace.registerTextDocumentContentProvider('gitglasses', revisionContent),
-    vscode.commands.registerCommand('gitglasses.diffWithHead', async () => {
-      const editor = deps.activeEditor();
-      if (!editor) return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
+    ...registerCommitDetails(context, engine, repos, deps.log),
+    vscode.commands.registerCommand('gitglasses.diffWithHead', async (arg?: unknown) => {
+      const target = diffWithHeadTarget(arg);
+      const located = target ? await locateFile(target) : await locateActiveFile();
       if (!located) return;
       const original = encodeRevisionUri(located.repoId, located.relativePath, 'HEAD');
       await vscode.commands.executeCommand(
         'vscode.diff',
         original,
-        editor.document.uri,
+        located.uri,
         `${located.relativePath} (HEAD ↔ Working Tree)`,
       );
     }),
     vscode.commands.registerCommand('gitglasses.openFileAtRevision', async () => {
-      const editor = deps.activeEditor();
-      if (!editor) return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
+      const located = await locateActiveFile();
       if (!located) return;
       const rev = await vscode.window.showInputBox({
         prompt: 'Revision (sha, branch, tag, HEAD~n…)',
@@ -342,14 +444,20 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       await reload();
     }),
     vscode.commands.registerCommand('gitglasses.refreshViews', () => refreshViews()),
-    vscode.commands.registerCommand('gitglasses.selectRepository', () => activeRepo.pick()),
-    vscode.commands.registerCommand('gitglasses.openWalkthrough', () =>
-      vscode.commands.executeCommand(
-        'workbench.action.openWalkthrough',
-        'gitglasses.gitglasses#gitglasses.getStarted',
-        false,
-      ),
+    // A root path, as a keybinding's args, selects that repository directly.
+    vscode.commands.registerCommand('gitglasses.selectRepository', (rootPath?: unknown) =>
+      typeof rootPath === 'string' ? activeRepo.select(rootPath) : activeRepo.pick(),
     ),
+    registerScmGraphButton({
+      locateOrDiscover: (uri) => repos.locateOrDiscover(uri),
+      activeRepoId: async () => (await activeRepo.resolve())?.repoId,
+      setActive: (rootPath) => activeRepo.setActive(rootPath),
+      log: deps.log,
+    }),
+    ...registerKeyboardShortcuts(),
+    walkthrough,
+    vscode.commands.registerCommand('gitglasses.openWalkthrough', () => walkthrough.open()),
+    ...registerGitGraphMigration(context),
     vscode.commands.registerCommand('gitglasses.loadMore', (loadMore: unknown) => {
       if (typeof loadMore === 'function') (loadMore as () => void)();
     }),
@@ -359,18 +467,13 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
       vscode.window.setStatusBarMessage(`Copied ${shortSha(node.sha)}`, 3000);
     }),
     vscode.commands.registerCommand('gitglasses.openCommitDiff', (node?: ViewNode) =>
-      openCommitDiff(node),
+      openCommitDiff(node, repos),
     ),
     vscode.commands.registerCommand('gitglasses.searchCommits', () => searchView.searchCommits()),
     vscode.commands.registerCommand('gitglasses.showLineHistory', async () => {
-      const editor = deps.activeEditor();
-      if (!editor) return;
-      const located = await repos.locateOrDiscover(editor.document.uri);
-      if (!located) {
-        void vscode.window.showWarningMessage('GitGlasses: file is not in a git repository.');
-        return;
-      }
-      const selection = editor.selection;
+      const located = await locateActiveFile();
+      if (!located) return;
+      const selection = located.editor.selection;
       let entries;
       try {
         ({ entries } = await engine.request('history/line', {
@@ -421,16 +524,37 @@ export function createCore(context: vscode.ExtensionContext, deps: CoreDeps): Co
     new ModeController(lineBlame, fileAnnotations, codeLens),
     registerStartWork(integrations, engine, repos),
     ...registerLaunchpad(launchpad, integrations),
-    ...registerAiFeatures(context, engine, repos, searchView),
+    ...registerAiFeatures(context, engine, repos, searchView, deps.log),
     registerSuggestChange(engine, repos, integrations),
   );
 
-  const rebase = registerRebaseWebview(context, engine, repos);
+  const rebase = registerRebaseWebview(context, engine, repos, deps.log);
   disposables.push(
     ...rebase.disposables,
-    ...registerGraphWebview(context, engine, repos, (upstream) => rebase.host.open(upstream)),
+    reloaded,
+    ...registerRebaseTodoEditor(context, deps.log),
+    ...registerRefCommands({
+      engine,
+      repos,
+      integrations,
+      log: deps.log,
+      refresh: () => refreshViews(),
+      openRebase: (upstream) => rebase.host.open(upstream),
+    }),
+    ...registerGraphWebview({
+      context,
+      engine,
+      repos,
+      onDidChangeActiveRepo: activeRepo.onDidChange,
+      onDidReload: reloaded.event,
+      openRebase: (upstream) => rebase.host.open(upstream),
+      log: deps.log,
+    }),
     ...registerTimelineWebview(context, engine, repos),
-    registerGitPalette(engine, repos, (upstream) => rebase.host.open(upstream)),
+    registerGitPalette(engine, repos, (upstream, repo) => rebase.host.open(upstream, repo), {
+      listRepos: () => activeRepo.all(),
+      activeEditorUri: () => deps.activeEditor()?.document.uri,
+    }),
     ...registerWorktreeCommands(engine, repos, worktreesView),
   );
 

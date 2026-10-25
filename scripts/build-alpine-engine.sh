@@ -33,10 +33,11 @@ mkdir -p "$cache" "$build"
 owner=$(stat -c %u:%g "$src")
 trap 'chown -R "$owner" "$build" "$cache"' EXIT
 
-# vcpkg runs on Alpine only with the system's cmake and ninja. Its port
+# vcpkg runs on Alpine only with the system's cmake and ninja, and its port
 # scripts need the CMake it pins (4.4), newer than Alpine's, so cmake comes
 # from PyPI's musl wheels, checked against these hashes (x86_64, aarch64).
-apk add --no-cache build-base python3 samurai git curl zip unzip tar pkgconf linux-headers >/dev/null
+# git-daemon carries git-http-backend, which the HTTP auth tests serve through.
+apk add --no-cache build-base python3 samurai git git-daemon curl zip unzip tar pkgconf linux-headers >/dev/null
 python3 -m venv /opt/cmake
 /opt/cmake/bin/pip install --quiet --disable-pip-version-check --no-deps \
   --only-binary=:all: --require-hashes -r /dev/stdin <<'REQUIREMENTS'

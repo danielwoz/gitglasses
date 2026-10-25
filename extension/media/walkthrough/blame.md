@@ -6,4 +6,6 @@ Three ways to see authorship:
 - **File blame** annotates every line in the file.
 - **Heatmap** shades lines by how recently they changed.
 
-Keyboard: `Ctrl+Shift+G B` toggles inline blame.
+Keyboard: GitGlasses shortcuts are off until you turn on
+`gitglasses.keyboardShortcuts.enabled`, so none of your editor's own are taken
+over. Then `Ctrl+Alt+G B` (`Cmd+Alt+G B` on macOS) toggles inline blame.

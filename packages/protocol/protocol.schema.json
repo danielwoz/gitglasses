@@ -14,6 +14,15 @@
           "protocolVersion": {
             "minLength": 1,
             "type": "string"
+          },
+          "clientCapabilities": {
+            "additionalProperties": true,
+            "type": "object",
+            "properties": {
+              "askpass": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -285,7 +294,7 @@
       }
     },
     "blame/file": {
-      "description": "Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table.",
+      "description": "Blames a file at a revision (working tree by default, honouring unsaved contents pushed via doc/didChange). Hunks stream as blame/hunks notifications tagged with `streamId`; the result carries only the totals and the commit table. The request runs after every doc/didChange the engine received before it, so a buffer pushed ahead of the request is the one blamed.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -313,6 +322,42 @@
             "minLength": 1,
             "description": "Correlates the blame/hunks notifications of this request.",
             "type": "string"
+          },
+          "docVersion": {
+            "minimum": -1,
+            "description": "Working-tree blame only: the editor buffer the client means. A doc/didChange version blames the buffer pushed for the path (the result says which version that was); -1 blames the file on disk even while a pushed buffer is held. Omitted blames whatever buffer was pushed last, or the file on disk.",
+            "type": "integer"
+          },
+          "options": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+              "ignoreWhitespace": {
+                "description": "`git blame -w`: a change that only touches whitespace does not take a line over. Default false.",
+                "type": "boolean"
+              },
+              "moves": {
+                "description": "How far blame looks for lines that were moved or copied rather than written: 'withinFile' is `git blame -M`, 'acrossFiles' is `-C`, which also covers moves within the file. Default 'off'. Ignored when the engine has no git CLI.",
+                "anyOf": [
+                  {
+                    "const": "off",
+                    "type": "string"
+                  },
+                  {
+                    "const": "withinFile",
+                    "type": "string"
+                  },
+                  {
+                    "const": "acrossFiles",
+                    "type": "string"
+                  }
+                ]
+              },
+              "ignoreRevs": {
+                "description": "Look through the commits listed in the blame.ignoreRevsFile files that exist, or in the repository's .git-blame-ignore-revs when that setting is unset. Default true. Ignored when the engine has no git CLI.",
+                "type": "boolean"
+              }
+            }
           }
         }
       },
@@ -398,12 +443,21 @@
                 }
               }
             }
+          },
+          "docVersion": {
+            "minimum": -1,
+            "description": "Working-tree blame only: the doc/didChange version of the buffer the hunks describe, or -1 for the file on disk. A client compares it with the version it asked about before trusting the hunks for a buffer.",
+            "type": "integer"
+          },
+          "lfs": {
+            "description": "The path is tracked with Git LFS (filter=lfs): git stores, and so blames, the small pointer file rather than the content, so hunks describe the pointer's lines (version, oid, size), not the lines of the file an editor shows. The newest commit among them is the last one that changed the content.",
+            "type": "boolean"
           }
         }
       }
     },
     "log/commits": {
-      "description": "Topo-ordered commit page from a ref (default HEAD).",
+      "description": "Topo-ordered commit page from a ref (default HEAD). Later pages continue the history the first page listed, even after the ref moves.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -513,6 +567,269 @@
           },
           "nextCursor": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "commit/details": {
+      "description": "One commit in full: its identity, its message split into subject, body and trailers, the refs pointing at it, and the files it changes against its first parent (the empty tree for a root commit), with diff/commit's rename detection and line stats. At most 2000 files are listed. Reads through libgit2 alone, so Restricted Mode and engines without the git CLI serve it too.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "sha"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "sha": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision naming the commit: a full or short sha, HEAD, a branch or a tag.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sha",
+          "parents",
+          "author",
+          "committer",
+          "subject",
+          "body",
+          "trailers",
+          "refs",
+          "files",
+          "stats",
+          "truncated"
+        ],
+        "properties": {
+          "sha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "pattern": "^[0-9a-f]{40}$",
+              "description": "Full 40-character lowercase hex object id.",
+              "type": "string"
+            }
+          },
+          "author": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "name",
+              "email",
+              "time"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "time": {
+                "type": "integer"
+              }
+            }
+          },
+          "committer": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "name",
+              "email",
+              "time"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "time": {
+                "type": "integer"
+              }
+            }
+          },
+          "subject": {
+            "description": "The message's first paragraph with its line breaks folded into spaces, like git's %s.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The message after the subject and the blank line that ends it, trailers included, trimmed; empty when there is none.",
+            "type": "string"
+          },
+          "trailers": {
+            "description": "Trailers parsed from the message's closing paragraph, in order.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "key",
+                "value"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "refs": {
+            "description": "Refs pointing at the commit: HEAD, then local branches, remote branches and tags, each sorted by name.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "name",
+                "kind"
+              ],
+              "properties": {
+                "name": {
+                  "description": "Short name: 'HEAD', 'main', 'origin/main', 'v1.0'.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "'head' when HEAD resolves to the commit (attached or detached), 'branch' for a local branch, 'remote' for a remote-tracking branch, 'tag' for a tag (annotated tags peeled).",
+                  "anyOf": [
+                    {
+                      "const": "head",
+                      "type": "string"
+                    },
+                    {
+                      "const": "branch",
+                      "type": "string"
+                    },
+                    {
+                      "const": "remote",
+                      "type": "string"
+                    },
+                    {
+                      "const": "tag",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "files": {
+            "description": "Files changed against the first parent (the empty tree for a root commit), with diff/commit's rename detection. Capped; see `truncated`.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions",
+                "binary"
+              ],
+              "properties": {
+                "path": {
+                  "description": "Path after the commit (for a deletion, the deleted path).",
+                  "type": "string"
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    },
+                    {
+                      "const": "T",
+                      "type": "string"
+                    },
+                    {
+                      "const": "U",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "description": "Path before the commit; renames and copies only.",
+                  "type": "string"
+                },
+                "additions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "deletions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "binary": {
+                  "description": "Either side is binary; additions and deletions are then 0.",
+                  "type": "boolean"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "stats": {
+            "additionalProperties": false,
+            "description": "`files` counts every changed file; `additions` and `deletions` sum the listed files only, so they undercount when `truncated` is set or a file has `statsUnavailable`.",
+            "type": "object",
+            "required": [
+              "files",
+              "additions",
+              "deletions"
+            ],
+            "properties": {
+              "files": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "additions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "deletions": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            }
+          },
+          "truncated": {
+            "description": "More files changed than `files` lists.",
+            "type": "boolean"
           }
         }
       }
@@ -754,6 +1071,100 @@
               },
               "sha": {
                 "minLength": 1,
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "streamId",
+          "total",
+          "truncated"
+        ],
+        "properties": {
+          "streamId": {
+            "type": "string"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "search/log": {
+      "description": "Commit search over HEAD history through `git log`, adding what search/commits cannot answer from libgit2 alone: changes to the code (pickaxe), a path and a commit-date window. Matches stream as search/matches notifications tagged with `streamId`, newest first. Needs the git CLI, so a Restricted Mode or CLI-less engine refuses it.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "streamId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "streamId": {
+            "minLength": 1,
+            "description": "Correlates the search/matches notifications of this request.",
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
+          },
+          "query": {
+            "additionalProperties": false,
+            "default": {},
+            "description": "Criteria, ANDed together. An absent or empty query matches every commit, so the page is bounded only by `limit`.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "author": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "content": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "contentMode": {
+                "default": "string",
+                "anyOf": [
+                  {
+                    "const": "string",
+                    "type": "string"
+                  },
+                  {
+                    "const": "regex",
+                    "type": "string"
+                  }
+                ]
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "since": {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})?)?$",
+                "type": "string"
+              },
+              "until": {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})?)?$",
                 "type": "string"
               }
             }
@@ -1104,6 +1515,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -1165,6 +1581,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -1198,6 +1619,7 @@
           },
           "cursor": {
             "minLength": 1,
+            "description": "nextCursor of the previous page. A cursor is valid for one ref set only: once any ref moves (or with another `refs` filter) it fails with InvalidParams, and the first page has to be requested again.",
             "type": "string"
           },
           "limit": {
@@ -1206,6 +1628,15 @@
             "default": 100,
             "description": "Maximum entries in the page. Omitted means 100.",
             "type": "integer"
+          },
+          "refs": {
+            "minItems": 1,
+            "description": "Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.",
+            "type": "array",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            }
           },
           "include": {
             "additionalProperties": false,
@@ -1288,9 +1719,18 @@
                         "type": "integer"
                       },
                       "kind": {
+                        "description": "line: a lane passing through the row, top to bottom. lineIn: the row's own lane from the row top into its dot, continuing the child above. lineOut: the row's own lane from its dot to the row bottom, towards its first parent. mergeIn: another lane curving from the row top into the dot. branchOut: a curve from the dot to another lane at the row bottom.",
                         "anyOf": [
                           {
                             "const": "line",
+                            "type": "string"
+                          },
+                          {
+                            "const": "lineIn",
+                            "type": "string"
+                          },
+                          {
+                            "const": "lineOut",
                             "type": "string"
                           },
                           {
@@ -1424,6 +1864,97 @@
         }
       }
     },
+    "graph/find": {
+      "description": "The rows of a graph/rows walk that match a find query, in row order: a sha prefix, a ref the row shows, or case-insensitive text in the commit message (a stash row's own message) or the author's name or email. The walk is the one graph/rows pages through with the same `refs` and stash rows, so every match is a row the graph can show.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "query"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "query": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 100,
+            "description": "Maximum entries in the page. Omitted means 100.",
+            "type": "integer"
+          },
+          "refs": {
+            "minItems": 1,
+            "description": "Walk only from these revisions (full ref names such as refs/heads/main, or any revision naming a commit) instead of HEAD and every local and remote branch. Revisions that no longer resolve are skipped. The WIP row is included only when HEAD is one of them.",
+            "type": "array",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "include": {
+            "additionalProperties": false,
+            "default": {
+              "stashes": false
+            },
+            "description": "Whether stash rows are searched (and counted in `index`).",
+            "type": "object",
+            "properties": {
+              "stashes": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "matches",
+          "truncated",
+          "refsFingerprint"
+        ],
+        "properties": {
+          "matches": {
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "sha",
+                "index"
+              ],
+              "properties": {
+                "sha": {
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Full 40-character lowercase hex object id.",
+                  "type": "string"
+                },
+                "index": {
+                  "minimum": 0,
+                  "description": "The row's position in the walk, not counting the uncommitted-changes row graph/rows may put first.",
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "refsFingerprint": {
+            "minimum": 0,
+            "description": "Content hash of the ref set the page was sliced from. Constant across the pages of one snapshot and different once any ref moves; unrelated to the monotonic counter in repo/didChange.",
+            "type": "integer"
+          }
+        }
+      }
+    },
     "diff/commit": {
       "description": "Files changed by one commit, against its first parent's tree.",
       "params": {
@@ -1508,6 +2039,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -1603,6 +2139,11 @@
                 "deletions": {
                   "minimum": 0,
                   "type": "integer"
+                },
+                "statsUnavailable": {
+                  "description": "The content is not in this partial clone and could not be fetched, so additions and deletions (0) are unknown rather than zero.",
+                  "const": true,
+                  "type": "boolean"
                 }
               }
             }
@@ -2121,7 +2662,7 @@
       }
     },
     "mutate/pull": {
-      "description": "Pulls into the current branch using git's configured strategy.",
+      "description": "Pulls into the current branch. Without `strategy` git's configured one applies; when the branches diverged and nothing is configured the error carries data.kind 'divergent'. Conflicts are a result, not an error.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2134,17 +2675,43 @@
           },
           "autoStash": {
             "type": "boolean"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "const": "merge",
+                "type": "string"
+              },
+              {
+                "const": "rebase",
+                "type": "string"
+              },
+              {
+                "const": "ff-only",
+                "type": "string"
+              }
+            ]
+          },
+          "remember": {
+            "type": "boolean"
           }
         }
       },
       "result": {
         "additionalProperties": false,
         "type": "object",
-        "properties": {}
+        "required": [
+          "conflicts"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "mutate/push": {
-      "description": "Pushes the current branch.",
+      "description": "Pushes the current branch. With `setUpstream` it publishes the branch and sets its upstream: to `remote` when given, otherwise to the remote git's config names for it (branch.<name>.pushRemote, remote.pushDefault, branch.<name>.remote) or the repository's only remote. With several remotes and none of those set, the error carries data.kind 'noRemote' and the remotes to choose from.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2158,6 +2725,12 @@
           "setUpstream": {
             "type": "boolean"
           },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to publish to; only read with `setUpstream`.",
+            "type": "string"
+          },
           "force": {
             "const": "with-lease",
             "type": "string"
@@ -2167,7 +2740,85 @@
       "result": {
         "additionalProperties": false,
         "type": "object",
-        "properties": {}
+        "properties": {
+          "remote": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "mutate/sequencer": {
+      "description": "Continues, skips or aborts the merge, rebase, cherry-pick or revert the repository is stopped in the middle of. Continuing while files are still conflicted changes nothing and reports conflicts.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "action"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "const": "continue",
+                "type": "string"
+              },
+              {
+                "const": "skip",
+                "type": "string"
+              },
+              {
+                "const": "abort",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operation",
+          "completed",
+          "conflicts"
+        ],
+        "properties": {
+          "operation": {
+            "description": "Multi-step operation the repository is stopped in the middle of, read from the sequencer state in the gitdir.",
+            "anyOf": [
+              {
+                "const": "none",
+                "type": "string"
+              },
+              {
+                "const": "rebase",
+                "type": "string"
+              },
+              {
+                "const": "merge",
+                "type": "string"
+              },
+              {
+                "const": "cherry-pick",
+                "type": "string"
+              },
+              {
+                "const": "revert",
+                "type": "string"
+              }
+            ]
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "stash/push": {
@@ -2384,7 +3035,7 @@
       }
     },
     "rebase/preview": {
-      "description": "Commits upstream..HEAD, oldest first — the editable rebase plan.",
+      "description": "The commits `git rebase -i <upstream>` will replay, in its order, oldest first: the editable rebase plan. Merges are left out (git flattens them) and so are commits whose change the upstream already has.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2408,7 +3059,10 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "entries"
+          "entries",
+          "headSha",
+          "upstreamSha",
+          "mergeCount"
         ],
         "properties": {
           "entries": {
@@ -2431,12 +3085,26 @@
                 }
               }
             }
+          },
+          "headSha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "upstreamSha": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full 40-character lowercase hex object id.",
+            "type": "string"
+          },
+          "mergeCount": {
+            "minimum": 0,
+            "type": "integer"
           }
         }
       }
     },
     "rebase/start": {
-      "description": "Executes an interactive rebase with the given plan via sequence-editor interception. Conflicts pause the rebase; repo/state then reports the sequencer step.",
+      "description": "Executes an interactive rebase with the given plan via sequence-editor interception. A plan that no longer matches the commits git would replay is refused before anything changes. Conflicts and edit steps pause the rebase; repo/state then reports the sequencer step, and rebase/continue, rebase/skip and rebase/abort resume or end it.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2456,7 +3124,8 @@
             "type": "string"
           },
           "plan": {
-            "description": "Steps in execution order. An empty plan rebases nothing.",
+            "minItems": 1,
+            "description": "Every commit rebase/preview returned, in execution order. A commit to remove is listed with action drop: one left out means the plan is stale, and the rebase is refused.",
             "type": "array",
             "items": {
               "additionalProperties": false,
@@ -2507,6 +3176,22 @@
                 }
               }
             }
+          },
+          "expectedHead": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "rebase/preview's headSha. The rebase is refused when HEAD moved since.",
+            "type": "string"
+          },
+          "expectedUpstream": {
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "rebase/preview's upstreamSha. The rebase is refused when `upstream` moved since.",
+            "type": "string"
+          },
+          "autoStash": {
+            "type": "boolean"
+          },
+          "updateRefs": {
+            "type": "boolean"
           }
         }
       },
@@ -2523,12 +3208,15 @@
           },
           "completed": {
             "type": "boolean"
+          },
+          "autoStashKept": {
+            "type": "boolean"
           }
         }
       }
     },
     "rebase/continue": {
-      "description": "Resumes a paused rebase once the conflicts are staged.",
+      "description": "Resumes a paused rebase once the conflicts are staged. A rebase rebase/start began keeps applying its plan's messages.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2554,6 +3242,43 @@
           },
           "completed": {
             "type": "boolean"
+          },
+          "autoStashKept": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "rebase/skip": {
+      "description": "Resumes a paused rebase without the commit it stopped at (--skip).",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conflicts",
+          "completed"
+        ],
+        "properties": {
+          "conflicts": {
+            "type": "boolean"
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "autoStashKept": {
+            "type": "boolean"
           }
         }
       }
@@ -2568,6 +3293,292 @@
         ],
         "properties": {
           "repoId": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "branch/rename": {
+      "description": "Renames a local branch (git branch -m).",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name",
+          "newName"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Branch to rename.",
+            "type": "string"
+          },
+          "newName": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Its new name.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "branch/setUpstream": {
+      "description": "Sets or clears the remote-tracking branch a local branch follows.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Local branch.",
+            "type": "string"
+          },
+          "upstream": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote-tracking branch to follow, e.g. origin/main. Omitted clears the upstream.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "branch/push": {
+      "description": "Pushes a local branch, checked out or not, to the remote branch of the same name. Pushing to the remote the branch tracks follows push.default: with upstream (or tracking) it updates the tracked branch, and with simple (git's default) a tracked branch of another name refuses the push rather than updating it. Publishing (setUpstream) always uses the branch's own name.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Local branch to push.",
+            "type": "string"
+          },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to push to. Omitted uses the branch's pushRemote, remote.pushDefault, the remote it tracks, or the only remote; with several and none configured the push is refused.",
+            "type": "string"
+          },
+          "setUpstream": {
+            "type": "boolean"
+          },
+          "force": {
+            "const": "with-lease",
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "remote",
+          "branch"
+        ],
+        "properties": {
+          "remote": {
+            "description": "The remote pushed to.",
+            "type": "string"
+          },
+          "branch": {
+            "description": "The branch on that remote the push updates (a full ref when it is not a branch).",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tag/create": {
+      "description": "Creates a tag: annotated when a message is given, lightweight otherwise.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Tag to create.",
+            "type": "string"
+          },
+          "ref": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Revision to tag. Omitted means HEAD.",
+            "type": "string"
+          },
+          "message": {
+            "minLength": 1,
+            "description": "Annotation message.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "tag/delete": {
+      "description": "Deletes a local tag.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Tag to delete.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "tag/push": {
+      "description": "Pushes a tag to a remote, or deletes it there.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name",
+          "remote"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Tag to push.",
+            "type": "string"
+          },
+          "remote": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to push to.",
+            "type": "string"
+          },
+          "delete": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "remote/add": {
+      "description": "Adds a remote.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name",
+          "url"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote name.",
+            "type": "string"
+          },
+          "url": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Fetch URL.",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "remote/remove": {
+      "description": "Removes a remote and its remote-tracking branches.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repoId",
+          "name"
+        ],
+        "properties": {
+          "repoId": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "pattern": "^[^-]",
+            "description": "Remote to remove.",
             "type": "string"
           }
         }
@@ -2781,7 +3792,7 @@
       }
     },
     "patch/apply": {
-      "description": "Applies a patch envelope; 3-way when the base is missing.",
+      "description": "Applies a patch envelope with `git apply --3way`. With `dryRun`, changes nothing and lists the files git would change, read by git's own patch parser.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -2833,6 +3844,10 @@
                 "type": "string"
               }
             }
+          },
+          "dryRun": {
+            "description": "Do not apply: return the files the patch would change in `files`. A patch git cannot read fails with GitError.",
+            "type": "boolean"
           }
         }
       },
@@ -2853,6 +3868,76 @@
           },
           "baseFound": {
             "type": "boolean"
+          },
+          "files": {
+            "description": "Dry runs only: every file the patch changes, in patch order.",
+            "type": "array",
+            "items": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions",
+                "binary"
+              ],
+              "properties": {
+                "path": {
+                  "description": "Path after the patch; for a deletion, the deleted path.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "Modified, added, deleted, renamed or copied.",
+                  "anyOf": [
+                    {
+                      "const": "M",
+                      "type": "string"
+                    },
+                    {
+                      "const": "A",
+                      "type": "string"
+                    },
+                    {
+                      "const": "D",
+                      "type": "string"
+                    },
+                    {
+                      "const": "R",
+                      "type": "string"
+                    },
+                    {
+                      "const": "C",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "origPath": {
+                  "description": "Path before the patch; renames and copies only.",
+                  "type": "string"
+                },
+                "additions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "deletions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "binary": {
+                  "type": "boolean"
+                },
+                "executable": {
+                  "description": "The patch creates the file executable or sets its executable bit.",
+                  "const": true,
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "message": {
+            "description": "git's explanation when the patch was not applied.",
+            "type": "string"
           }
         }
       }
@@ -3000,7 +4085,7 @@
     },
     "search/matches": {
       "direction": "engine",
-      "description": "A batch of matches for the search/commits request carrying this streamId.",
+      "description": "A batch of matches for the search/commits or search/log request carrying this streamId.",
       "params": {
         "additionalProperties": false,
         "type": "object",
@@ -3142,6 +4227,238 @@
           }
         }
       }
+    },
+    "ui/askpassCancelled": {
+      "direction": "engine",
+      "description": "Withdraws a ui/askpass request: git stopped waiting for the answer (it exited, timed out, or its request was cancelled). The client closes the prompt; an answer sent afterwards is ignored.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "engineRequests": {
+    "ui/askpass": {
+      "description": "Asks the user for what git, ssh or gpg prompted for while running a request: a credential, a key passphrase or a host-key confirmation. Sent only to clients that declared clientCapabilities.askpass. The value never reaches a log. A ui/askpassCancelled notification withdraws the request when git stops waiting (it exited, timed out or was cancelled); the client then closes its prompt and its answer is ignored.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "prompt",
+          "secret",
+          "interactive"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "integer"
+          },
+          "method": {
+            "type": "string"
+          },
+          "repoId": {
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "const": "username",
+                "type": "string"
+              },
+              {
+                "const": "password",
+                "type": "string"
+              },
+              {
+                "const": "passphrase",
+                "type": "string"
+              },
+              {
+                "const": "hostKey",
+                "type": "string"
+              },
+              {
+                "const": "confirm",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "interactive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "result": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "cancelled"
+            ],
+            "properties": {
+              "cancelled": {
+                "const": true,
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "errorData": {
+    "additionalProperties": false,
+    "description": "error.data of a GitError (-32001), present when the engine could tell what the failure was about.",
+    "type": "object",
+    "required": [
+      "kind"
+    ],
+    "properties": {
+      "kind": {
+        "description": "What a git failure was about, read from git's output.",
+        "anyOf": [
+          {
+            "const": "auth",
+            "type": "string"
+          },
+          {
+            "const": "hostKey",
+            "type": "string"
+          },
+          {
+            "const": "publickey",
+            "type": "string"
+          },
+          {
+            "const": "signing",
+            "type": "string"
+          },
+          {
+            "const": "rejected",
+            "type": "string"
+          },
+          {
+            "const": "divergent",
+            "type": "string"
+          },
+          {
+            "const": "noRemote",
+            "type": "string"
+          },
+          {
+            "const": "noUpstream",
+            "type": "string"
+          },
+          {
+            "const": "emptyCommit",
+            "type": "string"
+          },
+          {
+            "const": "stopped",
+            "type": "string"
+          },
+          {
+            "const": "network",
+            "type": "string"
+          },
+          {
+            "const": "timeout",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "type": "string"
+          }
+        ]
+      },
+      "operation": {
+        "description": "Multi-step operation the repository is stopped in the middle of, read from the sequencer state in the gitdir.",
+        "anyOf": [
+          {
+            "const": "none",
+            "type": "string"
+          },
+          {
+            "const": "rebase",
+            "type": "string"
+          },
+          {
+            "const": "merge",
+            "type": "string"
+          },
+          {
+            "const": "cherry-pick",
+            "type": "string"
+          },
+          {
+            "const": "revert",
+            "type": "string"
+          }
+        ]
+      },
+      "remote": {
+        "type": "string"
+      },
+      "remotes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "host": {
+        "type": "string"
+      },
+      "partialClone": {
+        "type": "boolean"
+      },
+      "sshProgram": {
+        "const": "plink",
+        "type": "string"
+      }
     }
   },
   "restrictedModeMethods": [
@@ -3159,9 +4476,11 @@
     "stash/list",
     "status/summary",
     "graph/rows",
+    "graph/find",
     "diff/commit",
     "diff/refs",
     "diff/fileHunks",
-    "remote/list"
+    "remote/list",
+    "commit/details"
   ]
 }

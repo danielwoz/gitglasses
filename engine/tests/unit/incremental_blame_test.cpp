@@ -122,5 +122,33 @@ TEST(IncrementalBlameParser, UncommittedShaIsStable) {
   EXPECT_EQ(hunks[0].sha, kUncommittedSha);
 }
 
+// git C-quotes a path holding non-ASCII bytes (unless core.quotePath is
+// off), a quote, a backslash or a control character.
+TEST(IncrementalBlameParser, DecodesQuotedFilenameAndPreviousPath) {
+  auto [hunks, commits] = parse(std::string(kSha1) +
+                                " 1 1 1\n"
+                                "author A\n"
+                                "previous " +
+                                kSha2 +
+                                " \"caf\\303\\251.txt\"\n"
+                                "filename \"r\\303\\251sum\\303\\251 notes.txt\"\n");
+  ASSERT_EQ(hunks.size(), 1u);
+  EXPECT_EQ(hunks[0].path, "r\xc3\xa9sum\xc3\xa9 notes.txt");
+  ASSERT_TRUE(hunks[0].previousPath.has_value());
+  EXPECT_EQ(*hunks[0].previousPath, "caf\xc3\xa9.txt");
+  EXPECT_EQ(*hunks[0].previousSha, kSha2);
+}
+
+TEST(UnquoteCPath, DecodesEveryEscapeGitWrites) {
+  EXPECT_EQ(unquoteCPath("plain name.txt"), "plain name.txt");
+  EXPECT_EQ(unquoteCPath("\"a\\tb\\nc\""), "a\tb\nc");
+  EXPECT_EQ(unquoteCPath("\"say \\\"hi\\\".txt\""), "say \"hi\".txt");
+  EXPECT_EQ(unquoteCPath("\"back\\\\slash\""), "back\\slash");
+  EXPECT_EQ(unquoteCPath("\"\\001\\177\""), std::string("\x01\x7f"));
+  // Not quoted at both ends: taken as the name it is.
+  EXPECT_EQ(unquoteCPath("\"half"), "\"half");
+  EXPECT_EQ(unquoteCPath("\""), "\"");
+}
+
 }  // namespace
 }  // namespace gg::exec

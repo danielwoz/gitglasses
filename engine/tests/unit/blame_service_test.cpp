@@ -2,6 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+
 #include "core/git2.h"
 #include "test_fixtures.h"
 
@@ -171,6 +176,265 @@ TEST_F(BlameServiceTest, ParityWithGitLinePorcelain) {
     ASSERT_EQ(ourShaByLine.at(line), porcelain.substr(0, 40)) << "mismatch at line " << line;
   }
   EXPECT_EQ(line, ourShaByLine.size());
+}
+
+// Line -> sha for one blame.
+std::map<std::uint32_t, std::string> linesOf(const std::vector<exec::BlameHunk>& hunks) {
+  std::map<std::uint32_t, std::string> lines;
+  for (const auto& h : hunks) {
+    for (std::uint32_t l = h.resultLine; l < h.resultLine + h.lineCount; ++l) lines[l] = h.sha;
+  }
+  return lines;
+}
+
+std::string revSha(const gg::testing::FixtureRepo& fixture, const std::string& spec) {
+  std::string sha = gg::testing::gitCapture(fixture.root(), "rev-parse " + spec);
+  while (!sha.empty() && (sha.back() == '\n' || sha.back() == '\r')) sha.pop_back();
+  return sha;
+}
+
+// A commit whose only change is whitespace, made by someone tidying up.
+struct IgnoreRevsTest : BlameServiceTest {
+  std::string formatSha;
+
+  void SetUp() override {
+    BlameServiceTest::SetUp();
+    fixture.writeFile("code.txt", "alpha \nbeta MODIFIED \ngamma \n");
+    fixture.run("git add code.txt");
+    fixture.commit("reformat");
+    formatSha = revSha(fixture, "HEAD");
+  }
+
+  std::map<std::uint32_t, std::string> lines(const BlameRequest& request,
+                                             bool* fromCache = nullptr) {
+    std::vector<exec::BlameHunk> hunks;
+    auto summary = blame(request, &hunks);
+    EXPECT_TRUE(summary.ok()) << (summary.ok() ? "" : summary.error().message);
+    if (fromCache && summary.ok()) *fromCache = summary.value().fromCache;
+    return linesOf(hunks);
+  }
+};
+
+// A configured ignore-revs file that is missing (a global setting most
+// repositories have no file for) must not stop blame.
+TEST_F(IgnoreRevsTest, MissingConfiguredFileDoesNotBreakBlame) {
+  fixture.run("git config blame.ignoreRevsFile no-such-revs-file");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  EXPECT_EQ(attribution.at(1), formatSha);
+}
+
+TEST_F(IgnoreRevsTest, ConfiguredFilesThatExistAreHonoured) {
+  fixture.writeFile("revs.txt", formatSha + "\n");
+  fixture.run("git config blame.ignoreRevsFile no-such-revs-file");
+  fixture.run("git config --add blame.ignoreRevsFile revs.txt");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  for (const auto& [line, sha] : attribution) EXPECT_NE(sha, formatSha) << "line " << line;
+}
+
+// git stops the whole blame on an ignore-revs line it cannot read, such as
+// an abbreviated id. The repository's file is ordinary content, so blame
+// leaves such a file out rather than fail for every file.
+TEST_F(IgnoreRevsTest, MalformedRepositoryFileDoesNotBreakBlame) {
+  fixture.writeFile(".git-blame-ignore-revs", formatSha.substr(0, 7) + "\n");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  EXPECT_EQ(attribution.at(1), formatSha);
+}
+
+TEST_F(IgnoreRevsTest, MalformedConfiguredFileIsSkippedAndTheOthersHonoured) {
+  fixture.writeFile("bad-revs.txt", formatSha + " trailing words\n");
+  fixture.writeFile("revs.txt", formatSha + "\n");
+  fixture.run("git config blame.ignoreRevsFile bad-revs.txt");
+  fixture.run("git config --add blame.ignoreRevsFile revs.txt");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  for (const auto& [line, sha] : attribution) EXPECT_NE(sha, formatSha) << "line " << line;
+}
+
+// Full ids git does not know are fine: git skips them itself.
+TEST_F(IgnoreRevsTest, UnknownFullIdsAreAccepted) {
+  fixture.writeFile(".git-blame-ignore-revs", std::string(40, 'f') + "\n" + formatSha + "\n");
+  const auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  EXPECT_EQ(attribution.at(1), revSha(fixture, "HEAD~2"));
+}
+
+TEST(InvalidIgnoreRevsLine, AcceptsWhatGitAccepts) {
+  const std::string sha1(40, 'a');
+  EXPECT_EQ(invalidIgnoreRevsLine("", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine("# only a comment\n\n   \n", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1 + "\n", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine("  " + sha1 + "  # reformat\r\n", 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(40, 'A'), 40), std::nullopt);
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(64, 'b') + "\n", 64), std::nullopt);
+}
+
+TEST(InvalidIgnoreRevsLine, ReportsTheFirstLineGitRejects) {
+  const std::string sha1(40, 'a');
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1 + "\nabc1234\n", 40), std::optional<std::string>("abc1234"));
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1 + " extra\n", 40),
+            std::optional<std::string>(sha1 + " extra"));
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(39, 'a') + "g", 40),
+            std::optional<std::string>(std::string(39, 'a') + "g"));
+  // A SHA-1 id in a SHA-256 repository, and the other way round.
+  EXPECT_EQ(invalidIgnoreRevsLine(sha1, 64), std::optional<std::string>(sha1));
+  EXPECT_EQ(invalidIgnoreRevsLine(std::string(64, 'b'), 40),
+            std::optional<std::string>(std::string(64, 'b')));
+}
+
+TEST_F(IgnoreRevsTest, RepositoryIgnoreRevsFileIsUsedWhenNothingIsConfigured) {
+  fixture.writeFile(".git-blame-ignore-revs", "# formatting\n" + formatSha + "\n");
+  auto attribution = lines({.path = "code.txt"});
+  ASSERT_EQ(attribution.size(), 3u);
+  EXPECT_EQ(attribution.at(1), revSha(fixture, "HEAD~2"));
+  EXPECT_EQ(attribution.at(2), revSha(fixture, "HEAD~1"));
+
+  // Asked not to, blame shows the formatting commit again.
+  BlameRequest unfiltered{.path = "code.txt"};
+  unfiltered.options.ignoreRevs = false;
+  attribution = lines(unfiltered);
+  EXPECT_EQ(attribution.at(1), formatSha);
+}
+
+// The ignore-revs file's contents are part of the cache key: editing it must
+// not leave the old attribution in place.
+TEST_F(IgnoreRevsTest, EditingTheIgnoreRevsFileMissesTheCache) {
+  fixture.writeFile(".git-blame-ignore-revs", formatSha + "\n");
+  bool fromCache = true;
+  EXPECT_NE(lines({.path = "code.txt"}, &fromCache).at(1), formatSha);
+  EXPECT_FALSE(fromCache);
+
+  fixture.writeFile(".git-blame-ignore-revs", "");
+  EXPECT_EQ(lines({.path = "code.txt"}, &fromCache).at(1), formatSha);
+  EXPECT_FALSE(fromCache);
+}
+
+TEST_F(IgnoreRevsTest, IgnoreWhitespaceLooksThroughWhitespaceOnlyChanges) {
+  BlameRequest request{.path = "code.txt"};
+  request.options.ignoreRevs = false;
+  EXPECT_EQ(lines(request).at(1), formatSha);
+  request.options.ignoreWhitespace = true;
+  const auto attribution = lines(request);
+  EXPECT_EQ(attribution.at(1), revSha(fixture, "HEAD~2"));
+  EXPECT_EQ(attribution.at(2), revSha(fixture, "HEAD~1"));
+}
+
+// Lines long enough for git's move detection (20 alphanumerics or more).
+constexpr const char* kBlockA =
+    "block a line one with plenty of characters\n"
+    "block a line two with plenty of characters\n"
+    "block a line three with plenty of characters\n";
+constexpr const char* kBlockB =
+    "block b line one with plenty of characters\n"
+    "block b line two with plenty of characters\n"
+    "block b line three with plenty of characters\n";
+
+TEST_F(BlameServiceTest, MoveDetectionWithinFileFollowsMovedLines) {
+  fixture.writeFile("moves.txt", std::string("head\n") + kBlockA + "middle\n" + kBlockB);
+  fixture.run("git add moves.txt");
+  fixture.commit("write blocks");
+  const std::string writeSha = revSha(fixture, "HEAD");
+  fixture.writeFile("moves.txt", std::string("head\n") + kBlockB + "middle\n" + kBlockA);
+  fixture.run("git add moves.txt");
+  fixture.commit("swap blocks");
+  const std::string swapSha = revSha(fixture, "HEAD");
+
+  std::vector<exec::BlameHunk> plain;
+  ASSERT_TRUE(blame({.path = "moves.txt"}, &plain).ok());
+  bool swapOwnsALine = false;
+  for (const auto& [line, sha] : linesOf(plain)) swapOwnsALine |= sha == swapSha;
+  EXPECT_TRUE(swapOwnsALine);
+
+  BlameRequest request{.path = "moves.txt"};
+  request.options.moves = MoveDetection::WithinFile;
+  std::vector<exec::BlameHunk> moved;
+  auto summary = blame(request, &moved);
+  ASSERT_TRUE(summary.ok()) << summary.error().message;
+  EXPECT_FALSE(summary.value().fromCache);
+  // Every block line keeps its author; only the short "middle" line, too
+  // short for git to recognise as moved, goes to the swap.
+  const auto attribution = linesOf(moved);
+  ASSERT_EQ(attribution.size(), 8u);
+  for (const auto& [line, sha] : attribution) {
+    if (line == 5) continue;
+    EXPECT_EQ(sha, writeSha) << "line " << line;
+  }
+}
+
+TEST_F(BlameServiceTest, MoveDetectionAcrossFilesFollowsLinesToTheirOriginalFile) {
+  fixture.writeFile("from.txt", std::string("keep\n") + kBlockA);
+  fixture.writeFile("to.txt", "target\n");
+  fixture.run("git add from.txt to.txt");
+  fixture.commit("write source");
+  const std::string writeSha = revSha(fixture, "HEAD");
+  fixture.writeFile("from.txt", "keep\n");
+  fixture.writeFile("to.txt", std::string("target\n") + kBlockA);
+  fixture.run("git add from.txt to.txt");
+  fixture.commit("move block");
+
+  BlameRequest request{.path = "to.txt"};
+  request.options.moves = MoveDetection::AcrossFiles;
+  std::vector<exec::BlameHunk> hunks;
+  ASSERT_TRUE(blame(request, &hunks).ok());
+  const auto attribution = linesOf(hunks);
+  ASSERT_EQ(attribution.size(), 4u);
+  for (std::uint32_t line = 2; line <= 4; ++line) EXPECT_EQ(attribution.at(line), writeSha);
+  bool sawSourcePath = false;
+  for (const auto& h : hunks) sawSourcePath |= h.path == "from.txt";
+  EXPECT_TRUE(sawSourcePath);
+}
+
+TEST_F(BlameServiceTest, ReportsLfsTrackedPaths) {
+  fixture.writeFile(".gitattributes", "*.csv filter=lfs diff=lfs merge=lfs -text\n");
+  fixture.writeFile("data.csv",
+                    "version https://git-lfs.github.com/spec/v1\n"
+                    "oid sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
+                    "size 3820\n");
+  fixture.run("git add .gitattributes data.csv");
+  fixture.commit("track data with lfs");
+
+  std::vector<exec::BlameHunk> hunks;
+  auto lfs = blame({.path = "data.csv"}, &hunks);
+  ASSERT_TRUE(lfs.ok()) << lfs.error().message;
+  EXPECT_TRUE(lfs.value().lfs);
+  // The flag holds for a cached answer too.
+  auto again = blame({.path = "data.csv"}, &hunks);
+  ASSERT_TRUE(again.ok());
+  EXPECT_TRUE(again.value().fromCache);
+  EXPECT_TRUE(again.value().lfs);
+
+  auto plain = blame({.path = "code.txt"}, &hunks);
+  ASSERT_TRUE(plain.ok());
+  EXPECT_FALSE(plain.value().lfs);
+}
+
+// git prints a path with bytes outside ASCII in C-quoted form unless told
+// otherwise; hunk paths must name the real file.
+TEST_F(BlameServiceTest, NonAsciiPathsComeBackUnquoted) {
+#ifdef _WIN32
+  GTEST_SKIP() << "fixture commands pass non-ASCII names through the console code page";
+#else
+  fixture.writeFile("caf\xc3\xa9.txt", "un\ndeux\n");
+  fixture.run("git add .");
+  fixture.commit("add cafe");
+  fixture.run("git mv caf\xc3\xa9.txt \"r\xc3\xa9sum\xc3\xa9 notes.txt\"");
+  fixture.commit("rename");
+  fixture.writeFile("r\xc3\xa9sum\xc3\xa9 notes.txt", "un\ndeux\ntrois\n");
+  fixture.run("git add .");
+  fixture.commit("append");
+
+  std::vector<exec::BlameHunk> hunks;
+  auto summary = blame({.path = "r\xc3\xa9sum\xc3\xa9 notes.txt"}, &hunks);
+  ASSERT_TRUE(summary.ok()) << summary.error().message;
+  std::set<std::string> paths;
+  for (const auto& h : hunks) {
+    paths.insert(h.path);
+    if (h.previousPath) paths.insert(*h.previousPath);
+  }
+  EXPECT_EQ(paths, (std::set<std::string>{"caf\xc3\xa9.txt", "r\xc3\xa9sum\xc3\xa9 notes.txt"}));
+#endif
 }
 
 }  // namespace

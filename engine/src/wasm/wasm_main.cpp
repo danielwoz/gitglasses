@@ -23,7 +23,11 @@ EM_JS(void, gg_wasm_emit, (const char* payload), {
 
 namespace {
 
-void emitJson(const gg::rpc::Json& message) { gg_wasm_emit(message.dump().c_str()); }
+// Serialized the way the native server writes frames: bytes that are not
+// valid UTF-8 (a Latin-1 file, a legacy path) become U+FFFD instead of
+// making the dump throw, which inside a handler would turn a good result
+// into an "invalid params" error.
+void emitJson(const gg::rpc::Json& message) { gg_wasm_emit(gg::rpc::dumpForWire(message).c_str()); }
 
 // All engine state, constructed once by gg_wasm_init. The task pool runs
 // inline (GG_SINGLE_THREADED), so every dispatch completes synchronously

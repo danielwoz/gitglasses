@@ -63,4 +63,32 @@ describe('Restricted Mode', () => {
     assert.ok(fs.readFileSync(index).equals(before), 'the index changed');
     assert.deepStrictEqual(ran(), [], 'a planted program ran');
   });
+
+  // The graph and commit details read through libgit2 alone, so they work
+  // untrusted.
+  it('shows the commit graph and a commit, without running anything the repository names', async () => {
+    // Waits for a tab of the panel type whose title matches.
+    const webviewTab = (viewType: string, title: RegExp): Promise<string> =>
+      poll(async () => {
+        const tab = vscode.window.tabGroups.all
+          .flatMap((group) => group.tabs)
+          .find(
+            (candidate) =>
+              candidate.input instanceof vscode.TabInputWebview &&
+              candidate.input.viewType.endsWith(viewType),
+          );
+        return tab && title.test(tab.label) ? tab.label : undefined;
+      }, `no ${viewType} tab titled ${title}`);
+    await vscode.commands.executeCommand('gitglasses.showGraph');
+    await webviewTab('gitglasses.graph', /^Commit Graph — /);
+    await vscode.commands.executeCommand('gitglasses.showCommitDetails', {
+      repoPath: workspaceRoot().fsPath,
+      sha: 'HEAD',
+    });
+    // The title names the sha HEAD resolved to once the commit has loaded.
+    await webviewTab('gitglasses.commitDetails', /^Commit [0-9a-f]{7}$/);
+    await settle(1000);
+    assert.deepStrictEqual(ran(), [], 'a planted program ran');
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  });
 });

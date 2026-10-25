@@ -1,6 +1,7 @@
-// gtest entry point that doubles as the rebase editor shim: during the
-// rebase E2E tests git re-invokes this binary as GIT_SEQUENCE_EDITOR /
-// GIT_EDITOR, so the shim modes must be handled before gtest starts.
+// gtest entry point that doubles as the engine's shims: during the rebase
+// E2E tests git re-invokes this binary as GIT_SEQUENCE_EDITOR / GIT_EDITOR,
+// and during the prompt tests as GIT_ASKPASS / SSH_ASKPASS and gpg.program,
+// so the shim modes must be handled before gtest starts.
 
 #include <gtest/gtest.h>
 
@@ -8,6 +9,7 @@
 #include <fstream>
 #include <system_error>
 
+#include "exec/askpass.h"
 #include "exec/sequence_editor.h"
 #include "test_fixtures.h"
 
@@ -42,6 +44,8 @@ class GitConfigEnvironment : public ::testing::Environment {
 int main(int argc, char** argv) {
   gg::exec::setSelfPathFallback(argc > 0 ? argv[0] : nullptr);
   if (const auto shimExit = gg::exec::maybeRunEditorShim(argc, argv)) return *shimExit;
+  if (const auto shimExit = gg::exec::maybeRunAskpassShim(argc, argv)) return *shimExit;
+  if (const auto shimExit = gg::exec::maybeRunGpgShim(argc, argv)) return *shimExit;
   ::testing::InitGoogleTest(&argc, argv);
   ::testing::AddGlobalTestEnvironment(new GitConfigEnvironment);
   return RUN_ALL_TESTS();
