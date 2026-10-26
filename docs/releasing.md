@@ -208,8 +208,8 @@ packages it names as optional dependencies, `@gitglasses/engine-linux-x64`,
    so nobody else can publish an engine package under it), and publish a
    placeholder `gitglasses-mcp@0.0.1` from your machine: a `package.json`
    with just the name, version, `"license": "MIT"` and the repository, plus a
-   README saying the real package arrives with 0.4.0. Then `npm deprecate
-   gitglasses-mcp@0.0.1 "placeholder; use 0.4.0 or newer"`.
+   README saying the real package arrives with 0.4.1. Then `npm deprecate
+   gitglasses-mcp@0.0.1 "placeholder; use 0.4.1 or newer"`.
 2. npm configures trusted publishing per package, and a package must exist
    before it can be configured. For the first release with engine packages,
    set the `NPM_TOKEN` secret of the `release` environment (step 6) and
