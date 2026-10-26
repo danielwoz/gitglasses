@@ -7,6 +7,13 @@ pre-release channel.
 
 ## [0.4.1] - 2026-10-26
 
+### Upgrading from 0.1.2
+
+- 0.2.0 and 0.3.0 were not published, so this release also brings everything
+  listed under them below. If you connected a self-managed GitLab, GitHub or
+  Bitbucket on a custom domain, or Azure DevOps Server in 0.1.1 or 0.1.2,
+  read the first 0.2.0 security note: that token should be replaced.
+
 ### Agents over MCP
 
 - The MCP server now ships inside GitGlasses. VS Code 1.101 and newer and

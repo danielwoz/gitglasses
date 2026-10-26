@@ -13,7 +13,8 @@ const EXIT_TIMEOUT_MS = 5000;
  * ({ name, arguments }), the text it returned; rejects on any failure,
  * including a tool result marked as an error. `command` and `args` start the
  * server in place of `node <cliPath>`, as an editor's own Node would.
- * Settles once the server has exited, so the engine it ran can be removed.
+ * Settles once the server has exited; the engine it started may still be
+ * shutting down, so a caller removing the engine should retry.
  */
 export function smokeTestMcpServer(
   cliPath,
