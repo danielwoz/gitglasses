@@ -5,12 +5,15 @@
 import { spawn } from 'node:child_process';
 
 const TIMEOUT_MS = 20000;
+/** How long the server gets to exit once its input ends, before it is killed. */
+const EXIT_TIMEOUT_MS = 5000;
 
 /**
  * Resolves with the server info, the tool names and, when `call` names a tool
  * ({ name, arguments }), the text it returned; rejects on any failure,
  * including a tool result marked as an error. `command` and `args` start the
  * server in place of `node <cliPath>`, as an editor's own Node would.
+ * Settles once the server has exited, so the engine it ran can be removed.
  */
 export function smokeTestMcpServer(
   cliPath,
@@ -30,10 +33,22 @@ export function smokeTestMcpServer(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // Once its input ends the server exits on its own and stops its engine.
+      // One that fails, or has not exited within EXIT_TIMEOUT_MS, is killed.
+      const killTimer = setTimeout(() => child.kill(), error ? 0 : EXIT_TIMEOUT_MS);
+      const giveUpTimer = setTimeout(settle, 2 * EXIT_TIMEOUT_MS);
+      function settle() {
+        clearTimeout(killTimer);
+        clearTimeout(giveUpTimer);
+        if (error) reject(error);
+        else resolve(value);
+      }
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+        settle();
+      } else {
+        child.once('close', settle);
+      }
       child.stdin.end();
-      child.kill();
-      if (error) reject(error);
-      else resolve(value);
     };
     const timer = setTimeout(
       () => finish(new Error(`no answer within ${TIMEOUT_MS} ms; stderr: ${stderr}`)),

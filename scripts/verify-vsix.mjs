@@ -96,7 +96,14 @@ if (engine && options.run) {
   } catch (error) {
     fail(`${path.basename(options.vsix)}: the packaged MCP server failed to run: ${error.message}`);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    // On Windows the engine can hold its executable for a moment after the
+    // MCP server has exited, so removal is retried, and a directory that
+    // still cannot be removed is left behind with a warning.
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (error) {
+      console.warn(`verify-vsix: could not remove ${dir}: ${error.message}`);
+    }
   }
 }
 
