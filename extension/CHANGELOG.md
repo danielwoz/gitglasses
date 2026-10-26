@@ -5,7 +5,7 @@ All notable changes to GitGlasses are listed here. The format follows
 even minor version (0.2.x) are stable; odd minor versions (0.3.x) ship on the
 pre-release channel.
 
-## [0.4.0] - 2026-10-26
+## [0.4.1] - 2026-10-26
 
 ### Agents over MCP
 
