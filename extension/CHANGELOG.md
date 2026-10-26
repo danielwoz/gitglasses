@@ -29,6 +29,8 @@ pre-release channel.
   as unknown instead of +0 -0.
 - Releases also pack per-platform engine packages (`@gitglasses/engine-*`),
   so `gitglasses-mcp` from npm needs no `GITGLASSES_ENGINE`.
+- The server needs Node.js 20 or newer: the editor's own Node, or `node` on
+  `PATH` in editors whose own Node is older or turned off.
 
 ### Line Story
 

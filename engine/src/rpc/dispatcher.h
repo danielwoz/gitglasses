@@ -5,12 +5,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -100,9 +101,11 @@ enum class NotificationMode { Inline, Queued };
 // JSON-RPC 2.0 method dispatch with per-request cancellation.
 //
 // Requests run on the task pool; `$/cancelRequest` is handled inline on the
-// read loop and flips the matching request's CancelToken. Responses and
-// notifications are emitted through a caller-supplied send callback, which
-// must be thread-safe (FrameWriter is).
+// read loop and flips the matching request's CancelToken. Every request gets
+// exactly one response: one whose id is still in flight is refused at once
+// with InvalidRequest, and the request holding the id answers as usual.
+// Responses and notifications are emitted through a caller-supplied send
+// callback, which must be thread-safe (FrameWriter is).
 //
 // Lifetime contract: call TaskPool::shutdown() (draining all handler tasks)
 // before destroying the Dispatcher or anything the send callback captures.
@@ -114,6 +117,8 @@ class Dispatcher {
 
   void method(const std::string& name, Handler handler, Mode mode = Mode::Concurrent,
               Priority priority = Priority::Interactive);
+  // `$/cancelRequest` is handled by the dispatcher itself, so a handler
+  // registered under that name never runs.
   void notification(const std::string& name, NotificationHandler handler,
                     NotificationMode mode = NotificationMode::Inline);
 
@@ -132,34 +137,45 @@ class Dispatcher {
   // answer no one will read.
   void cancelAll();
 
-  // Waits until no request is in flight or waiting to be parsed, or until
+  // Waits until no request is in flight or waiting to be routed, or until
   // `timeout` passes. Returns true when idle.
   bool waitIdle(std::chrono::milliseconds timeout);
 
   // Entry point for every inbound payload. Never throws; protocol-level
   // failures produce JSON-RPC error responses. Payloads over
-  // kInlineParseLimit are parsed and routed on a worker. While such a parse
-  // is pending, later payloads are routed behind it, so every message is
-  // routed in arrival order; only Inline notifications ($/cancelRequest)
-  // still run at once.
+  // kInlineParseLimit are parsed and routed on a worker. While such a parse,
+  // or a payload queued behind one, waits to be routed, later payloads are
+  // routed behind it, so every message is routed in arrival order; only
+  // Inline notifications ($/cancelRequest) still run at once.
   void dispatch(std::string payload);
 
   // Number of requests currently registered as in flight (for tests).
   size_t inflight() const;
 
  private:
-  void route(const std::string& payload);
+  // Arrival number of a payload queued on notificationStrand_ to be routed
+  // later. Payloads routed as they arrive carry kRoutedOnArrival, which
+  // orders them after every cancel already received.
+  using Arrival = std::uint64_t;
+  static constexpr Arrival kRoutedOnArrival = std::numeric_limits<Arrival>::max();
+
+  void route(const std::string& payload, Arrival arrival);
   // Parses a payload, answering malformed ones with an error; nullopt when
   // there is nothing left to route.
   std::optional<Json> parse(const std::string& payload);
-  void routeMessage(Json message);
+  void routeMessage(Json message, Arrival arrival);
   // A notification whose handler runs on the read loop.
   bool isInlineNotification(const Json& message) const;
   // Claims `size` bytes of the deferred-parse budget, or fails when the
   // budget is exhausted and the caller must parse inline instead.
   bool reserveDeferred(size_t size);
-  void runRequest(const Json& id, const std::string& methodName, Json params);
-  void cancelRequest(const Json& params);
+  // Counts a payload into the queue waiting to be routed and returns its
+  // arrival number; finishQueuedRoute() counts it out once routed.
+  Arrival queueRoute();
+  void finishQueuedRoute();
+  bool routesQueued() const;
+  void runRequest(const Json& id, const std::string& methodName, Json params, Arrival arrival);
+  void cancelRequest(const Json& params, Arrival arrival);
   static Json resultMessage(const Json& id, const Json& result);
   static Json errorMessage(const Json& id, const Error& error, const Json& data = nullptr);
   void sendError(const Json& id, const Error& error, const Json& data = nullptr);
@@ -188,7 +204,7 @@ class Dispatcher {
   std::mutex strandsMutex_;
   std::map<std::string, std::unique_ptr<Strand>> strands_;
   // Carries queued notification handlers, deferred parses, the payloads
-  // routed behind a deferred parse and the starts of AfterNotifications
+  // routed behind them and the starts of AfterNotifications
   // requests, so all of them keep arrival order relative to each other.
   Strand notificationStrand_;
   std::atomic<size_t> deferredBytes_{0};
@@ -196,10 +212,18 @@ class Dispatcher {
   mutable std::mutex inflightMutex_;
   std::condition_variable idle_;
   std::map<std::int64_t, CancelSource> inflight_;
-  // Ids cancelled before their request reached the inflight map, which a
-  // deferred parse makes possible. Bounded so a client cannot grow it by
+  // Payloads on notificationStrand_ not yet routed (deferred parses and the
+  // payloads routed behind one), and the arrival number given to the latest.
+  size_t queuedRoutes_ = 0;
+  Arrival lastQueued_ = 0;
+  // Ids cancelled while their request may still be waiting to be routed,
+  // each with the arrival number of the latest payload queued when the
+  // cancel came: it applies to a request with that id queued up to then.
+  // Kept only while payloads are queued and cleared once none are, so a
+  // cancel that crosses the answer to its request never reaches a later
+  // request reusing the id. Bounded so a client cannot grow it by
   // cancelling ids it never sends.
-  std::set<std::int64_t> earlyCancelled_;
+  std::map<std::int64_t, Arrival> earlyCancelled_;
 };
 
 }  // namespace gg::rpc

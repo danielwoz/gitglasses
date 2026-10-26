@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -78,11 +79,53 @@ class MessageSink {
     return matches;
   }
 
+  // Responses carrying `id`, in the order they were sent.
+  std::vector<Json> answers(std::int64_t id) {
+    std::lock_guard lock(mutex_);
+    std::vector<Json> matches;
+    for (const auto& m : messages_) {
+      if (m.contains("id") && m["id"] == id) matches.push_back(m);
+    }
+    return matches;
+  }
+
  private:
   std::mutex mutex_;
   std::condition_variable cv_;
   std::vector<Json> messages_;
 };
+
+// A one-shot signal between a handler and the test, waited on with a bound so
+// a broken dispatcher fails the test instead of hanging it.
+class Gate {
+ public:
+  void open() {
+    {
+      std::lock_guard lock(mutex_);
+      open_ = true;
+    }
+    cv_.notify_all();
+  }
+
+  bool wait() {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, 5s, [this] { return open_; });
+  }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool open_ = false;
+};
+
+// The result and error members of a response; null when absent, as in the
+// null message MessageSink returns after timing out.
+Json resultOf(const Json& response) {
+  return response.contains("result") ? response["result"] : Json();
+}
+Json errorOf(const Json& response) {
+  return response.contains("error") ? response["error"] : Json();
+}
 
 struct DispatcherTest : ::testing::Test {
   TaskPool pool{2};
@@ -531,6 +574,63 @@ TEST_F(DispatcherTest, PayloadsBehindADeferredParseKeepArrivalOrder) {
   pool.shutdown();
 }
 
+// Once a deferred parse has finished, a payload sent while one queued behind
+// that parse is still waiting to be routed is routed after it, not ahead.
+TEST_F(DispatcherTest, PayloadsBehindAFinishedDeferredParseKeepArrivalOrder) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: every payload is routed as it arrives";
+#else
+  Gate held;
+  Gate release;
+  Gate responseHeld;
+  Gate responseRelease;
+  std::mutex m;
+  std::vector<int> order;
+  // Holds the strand so everything below is queued before any of it runs.
+  dispatcher.notification(
+      "hold",
+      [&](Json) {
+        held.open();
+        release.wait();
+      },
+      NotificationMode::Queued);
+  // A response is routed on the strand when queued, so holding its handler
+  // stops routing after the deferred parse has released its budget.
+  dispatcher.onResponse([&](const Json&) {
+    responseHeld.open();
+    responseRelease.wait();
+  });
+  dispatcher.notification(
+      "mark",
+      [&](Json params) {
+        std::lock_guard lock(m);
+        order.push_back(params["n"].get<int>());
+      },
+      NotificationMode::Queued);
+
+  send({{"jsonrpc", "2.0"}, {"method", "hold"}});
+  EXPECT_TRUE(held.wait());
+  send({{"jsonrpc", "2.0"},
+        {"method", "mark"},
+        {"params", {{"n", 1}, {"blob", std::string(kInlineParseLimit + 1024, 'x')}}}});
+  send({{"jsonrpc", "2.0"}, {"id", 1}, {"result", Json::object()}});
+  send({{"jsonrpc", "2.0"}, {"method", "mark"}, {"params", {{"n", 2}}}});
+  release.open();
+  EXPECT_TRUE(responseHeld.wait());
+  // The deferred parse is done and mark 2 is still waiting to be routed.
+  send({{"jsonrpc", "2.0"}, {"method", "mark"}, {"params", {{"n", 3}}}});
+  responseRelease.open();
+
+  EXPECT_TRUE(sink.waitUntil([&] {
+    std::lock_guard lock(m);
+    return order.size() == 3;
+  }));
+  // The handlers use this frame's locals.
+  pool.shutdown();
+  EXPECT_EQ(order, (std::vector<int>{1, 2, 3}));
+#endif
+}
+
 // A cancel is not held behind a deferred parse; it still reaches the request
 // queued behind that parse.
 TEST_F(DispatcherTest, CancelReachesARequestQueuedBehindADeferredParse) {
@@ -581,6 +681,253 @@ TEST_F(DispatcherTest, IdReusedAfterTheResponseIsAnsweredAgain) {
     ASSERT_TRUE(slowSink.waitUntil([&] { return answers() >= round; })) << "round " << round;
   }
   pool.shutdown();
+}
+
+// On a Serial lane the request reusing an id the moment its answer is sent
+// queues on the strand still running the first one, and is answered too.
+TEST_F(DispatcherTest, IdReusedFromTheSendPathOnASerialStrandIsAnswered) {
+  MessageSink serialSink;
+  Dispatcher* serialDispatcher = nullptr;
+  std::atomic<bool> reused{false};
+  const auto request = [](int n) {
+    return Json({{"jsonrpc", "2.0"},
+                 {"id", 5},
+                 {"method", "mutate"},
+                 {"params", {{"repoId", "r1"}, {"n", n}}}})
+        .dump();
+  };
+  // The client sends its next request with the id before the first answer
+  // has left the send path.
+  Dispatcher serial{pool, [&](const Json& m) {
+                      serialSink.push(m);
+                      if (m.contains("id") && m["id"] == 5 && !reused.exchange(true)) {
+                        serialDispatcher->dispatch(request(2));
+                      }
+                    }};
+  serialDispatcher = &serial;
+  serial.method(
+      "mutate",
+      [](const Json& params, const CancelToken&, const NotifyFn&) {
+        return Json{{"n", params["n"]}};
+      },
+      Mode::Serial);
+
+  serial.dispatch(request(1));
+  EXPECT_TRUE(serialSink.waitUntil([&] { return serialSink.answers(5).size() >= 2; }));
+  pool.shutdown();
+
+  const std::vector<Json> answers = serialSink.answers(5);
+  ASSERT_EQ(answers.size(), 2u);
+  EXPECT_EQ(resultOf(answers[0]), (Json{{"n", 1}})) << answers[0].dump();
+  EXPECT_EQ(resultOf(answers[1]), (Json{{"n", 2}})) << answers[1].dump();
+}
+
+// A request reusing the id of one still in flight is refused at once, on
+// every lane, while the request holding the id runs on and answers once.
+TEST_F(DispatcherTest, RequestReusingAnInFlightIdIsRefused) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: a request is answered before the next one is sent";
+#else
+  struct Lane {
+    const char* method;
+    Mode mode;
+    std::int64_t id;
+    Gate started;
+    Gate release;
+    std::atomic<int> calls{0};
+  };
+  // Outlives the pool's tasks, which the handlers below reach into.
+  Lane lanes[] = {{"concurrentHold", Mode::Concurrent, 3}, {"serialHold", Mode::Serial, 4}};
+
+  for (Lane& lane : lanes) {
+    dispatcher.method(
+        lane.method,
+        [&lane](const Json& params, const CancelToken&, const NotifyFn&) {
+          if (lane.calls++ == 0) {
+            lane.started.open();
+            lane.release.wait();
+          }
+          return Json{{"from", params["from"]}};
+        },
+        lane.mode);
+    const auto request = [&lane](const char* from) {
+      return Json{{"jsonrpc", "2.0"},
+                  {"id", lane.id},
+                  {"method", lane.method},
+                  {"params", {{"repoId", "r1"}, {"from", from}}}};
+    };
+
+    send(request("first"));
+    EXPECT_TRUE(lane.started.wait()) << lane.method;
+    send(request("second"));
+
+    // The refusal comes while the first request is still held.
+    const Json refusal =
+        sink.waitFor([&lane](const Json& m) { return m.contains("id") && m["id"] == lane.id; });
+    EXPECT_EQ(errorOf(refusal),
+              (Json{{"code", static_cast<int>(ErrorCode::InvalidRequest)},
+                    {"message", "request id " + std::to_string(lane.id) + " is already in use"}}))
+        << refusal.dump();
+
+    lane.release.open();
+    EXPECT_TRUE(sink.waitUntil([&] { return sink.answers(lane.id).size() >= 2; }));
+  }
+
+  // Drains every task, so no further answer can still be on its way.
+  pool.shutdown();
+  for (Lane& lane : lanes) {
+    const std::vector<Json> answers = sink.answers(lane.id);
+    ASSERT_EQ(answers.size(), 2u) << lane.method;
+    EXPECT_EQ(resultOf(answers[1]), (Json{{"from", "first"}})) << answers[1].dump();
+    EXPECT_EQ(lane.calls.load(), 1) << lane.method;
+  }
+#endif
+}
+
+// A cancel that crosses the answer to its request is dropped: a later request
+// reusing the id runs to completion.
+TEST_F(DispatcherTest, CancelForAnAnsweredIdSparesTheNextRequestWithIt) {
+  dispatcher.method(
+      "noop", [](const Json&, const CancelToken&, const NotifyFn&) { return Json::object(); });
+
+  send({{"jsonrpc", "2.0"}, {"id", 7}, {"method", "noop"}});
+  EXPECT_TRUE(sink.waitForId(7).contains("result"));
+  send({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 7}}}});
+  send({{"jsonrpc", "2.0"}, {"id", 7}, {"method", "noop"}});
+  EXPECT_TRUE(sink.waitUntil([&] { return sink.answers(7).size() >= 2; }));
+
+  for (const Json& answer : sink.answers(7)) {
+    EXPECT_EQ(errorOf(answer), nullptr) << answer.dump();
+  }
+}
+
+// While payloads wait to be routed, a cancel for an id not in flight is kept
+// for a request queued ahead of it, but not for one with the id queued after
+// it, whether the cancel is handled on arrival or parsed off the read loop.
+TEST_F(DispatcherTest, CancelForAnAnsweredIdSparesARequestQueuedAfterIt) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: every payload is routed as it arrives";
+#else
+  Gate held;
+  Gate release;
+  // Holds the strand that deferred parses and the payloads behind them run
+  // on, so everything sent meanwhile waits to be routed.
+  dispatcher.notification(
+      "hold",
+      [&](Json) {
+        held.open();
+        release.wait();
+      },
+      NotificationMode::Queued);
+  dispatcher.notification("bulk", [](Json) {}, NotificationMode::Queued);
+  dispatcher.method(
+      "noop", [](const Json&, const CancelToken&, const NotifyFn&) { return Json::object(); });
+  const std::string blob(kInlineParseLimit + 1024, 'x');
+
+  for (const int id : {7, 8}) {
+    send({{"jsonrpc", "2.0"}, {"id", id}, {"method", "noop"}});
+    EXPECT_TRUE(sink.waitForId(id).contains("result"));
+  }
+  send({{"jsonrpc", "2.0"}, {"method", "hold"}});
+  EXPECT_TRUE(held.wait());
+  send({{"jsonrpc", "2.0"}, {"method", "bulk"}, {"params", {{"blob", blob}}}});
+  // Handled on arrival, ahead of the second request with id 7.
+  send({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 7}}}});
+  // Large enough to be parsed off the read loop, behind the bulk payload.
+  send({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 8}, {"pad", blob}}}});
+  send({{"jsonrpc", "2.0"}, {"id", 7}, {"method", "noop"}});
+  send({{"jsonrpc", "2.0"}, {"id", 8}, {"method", "noop"}});
+  release.open();
+
+  for (const int id : {7, 8}) {
+    EXPECT_TRUE(sink.waitUntil([&] { return sink.answers(id).size() >= 2; })) << "id " << id;
+    for (const Json& answer : sink.answers(id)) {
+      EXPECT_EQ(errorOf(answer), nullptr) << answer.dump();
+    }
+  }
+  // The hold handler uses this frame's locals.
+  pool.shutdown();
+#endif
+}
+
+// A cancel for a request still waiting to be routed, whether its own parse is
+// deferred or it is queued behind one, applies once the request is routed.
+TEST_F(DispatcherTest, CancelForAQueuedRequestAppliesOnceItIsRouted) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: a request is routed before its cancel is sent";
+#else
+  Gate held;
+  Gate release;
+  dispatcher.notification(
+      "hold",
+      [&](Json) {
+        held.open();
+        release.wait();
+      },
+      NotificationMode::Queued);
+  dispatcher.method("read", [](const Json&, const CancelToken& token, const NotifyFn&) {
+    return Json{{"cancelled", token.cancelled()}};
+  });
+
+  send({{"jsonrpc", "2.0"}, {"method", "hold"}});
+  EXPECT_TRUE(held.wait());
+  send({{"jsonrpc", "2.0"},
+        {"id", 1},
+        {"method", "read"},
+        {"params", {{"blob", std::string(kInlineParseLimit + 1024, 'x')}}}});
+  send({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "read"}});
+  send({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "read"}});
+  send({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 1}}}});
+  send({{"jsonrpc", "2.0"}, {"method", "$/cancelRequest"}, {"params", {{"id", 2}}}});
+  release.open();
+
+  for (const int id : {1, 2}) {
+    const Json response = sink.waitForId(id);
+    EXPECT_EQ(errorOf(response), (Json{{"code", static_cast<int>(ErrorCode::Cancelled)},
+                                       {"message", "request cancelled"}}))
+        << response.dump();
+  }
+  EXPECT_EQ(resultOf(sink.waitForId(3)), (Json{{"cancelled", false}}));
+  // The hold handler uses this frame's locals.
+  pool.shutdown();
+#endif
+}
+
+// A payload still waiting to be routed counts as work outstanding, though its
+// request is not yet in flight.
+TEST_F(DispatcherTest, WaitIdleCountsPayloadsWaitingToBeRouted) {
+#ifdef GG_SINGLE_THREADED
+  GTEST_SKIP() << "inline task pool: every payload is routed as it arrives";
+#else
+  Gate held;
+  Gate release;
+  dispatcher.notification(
+      "hold",
+      [&](Json) {
+        held.open();
+        release.wait();
+      },
+      NotificationMode::Queued);
+  dispatcher.method(
+      "noop", [](const Json&, const CancelToken&, const NotifyFn&) { return Json::object(); });
+
+  send({{"jsonrpc", "2.0"}, {"method", "hold"}});
+  EXPECT_TRUE(held.wait());
+  send({{"jsonrpc", "2.0"},
+        {"id", 1},
+        {"method", "noop"},
+        {"params", {{"blob", std::string(kInlineParseLimit + 1024, 'x')}}}});
+  send({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "noop"}});
+  EXPECT_EQ(dispatcher.inflight(), 0u);
+  EXPECT_FALSE(dispatcher.waitIdle(0ms));
+
+  release.open();
+  EXPECT_TRUE(dispatcher.waitIdle(5s));
+  EXPECT_TRUE(sink.waitForId(1).contains("result"));
+  EXPECT_TRUE(sink.waitForId(2).contains("result"));
+  // The hold handler uses this frame's locals.
+  pool.shutdown();
+#endif
 }
 
 TEST_F(DispatcherTest, InflightDrainsAfterCompletion) {

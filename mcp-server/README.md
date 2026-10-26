@@ -66,7 +66,9 @@ by default it may not, and the server reads the project the agent works in
 without git. Many desktop apps share no folders with their servers, so the
 configuration **Copy MCP Server Config** produces also names the workspace's
 folders, to read without git (`--read`). The paths point into the installed
-extension, so run the command again after GitGlasses updates. The Home view's **MCP Server**
+extension, so run the command again after GitGlasses updates. The extension's
+copy needs Node.js 20 or newer: the editor's own Node, or `node` on `PATH`
+where the editor's is older or turned off. The Home view's **MCP Server**
 section shows the registration and offers the same commands.
 
 ## Installation
@@ -74,7 +76,8 @@ section shows the registration and offers the same commands.
 `gitglasses-mcp` is not on npm yet. Until a release publishes it, do not run
 `npx gitglasses-mcp`: npx would download and run whatever is published under
 that name, with your tokens in its environment. Build the server from a clone
-instead (Node.js 20.11 or newer, pnpm):
+instead (building takes Node.js 22.13 or newer and pnpm 11; the built server
+runs on Node.js 20.11 or newer):
 
 ```sh
 git clone https://github.com/danielwoz/gitglasses.git

@@ -2,6 +2,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <string_view>
+
 #include "util/request_context.h"
 
 namespace gg::rpc {
@@ -12,6 +14,13 @@ std::string dumpForWire(const Json& message) {
 }
 
 namespace {
+
+// The notification that cancels a request. Like an Inline notification it
+// runs on the read loop, so it is never held up behind the request it
+// cancels. The dispatcher handles it itself rather than registering it,
+// because a cancel for an id not in flight means something else when the
+// cancel was itself parsed off the read loop.
+constexpr std::string_view kCancelRequest = "$/cancelRequest";
 
 // True when the payload nests deeper than kMaxParseDepth. Counts brackets
 // outside strings, which is enough to answer before the parser (one recursion
@@ -51,12 +60,23 @@ std::string jsonExceptionDetail(const std::exception& e) {
   return detail;
 }
 
+// Runs `onExit` when the scope ends, however it is left.
+template <typename F>
+class ScopeExit {
+ public:
+  explicit ScopeExit(F onExit) : onExit_(std::move(onExit)) {}
+  ~ScopeExit() { onExit_(); }
+  ScopeExit(const ScopeExit&) = delete;
+  ScopeExit& operator=(const ScopeExit&) = delete;
+
+ private:
+  F onExit_;
+};
+
 }  // namespace
 
 Dispatcher::Dispatcher(TaskPool& pool, SendFn send)
-    : pool_(pool), send_(std::move(send)), notificationStrand_(pool, Priority::Interactive) {
-  notification("$/cancelRequest", [this](Json params) { cancelRequest(params); });
-}
+    : pool_(pool), send_(std::move(send)), notificationStrand_(pool, Priority::Interactive) {}
 
 void Dispatcher::method(const std::string& name, Handler handler, Mode mode, Priority priority) {
   methods_[name] = {std::move(handler), mode, priority};
@@ -77,16 +97,10 @@ void Dispatcher::cancelAll() {
 }
 
 bool Dispatcher::waitIdle(std::chrono::milliseconds timeout) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
   std::unique_lock lock(inflightMutex_);
-  // Deferred parses register their request only once parsed, so the parse
-  // budget in use counts as work outstanding too. Its counter is not guarded
-  // by this mutex, hence the bounded waits.
-  for (;;) {
-    if (inflight_.empty() && deferredBytes_.load(std::memory_order_relaxed) == 0) return true;
-    if (std::chrono::steady_clock::now() >= deadline) return false;
-    idle_.wait_for(lock, std::chrono::milliseconds(20));
-  }
+  // A queued payload registers its request only once routed, so the queue
+  // counts as work outstanding too.
+  return idle_.wait_for(lock, timeout, [this] { return inflight_.empty() && queuedRoutes_ == 0; });
 }
 
 std::vector<std::string> Dispatcher::methodNames() const {
@@ -118,45 +132,65 @@ bool Dispatcher::reserveDeferred(size_t size) {
   }
 }
 
+Dispatcher::Arrival Dispatcher::queueRoute() {
+  std::lock_guard lock(inflightMutex_);
+  ++queuedRoutes_;
+  return ++lastQueued_;
+}
+
+void Dispatcher::finishQueuedRoute() {
+  std::lock_guard lock(inflightMutex_);
+  if (--queuedRoutes_ > 0) return;
+  // Every request a remembered cancel could still be for has been routed.
+  earlyCancelled_.clear();
+  idle_.notify_all();
+}
+
+bool Dispatcher::routesQueued() const {
+  std::lock_guard lock(inflightMutex_);
+  return queuedRoutes_ > 0;
+}
+
 void Dispatcher::dispatch(std::string payload) {
   const size_t size = payload.size();
   if (size > kInlineParseLimit && reserveDeferred(size)) {
-    notificationStrand_.post([this, size, payload = std::move(payload)] {
-      // Releases the budget however route() leaves, so a burst cannot wedge
-      // deferral off permanently. The release pairs with the acquire below:
-      // a payload that sees the budget drained also sees everything this
-      // parse routed.
-      struct Release {
-        std::atomic<size_t>& counter;
-        size_t size;
-        ~Release() { counter.fetch_sub(size, std::memory_order_release); }
-      } release{deferredBytes_, size};
-      route(payload);
+    const Arrival arrival = queueRoute();
+    notificationStrand_.post([this, size, arrival, payload = std::move(payload)] {
+      // Releases the budget and the queue slot however route() leaves, so a
+      // burst cannot wedge deferral off or keep the dispatcher from idling.
+      const ScopeExit done([this, size] {
+        deferredBytes_.fetch_sub(size, std::memory_order_relaxed);
+        finishQueuedRoute();
+      });
+      route(payload, arrival);
     });
     return;
   }
-  if (deferredBytes_.load(std::memory_order_acquire) > 0) {
-    // A deferred parse ahead of this payload has not routed its message yet,
-    // and routing this one now would let it overtake: a blame request would
-    // read the editor buffer the doc/didChange ahead of it replaces. The
-    // payload is parsed here and routed behind the parse. Inline
-    // notifications still run at once, so a $/cancelRequest is never held up;
-    // one for a request still queued behind the parse is remembered for it.
+  if (routesQueued()) {
+    // A payload ahead of this one has not been routed yet, and routing this
+    // one now would let it overtake: a blame request would read the editor
+    // buffer the doc/didChange ahead of it replaces. The payload is parsed
+    // here and routed behind the queue. Inline notifications still run at
+    // once, so a $/cancelRequest is never held up; one for a request still
+    // queued is remembered for it.
     auto message = parse(payload);
     if (!message) return;
     if (isInlineNotification(*message)) {
-      routeMessage(std::move(*message));
+      routeMessage(std::move(*message), kRoutedOnArrival);
       return;
     }
-    notificationStrand_.post(
-        [this, message = std::move(*message)]() mutable { routeMessage(std::move(message)); });
+    const Arrival arrival = queueRoute();
+    notificationStrand_.post([this, arrival, message = std::move(*message)]() mutable {
+      const ScopeExit done([this] { finishQueuedRoute(); });
+      routeMessage(std::move(message), arrival);
+    });
     return;
   }
-  route(payload);
+  route(payload, kRoutedOnArrival);
 }
 
-void Dispatcher::route(const std::string& payload) {
-  if (auto message = parse(payload)) routeMessage(std::move(*message));
+void Dispatcher::route(const std::string& payload, Arrival arrival) {
+  if (auto message = parse(payload)) routeMessage(std::move(*message), arrival);
 }
 
 std::optional<Json> Dispatcher::parse(const std::string& payload) {
@@ -177,11 +211,13 @@ bool Dispatcher::isInlineNotification(const Json& message) const {
   if (idIt != message.end() && !idIt->is_null()) return false;
   const auto methodIt = message.find("method");
   if (methodIt == message.end() || !methodIt->is_string()) return false;
-  const auto it = notifications_.find(methodIt->get<std::string>());
+  const auto& methodName = methodIt->get_ref<const std::string&>();
+  if (methodName == kCancelRequest) return true;
+  const auto it = notifications_.find(methodName);
   return it != notifications_.end() && it->second.mode == NotificationMode::Inline;
 }
 
-void Dispatcher::routeMessage(Json message) {
+void Dispatcher::routeMessage(Json message, Arrival arrival) {
   const auto methodIt = message.find("method");
   if (methodIt == message.end() || !methodIt->is_string()) {
     // An answer to a request this process sent: it has an id and a result or
@@ -206,6 +242,10 @@ void Dispatcher::routeMessage(Json message) {
 
   const auto idIt = message.find("id");
   if (idIt == message.end() || idIt->is_null()) {
+    if (methodName == kCancelRequest) {
+      cancelRequest(params, arrival);
+      return;
+    }
     const auto it = notifications_.find(methodName);
     if (it == notifications_.end()) {
       spdlog::debug("ignoring unknown notification: {}", methodName);
@@ -222,10 +262,11 @@ void Dispatcher::routeMessage(Json message) {
     return;
   }
 
-  runRequest(*idIt, methodName, std::move(params));
+  runRequest(*idIt, methodName, std::move(params), arrival);
 }
 
-void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json params) {
+void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json params,
+                            Arrival arrival) {
   const auto it = methods_.find(methodName);
   if (it == methods_.end()) {
     sendError(id, {ErrorCode::MethodNotFound, "unknown method: " + methodName});
@@ -238,15 +279,28 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
   }
   const std::int64_t numericId = id.get<std::int64_t>();
 
+  bool inUse = false;
   {
     std::lock_guard lock(inflightMutex_);
-    CancelSource& source = inflight_[numericId];
-    // A cancel that arrived while this payload was waiting to be parsed
-    // applies to it.
-    if (const auto early = earlyCancelled_.find(numericId); early != earlyCancelled_.end()) {
-      source.cancel();
+    const auto [slot, inserted] = inflight_.try_emplace(numericId);
+    if (!inserted) {
+      inUse = true;
+    } else if (const auto early = earlyCancelled_.find(numericId); early != earlyCancelled_.end()) {
+      // A cancel that arrived while this payload was waiting to be routed
+      // applies to it. One that arrived before this payload did was for an
+      // earlier request with the same id, already answered.
+      if (arrival <= early->second) slot->second.cancel();
       earlyCancelled_.erase(early);
     }
+  }
+  if (inUse) {
+    // Joining the entry of the request that holds the id would leave one of
+    // the two without an answer, so this one is refused and the other keeps
+    // running untouched.
+    spdlog::warn("refusing request {} ('{}'): its id is already in flight", numericId, methodName);
+    sendError(id, {ErrorCode::InvalidRequest,
+                   "request id " + std::to_string(numericId) + " is already in use"});
+    return;
   }
 
   const MethodEntry& entry = it->second;
@@ -259,14 +313,23 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
   auto task = [this, id, numericId, handler = entry.handler, params = std::move(params),
                context = std::move(context)] {
     CancelToken token;
+    bool registered = false;
     {
       std::lock_guard lock(inflightMutex_);
-      auto entry = inflight_.find(numericId);
-      // The entry is registered before this task is posted, so a missing one
-      // means a second request reused an id whose first request already
-      // finished and erased it.
-      if (entry == inflight_.end()) return;
-      token = entry->second.token();
+      // The entry is registered before this task is posted and only this
+      // task erases it, since a request reusing the id meanwhile is refused
+      // without touching it. Should it be missing all the same, the request
+      // is answered with an error rather than left without a response.
+      if (const auto entry = inflight_.find(numericId); entry != inflight_.end()) {
+        token = entry->second.token();
+        registered = true;
+      }
+    }
+    if (!registered) {
+      spdlog::warn("request {} ('{}') lost its in-flight entry before it started", numericId,
+                   context.method);
+      sendError(id, {ErrorCode::Internal, "request is no longer in flight"});
+      return;
     }
 
     NotifyFn notify = [this](const std::string& method, const Json& notifyParams) {
@@ -326,7 +389,7 @@ void Dispatcher::runRequest(const Json& id, const std::string& methodName, Json 
   }
 }
 
-void Dispatcher::cancelRequest(const Json& params) {
+void Dispatcher::cancelRequest(const Json& params, Arrival arrival) {
   const auto idIt = params.find("id");
   if (idIt == params.end() || !idIt->is_number_integer()) return;
   const std::int64_t id = idIt->get<std::int64_t>();
@@ -335,10 +398,15 @@ void Dispatcher::cancelRequest(const Json& params) {
     it->second.cancel();
     return;
   }
-  // Unknown id: either already answered, or a request still waiting to be
-  // parsed. Remembering it covers the second case.
+  // Unknown id: already answered, or a request still waiting to be routed.
+  // Only the second needs remembering. Nothing is waiting when no payload is
+  // queued, nor ahead of a cancel that was itself queued: every request sent
+  // before it has been routed by the time it runs.
+  if (arrival != kRoutedOnArrival || queuedRoutes_ == 0) return;
   constexpr size_t kMaxEarlyCancelled = 1024;
-  if (earlyCancelled_.size() < kMaxEarlyCancelled) earlyCancelled_.insert(id);
+  if (earlyCancelled_.size() < kMaxEarlyCancelled || earlyCancelled_.contains(id)) {
+    earlyCancelled_[id] = lastQueued_;
+  }
 }
 
 Json Dispatcher::resultMessage(const Json& id, const Json& result) {

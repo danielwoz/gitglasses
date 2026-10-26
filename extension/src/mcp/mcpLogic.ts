@@ -165,17 +165,22 @@ export function detectMcpHost(api: McpApiSurface): McpHost | undefined {
 
 // --- Node runtime ------------------------------------------------------------
 
-/** What `<binary> --version` printed when run with ELECTRON_RUN_AS_NODE=1. */
-export function isNodeVersionOutput(output: string): boolean {
-  return /^v\d+\.\d+\.\d+/.test(output.trim());
-}
+/**
+ * Oldest Node major the bundled server supports: the one its bundle is built
+ * for (mcpConfig's node20 target in extension/esbuild.mjs), which VS Code
+ * 1.90, the oldest editor the extension installs in, also ships. The npm
+ * package needs 20.11 for import.meta.dirname; the bundle replaces that with
+ * __dirname.
+ */
+export const MIN_NODE_MAJOR = 20;
 
-/** Oldest Node major the bundled server supports. */
-export const MIN_NODE_MAJOR = 18;
-
-/** True when `node --version` output names a Node the server runs on. */
+/**
+ * True when `--version` output names a Node the server runs on. An editor
+ * that ignores ELECTRON_RUN_AS_NODE prints its own version instead, with no
+ * leading v, which never passes.
+ */
 export function isSupportedNodeVersion(output: string): boolean {
-  const major = /^v(\d+)\./.exec(output.trim())?.[1];
+  const major = /^v(\d+)\.\d+\.\d+/.exec(output.trim())?.[1];
   return major !== undefined && Number(major) >= MIN_NODE_MAJOR;
 }
 
