@@ -2,8 +2,8 @@ name: Release
 
 # A v* tag on a commit of main builds every engine, packages and runs one
 # VSIX per target, waits for CI to have passed on the same commit, and then
-# publishes to the Visual Studio Marketplace and Open VSX from jobs that
-# each need approval in the `release` environment. The GitHub release is
+# publishes to the Visual Studio Marketplace and Open VSX from jobs in the
+# `release` environment, which only v* tags can reach. The GitHub release is
 # created last, once both registries have every package. The MCP server
 # (mcp-server/) is neither packaged nor published: no VSIX carries it and
 # nothing goes to npm.

@@ -22,7 +22,7 @@ then:
    changelog section as the notes;
 6. once all of the above has succeeded, publishes to the Visual Studio
    Marketplace and Open VSX, each from its own job in the `release`
-   environment, which needs your approval;
+   environment, which only a `v*` tag can reach;
 7. creates the GitHub release once both registries have every package.
 
 The MCP server (`mcp-server/`) is built and tested with everything else but
@@ -90,8 +90,8 @@ what step 6's trusted publishing needs.
 
 In the repository's **Settings > Environments**, create `release`:
 
-- **Required reviewers**: yourself. Every publish job then waits for your
-  approval (approve the two pending deployments together).
+- **Required reviewers**: none, so a pushed release tag publishes without
+  waiting. Add yourself here instead to approve each publish by hand.
 - **Deployment branches and tags**: *Selected branches and tags*, with one
   rule: tag `v*`. Nothing but a release tag can reach the publishing
   credentials.
@@ -100,7 +100,7 @@ Or with the GitHub CLI:
 
 ```sh
 gh api -X PUT repos/danielwoz/gitglasses/environments/release --input - <<EOF
-{"reviewers":[{"type":"User","id":$(gh api user --jq .id)}],
+{"reviewers":null,
  "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 EOF
 gh api -X POST repos/danielwoz/gitglasses/environments/release/deployment-branch-policies \
@@ -110,7 +110,7 @@ gh api -X POST repos/danielwoz/gitglasses/environments/release/deployment-branch
 ### 6. Secrets and variables
 
 All of these belong to the `release` environment, not the repository, so
-only approved release jobs can read them. Set them under **Settings >
+only release jobs on a `v*` tag can read them. Set them under **Settings >
 Environments > release**, or with `gh secret set NAME --env release` and
 `gh variable set NAME --env release --body VALUE`.
 
@@ -173,7 +173,7 @@ enough) for the identity.
    gh workflow run marketplace-identity.yml --ref v0.2.0
    ```
 
-   Approve the deployment; the ID is in the run's summary.
+   The ID is in the run's summary.
 
 5. At <https://marketplace.visualstudio.com/manage/publishers/gitglasses>,
    open **Members**, add that ID and give it the **Contributor** role.
@@ -235,8 +235,8 @@ Add two rulesets under **Settings > Rules > Rulesets**:
    git push origin v0.2.0
    ```
 
-4. Approve the two deployments to `release` when the builds are done.
-5. If a job fails, fix the cause and re-run the failed jobs: published
+   The release then runs to the end on its own.
+4. If a job fails, fix the cause and re-run the failed jobs: published
    versions are skipped. Never move or delete a pushed tag; if the commit
    itself is wrong, bump the patch version and tag again.
 
@@ -246,7 +246,7 @@ Add two rulesets under **Settings > Rules > Rulesets**:
 Run workflow, or `gh workflow run release.yml --ref <branch>`. It runs the
 version checks (without a tag), every engine build and test, all nine
 packages and their smoke tests, and prepares the release assets. It
-publishes nothing and needs no approval.
+publishes nothing.
 
 **Locally**, from a checkout with the engine built (`cmake --preset release
 && cmake --build --preset release`), the wasm engine built (`cmake --preset
