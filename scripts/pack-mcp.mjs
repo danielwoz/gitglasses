@@ -8,10 +8,10 @@
 //
 // With --engines, also packs an @gitglasses/engine-* package for every
 // engine build found there, from <dir>/engine-<target>/gitglasses-engine[.exe]
-// (the layout the release workflow downloads its engine artifacts into). Each
-// engine must be an executable for its target. --all-engines makes a missing
-// one an error, as a release needs every package its optional dependencies
-// name.
+// (the layout download-artifact gives the release workflow's engine-<target>
+// artifacts). Each engine must be an executable for its target.
+// --all-engines makes a missing one an error, as a published gitglasses-mcp
+// needs every package its optional dependencies name.
 // Usage:
 //   node scripts/pack-mcp.mjs [--out <dir>] [--engines <dir> [--all-engines]]
 // Build first (pnpm --filter "gitglasses-mcp..." build). The tarballs go to

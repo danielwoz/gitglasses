@@ -2,13 +2,15 @@ name: Release
 
 # A v* tag on a commit of main builds every engine, packages and runs one
 # VSIX per target, waits for CI to have passed on the same commit, and then
-# publishes to the Visual Studio Marketplace, Open VSX and npm from jobs
-# that each need approval in the `release` environment. The GitHub release
-# is created last, once both extension registries have every package.
+# publishes to the Visual Studio Marketplace and Open VSX from jobs that
+# each need approval in the `release` environment. The GitHub release is
+# created last, once both registries have every package. The MCP server
+# (mcp-server/) is neither packaged nor published: no VSIX carries it and
+# nothing goes to npm.
 #
 # Running the workflow by hand (Actions > Release > Run workflow) is a dry
 # run on the chosen branch: it builds, packages and smoke-tests everything,
-# packs the npm packages, and publishes nothing. See docs/releasing.md.
+# and publishes nothing. See docs/releasing.md.
 
 on:
   push:
@@ -502,49 +504,6 @@ jobs:
             exit 1
           fi
 
-  # gitglasses-mcp and one @gitglasses/engine-* package per engine build,
-  # which gitglasses-mcp names as optional dependencies so npm installs the
-  # engine for its platform (see scripts/lib/mcp-package.mjs).
-  package-mcp:
-    name: package (gitglasses-mcp)
-    needs: [version, engine, engine-alpine]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-      # Each into engines/engine-<target>/, where pack-mcp.mjs looks.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: engine-*
-          path: engines/
-      # The tarball carries the npm README (mcp-server/npm-readme.md) in place
-      # of the repository README, which describes running from a clone. Every
-      # engine must be there and be an executable for its target.
-      - name: Build and pack
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm --filter "gitglasses-mcp..." build
-          node scripts/pack-mcp.mjs --out dist-npm --engines engines --all-engines
-      # Installs the tarballs into an empty directory as npx would, checks
-      # their files and README, and runs the server, which must find the
-      # linux-x64 engine package by itself and read a repository with it.
-      - name: Verify the package
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          node scripts/verify-mcp-package.mjs "dist-npm/gitglasses-mcp-$VERSION.tgz" --version "$VERSION" \
-            --engine-package "dist-npm/gitglasses-engine-linux-x64-$VERSION.tgz"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: npm-package
-          path: dist-npm/*.tgz
-          if-no-files-found: error
-
   # Everything the GitHub release carries. Every publish job waits for it, so
   # a release that cannot be fully described never reaches a registry.
   release-assets:
@@ -695,60 +654,6 @@ jobs:
           flags=(--skip-duplicate)
           if [ "$PRERELEASE" = true ]; then flags+=(--pre-release); fi
           pnpm exec ovsx publish "${auth[@]}" "${flags[@]}" --packagePath ../dist/*.vsix
-
-  publish-npm:
-    name: publish (npm gitglasses-mcp and engines)
-    if: github.event_name == 'push'
-    needs: [version, ci, package-mcp, release-assets]
-    runs-on: ubuntu-24.04
-    environment: release
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
-    steps:
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
-      - run: npm install -g npm@11.20.0
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: npm-package
-          path: dist-npm/
-      # npm trusted publishing (OIDC) once configured for this workflow on
-      # npmjs.com for every package and NPM_TRUSTED_PUBLISHING is true; until
-      # then NPM_TOKEN. Either way each package carries a provenance
-      # attestation. The engine packages go first, so gitglasses-mcp never
-      # names an optional dependency that is not there yet; a version already
-      # on npm is skipped, so a re-run finishes a partial publish.
-      - name: Publish
-        env:
-          TRUSTED: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
-          NODE_AUTH_TOKEN: ${{ vars.NPM_TRUSTED_PUBLISHING != 'true' && secrets.NPM_TOKEN || '' }}
-          PRERELEASE: ${{ needs.version.outputs.prerelease }}
-        run: |
-          if [ "$TRUSTED" != true ] && [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::No npm credential in the release environment. Set the NPM_TOKEN secret for the first publish, then configure trusted publishing and the NPM_TRUSTED_PUBLISHING variable (docs/releasing.md)."
-            exit 1
-          fi
-          tag=latest
-          if [ "$PRERELEASE" = true ]; then tag=next; fi
-          publish() {
-            local tarball=$1 name
-            name=$(tar -xzOf "$tarball" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')
-            if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
-              echo "$name@$VERSION is already on npm"
-              return 0
-            fi
-            npm publish "$tarball" --provenance --access public --tag "$tag"
-          }
-          for tarball in dist-npm/gitglasses-engine-*-"$VERSION".tgz; do
-            publish "$tarball"
-          done
-          publish "dist-npm/gitglasses-mcp-$VERSION.tgz"
 
   # Created only after both extension registries have every package. A
   # re-run uploads any missing assets to the existing release.

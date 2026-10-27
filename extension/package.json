@@ -1,7 +1,7 @@
 {
   "name": "gitglasses",
   "displayName": "GitGlasses",
-  "description": "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, file and line history, commit search, interactive rebase and worktrees. Works on private repos with no account, and your AI agents can use it over MCP.",
+  "description": "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, file and line history, commit search, interactive rebase and worktrees. Works on private repos with no account.",
   "version": "0.4.1",
   "publisher": "gitglasses",
   "license": "MIT",
@@ -51,7 +51,6 @@
     "code review",
     "scm",
     "ai commit message",
-    "mcp",
     "agents",
     "open vsx",
     "open source",
@@ -69,7 +68,6 @@
       "description": "In Restricted Mode GitGlasses runs no git commands, so no program the repository configures (hooks, filters, fsmonitor, diff drivers, ssh commands) can run: blame, commit history and the commit graph are read straight from the repository, while file and line history, patches and every command that changes the repository or contacts a remote stay off until the folder is trusted. Settings that choose an executable, a network endpoint or a link target are read from user settings only.",
       "restrictedConfigurations": [
         "gitglasses.engine.path",
-        "gitglasses.mcp.enabled",
         "gitglasses.web.maxRepoBytes",
         "gitglasses.integrations.hosts",
         "gitglasses.integrations.issues",
@@ -379,21 +377,6 @@
       {
         "command": "gitglasses.ai.clearApiKey",
         "title": "Clear AI API Key…",
-        "category": "GitGlasses"
-      },
-      {
-        "command": "gitglasses.mcp.addToClaudeCode",
-        "title": "Add MCP Server to Claude Code",
-        "category": "GitGlasses"
-      },
-      {
-        "command": "gitglasses.mcp.addToCodex",
-        "title": "Add MCP Server to Codex",
-        "category": "GitGlasses"
-      },
-      {
-        "command": "gitglasses.mcp.copyConfig",
-        "title": "Copy MCP Server Config",
         "category": "GitGlasses"
       },
       {
@@ -1656,18 +1639,6 @@
         {
           "command": "gitglasses.rebase.abort",
           "when": "gitglasses.hasRepository && gitglasses.rebaseInProgress && isWorkspaceTrusted && gitglasses.engineFullCapabilities"
-        },
-        {
-          "command": "gitglasses.mcp.addToClaudeCode",
-          "when": "gitglasses.hasRepository && !isWeb"
-        },
-        {
-          "command": "gitglasses.mcp.addToCodex",
-          "when": "gitglasses.hasRepository && !isWeb"
-        },
-        {
-          "command": "gitglasses.mcp.copyConfig",
-          "when": "gitglasses.hasRepository && !isWeb"
         }
       ]
     },
@@ -1681,12 +1652,6 @@
           }
         ],
         "priority": "option"
-      }
-    ],
-    "mcpServerDefinitionProviders": [
-      {
-        "id": "gitglasses.mcp",
-        "label": "GitGlasses"
       }
     ],
     "configuration": {
@@ -1883,12 +1848,6 @@
           "default": "warn",
           "description": "Engine log level (logs go to the GitGlasses output channel)"
         },
-        "gitglasses.mcp.enabled": {
-          "type": "boolean",
-          "scope": "window",
-          "default": true,
-          "markdownDescription": "Register GitGlasses' MCP server with the editor's AI agents (VS Code 1.101 or newer, and Cursor), so they can read this workspace's blame, history, branch comparisons, status and diffs with no setup. Git runs only in the workspace's folders, and nowhere in an untrusted workspace. The **Add MCP Server** commands configure other agents."
-        },
         "gitglasses.integrations.hosts": {
           "type": "array",
           "scope": "machine-overridable",
@@ -2067,7 +2026,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "test": "vitest run",
-    "test:e2e": "node esbuild.mjs && tsc -p test-e2e/tsconfig.json && node test-e2e/headless.cjs",
+    "test:e2e": "node esbuild.mjs && node -e \"require('node:fs').rmSync('dist-e2e', { recursive: true, force: true })\" && tsc -p test-e2e/tsconfig.json && node test-e2e/headless.cjs",
     "test:web": "node esbuild.mjs && node test-web/runTests.mjs",
     "package": "node ../scripts/package-vsix.mjs"
   },

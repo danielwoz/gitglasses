@@ -196,9 +196,12 @@ describe('Node runtime checks', () => {
     expect(isSupportedNodeVersion('v22')).toBe(false);
   });
 
-  it('asks for the Node the bundled server is built for', () => {
-    const build = readFileSync(path.join(__dirname, '..', 'esbuild.mjs'), 'utf8');
-    const target = /const mcpConfig = \{[^}]*?\btarget: '([^']+)'/.exec(build)?.[1];
+  it('asks for the Node the server is built for', () => {
+    const build = readFileSync(
+      path.join(__dirname, '..', '..', 'mcp-server', 'esbuild.mjs'),
+      'utf8',
+    );
+    const target = /esbuild\.build\(\{[^}]*?\btarget: '([^']+)'/.exec(build)?.[1];
     expect(target).toBe(`node${MIN_NODE_MAJOR}`);
   });
 });

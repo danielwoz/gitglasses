@@ -1,9 +1,15 @@
 <!--
 The README published to npm with gitglasses-mcp. scripts/pack-mcp.mjs packs
-it as README.md with {{version}} replaced by the package version; README.md
-in this directory describes running the server from a clone.
+it as README.md with {{version}} replaced by the package version, leaving
+out this comment; README.md in this directory describes running the server
+from a clone. The note under the heading is for readers of the repository
+while releases do not publish the package; it goes when they do again.
 -->
 # gitglasses-mcp
+
+> **Not shipped for now.** The GitGlasses extension does not include this
+> server, and releases do not publish it to npm. It can be built from source
+> and run on its own, as [README.md](README.md) in this directory describes.
 
 MCP (Model Context Protocol) server exposing GitGlasses repository insight as
 tools: blame, log search, file history, commit show, diffs, refs, graph
@@ -49,12 +55,6 @@ comes with it: each platform's engine is a package of its own
 listed as optional dependencies, so npm installs only the one your machine
 needs and the server finds it without any setting. Set `GITGLASSES_ENGINE`
 to use another engine, such as the one the GitGlasses extension ships.
-
-If you use the GitGlasses extension for VS Code and Open VSX editors, you may
-not need this package at all: the extension registers the same server with
-VS Code's and Cursor's agents, and its **Add MCP Server to Claude Code**,
-**Add MCP Server to Codex** and **Copy MCP Server Config** commands set it up
-for other agents.
 
 ## Registration
 

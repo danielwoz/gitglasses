@@ -1,11 +1,10 @@
 // The release workflow's ordering: nothing publishes until CI has passed on
-// the tagged commit and everything the release ships is ready, and its steps
-// run the same scripts as the local checks.
+// the tagged commit and everything the release ships is ready, its steps run
+// the same scripts as the local checks, and it publishes only the VSIXes.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ENGINE_PACKAGES } from '../lib/mcp-package.mjs';
 
 const workflow = readFileSync(
   fileURLToPath(new URL('../../.github/workflows/release.yml', import.meta.url)),
@@ -33,7 +32,7 @@ describe('release workflow', () => {
   const publishJobs = [...jobs.keys()].filter((id) => id.startsWith('publish-'));
 
   it('publishes only after CI and every release asset', () => {
-    expect(publishJobs).toEqual(['publish-marketplace', 'publish-openvsx', 'publish-npm']);
+    expect(publishJobs).toEqual(['publish-marketplace', 'publish-openvsx']);
     for (const id of publishJobs) {
       expect(needs(id), id).toEqual(expect.arrayContaining(['version', 'ci', 'release-assets']));
     }
@@ -49,30 +48,26 @@ describe('release workflow', () => {
     expect(jobs.get('ci')).not.toContain('gh api');
   });
 
-  it('packs gitglasses-mcp with its npm README and checks the tarball', () => {
-    expect(jobs.get('package-mcp')).toContain('node scripts/pack-mcp.mjs --out dist-npm');
-    expect(jobs.get('package-mcp')).toContain('node scripts/verify-mcp-package.mjs');
-    expect(jobs.get('package-mcp')).not.toMatch(/pnpm[^\n]* pack\b/);
+  // The MCP server is not shipped: nothing is packed for npm or published
+  // there, and no npm credential is read.
+  it('packs and publishes nothing to npm', () => {
+    expect([...jobs.keys()]).not.toContain('package-mcp');
+    expect(workflow).not.toMatch(/pack-mcp|verify-mcp-package|npm publish|registry-url|NPM_/);
   });
 
-  it('packs an engine package from every engine the release builds, and runs one', () => {
-    expect(needs('package-mcp')).toEqual(expect.arrayContaining(['engine', 'engine-alpine']));
-    expect(jobs.get('package-mcp')).toContain('--engines engines --all-engines');
-    expect(jobs.get('package-mcp')).toContain('--engine-package');
+  it('runs the engine of every native package it builds, from the package', () => {
+    const matrix = (id, pattern) => [...jobs.get(id).matchAll(pattern)].map((match) => match[1]);
+    const packaged = matrix('package', /^ {10}- ([\w-]+)$/gm).filter((target) => target !== 'web');
     const built = ['engine', 'engine-alpine'].flatMap((id) =>
-      [...jobs.get(id).matchAll(/^\s+(?:- )?target: ([\w-]+)$/gm)].map((match) => match[1]),
+      matrix(id, /^\s+(?:- )?target: ([\w-]+)$/gm),
     );
-    expect(built.sort()).toEqual(ENGINE_PACKAGES.map((engine) => engine.target).sort());
-  });
-
-  it('publishes the engine packages before gitglasses-mcp, which names them', () => {
-    const publish = jobs.get('publish-npm');
-    expect(publish).toContain('environment: release');
-    const engines = publish.indexOf('dist-npm/gitglasses-engine-');
-    const server = publish.indexOf('publish "dist-npm/gitglasses-mcp-');
-    expect(engines).toBeGreaterThan(0);
-    expect(server).toBeGreaterThan(engines);
-    expect(publish).toContain('--provenance --access public');
+    const smoked = matrix('smoke', /^\s+- target: ([\w-]+)$/gm);
+    expect(packaged.length).toBeGreaterThan(0);
+    expect(built.sort()).toEqual([...packaged].sort());
+    expect(smoked.sort()).toEqual([...packaged].sort());
+    expect(jobs.get('smoke')).toContain(
+      'node scripts/verify-vsix.mjs dist/*.vsix --target "$TARGET" --version "$VERSION" --run',
+    );
   });
 
   it('takes the release notes from the changelog parser the version job checks with', () => {

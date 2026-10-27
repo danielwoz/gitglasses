@@ -27,7 +27,7 @@ toolchain needed) and the full build including the C++ engine.
 | `packages/rpc/` | The engine client shared by the extension and the MCP server |
 | `packages/integrations/` | GitHub, GitLab, Bitbucket, Azure DevOps, Jira and Linear clients |
 | `extension/` | The VS Code extension; webview sources are in `extension/webviews-src/` |
-| `mcp-server/` | The `gitglasses-mcp` stdio MCP server |
+| `mcp-server/` | The `gitglasses-mcp` stdio MCP server; built and tested with everything else, but not shipped right now (neither in the extension nor on npm) |
 | `scripts/` | Repository tooling (format check, engine download, packaging) |
 
 ## Making a change

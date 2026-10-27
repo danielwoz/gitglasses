@@ -1,7 +1,7 @@
 # GitGlasses
 
 **The maintained, open git lens for VS Code and Open VSX: free on private
-repos, no account, available to your agents over MCP.**
+repos, no account, no telemetry.**
 
 ![The Commit Graph, with a commit's message, files and stats below it](https://raw.githubusercontent.com/danielwoz/gitglasses/main/extension/media/screenshots/hero-graph.png)
 
@@ -29,10 +29,6 @@ public ones.
 - **Fast on large repositories.** A native engine reads the repository in
   process and streams results, and runs apart from the editor, so a problem
   in it never takes the editor down.
-- **Ready for agents.** The extension's MCP server gives the agents in VS
-  Code and Cursor the same blame, history, branch comparisons, search and
-  diffs with no setup, and one command adds it to Claude Code, Codex or any
-  other agent. It is read-only unless you allow more.
 - **Safe in untrusted folders.** In Restricted Mode GitGlasses runs no git at
   all, so nothing a repository configures can run; reading history still
   works.
@@ -216,46 +212,6 @@ sends the commit's own diff, capped at about 6,000 tokens and largest files
 trimmed first; for a very large commit, only its 30 most relevant files are
 read. AI output is shown without loading any images or HTML it contains.
 
-### Agents over MCP
-
-GitGlasses ships an MCP server that gives AI agents tools over the same
-engine: blame, commit search by message, author, code change, path or
-date, file history, commit details, branch comparisons from the merge base,
-diffs, refs, a text rendering of the graph, status, worktrees, patches, your
-pull requests, the declared AI provenance of a file's lines and the story
-of a line. Every tool
-except `apply_patch` is marked read-only.
-
-- **In VS Code 1.101 or newer and in Cursor** the server is registered with
-  the editor's agents (Copilot agent mode, Cursor's agent) as soon as a folder
-  is open; there is nothing to set up. It runs on the editor's own Node with
-  the bundled engine. In a trusted workspace git may run in the workspace's
-  folders; in Restricted Mode it runs nowhere.
-- **Claude Code**: **GitGlasses: Add MCP Server to Claude Code** adds it to
-  your Claude Code configuration with `claude mcp add-json`, or shows the
-  JSON when the `claude` CLI is not on `PATH`.
-- **Codex**: **GitGlasses: Add MCP Server to Codex** shows the change to
-  `~/.codex/config.toml` as a diff and writes it when you confirm.
-- **Anything else** (Claude Desktop, Windsurf, Kiro, Theia AI):
-  **GitGlasses: Copy MCP Server Config** copies the configuration with
-  absolute paths.
-
-The Home view's **MCP Server** section shows where the server is registered
-and offers the same commands. Each command asks whether the agent may run git
-in this workspace; by default it may not, and the agent's own project is read
-without git. The copied configuration also names this workspace's folders,
-since many desktop apps share none with their servers.
-
-*Limits:* registration in the editor needs VS Code 1.101 or newer, or Cursor;
-older releases and other editors use the commands. The server needs Node.js
-20 or newer: the editor's own Node, or `node` on `PATH` where the editor's is
-older or turned off. The configuration the commands write points into the
-installed extension, so run the command again after GitGlasses updates.
-`gitglasses.mcp.enabled` turns the registration off. The server also runs on
-its own, without the extension;
-[its README](https://github.com/danielwoz/gitglasses/blob/main/mcp-server/README.md)
-covers that and the trust model.
-
 ### Open Patches
 
 Share uncommitted changes, a stash or a commit as a patch file, a secret gist
@@ -321,14 +277,6 @@ everything that can reach the network, and when:
   that model's extension does.
 - **Open on Remote** opens a link in your browser; **Copy Remote URL** only
   copies it.
-- **The MCP server** runs only when an agent starts it, on your machine, and
-  reads repositories through the same engine, so the partial clone exception
-  above applies to it too: where it may run git, a tool that needs contents
-  the clone lacks (blame, file history, the changes of a commit or a branch
-  comparison) has git download them from your own remote. Read without git,
-  it reports those line counts as unknown instead. Otherwise it contacts no
-  service unless an agent calls `list_my_prs` with a hosting service's token
-  in its environment.
 
 In Restricted Mode no git runs at all, so nothing a repository configures
 (hooks, filters, credential helpers, ssh commands) can either.
@@ -393,7 +341,6 @@ Every setting, generated from the extension manifest:
 | `gitglasses.engine.path` | `""` | Path to gitglasses-engine (defaults to the bundled binary) |
 | `gitglasses.web.maxRepoBytes` | `209715200` | Web only: maximum total bytes mirrored into the in-memory wasm engine before GitGlasses aborts with an error (default 200 MB) |
 | `gitglasses.engine.logLevel` | `"warn"` | Engine log level (logs go to the GitGlasses output channel) One of `trace`, `debug`, `info`, `warn`, `error`. |
-| `gitglasses.mcp.enabled` | `true` | Register GitGlasses' MCP server with the editor's AI agents (VS Code 1.101 or newer, and Cursor), so they can read this workspace's blame, history, branch comparisons, status and diffs with no setup. Git runs only in the workspace's folders, and nowhere in an untrusted workspace. The **Add MCP Server** commands configure other agents. |
 | `gitglasses.integrations.hosts` | `[]` | Git hosting instances beyond github.com, gitlab.com and bitbucket.org, e.g. [{ "domain": "github.example.com", "provider": "github-enterprise" }]. Azure DevOps takes dev.azure.com plus an organization. |
 | `gitglasses.integrations.issues` | `[]` | Issue tracker integrations, e.g. [{ "provider": "jira", "host": "mycompany.atlassian.net" }] |
 | `gitglasses.ai.provider` | `"none"` | Where GitGlasses AI requests go. Until a provider is chosen, the first AI command offers the ones this editor can use; change it any time with **GitGlasses: Choose AI Provider…**. Saving an API key with **GitGlasses: Set AI API Key…** switches to that provider. One of `none`, `vscode-lm`, `anthropic`, `openai`, `gemini`, `ollama`. |
@@ -505,9 +452,6 @@ in Restricted Mode.
 | GitGlasses: Import Repo Group… | `gitglasses.groups.import` |  |
 | GitGlasses: Continue Merge, Rebase, Cherry-pick or Revert | `gitglasses.continueOperation` | trusted workspace |
 | GitGlasses: Abort Merge, Rebase, Cherry-pick or Revert | `gitglasses.abortOperation` | trusted workspace |
-| GitGlasses: Add MCP Server to Claude Code | `gitglasses.mcp.addToClaudeCode` |  |
-| GitGlasses: Add MCP Server to Codex | `gitglasses.mcp.addToCodex` |  |
-| GitGlasses: Copy MCP Server Config | `gitglasses.mcp.copyConfig` |  |
 | GitGlasses: Get Started | `gitglasses.openWalkthrough` |  |
 | GitGlasses: Select Repository… | `gitglasses.selectRepository` |  |
 | GitGlasses: Coming from Git Graph? | `gitglasses.comingFromGitGraph` |  |

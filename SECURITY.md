@@ -25,8 +25,8 @@ Of particular interest:
 - The engine (`gitglasses-engine`) opening a repository the user does not
   trust: crafted objects, packs, configuration, hooks or paths that crash it,
   exhaust memory, run commands or touch files outside the repository.
-- The extension and the MCP server handling provider tokens (GitHub, GitLab,
-  Bitbucket, Azure DevOps, Jira, Linear) and AI provider keys.
+- The extension handling provider tokens (GitHub, GitLab, Bitbucket, Azure
+  DevOps, Jira, Linear) and AI provider keys.
 - Webviews rendering repository content (commit messages, branch names, file
   names).
 

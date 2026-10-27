@@ -166,11 +166,10 @@ export function detectMcpHost(api: McpApiSurface): McpHost | undefined {
 // --- Node runtime ------------------------------------------------------------
 
 /**
- * Oldest Node major the bundled server supports: the one its bundle is built
- * for (mcpConfig's node20 target in extension/esbuild.mjs), which VS Code
- * 1.90, the oldest editor the extension installs in, also ships. The npm
- * package needs 20.11 for import.meta.dirname; the bundle replaces that with
- * __dirname.
+ * Oldest Node major the server supports: the one it is built for (the node20
+ * target in mcp-server/esbuild.mjs), which VS Code 1.90, the oldest editor
+ * the extension installs in, also ships. The npm package needs 20.11 for
+ * import.meta.dirname.
  */
 export const MIN_NODE_MAJOR = 20;
 

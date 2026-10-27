@@ -1,7 +1,7 @@
 # GitGlasses
 
 **The maintained, open git lens for VS Code and Open VSX: free on private
-repos, no account, available to your agents over MCP.**
+repos, no account, no telemetry.**
 
 ![The Commit Graph, with a commit's message, files and stats below it](extension/media/screenshots/hero-graph.png)
 
@@ -60,30 +60,6 @@ release is in [the changelog](extension/CHANGELOG.md).
   editor so it cannot take the editor down.
 - **Safe in untrusted folders:** in Restricted Mode no git runs at all.
 
-## For agents: the MCP server
-
-`gitglasses-mcp` (in [`mcp-server/`](mcp-server/)) is a stdio
-[Model Context Protocol](https://modelcontextprotocol.io) server that gives
-AI agents the same engine: blame, commit search (by message, author, code
-change, path or date), file history, commit details, branch comparisons from
-the merge base, diffs, refs, a text rendering of the graph, status,
-worktrees, patches, a pull request list, the AI provenance commits declare
-and the story of a line. Every tool except `apply_patch` is marked read-only, and by default
-the server reads only the folders the client shares with it, without running
-git.
-
-The extension ships the server and registers it with the editor's agents,
-with no setup: through VS Code's MCP API on VS Code 1.101 and newer, and
-through Cursor's own registration in Cursor. Commands add it to Claude Code
-(`claude mcp add-json`), to Codex (`~/.codex/config.toml`, after showing the
-change) or copy its configuration for any other agent.
-
-Releases also publish it to npm as `gitglasses-mcp`, with the engine for each
-platform as an optional dependency; it is not on npm yet, so until then
-register the copy the extension ships, or build it from a clone.
-[Its README](mcp-server/README.md) has the setup for each client and the
-trust model.
-
 ## Layout
 
 | Path | What |
@@ -91,7 +67,7 @@ trust model.
 | `engine/` | C++ analysis daemon, JSON-RPC over stdio |
 | `packages/protocol/` | Wire protocol: TypeBox schemas → TS types + generated C++ |
 | `extension/` | VS Code extension (thin TypeScript shim over the engine) |
-| `mcp-server/` | MCP server exposing the engine + integrations to AI tools |
+| `mcp-server/` | MCP server over the engine; built and tested, but not shipped for now |
 | `fixtures/` | Deterministic fixture-repo generators for tests |
 | `docs/` | Specs, known limitations, clean-room policy, integrations |
 

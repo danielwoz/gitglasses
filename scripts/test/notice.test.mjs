@@ -1,8 +1,6 @@
 // NOTICE must carry the license of everything the packages redistribute: the
 // libraries statically linked into the native and wasm engines, the runtimes
-// linked with them, and the npm code bundled into the extension and into its
-// copy of the MCP server. extension/esbuild.mjs also refuses to bundle a
-// package into the MCP server that NOTICE does not name.
+// linked with them, and the npm code bundled into the extension.
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -24,15 +22,9 @@ const SECTIONS = {
   spdlog: 'spdlog',
   'nlohmann-json': 'nlohmann/json',
   '@sinclair/typebox': 'TypeBox',
-  '@modelcontextprotocol/sdk': 'MCP TypeScript SDK',
-  zod: 'Zod',
-  'zod-to-json-schema': 'zod-to-json-schema',
-  ajv: 'Ajv',
-  'ajv-formats': 'ajv-formats',
-  'fast-uri': 'fast-uri',
-  'fast-deep-equal': 'fast-deep-equal',
-  'json-schema-traverse': 'json-schema-traverse',
 };
+// Components that ship as part of another one, and the runtimes linked in.
+const BUNDLED = ['SLJIT', 'musl libc', 'Emscripten'];
 // Build and test tooling that never ships.
 const NOT_SHIPPED = new Set(['gtest', 'vcpkg-cmake', 'vcpkg-cmake-config', 'vcpkg-cmake-get-vars']);
 
@@ -41,7 +33,7 @@ const squash = (text) => text.replace(/\s+/g, ' ').trim();
 
 describe('NOTICE', () => {
   it('has a section for every shipped component and runtime', () => {
-    for (const name of [...Object.values(SECTIONS), 'SLJIT', 'musl libc', 'Emscripten']) {
+    for (const name of [...Object.values(SECTIONS), ...BUNDLED]) {
       expect(sections, name).toContain(name);
     }
   });
@@ -71,18 +63,11 @@ describe('NOTICE', () => {
     }
   });
 
-  it('covers the npm packages bundled into the MCP server the extension ships', () => {
-    const { dependencies } = readJson('mcp-server/package.json');
-    expect(Object.keys(dependencies).length).toBeGreaterThan(0);
-    for (const name of Object.keys(dependencies)) {
-      expect(SECTIONS[name], `${name} (via gitglasses-mcp) needs a NOTICE section`).toBeDefined();
-    }
-    // The paragraph the build checks names every package by its npm name.
-    const paragraph = /The MCP server bundled into[\s\S]*?\n\n/.exec(notice)?.[0] ?? '';
-    for (const [name, section] of Object.entries(SECTIONS)) {
-      if (!paragraph.includes(name)) continue;
-      expect(sections, `${name} is named but has no section`).toContain(section);
-    }
+  // No package carries the MCP server, so NOTICE lists nothing for it.
+  it('has a section for nothing that does not ship', () => {
+    const shipped = new Set([...Object.values(SECTIONS), ...BUNDLED]);
+    expect([...sections].filter((name) => !shipped.has(name))).toEqual([]);
+    expect(notice).not.toMatch(/dist\/mcp|MCP/);
   });
 
   // Every port vcpkg installed (transitive ones included) must be covered,

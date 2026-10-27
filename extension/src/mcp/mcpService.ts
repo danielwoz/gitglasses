@@ -1,6 +1,20 @@
 // The bundled MCP server in the desktop extension: its registration with the
 // editor's agents, the commands that add it to other agents, and its section
 // in the Home view.
+//
+// Not wired into activation while the MCP server is not shipped: nothing calls
+// startMcpService, and the build makes no dist/mcp/cli.js for it to start.
+// Wiring it in takes:
+// - the call in src/extension.ts;
+// - the package.json contributions (mcpServerDefinitionProviders, the
+//   gitglasses.mcp.* commands and the gitglasses.mcp.enabled setting);
+// - the dist/mcp/cli.js bundle in esbuild.mjs, with a build check that NOTICE
+//   names every package inlined into it, and its entry in .vscodeignore;
+// - NOTICE sections for those packages (the MCP SDK and its dependencies), and
+//   scripts/test/notice.test.mjs, which refuses any MCP mention in NOTICE;
+// - scripts/lib/vsix.mjs, whose inspectVsix refuses any package carrying
+//   extension/dist/mcp/, and scripts/verify-vsix.mjs --run, which runs only
+//   the engine.
 
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
