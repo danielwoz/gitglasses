@@ -8,7 +8,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@vscode/vsce": "3.9.2",
+    "@vscode/vsce": "4.0.0",
     "ovsx": "1.3.0",
     "vitest": "^2.1.0"
   }
