@@ -1,5 +1,9 @@
 # gitglasses-mcp
 
+> **Not shipped for now.** The GitGlasses extension does not include this
+> server, and releases do not publish it to npm. It can still be built from
+> source and run on its own, as [Installation](#installation) describes.
+
 MCP (Model Context Protocol) server exposing gitglasses repository insight as
 tools: blame, log search, file history, commit show, diffs, refs, graph
 summary, status, patch envelopes, a Launchpad-classified pull request
@@ -42,42 +46,13 @@ Tools that render a whole commit, diff, status, ref list or patch take a
 `maxChars` argument and truncate with a footer naming the limit; `git_blame`
 takes `limit` hunks.
 
-## With the GitGlasses extension
-
-The GitGlasses extension for VS Code and Open VSX editors ships this server
-and its engine, so most people need no installation at all:
-
-- **VS Code 1.101 or newer and Cursor**: the extension registers the server
-  with the editor's agents (Copilot agent mode, Cursor's agent) as soon as a
-  folder is open. It runs on the editor's own Node with the extension's
-  engine. In a trusted workspace git may run in the workspace folders; in
-  Restricted Mode it runs nowhere. The `gitglasses.mcp.enabled` setting
-  turns this off.
-- **Claude Code and Codex**: run **GitGlasses: Add MCP Server to Claude
-  Code** (it uses `claude mcp add-json` for your user configuration) or
-  **GitGlasses: Add MCP Server to Codex** (it shows the change to
-  `~/.codex/config.toml` before writing it).
-- **Any other agent** (Claude Desktop, Windsurf, Kiro, Theia AI and others):
-  **GitGlasses: Copy MCP Server Config** copies an `mcpServers` entry with
-  absolute paths to paste into the agent's settings.
-
-Each command asks whether the agent may run git in the workspace's folders;
-by default it may not, and the server reads the project the agent works in
-without git. Many desktop apps share no folders with their servers, so the
-configuration **Copy MCP Server Config** produces also names the workspace's
-folders, to read without git (`--read`). The paths point into the installed
-extension, so run the command again after GitGlasses updates. The extension's
-copy needs Node.js 20 or newer: the editor's own Node, or `node` on `PATH`
-where the editor's is older or turned off. The Home view's **MCP Server**
-section shows the registration and offers the same commands.
-
 ## Installation
 
-`gitglasses-mcp` is not on npm yet. Until a release publishes it, do not run
-`npx gitglasses-mcp`: npx would download and run whatever is published under
-that name, with your tokens in its environment. Build the server from a clone
-instead (building takes Node.js 22.13 or newer and pnpm 11; the built server
-runs on Node.js 20.11 or newer):
+`gitglasses-mcp` is not on npm yet, and releases do not publish it for now.
+Do not run `npx gitglasses-mcp`: npx would download and run whatever is
+published under that name, with your tokens in its environment. Build the
+server from a clone instead (building takes Node.js 22.13 or newer and
+pnpm 11; the built server runs on Node.js 20.11 or newer):
 
 ```sh
 git clone https://github.com/danielwoz/gitglasses.git
@@ -90,14 +65,9 @@ The server is `mcp-server/dist/cli.js` in the clone; start it with `node`.
 
 ### The engine
 
-The server drives the `gitglasses-engine` binary. Installed from npm, it
-comes with the server: each platform's engine is a package of its own
-(`@gitglasses/engine-linux-x64`, `@gitglasses/engine-darwin-arm64`, and so
-on, with `-musl` builds for Alpine), listed as optional dependencies of
-`gitglasses-mcp`, so npm installs only the one your machine needs and the
-server finds it without any setting. Run from a clone, it needs an engine;
-the GitGlasses extension ships one for your platform, so once the extension
-is installed, point `GITGLASSES_ENGINE` at it:
+The server drives the `gitglasses-engine` binary, so run from a clone it
+needs an engine. The GitGlasses extension ships one for your platform, so
+once the extension is installed, point `GITGLASSES_ENGINE` at it:
 
 | Editor | Engine |
 | --- | --- |
@@ -231,6 +201,11 @@ pnpm --filter gitglasses-mcp test
 The integration test spawns the real engine binary and is skipped (with a
 console note) when no binary can be found.
 
-The npm package is packed with `node scripts/pack-mcp.mjs` from the repository
-root, never with `pnpm pack`: npm users get `npm-readme.md` as the package's
-README, since this one describes running the server from a clone.
+Releases do not publish the npm package for now, but it can still be packed
+locally with `node scripts/pack-mcp.mjs` from the repository root, never with
+`pnpm pack`: the package gets `npm-readme.md` as its README, since this one
+describes running the server from a clone. The packed manifest lists each
+platform's engine package (`@gitglasses/engine-linux-x64`,
+`@gitglasses/engine-darwin-arm64` and so on, with `-musl` builds for Alpine)
+as an optional dependency, and the server finds the one npm installed
+without any setting.

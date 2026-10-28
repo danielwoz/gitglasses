@@ -5,6 +5,30 @@ All notable changes to GitGlasses are listed here. The format follows
 even minor version (0.2.x) are stable; odd minor versions (0.3.x) ship on the
 pre-release channel.
 
+## [0.4.2] - 2026-10-28
+
+### MCP server turned off for now
+
+- GitGlasses no longer includes its MCP server. It is no longer registered
+  with the agents in VS Code or Cursor; the **Add MCP Server to Claude
+  Code**, **Add MCP Server to Codex** and **Copy MCP Server Config** commands,
+  the `gitglasses.mcp.enabled` setting and the Home view's MCP Server section
+  are gone. Everything else works as before. The server may come back in a
+  later release.
+- VS Code and Cursor drop their registration on their own. If you added the
+  server to another agent with one of those commands, that entry points into
+  an earlier GitGlasses install, which updating removes, so please remove the
+  entry too:
+  - **Claude Code:** `claude mcp remove --scope user gitglasses` (or delete
+    the `gitglasses` entry under `mcpServers` in `~/.claude.json`).
+  - **Codex:** delete the `[mcp_servers.gitglasses]` table (its `command`,
+    `args` and `env` lines) from `~/.codex/config.toml`, or from
+    `$CODEX_HOME/config.toml` if you set `CODEX_HOME`. If that file is a
+    link, the table is in the file it points to.
+  - **Anywhere you pasted the copied configuration** (Claude Desktop,
+    Windsurf, Kiro, Theia AI and others): delete the `gitglasses` entry under
+    `mcpServers` in that agent's settings.
+
 ## [0.4.1] - 2026-10-26
 
 ### Upgrading from 0.1.2

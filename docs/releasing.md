@@ -11,44 +11,38 @@ then:
    symbols, and runs the binary;
 3. packages nine VSIXes (`linux-x64`, `linux-arm64`, `alpine-x64`,
    `alpine-arm64`, `darwin-x64`, `darwin-arm64`, `win32-x64`, `win32-arm64`,
-   `web`), refusing an engine whose format or CPU does not match the target,
-   and runs each packaged engine, and the MCP server bundled with it, on its
-   own platform;
-4. packs `gitglasses-mcp`, with `mcp-server/npm-readme.md` as the README
-   npm shows, and one engine package per engine build
-   (`@gitglasses/engine-linux-x64`, `-linux-arm64`, `-linux-x64-musl`,
-   `-linux-arm64-musl`, `-darwin-x64`, `-darwin-arm64`, `-win32-x64`,
-   `-win32-arm64`), which `gitglasses-mcp` names as optional dependencies so
-   npm installs the engine for its platform; then installs `gitglasses-mcp`
-   with the linux-x64 engine package from a clean npm install and has it read
-   a repository;
-5. waits for the CI workflow to have passed on the tagged commit itself,
+   `web`), refusing an engine whose format or CPU does not match the target
+   and any package that carries the MCP server (`extension/dist/mcp/`), and
+   runs each packaged engine on its own platform;
+4. waits for the CI workflow to have passed on the tagged commit itself,
    from its push to `main` (a pull request run does not count: it tested
    the pull request merged into its base branch);
-6. prepares the GitHub release's assets: `SHA256SUMS`, symbol archives,
+5. prepares the GitHub release's assets: `SHA256SUMS`, symbol archives,
    build provenance attestations for the VSIXes, and this version's
    changelog section as the notes;
-7. once all of the above has succeeded, publishes to the Visual Studio
-   Marketplace, Open VSX and npm (the engine packages first, then
-   `gitglasses-mcp`), each from its own job in the `release` environment,
-   which needs your approval;
-8. creates the GitHub release once both extension registries have every
-   package.
+6. once all of the above has succeeded, publishes to the Visual Studio
+   Marketplace and Open VSX, each from its own job in the `release`
+   environment, which only a `v*` tag can reach;
+7. creates the GitHub release once both registries have every package.
+
+The MCP server (`mcp-server/`) is built and tested with everything else but
+is not shipped for now: no VSIX carries it, and nothing is published to npm
+(see step 8 of the one-time setup).
 
 Every publish step skips versions that already exist, so re-running a failed
 job finishes a partial release. A missing credential fails the job with an
 error naming what to set; nothing is skipped silently.
 
 Odd minor versions (0.3.x, 0.5.x) are pre-releases: packaged and published on
-the pre-release channel, tagged `next` on npm and marked as pre-releases on
-GitHub. Even minor versions are stable.
+the pre-release channel and marked as pre-releases on GitHub. Even minor
+versions are stable.
 
 ## One-time setup
 
-Work through these in order. Steps 1 to 4 and the npm names in step 8 are
-urgent: until they are done, anyone can create the `gitglasses` namespace on
-Open VSX, or register `gitglasses-mcp` or the `@gitglasses` scope on npm, and
-publish under our name.
+Work through these in order. Steps 1 to 4 are urgent: until they are done,
+anyone can create the `gitglasses` namespace on Open VSX and publish under
+our name. The npm names in step 8 are worth reserving early for the same
+reason.
 
 ### 1. Eclipse account
 
@@ -96,8 +90,8 @@ what step 6's trusted publishing needs.
 
 In the repository's **Settings > Environments**, create `release`:
 
-- **Required reviewers**: yourself. Every publish job then waits for your
-  approval (approve the three pending deployments together).
+- **Required reviewers**: none, so a pushed release tag publishes without
+  waiting. Add yourself here instead to approve each publish by hand.
 - **Deployment branches and tags**: *Selected branches and tags*, with one
   rule: tag `v*`. Nothing but a release tag can reach the publishing
   credentials.
@@ -106,7 +100,7 @@ Or with the GitHub CLI:
 
 ```sh
 gh api -X PUT repos/danielwoz/gitglasses/environments/release --input - <<EOF
-{"reviewers":[{"type":"User","id":$(gh api user --jq .id)}],
+{"reviewers":null,
  "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 EOF
 gh api -X POST repos/danielwoz/gitglasses/environments/release/deployment-branch-policies \
@@ -116,7 +110,7 @@ gh api -X POST repos/danielwoz/gitglasses/environments/release/deployment-branch
 ### 6. Secrets and variables
 
 All of these belong to the `release` environment, not the repository, so
-only approved release jobs can read them. Set them under **Settings >
+only release jobs on a `v*` tag can read them. Set them under **Settings >
 Environments > release**, or with `gh secret set NAME --env release` and
 `gh variable set NAME --env release --body VALUE`.
 
@@ -126,8 +120,6 @@ Environments > release**, or with `gh secret set NAME --env release` and
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` | variables | Marketplace | In step 7. Once set, the Marketplace job signs in with Entra ID and ignores `VSCE_PAT`. |
 | `OVSX_PAT` | secret | Open VSX | Now, with the token from step 2. The first Open VSX publish must use it. |
 | `OVSX_TRUSTED_PUBLISHING` | variable | Open VSX | `true`, after the first publish, once trusted publishing is registered (below). Then delete `OVSX_PAT`. |
-| `NPM_TRUSTED_PUBLISHING` | variable | npm | `true`, once step 8 is done. |
-| `NPM_TOKEN` | secret | npm | For the first release that publishes the engine packages (step 8), and until trusted publishing is configured for every package. A granular token with read and write access to `gitglasses-mcp` and the `@gitglasses` scope. Delete it afterwards. |
 
 **Open VSX trusted publishing.** After the first release has published with
 `OVSX_PAT` and the ownership claim is granted, register a trusted publisher
@@ -181,7 +173,7 @@ enough) for the identity.
    gh workflow run marketplace-identity.yml --ref v0.2.0
    ```
 
-   Approve the deployment; the ID is in the run's summary.
+   The ID is in the run's summary.
 
 5. At <https://marketplace.visualstudio.com/manage/publishers/gitglasses>,
    open **Members**, add that ID and give it the **Contributor** role.
@@ -193,41 +185,23 @@ To switch before 0.2.0 instead, run step 4 on `main`: temporarily add
 `main` to the environment's deployment rules, run the workflow with
 `--ref main`, and remove the rule again.
 
-### 8. npm: `gitglasses-mcp` and the engine packages, with trusted publishing
+### 8. npm: reserve the names
 
-A release publishes nine npm packages: `gitglasses-mcp` and the eight engine
-packages it names as optional dependencies, `@gitglasses/engine-linux-x64`,
-`@gitglasses/engine-linux-arm64`, `@gitglasses/engine-linux-x64-musl`,
-`@gitglasses/engine-linux-arm64-musl`, `@gitglasses/engine-darwin-x64`,
-`@gitglasses/engine-darwin-arm64`, `@gitglasses/engine-win32-x64` and
-`@gitglasses/engine-win32-arm64` (the list is `ENGINE_PACKAGES` in
-`scripts/lib/mcp-package.mjs`).
+npm publishing of `gitglasses-mcp` is paused while the MCP server is not
+shipped: the release workflow packs nothing for npm and needs no npm
+credentials. Reserving the names is still worthwhile, so nobody else takes
+them:
 
-1. Reserve the names now. Create the `gitglasses` organisation at
-   <https://www.npmjs.com/org/create> (this holds the `@gitglasses` scope,
-   so nobody else can publish an engine package under it), and publish a
-   placeholder `gitglasses-mcp@0.0.1` from your machine: a `package.json`
-   with just the name, version, `"license": "MIT"` and the repository, plus a
-   README saying the real package arrives with 0.4.1. Then `npm deprecate
-   gitglasses-mcp@0.0.1 "placeholder; use 0.4.1 or newer"`.
-2. npm configures trusted publishing per package, and a package must exist
-   before it can be configured. For the first release with engine packages,
-   set the `NPM_TOKEN` secret of the `release` environment (step 6) and
-   leave `NPM_TRUSTED_PUBLISHING` unset; that release publishes all nine.
-3. Then, on each package's **Settings** page on npmjs.com, add a trusted
-   publisher: GitHub Actions, user `danielwoz`, repository `gitglasses`,
-   workflow `release.yml`, environment `release`. Under publishing access,
-   require two-factor authentication and disallow tokens.
-4. Set the `NPM_TRUSTED_PUBLISHING` variable of the `release` environment to
-   `true` and delete `NPM_TOKEN`. The workflow then publishes with OIDC and a
-   provenance attestation for every package.
-5. After the first release is on npm, change the registration examples in
-   `mcp-server/README.md` and the MCP section of `README.md` to
-   `npx -y gitglasses-mcp@<version>`, and drop the "not on npm yet"
-   paragraphs (the `mcp-package` test in `scripts/test` forbids `npx` in
-   those README examples until then, so update it in the same change).
-   The npm page needs no change: it shows `mcp-server/npm-readme.md`,
-   which already gives the `npx` form for the published version.
+1. Create the `gitglasses` organisation at <https://www.npmjs.com/org/create>.
+   It holds the `@gitglasses` scope, which the engine packages
+   (`ENGINE_PACKAGES` in `scripts/lib/mcp-package.mjs`) would use.
+2. Publish a placeholder `gitglasses-mcp@0.0.1` from your machine: a
+   `package.json` with just the name, version, `"license": "MIT"` and the
+   repository, plus a one-line README. Then `npm deprecate
+   gitglasses-mcp@0.0.1 "placeholder"`.
+
+`scripts/pack-mcp.mjs` and `scripts/verify-mcp-package.mjs` still pack and
+check the package from a local build (`mcp-server/dist`).
 
 ### 9. Protect `main` and the release tags
 
@@ -261,8 +235,8 @@ Add two rulesets under **Settings > Rules > Rulesets**:
    git push origin v0.2.0
    ```
 
-4. Approve the three deployments to `release` when the builds are done.
-5. If a job fails, fix the cause and re-run the failed jobs: published
+   The release then runs to the end on its own.
+4. If a job fails, fix the cause and re-run the failed jobs: published
    versions are skipped. Never move or delete a pushed tag; if the commit
    itself is wrong, bump the patch version and tag again.
 
@@ -271,8 +245,8 @@ Add two rulesets under **Settings > Rules > Rulesets**:
 **In GitHub.** Run the workflow by hand on any branch: Actions > Release >
 Run workflow, or `gh workflow run release.yml --ref <branch>`. It runs the
 version checks (without a tag), every engine build and test, all nine
-packages and their smoke tests, the npm packs and install test, and prepares
-the release assets. It publishes nothing and needs no approval.
+packages and their smoke tests, and prepares the release assets. It
+publishes nothing.
 
 **Locally**, from a checkout with the engine built (`cmake --preset release
 && cmake --build --preset release`), the wasm engine built (`cmake --preset
@@ -285,14 +259,6 @@ node scripts/release-notes.mjs 0.2.0
 node scripts/package-vsix.mjs --target linux-x64 --engine build/release/engine/gitglasses-engine
 node scripts/package-vsix.mjs --target web
 node scripts/verify-vsix.mjs dist/gitglasses-linux-x64-0.2.0.vsix --target linux-x64 --run
-
-# gitglasses-mcp, plus an engine package for each engine found under
-# engines/engine-<target>/ (here only the local linux-x64 build)
-mkdir -p engines/engine-linux-x64
-cp build/release/engine/gitglasses-engine engines/engine-linux-x64/
-node scripts/pack-mcp.mjs --out dist-npm --engines engines
-node scripts/verify-mcp-package.mjs dist-npm/gitglasses-mcp-0.2.0.tgz --version 0.2.0 \
-  --engine-package dist-npm/gitglasses-engine-linux-x64-0.2.0.tgz
 
 # Alpine engine (x64 here; arm64 on an arm64 host)
 docker run --rm -v "$PWD:/src" alpine:3.22 sh /src/scripts/build-alpine-engine.sh

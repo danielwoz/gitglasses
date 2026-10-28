@@ -24,7 +24,7 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-DESCRIPTION="Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, history, commit search, rebase and worktrees. No account, no telemetry, and an MCP server for agents."
+DESCRIPTION="Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, history, commit search, rebase and worktrees. No account, no telemetry."
 HOMEPAGE="https://marketplace.visualstudio.com/items?itemName=gitglasses.gitglasses"
 TOPICS=(
   vscode-extension
@@ -36,8 +36,6 @@ TOPICS=(
   commit-graph
   interactive-rebase
   libgit2
-  mcp
-  model-context-protocol
   developer-tools
 )
 

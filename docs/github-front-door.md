@@ -15,9 +15,9 @@ scripts/github-front-door.sh --apply    # change it (needs admin on the reposito
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| Description | "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, history, commit search, rebase and worktrees. No account, no telemetry, and an MCP server for agents." | Shown under the repository name and in search results; empty today. |
+| Description | "Free, open-source git toolkit for VS Code and Open VSX: inline blame, Commit Graph, history, commit search, rebase and worktrees. No account, no telemetry." | Shown under the repository name and in search results; empty today. |
 | Website | the Marketplace listing | One click from the repository to installing it. |
-| Topics | `vscode-extension`, `open-vsx`, `vscodium`, `git`, `git-blame`, `git-history`, `commit-graph`, `interactive-rebase`, `libgit2`, `mcp`, `model-context-protocol`, `developer-tools` | Topic pages and GitHub search. No other product's name. |
+| Topics | `vscode-extension`, `open-vsx`, `vscodium`, `git`, `git-blame`, `git-history`, `commit-graph`, `interactive-rebase`, `libgit2`, `developer-tools` | Topic pages and GitHub search. No other product's name. |
 | Discussions | on | The extension's Q&A link (`qna` in `extension/package.json`) points at Discussions. Until they are on, that link is a 404. |
 | Wiki | off | The wiki is empty; the docs live in `docs/`. |
 | Private vulnerability reporting | on | `SECURITY.md` asks for private reports, and the extension stores forge tokens. |
@@ -32,11 +32,10 @@ These have no API, or need a decision first:
   listing screenshots in `extension/media/screenshots/` are a good source.
 - **Discussions categories:** keep Q&A, Ideas and Announcements; delete the
   rest. Pin a "Getting started" post that links the extension README.
-- **npm publishing for `gitglasses-mcp`:** the release workflow publishes the
-  MCP server to npm only when the release environment has the `NPM_TOKEN`
-  secret, or trusted publishing is configured (see `docs/releasing.md`). The
-  READMEs say releases from 0.3 on publish it; set this up before the 0.3
-  release, or change that sentence.
+- **npm names:** releases do not publish `gitglasses-mcp` to npm for now, so
+  no npm credentials are needed. Reserving the names is still worthwhile, so
+  nobody else takes them; see
+  [step 8 of the one-time setup](releasing.md#8-npm-reserve-the-names).
 - **Screenshots:** commit the images that
   `extension/media/screenshots/README.md` lists to `main` before publishing
   0.3; the store listings load them from there.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inspectVsix, mcpBundleProblems } from '../lib/vsix.mjs';
+import { inspectVsix } from '../lib/vsix.mjs';
 import { readZipEntries, readZipEntry } from '../lib/zip.mjs';
 import {
   elfHeader,
@@ -125,59 +125,24 @@ describe('inspectVsix', () => {
   it('fails a package whose version is not the release version', () => {
     const files = vsixFiles('linux-x64', { engine: linuxEngine, version: '0.1.2' });
     expect(inspectVsix(makeZip(files), { target: 'linux-x64', version: '0.2.0' }).problems).toEqual(
-      [
-        'package.json version is 0.1.2, expected 0.2.0',
-        'CHANGELOG.md has no entry for 0.2.0',
-        'extension/dist/mcp/cli.js does not report version 0.2.0',
-      ],
+      ['package.json version is 0.1.2, expected 0.2.0', 'CHANGELOG.md has no entry for 0.2.0'],
     );
   });
 
-  it('returns the bundled MCP server of a native package, and fails one without it', () => {
-    const files = vsixFiles('linux-x64', { engine: linuxEngine });
-    const result = inspectVsix(makeZip(files), { target: 'linux-x64', version: '0.2.0' });
-    expect(result.mcp.name).toBe('extension/dist/mcp/cli.js');
-    expect(result.mcp.data.toString('utf8')).toContain('"0.2.0"');
-
-    const without = replace(files, 'extension/dist/mcp/cli.js', { data: null });
-    expect(inspectVsix(makeZip(without), { target: 'linux-x64' }).problems).toEqual([
-      'extension/dist/mcp/cli.js is missing',
+  it('fails a package of any target that carries the MCP server, which does not ship', () => {
+    const bundle = [
+      { name: 'extension/dist/mcp/cli.js', data: '#!/usr/bin/env node\nvar v="0.2.0";\n' },
+      { name: 'extension/dist/mcp/cli.js.map', data: '{}' },
+    ];
+    const native = vsixFiles('linux-x64', { engine: linuxEngine }).concat(bundle);
+    expect(
+      inspectVsix(makeZip(native), { target: 'linux-x64', version: '0.2.0' }).problems,
+    ).toEqual([
+      'the MCP server does not ship, but the package carries extension/dist/mcp/cli.js, extension/dist/mcp/cli.js.map',
     ]);
-  });
-});
-
-describe('mcpBundleProblems', () => {
-  it('accepts a CommonJS bundle that loads only Node built-ins', () => {
-    const source =
-      '"use strict";var a=require("node:fs"),b=require("path"),c=require("child_process");' +
-      // Code ajv generates for standalone validators, held in strings.
-      'x.code=\'require("ajv/dist/runtime/equal").default\';y=`require("ajv-formats/dist/formats").${n}`;' +
-      'var v="0.4.0";';
-    expect(mcpBundleProblems(source, '0.4.0')).toEqual([]);
-  });
-
-  it('names modules the editor would have to find in node_modules', () => {
-    const source =
-      'var r=require("@gitglasses/rpc"),z=require("zod"),f=require("fs");var v="0.4.0";';
-    expect(mcpBundleProblems(source, '0.4.0')).toEqual([
-      'extension/dist/mcp/cli.js loads modules that are not bundled: @gitglasses/rpc, zod',
+    const web = vsixFiles('web').concat(bundle.slice(0, 1));
+    expect(inspectVsix(makeZip(web), { target: 'web', version: '0.2.0' }).problems).toEqual([
+      'the MCP server does not ship, but the package carries extension/dist/mcp/cli.js',
     ]);
-  });
-
-  it('rejects an ES module and a bundle built for another version', () => {
-    expect(mcpBundleProblems('import fs from "node:fs";\nvar v="0.3.0";', '0.4.0')).toEqual([
-      "extension/dist/mcp/cli.js is an ES module; the editor's Node runs it as CommonJS",
-      'extension/dist/mcp/cli.js does not report version 0.4.0',
-    ]);
-  });
-
-  it('passes the bundle the extension build produces', async () => {
-    const { existsSync, readFileSync } = await import('node:fs');
-    const bundle = new URL('../../extension/dist/mcp/cli.js', import.meta.url);
-    if (!existsSync(bundle)) return;
-    const { version } = JSON.parse(
-      readFileSync(new URL('../../mcp-server/package.json', import.meta.url), 'utf8'),
-    );
-    expect(mcpBundleProblems(readFileSync(bundle, 'utf8'), version)).toEqual([]);
   });
 });

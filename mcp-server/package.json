@@ -1,6 +1,6 @@
 {
   "name": "gitglasses-mcp",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "MCP server that gives AI agents GitGlasses repository insight: blame, history, the commit graph, status, diffs, patches and pull requests",
   "license": "MIT",
   "keywords": [
