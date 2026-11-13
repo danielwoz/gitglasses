@@ -11,27 +11,35 @@ import * as vscode from 'vscode';
 import { EngineClient } from '@gitglasses/rpc';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
 
+function stripTrailingSlash(path: string): string {
+  return path.endsWith('/') ? path.slice(0, -1) : path;
+}
+
 export class WebRepositoryService extends RepositoryService {
   private readonly folderPath: string;
+  private readonly mountPath: string;
   private repoId: string | undefined;
   private inflight: Promise<void> | undefined;
 
   constructor(
     private readonly client: EngineClient,
     folderPath: string,
-    private readonly mountPath: string,
+    mountPath: string,
   ) {
     super(client);
-    this.folderPath = folderPath.endsWith('/')
-      ? folderPath.slice(0, -1)
-      : folderPath;
+    this.folderPath = stripTrailingSlash(folderPath);
+    this.mountPath = stripTrailingSlash(mountPath);
   }
 
   private relativeOf(uri: vscode.Uri): string | undefined {
     const p = uri.path;
-    if (p === this.folderPath) return '';
-    if (!p.startsWith(`${this.folderPath}/`)) return undefined;
-    return p.slice(this.folderPath.length + 1);
+    // Match both the workspace folder URI path and the MEMFS mountPath:
+    // callers like Commit Details probe using `rootPath` (which is `mountPath`).
+    for (const root of [this.folderPath, this.mountPath]) {
+      if (p === root) return '';
+      if (p.startsWith(`${root}/`)) return p.slice(root.length + 1);
+    }
+    return undefined;
   }
 
   override locate(uri: vscode.Uri): LocatedFile | undefined {
