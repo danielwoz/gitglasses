@@ -118,12 +118,10 @@ export async function activate(
     console.log(`[gitglasses] ${line}`);
   };
 
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) {
-    log('web: no workspace folder open; GitGlasses stays dormant');
-    return { capabilities: () => undefined, mode: 'dormant' };
-  }
-  if ((vscode.workspace.workspaceFolders?.length ?? 0) > 1) {
+  let currentFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!currentFolder) {
+    log('web: no workspace folder open yet; waiting for folder');
+  } else if ((vscode.workspace.workspaceFolders?.length ?? 0) > 1) {
     log('web: multi-root workspace — only the first folder is mirrored (v1)');
   }
 
@@ -131,13 +129,15 @@ export async function activate(
     vscode.workspace
       .getConfiguration('gitglasses')
       .get<number>('web.maxRepoBytes') ?? DEFAULT_MAX_REPO_BYTES;
-  const bridge = new MemfsBridge(workspaceSourceFs(folder.uri), {
-    maxTotalBytes: maxRepoBytes,
-    mountPath: DEFAULT_MOUNT_PATH,
-  });
+  const createBridge = (target: vscode.WorkspaceFolder): MemfsBridge =>
+    new MemfsBridge(workspaceSourceFs(target.uri), {
+      maxTotalBytes: maxRepoBytes,
+      mountPath: DEFAULT_MOUNT_PATH,
+    });
+  let bridge = currentFolder ? createBridge(currentFolder) : undefined;
 
-  if (!(await bridge.hasGitDir())) {
-    log(`web: no .git directory in ${folder.uri.toString()}; staying dormant`);
+  if (currentFolder && bridge && !(await bridge.hasGitDir())) {
+    log(`web: no .git directory in ${currentFolder.uri.toString()}; waiting for repository`);
     if (!context.globalState.get<boolean>(NO_GIT_NOTICE_KEY)) {
       void context.globalState.update(NO_GIT_NOTICE_KEY, true);
       void vscode.window.showInformationMessage(
@@ -146,7 +146,6 @@ export async function activate(
           'virtual GitHub repos is not yet implemented.',
       );
     }
-    return { capabilities: () => undefined, mode: 'dormant' };
   }
 
   const showMethodNotSupported = createMethodNotSupportedNotifier();
@@ -159,11 +158,19 @@ export async function activate(
     createWasmTransportFactory({
       loadModule,
       setup: async (module) => {
-        const stats = await bridge.mirrorInto(memfsWriter(module));
+        const writer = memfsWriter(module);
+        if (currentFolder && bridge && (await bridge.hasGitDir())) {
+          const stats = await bridge.mirrorInto(writer);
+          log(
+            `web: mirrored ${stats.files} files (${(stats.bytes / (1024 * 1024)).toFixed(1)} MB) into MEMFS`,
+          );
+        } else {
+          writer.mkdirTree(DEFAULT_MOUNT_PATH);
+          if (currentFolder) {
+            log(`web: no .git directory in ${currentFolder.uri.toString()}; waiting for repository`);
+          }
+        }
         currentModule = module;
-        log(
-          `web: mirrored ${stats.files} files (${(stats.bytes / (1024 * 1024)).toFixed(1)} MB) into MEMFS`,
-        );
       },
       onLog: log,
     }),
@@ -176,7 +183,11 @@ export async function activate(
   );
   context.subscriptions.push({ dispose: () => engine.dispose() });
 
-  const repos = new WebRepositoryService(engine, folder.uri.path, DEFAULT_MOUNT_PATH);
+  const repos = new WebRepositoryService(
+    engine,
+    currentFolder?.uri.path ?? '',
+    DEFAULT_MOUNT_PATH,
+  );
   // Web workspaces surface documents under the workspace folder's scheme
   // (vscode-test-web:, vscode-vfs: or file:), so membership is decided by the
   // repository service alone.
@@ -205,33 +216,64 @@ export async function activate(
   // then the bridge's sync event synthesizes the same client-side refresh a
   // repo/didChange push triggers on native. .git internals changed outside
   // this window (external pushes) are not covered in v1.
-  const watcher = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(folder, '**/*'),
-  );
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
-  const scheduleFlush = (): void => {
+  let folderSubscription: vscode.Disposable | undefined;
+  const attachFolder = (
+    target: vscode.WorkspaceFolder | undefined,
+    activeBridge: MemfsBridge | undefined,
+  ): void => {
+    folderSubscription?.dispose();
     clearTimeout(flushTimer);
-    flushTimer = setTimeout(() => {
-      const module = currentModule;
-      if (!module) return;
-      void bridge.flushInto(memfsWriter(module)).catch((error) => {
-        log(`web: MEMFS re-sync failed: ${String(error)}`);
-      });
-    }, SYNC_DEBOUNCE_MS);
+    if (!target || !activeBridge) {
+      folderSubscription = undefined;
+      return;
+    }
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(target, '**/*'),
+    );
+    const scheduleFlush = (): void => {
+      clearTimeout(flushTimer);
+      flushTimer = setTimeout(() => {
+        const module = currentModule;
+        if (!module) return;
+        void activeBridge.flushInto(memfsWriter(module)).catch((error) => {
+          log(`web: MEMFS re-sync failed: ${String(error)}`);
+        });
+      }, SYNC_DEBOUNCE_MS);
+    };
+    const onFsEvent = (uri: vscode.Uri): void => {
+      const rel = workspaceRelativePath(target.uri.path, uri.path);
+      if (rel === undefined || rel === '') return;
+      activeBridge.queueChange(rel);
+      scheduleFlush();
+    };
+    folderSubscription = vscode.Disposable.from(
+      watcher,
+      watcher.onDidChange(onFsEvent),
+      watcher.onDidCreate(onFsEvent),
+      watcher.onDidDelete(onFsEvent),
+      activeBridge.onDidSyncChanges(() => core.refreshAll()),
+    );
   };
-  const onFsEvent = (uri: vscode.Uri): void => {
-    const rel = workspaceRelativePath(folder.uri.path, uri.path);
-    if (rel === undefined || rel === '') return;
-    bridge.queueChange(rel);
-    scheduleFlush();
-  };
+  attachFolder(currentFolder, bridge);
+
   context.subscriptions.push(
-    watcher,
-    watcher.onDidChange(onFsEvent),
-    watcher.onDidCreate(onFsEvent),
-    watcher.onDidDelete(onFsEvent),
+    { dispose: () => folderSubscription?.dispose() },
     { dispose: () => clearTimeout(flushTimer) },
-    bridge.onDidSyncChanges(() => core.refreshAll()),
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      const nextFolder = vscode.workspace.workspaceFolders?.[0];
+      if (nextFolder?.uri.toString() === currentFolder?.uri.toString()) return;
+      currentFolder = nextFolder;
+      bridge = currentFolder ? createBridge(currentFolder) : undefined;
+      repos.setFolderPath(currentFolder?.uri.path ?? '');
+      attachFolder(currentFolder, bridge);
+      try {
+        await engine.restart();
+        await core.reload();
+      } catch (error) {
+        log(`web: folder switch failed: ${String(error)}`);
+      }
+    }),
   );
 
   const notOnWeb = (what: string) => (): void => {

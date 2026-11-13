@@ -12,7 +12,7 @@ import { EngineClient } from '@gitglasses/rpc';
 import { LocatedFile, RepositoryService } from '../model/repositoryService';
 
 export class WebRepositoryService extends RepositoryService {
-  private readonly folderPath: string;
+  private folderPath: string;
   private repoId: string | undefined;
   private inflight: Promise<void> | undefined;
 
@@ -27,7 +27,15 @@ export class WebRepositoryService extends RepositoryService {
       : folderPath;
   }
 
+  /** Updates the workspace folder path when the active folder changes. */
+  setFolderPath(folderPath: string): void {
+    this.folderPath = folderPath.endsWith('/')
+      ? folderPath.slice(0, -1)
+      : folderPath;
+  }
+
   private relativeOf(uri: vscode.Uri): string | undefined {
+    if (!this.folderPath) return undefined;
     const p = uri.path;
     if (p === this.folderPath) return '';
     if (!p.startsWith(`${this.folderPath}/`)) return undefined;
